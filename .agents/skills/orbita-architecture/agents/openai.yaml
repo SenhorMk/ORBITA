@@ -1,4 +1,0 @@
-interface:
-  display_name: "ORBITA Architecture"
-  short_description: "Evolve ORBITA architecture safely"
-  default_prompt: "Use $orbita-architecture to plan a change against the current ORBITA architecture."

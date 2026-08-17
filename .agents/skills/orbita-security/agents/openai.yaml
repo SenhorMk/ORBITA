@@ -1,4 +1,0 @@
-interface:
-  display_name: "ORBITA Security"
-  short_description: "Apply the ORBITA security baseline"
-  default_prompt: "Use $orbita-security to review this ORBITA change against its security baseline."
