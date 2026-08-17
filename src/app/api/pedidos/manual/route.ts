@@ -7,12 +7,12 @@ export async function POST(request: Request) {
   const logEntries: string[] = [];
   try {
     const session = await verifySessionAndRole(request);
-    const userId = session?.user?.id;
+    const userId = session?.tenant.id;
     if (!userId) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const blingClient = bling.forUser(userId);
+    const blingClient = bling.forUser(session.tenant);
     const body = await request.json();
     const { syncBling, contatoId, itens, parcelas, total, formaPagamento, desconto, frete, observacoes } = body;
 

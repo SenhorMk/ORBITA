@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabaseServer';
-import { verifySessionAndRole } from '@/lib/auth';
+import {
+  actorContextDenialStatus,
+  resolveActorContext,
+  verifySessionAndRole,
+} from '@/lib/auth';
 import { encrypt } from '@/lib/crypto';
 
 export const dynamic = 'force-dynamic';
@@ -13,10 +17,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
     }
 
-    let userId = session?.user?.id;
-    if (!userId) {
-      return NextResponse.json({ success: false, error: 'User ID não encontrado na sessão' }, { status: 401 });
-    }
+    const userId = session.tenant.id;
 
     const { data: blingConfig } = await supabaseServer
       .from('integracoes_bling')
@@ -59,13 +60,14 @@ export async function GET(request: Request) {
 // POST: Atualiza credenciais do Bling no Supabase
 export async function POST(request: Request) {
   try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
+    const actorContextResult = await resolveActorContext(request, 'tenant:manage');
+    if (actorContextResult._tag !== 'ActorContextResolved') {
+      return NextResponse.json(
+        { success: false, error: 'Não autorizado' },
+        { status: actorContextDenialStatus(actorContextResult) },
+      );
     }
-    if (session.role !== 'dono') {
-      return NextResponse.json({ success: false, error: 'Acesso negado: Apenas o dono pode alterar configurações' }, { status: 403 });
-    }
+    const session = actorContextResult.context;
 
     const body = await request.json();
     const { clientId, clientSecret } = body;
@@ -74,10 +76,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Client ID e Client Secret são obrigatórios.' }, { status: 400 });
     }
 
-    const userId = session?.user?.id;
-    if (!userId) {
-      return NextResponse.json({ success: false, error: 'User ID não encontrado na sessão' }, { status: 401 });
-    }
+    const userId = session.tenant.id;
     
     const { data: existing } = await supabaseServer
       .from('integracoes_bling')

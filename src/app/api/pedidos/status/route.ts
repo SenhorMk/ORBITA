@@ -4,16 +4,16 @@ import { bling } from '@/services/bling';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { produtoRepository } from '@/repositories/produtoRepository';
 import { mapBlingStatus } from '@/lib/utils';
+import { verifySessionAndRole } from '@/lib/auth';
 
 export async function POST(request: Request) {
   try {
-    const { data: { session }, error: sessionError } = await supabaseServer.auth.getSession();
-    
-    if (sessionError || !session) {
+    const session = await verifySessionAndRole(request);
+    if (!session) {
       return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
     }
 
-    const userId = session.user.id;
+    const userId = session.tenant.id;
     const body = await request.json();
     const { pedidoId, novaSituacaoId, novaSituacaoNome } = body;
 
@@ -22,19 +22,19 @@ export async function POST(request: Request) {
     }
 
     // 1. Busca o pedido local
-    const pedidoLocal = await pedidoRepository.getById(userId, pedidoId);
+    const pedidoLocal = await pedidoRepository.getById(session.tenant, pedidoId);
     if (!pedidoLocal || !pedidoLocal.bling_id) {
       return NextResponse.json({ error: 'Pedido não encontrado ou sem ID do Bling' }, { status: 404 });
     }
 
-    const blingClient = bling.forUser(userId);
+    const blingClient = bling.forUser(session.tenant);
 
     // 2. Atualiza a situação no Bling
     await blingClient.updateSituacaoPedido(pedidoLocal.bling_id, novaSituacaoId);
 
     // 3. Atualiza o status localmente no Supabase
     const novoStatusCanonico = mapBlingStatus(novaSituacaoNome);
-    await pedidoRepository.upsert(userId, {
+    await pedidoRepository.upsert(session.tenant, {
       ...pedidoLocal,
       status: novoStatusCanonico
     });

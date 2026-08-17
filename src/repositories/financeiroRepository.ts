@@ -1,13 +1,14 @@
 import { TituloFinanceiro, CategoriaFinanceira } from '../types';
 import { supabaseServer } from '../lib/supabaseServer';
+import type { VerifiedTenant } from '../lib/auth';
 
 export class FinanceiroRepository {
 
-  async getCategorias(userId: string): Promise<CategoriaFinanceira[]> {
+  async getCategorias(tenant: VerifiedTenant): Promise<CategoriaFinanceira[]> {
     const { data, error } = await supabaseServer
       .from('categorias_financeiras')
       .select('*')
-      .eq('user_id', userId)
+      .eq('user_id', tenant.id)
       .order('descricao', { ascending: true });
       
     if (error) {
@@ -18,11 +19,11 @@ export class FinanceiroRepository {
     return data || [];
   }
 
-  async getCategoriaByBlingId(userId: string, blingId: number): Promise<CategoriaFinanceira | null> {
+  async getCategoriaByBlingId(tenant: VerifiedTenant, blingId: number): Promise<CategoriaFinanceira | null> {
     const { data, error } = await supabaseServer
       .from('categorias_financeiras')
       .select('*')
-      .eq('user_id', userId)
+      .eq('user_id', tenant.id)
       .eq('bling_id', blingId)
       .maybeSingle();
 
@@ -34,11 +35,11 @@ export class FinanceiroRepository {
     return data;
   }
 
-  async getResumo(userId: string): Promise<{ receitas: number; despesas: number; saldo: number }> {
+  async getResumo(tenant: VerifiedTenant): Promise<{ receitas: number; despesas: number; saldo: number }> {
     const { data, error } = await supabaseServer
       .from('titulos_financeiros')
       .select('tipo, valor')
-      .eq('user_id', userId)
+      .eq('user_id', tenant.id)
       .eq('situacao', 'pago'); // Considerar apenas pagos para saldo líquido real
 
     if (error) {
@@ -61,14 +62,14 @@ export class FinanceiroRepository {
     };
   }
 
-  async getTitulosFiltro(userId: string, filtros?: { tipo?: 'receber' | 'pagar', situacao?: string }): Promise<TituloFinanceiro[]> {
+  async getTitulosFiltro(tenant: VerifiedTenant, filtros?: { tipo?: 'receber' | 'pagar', situacao?: string }): Promise<TituloFinanceiro[]> {
     let query = supabaseServer
       .from('titulos_financeiros')
       .select(`
         *,
         categoria:categoria_id (*)
       `)
-      .eq('user_id', userId)
+      .eq('user_id', tenant.id)
       .order('data_vencimento', { ascending: false });
 
     if (filtros?.tipo) {
@@ -88,8 +89,8 @@ export class FinanceiroRepository {
     return data || [];
   }
 
-  async upsertTitulo(userId: string, titulo: TituloFinanceiro): Promise<TituloFinanceiro> {
-    const payload = { ...titulo, user_id: userId };
+  async upsertTitulo(tenant: VerifiedTenant, titulo: TituloFinanceiro): Promise<TituloFinanceiro> {
+    const payload = { ...titulo, user_id: tenant.id };
     const { data, error } = await supabaseServer
       .from('titulos_financeiros')
       .upsert(payload, { onConflict: 'bling_id', ignoreDuplicates: false })
@@ -107,4 +108,3 @@ export class FinanceiroRepository {
 }
 
 export const financeiroRepository = new FinanceiroRepository();
-

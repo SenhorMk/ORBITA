@@ -6,8 +6,10 @@ import { verifySessionAndRole } from '@/lib/auth';
 export async function POST(request: Request) {
   try {
     const session = await verifySessionAndRole(request);
-    const userId = session?.user?.id;
-    const blingClient = userId ? bling.forUser(userId) : bling;
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
+    }
+    const blingClient = bling.forUser(session.tenant);
 
     const categorias = await blingClient.getCategoriasProdutos(1, 100);
     

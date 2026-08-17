@@ -14,7 +14,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Acesso negado: Apenas dono pode sincronizar' }, { status: 403 });
     }
 
-    const result = await syncService.syncAll(session.user?.id);
+    const result = await syncService.syncAll(session.tenant);
     return NextResponse.json(result);
   } catch (error: any) {
     console.error('Erro na API de sincronização:', error);

@@ -1,13 +1,14 @@
 import { supabaseServer } from '../lib/supabaseServer';
+import type { VerifiedTenant } from '../lib/auth';
 import { Produto } from '../types';
 import { syncService } from '../services/sync';
 
 export class ProdutoRepository {
-  async getAll(userId: string): Promise<Produto[]> {
+  async getAll(tenant: VerifiedTenant): Promise<Produto[]> {
     const { data, error } = await supabaseServer
       .from('produtos')
       .select('*')
-      .eq('user_id', userId)
+      .eq('user_id', tenant.id)
       .order('nome', { ascending: true });
 
     if (error) {
@@ -23,11 +24,11 @@ export class ProdutoRepository {
     return data || [];
   }
 
-  async getByBlingId(userId: string, blingId: string): Promise<Produto | null> {
+  async getByBlingId(tenant: VerifiedTenant, blingId: string): Promise<Produto | null> {
     const { data, error } = await supabaseServer
       .from('produtos')
       .select('*')
-      .eq('user_id', userId)
+      .eq('user_id', tenant.id)
       .eq('bling_id', blingId)
       .maybeSingle();
 
@@ -38,21 +39,21 @@ export class ProdutoRepository {
     return data || null;
   }
 
-  async upsert(userId: string, produto: Produto): Promise<Produto> {
-    const payloadForUpsert = { ...produto, user_id: userId };
+  async upsert(tenant: VerifiedTenant, produto: Produto): Promise<Produto> {
+    const payloadForUpsert = { ...produto, user_id: tenant.id };
 
     if (produto.bling_id && produto.id) {
       const { data: existingBling } = await supabaseServer
         .from('produtos')
         .select('id')
-        .eq('user_id', userId)
+        .eq('user_id', tenant.id)
         .eq('bling_id', produto.bling_id)
         .maybeSingle();
 
       if (existingBling && existingBling.id !== produto.id) {
         console.log(`⚠️ Resolvendo duplicidade: deletando registro duplicado puxado do Bling (${existingBling.id}) para manter o local (${produto.id})`);
         try {
-          await this.delete(userId, existingBling.id);
+          await this.delete(tenant, existingBling.id);
         } catch (delErr: any) {
           console.warn(`⚠️ Não foi possível deletar o duplicado (pode estar em uso): ${delErr.message}`);
         }
@@ -66,7 +67,7 @@ export class ProdutoRepository {
         .from('produtos')
         .update(payloadForUpsert)
         .eq('id', produto.id)
-        .eq('user_id', userId)
+        .eq('user_id', tenant.id)
         .select()
         .single();
         
@@ -94,12 +95,12 @@ export class ProdutoRepository {
     return data;
   }
 
-  async delete(userId: string, id: string): Promise<void> {
+  async delete(tenant: VerifiedTenant, id: string): Promise<void> {
     const { error } = await supabaseServer
       .from('produtos')
       .delete()
       .eq('id', id)
-      .eq('user_id', userId);
+      .eq('user_id', tenant.id);
 
     if (error) {
       console.error(`Erro ao deletar produto com id ${id} no Supabase:`, error);

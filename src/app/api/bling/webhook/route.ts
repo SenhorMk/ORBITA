@@ -5,8 +5,8 @@ import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { bling, extractBlingImageUrl } from '@/services/bling';
 import { Produto, Cliente, Pedido, ItemPedido } from '@/types';
 import { supabaseServer } from '@/lib/supabaseServer';
-import crypto from 'node:crypto';
 import { mapBlingStatus, normalizeToE164 } from '@/lib/utils';
+import { authorizeSignedServiceTenant } from '@/lib/auth';
 
 export async function GET(req: NextRequest) {
   return NextResponse.json({
@@ -41,32 +41,22 @@ export async function POST(req: NextRequest) {
       if (data) integracoes = data;
     }
 
-    let resolvedUserId: string | null = null;
+    const tenantAuthorization = authorizeSignedServiceTenant(
+      rawBody,
+      signatureHeader,
+      integracoes.map((integration) => ({
+        tenantId: integration.user_id,
+        encryptedSecret: integration.client_secret,
+      })),
+    );
 
-    if (integracoes && integracoes.length > 0) {
-      for (const it of integracoes) {
-        if (!it.client_secret) continue;
-        try {
-          const expected = 'sha256=' + crypto.createHmac('sha256', it.client_secret).update(rawBody, 'utf8').digest('hex');
-          const expectedBuf = Buffer.from(expected);
-          const sigBuf = Buffer.from(signatureHeader || '');
-          if (expectedBuf.length === sigBuf.length && crypto.timingSafeEqual(expectedBuf, sigBuf)) {
-            resolvedUserId = it.user_id;
-            break;
-          }
-        } catch (hmacErr) {
-           // Continua testando os próximos
-        }
-      }
-    }
-
-    if (!resolvedUserId) {
+    if (tenantAuthorization._tag === 'ServiceTenantDenied') {
       console.warn('⚠️ Webhook Bling: Assinatura inválida (nenhum tenant correspondente). Payload ignorado.');
       return NextResponse.json({ success: false, error: 'Assinatura inválida' }, { status: 403 });
     }
 
-    const userId = resolvedUserId;
-    const blingClient = bling.forUser(userId);
+    const tenant = tenantAuthorization.tenant;
+    const blingClient = bling.forUser(tenant);
 
     let body: any;
     const contentType = req.headers.get('content-type') || '';
@@ -112,7 +102,7 @@ export async function POST(req: NextRequest) {
             telefone: tel,
             telefone_normalizado: normalizeToE164(tel) || undefined,
           };
-          await clienteRepository.upsert(userId as string, cliente);
+          await clienteRepository.upsert(tenant, cliente);
           console.log(`✅ Webhook Bling: Contato ${cliente.nome} (Bling ID: ${blingId}) salvo no Supabase.`);
         }
         continue;
@@ -128,7 +118,7 @@ export async function POST(req: NextRequest) {
             // Fetch the full order from Bling to get reliable items and status
             const fullPedido = await blingClient.getPedido(blingId);
             if (fullPedido && fullPedido.contato?.id) {
-              const clienteLocal = await clienteRepository.getByBlingId(userId as string, fullPedido.contato.id);
+              const clienteLocal = await clienteRepository.getByBlingId(tenant, fullPedido.contato.id);
               if (clienteLocal?.id) {
                 const statusCanonico = mapBlingStatus(fullPedido.situacao.valor);
                 const pedido: Pedido = {
@@ -139,12 +129,12 @@ export async function POST(req: NextRequest) {
                   status: statusCanonico,
                   cliente_id: clienteLocal.id,
                 };
-                const savedPedido = await pedidoRepository.upsert(userId as string, pedido);
+                const savedPedido = await pedidoRepository.upsert(tenant, pedido);
 
                 const itemsParaSalvar: ItemPedido[] = [];
                 for (const item of fullPedido.itens) {
                   if (item.produto?.id) {
-                    const produtoLocal = await produtoRepository.getByBlingId(userId as string, item.produto.id);
+                    const produtoLocal = await produtoRepository.getByBlingId(tenant, item.produto.id);
                     if (produtoLocal?.id && savedPedido.id) {
                       itemsParaSalvar.push({
                         pedido_id: savedPedido.id,
@@ -156,7 +146,7 @@ export async function POST(req: NextRequest) {
                   }
                 }
                 if (itemsParaSalvar.length > 0) {
-                  await pedidoRepository.addItems(userId as string, itemsParaSalvar);
+                  await pedidoRepository.addItems(tenant, itemsParaSalvar);
                 }
                 console.log(`✅ Webhook Bling: Pedido ${pedido.numero} (Bling ID: ${blingId}) atualizado no Supabase.`);
               } else {
@@ -198,7 +188,7 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        const existingLocal = await produtoRepository.getByBlingId(userId as string, blingId);
+        const existingLocal = await produtoRepository.getByBlingId(tenant, blingId);
         const imgUrl = extractBlingImageUrl(fullProduct) || existingLocal?.imagem_url;
 
         let saldoEstoque = 0;
@@ -221,7 +211,7 @@ export async function POST(req: NextRequest) {
           estoque: Math.max(0, saldoEstoque),
         };
 
-        await produtoRepository.upsert(userId as string, produto);
+        await produtoRepository.upsert(tenant, produto);
         processedProducts++;
         console.log(`✅ Webhook Bling: Produto ${produto.nome} (Bling ID: ${blingId}) salvo no Supabase com sucesso.`);
       }

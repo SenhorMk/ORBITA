@@ -5,11 +5,13 @@ import { pedidoRepository } from '../repositories/pedidoRepository';
 import { Cliente, Produto, Pedido, ItemPedido } from '../types';
 import { supabaseServer } from '../lib/supabaseServer';
 import { mapBlingStatus, normalizeToE164 } from '../lib/utils';
+import type { VerifiedTenant } from '../lib/auth';
 
 export class SyncService {
   private isSyncing = false;
 
-  async syncAll(userId: string): Promise<{ success: boolean; stats: { clientes: number; produtos: number; pedidos: number } }> {
+  async syncAll(tenant: VerifiedTenant): Promise<{ success: boolean; stats: { clientes: number; produtos: number; pedidos: number } }> {
+    const userId = tenant.id;
     if (this.isSyncing) {
       throw new Error('Uma sincronização de dados já está em execução neste processo.');
     }
@@ -42,7 +44,7 @@ export class SyncService {
       pedidos: 0,
     };
 
-    const blingClient = userId ? bling.forUser(userId) : bling;
+    const blingClient = bling.forUser(tenant);
 
     try {
       // 0. Sincronizar Categorias
@@ -111,7 +113,7 @@ export class SyncService {
                 telefone: tel,
                 telefone_normalizado: normalizeToE164(tel) || undefined,
               };
-              await clienteRepository.upsert(userId, cliente);
+              await clienteRepository.upsert(tenant, cliente);
               stats.clientes++;
             } catch (itemErr: any) {
               console.warn(`⚠️ Erro ao salvar cliente Bling ID ${bc.id} no Supabase: ${itemErr.message}`);
@@ -170,7 +172,7 @@ export class SyncService {
                 imagem_url: imgUrl,
                 estoque: saldoFisico,
               };
-              await produtoRepository.upsert(userId, produto);
+              await produtoRepository.upsert(tenant, produto);
               stats.produtos++;
             } catch (itemErr: any) {
               console.warn(`⚠️ Erro ao salvar produto Bling ID ${bp.id} no Supabase: ${itemErr.message}`);
@@ -211,7 +213,7 @@ export class SyncService {
           
           for (const bp of blingPedidos) {
             try {
-              const clienteLocal = await clienteRepository.getByBlingId(userId, bp.contato.id);
+              const clienteLocal = await clienteRepository.getByBlingId(tenant, bp.contato.id);
               
               if (!clienteLocal || !clienteLocal.id) {
                 console.warn(`⚠️ Sincronização: Pulando pedido Bling ${bp.numero} porque o cliente associado (Bling ID: ${bp.contato.id}) não existe localmente.`);
@@ -229,13 +231,13 @@ export class SyncService {
                 cliente_id: clienteLocal.id,
               };
 
-              const savedPedido = await pedidoRepository.upsert(userId, pedido);
+              const savedPedido = await pedidoRepository.upsert(tenant, pedido);
               stats.pedidos++;
 
               const itemsParaSalvar: ItemPedido[] = [];
               for (const item of bp.itens) {
                 if (item.produto?.id) {
-                  const produtoLocal = await produtoRepository.getByBlingId(userId, item.produto.id);
+                  const produtoLocal = await produtoRepository.getByBlingId(tenant, item.produto.id);
                   if (produtoLocal?.id && savedPedido.id) {
                     itemsParaSalvar.push({
                       pedido_id: savedPedido.id,
@@ -248,7 +250,7 @@ export class SyncService {
               }
 
               if (itemsParaSalvar.length > 0) {
-                await pedidoRepository.addItems(userId, itemsParaSalvar);
+                await pedidoRepository.addItems(tenant, itemsParaSalvar);
               }
             } catch (itemErr: any) {
               console.warn(`⚠️ Erro ao salvar pedido Bling ID ${bp.id} no Supabase: ${itemErr.message}`);

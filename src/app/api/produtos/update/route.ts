@@ -17,8 +17,7 @@ export async function POST(request: Request) {
     if (session.role !== 'dono') {
       return NextResponse.json({ success: false, error: 'Acesso negado: apenas o dono pode realizar esta ação.' }, { status: 403 });
     }
-    const userId = session.user.id;
-    const blingClient = bling.forUser(userId);
+    const blingClient = bling.forUser(session.tenant);
 
     const body = await request.json();
     const { id, bling_id, nome, codigo, preco, estoque, tipo, situacao, formato, unidade, categoria_id } = body as Partial<Produto> & {
@@ -183,7 +182,7 @@ export async function POST(request: Request) {
     logEntries.push(`[${new Date().toISOString()}] 💾 Persistindo registro no banco Supabase...`);
     let savedProduct: Produto;
     try {
-      savedProduct = await produtoRepository.upsert(userId, updatedProductPayload);
+      savedProduct = await produtoRepository.upsert(session.tenant, updatedProductPayload);
       logEntries.push(`[${new Date().toISOString()}] ✅ Registro persistido no Supabase! ID: ${savedProduct.id}`);
     } catch (dbErr: any) {
       logEntries.push(`[${new Date().toISOString()}] ❌ ERRO SUPABASE: ${dbErr.message || dbErr}`);

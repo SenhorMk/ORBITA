@@ -1,4 +1,5 @@
 import { supabaseServer } from '../lib/supabaseServer';
+import type { VerifiedTenant } from '../lib/auth';
 import { Pedido, ItemPedido, Nfe, Cliente } from '../types';
 import { clienteRepository } from './clienteRepository';
 
@@ -10,7 +11,7 @@ export interface PedidoEnriquecido extends Pedido {
 }
 
 export class PedidoRepository {
-  async getAllEnriched(userId: string): Promise<PedidoEnriquecido[]> {
+  async getAllEnriched(tenant: VerifiedTenant): Promise<PedidoEnriquecido[]> {
     try {
       const { data, error } = await supabaseServer
         .from('pedidos')
@@ -19,7 +20,7 @@ export class PedidoRepository {
           cliente:clientes!fk_pedido_cliente(*),
           nfe:nfes(*)
         `)
-        .eq('user_id', userId)
+        .eq('user_id', tenant.id)
         .order('data', { ascending: false });
 
       if (!error && data) {
@@ -34,12 +35,12 @@ export class PedidoRepository {
       const { data: rawPedidos, error: pErr } = await supabaseServer
         .from('pedidos')
         .select('*, nfe:nfes(*)')
-        .eq('user_id', userId)
+        .eq('user_id', tenant.id)
         .order('data', { ascending: false });
 
       if (pErr) throw pErr;
 
-      const clientes = await clienteRepository.getAll(userId);
+      const clientes = await clienteRepository.getAll(tenant);
       const clienteMap = new Map(clientes.map(c => [c.id, c]));
 
       return (rawPedidos || []).map(p => ({
@@ -52,12 +53,12 @@ export class PedidoRepository {
     }
   }
 
-  async getById(userId: string, id: string): Promise<Pedido | null> {
+  async getById(tenant: VerifiedTenant, id: string): Promise<Pedido | null> {
     const { data, error } = await supabaseServer
       .from('pedidos')
       .select('*')
       .eq('id', id)
-      .eq('user_id', userId)
+      .eq('user_id', tenant.id)
       .maybeSingle();
 
     if (error) {
@@ -67,11 +68,11 @@ export class PedidoRepository {
     return data || null;
   }
 
-  async getByBlingId(userId: string, blingId: string): Promise<Pedido | null> {
+  async getByBlingId(tenant: VerifiedTenant, blingId: string): Promise<Pedido | null> {
     const { data, error } = await supabaseServer
       .from('pedidos')
       .select('*')
-      .eq('user_id', userId)
+      .eq('user_id', tenant.id)
       .eq('bling_id', blingId)
       .maybeSingle();
 
@@ -82,8 +83,8 @@ export class PedidoRepository {
     return data || null;
   }
 
-  async upsert(userId: string, pedido: Pedido): Promise<Pedido> {
-    const payload = { ...pedido, user_id: userId };
+  async upsert(tenant: VerifiedTenant, pedido: Pedido): Promise<Pedido> {
+    const payload = { ...pedido, user_id: tenant.id };
     const { data, error } = await supabaseServer
       .from('pedidos')
       .upsert(payload, { onConflict: 'user_id, bling_id' })
@@ -98,8 +99,8 @@ export class PedidoRepository {
   }
 
   // Operações para Itens de Pedido
-  async addItems(userId: string, items: ItemPedido[]): Promise<void> {
-    const itemsWithUser = items.map(i => ({ ...i, user_id: userId }));
+  async addItems(tenant: VerifiedTenant, items: ItemPedido[]): Promise<void> {
+    const itemsWithUser = items.map(i => ({ ...i, user_id: tenant.id }));
     // Utiliza upsert composto (pedido_id, produto_id) para garantir idempotência (CT-001)
     const { error } = await supabaseServer
       .from('itens_pedido')
@@ -112,8 +113,8 @@ export class PedidoRepository {
   }
 
   // Operações para NF-es
-  async upsertNfe(userId: string, nfe: Nfe): Promise<Nfe> {
-    const payload = { ...nfe, user_id: userId };
+  async upsertNfe(tenant: VerifiedTenant, nfe: Nfe): Promise<Nfe> {
+    const payload = { ...nfe, user_id: tenant.id };
     const { data, error } = await supabaseServer
       .from('nfes')
       .upsert(payload, { onConflict: 'user_id, bling_id' })
@@ -128,8 +129,8 @@ export class PedidoRepository {
   }
 
   // Obter faturamento mensal total
-  async getFaturamentoMensal(userId: string): Promise<number> {
-    const pedidos = await this.getAllEnriched(userId);
+  async getFaturamentoMensal(tenant: VerifiedTenant): Promise<number> {
+    const pedidos = await this.getAllEnriched(tenant);
     const trintaDiasAtras = Date.now() - 30 * 24 * 60 * 60 * 1000;
     
     return pedidos
@@ -137,9 +138,9 @@ export class PedidoRepository {
       .reduce((acc, current) => acc + Number(current.total), 0);
   }
 
-  async getDashboardStats(userId: string): Promise<{ faturamento30: number; total: number; pendentes: number; cancelados: number; atendidos: number }> {
+  async getDashboardStats(tenant: VerifiedTenant): Promise<{ faturamento30: number; total: number; pendentes: number; cancelados: number; atendidos: number }> {
     try {
-      const { data, error } = await supabaseServer.rpc('dashboard_stats', { p_user_id: userId }).maybeSingle();
+      const { data, error } = await supabaseServer.rpc('dashboard_stats', { p_user_id: tenant.id }).maybeSingle();
       if (!error && data) {
         const d = data as any;
         return {

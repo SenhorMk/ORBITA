@@ -20,8 +20,7 @@ export async function POST(request: Request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
     }
-    const userId = session.user.id;
-    const blingClient = bling.forUser(userId);
+    const blingClient = bling.forUser(session.tenant);
     
     let stats = {
       contasPagar: 0,
@@ -45,7 +44,7 @@ export async function POST(request: Request) {
             descricao: cp.historico || `Conta a Pagar #${cp.id}`,
           };
           
-          await financeiroRepository.upsertTitulo(userId, titulo);
+          await financeiroRepository.upsertTitulo(session.tenant, titulo);
           stats.contasPagar++;
         } catch (err: any) {
           console.warn(`Erro ao sincronizar Conta a Pagar ${cp.id}:`, err.message);
@@ -73,7 +72,7 @@ export async function POST(request: Request) {
             descricao: cr.historico || `Conta a Receber #${cr.id}`,
           };
           
-          await financeiroRepository.upsertTitulo(userId, titulo);
+          await financeiroRepository.upsertTitulo(session.tenant, titulo);
           stats.contasReceber++;
         } catch (err: any) {
           console.warn(`Erro ao sincronizar Conta a Receber ${cr.id}:`, err.message);

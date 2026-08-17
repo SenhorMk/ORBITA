@@ -15,7 +15,7 @@ export async function GET(request: Request) {
     );
   }
 
-  const userId = session.user.id;
+  const userId = session.tenant.id;
 
   const { data: tenantData } = await supabaseServer
     .from('integracoes_bling')

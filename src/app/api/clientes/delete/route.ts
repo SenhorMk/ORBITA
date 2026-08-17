@@ -14,7 +14,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Acesso negado: apenas o dono pode realizar esta ação.' }, { status: 403 });
     }
     
-    const userId = session.user.id;
     const body = await request.json();
     const { id, bling_id } = body;
 
@@ -29,7 +28,7 @@ export async function POST(request: Request) {
 
     // Deletar no Bling v3
     if (/^\d+$/.test(bling_id)) {
-      const blingClient = bling.forUser(userId);
+      const blingClient = bling.forUser(session.tenant);
       try {
         logEntries.push(`[${new Date().toISOString()}] 🌐 Chamando DELETE na API do Bling para o contato ${bling_id}...`);
         await blingClient.deleteContato(bling_id);
@@ -42,7 +41,7 @@ export async function POST(request: Request) {
     // Deletar no Supabase Cache
     try {
       logEntries.push(`[${new Date().toISOString()}] 💾 Removendo cliente do Supabase (ID: ${id})...`);
-      await clienteRepository.delete(userId, id);
+      await clienteRepository.delete(session.tenant, id);
       logEntries.push(`[${new Date().toISOString()}] ✅ Cliente removido do Supabase com sucesso.`);
     } catch (err: any) {
       logEntries.push(`[${new Date().toISOString()}] ❌ Erro ao deletar no Supabase: ${err.message}`);

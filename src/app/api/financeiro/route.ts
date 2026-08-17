@@ -17,12 +17,11 @@ export async function GET(request: Request) {
     const tipo = searchParams.get('tipo') as 'receber' | 'pagar' | null;
     const situacao = searchParams.get('situacao') || undefined;
 
-    const userId = session.user.id;
 
     const [resumo, titulos, categorias] = await Promise.all([
-      financeiroRepository.getResumo(userId),
-      financeiroRepository.getTitulosFiltro(userId, { tipo: tipo || undefined, situacao }),
-      financeiroRepository.getCategorias(userId)
+      financeiroRepository.getResumo(session.tenant),
+      financeiroRepository.getTitulosFiltro(session.tenant, { tipo: tipo || undefined, situacao }),
+      financeiroRepository.getCategorias(session.tenant)
     ]);
 
     return NextResponse.json({
@@ -72,19 +71,19 @@ export async function POST(request: Request) {
         categoria_id: categoria_id || undefined,
       };
 
-      const tituloSalvo = await financeiroRepository.upsertTitulo(session.user.id, novoTituloInterno);
+      const tituloSalvo = await financeiroRepository.upsertTitulo(session.tenant, novoTituloInterno);
       return NextResponse.json({ success: true, data: tituloSalvo });
     }
 
     // ═══════════════════════════════════════════════════
     // MODO CONTÁBIL: Integrado com o Bling ERP
     // ═══════════════════════════════════════════════════
-    const blingClient = session.user?.id ? bling.forUser(session.user.id) : bling;
+    const blingClient = bling.forUser(session.tenant);
     
     // Obter a categoria no Supabase para ver se tem bling_id
     let idCategoriaBling: number | undefined = undefined;
     if (categoria_id) {
-      const categorias = await financeiroRepository.getCategorias(session.user.id);
+      const categorias = await financeiroRepository.getCategorias(session.tenant);
       const cat = categorias.find(c => c.id === categoria_id);
       if (cat && cat.bling_id) {
         idCategoriaBling = cat.bling_id;
@@ -178,7 +177,7 @@ export async function POST(request: Request) {
       categoria_id: categoria_id || undefined,
     };
 
-    const tituloSalvo = await financeiroRepository.upsertTitulo(session.user.id, novoTitulo);
+    const tituloSalvo = await financeiroRepository.upsertTitulo(session.tenant, novoTitulo);
 
     return NextResponse.json({ success: true, data: tituloSalvo });
 
