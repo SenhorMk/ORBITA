@@ -16,6 +16,8 @@ describe('privileged repository tenant scope', () => {
       .toEqualTypeOf<VerifiedTenant>();
     expectTypeOf<Parameters<PedidoRepository['getAllEnriched']>[0]>()
       .toEqualTypeOf<VerifiedTenant>();
+    expectTypeOf<Parameters<PedidoRepository['deleteByBlingId']>[0]>()
+      .toEqualTypeOf<VerifiedTenant>();
     expectTypeOf<Parameters<ProdutoRepository['getAll']>[0]>()
       .toEqualTypeOf<VerifiedTenant>();
     expectTypeOf<Parameters<typeof bling.forUser>[0]>()

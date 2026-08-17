@@ -1,60 +1,73 @@
-import { NextResponse } from 'next/server';
-import { bling } from '@/services/bling';
+import { z } from 'zod';
+
+import { resolveActorContext } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabaseServer';
-import { verifySessionAndRole } from '@/lib/auth';
+import { bling } from '@/services/bling';
+import {
+  CategoryCatalog,
+  type CategorySource,
+  type CategoryStore,
+} from '@/services/categoryCatalog';
 
-export async function POST(request: Request) {
-  try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-    }
-    const blingClient = bling.forUser(session.tenant);
+import { createCategoryHandlers } from './handlers';
 
-    const categorias = await blingClient.getCategoriasProdutos(1, 100);
-    
-    if (!categorias || categorias.length === 0) {
-      return NextResponse.json({ success: true, message: 'Nenhuma categoria encontrada no Bling.' });
-    }
+const categoryRowsSchema = z.array(z.object({
+  id: z.uuid(),
+  bling_id: z.string().min(1),
+  descricao: z.string(),
+  categoria_pai_id: z.string().nullable(),
+}));
 
-    const upsertPromises = categorias.map(async (cat) => {
-      const payload = {
-        bling_id: String(cat.id),
-        descricao: cat.descricao,
-        categoria_pai_id: cat.categoriaPai?.id ? String(cat.categoriaPai.id) : null,
-      };
+const categorySource: CategorySource = {
+  async fetchPage(tenant, page, pageSize) {
+    const categories = await bling.forUser(tenant).getCategoriasProdutos(page, pageSize);
+    return categories.map((category) => ({
+      blingId: String(category.id),
+      description: category.descricao,
+      parentBlingId: category.categoriaPai?.id
+        ? String(category.categoriaPai.id)
+        : null,
+    }));
+  },
+};
 
-      const { data, error } = await supabaseServer
-        .from('categorias')
-        .upsert(payload, { onConflict: 'bling_id' })
-        .select();
-        
-      if (error) {
-        console.error(`Erro ao inserir categoria ${cat.id}:`, error);
-      }
-      return data;
-    });
-
-    await Promise.all(upsertPromises);
-
-    return NextResponse.json({ success: true, count: categorias.length, message: 'Categorias sincronizadas com sucesso' });
-  } catch (error: any) {
-    console.error('Erro na sincronização de categorias:', error);
-    return NextResponse.json({ success: false, error: error.message || String(error) }, { status: 500 });
-  }
-}
-
-export async function GET(request: Request) {
-  try {
+const categoryStore: CategoryStore = {
+  async list(tenant) {
     const { data, error } = await supabaseServer
       .from('categorias')
-      .select('*')
+      .select('id, bling_id, descricao, categoria_pai_id')
+      .eq('user_id', tenant.id)
       .order('descricao', { ascending: true });
 
     if (error) throw error;
 
-    return NextResponse.json({ success: true, data });
-  } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || String(error) }, { status: 500 });
-  }
-}
+    return categoryRowsSchema.parse(data ?? []).map((category) => ({
+      id: category.id,
+      blingId: category.bling_id,
+      description: category.descricao,
+      parentBlingId: category.categoria_pai_id,
+    }));
+  },
+
+  async upsertAll(tenant, categories) {
+    const payload = categories.map((category) => ({
+      user_id: tenant.id,
+      bling_id: category.blingId,
+      descricao: category.description,
+      categoria_pai_id: category.parentBlingId,
+    }));
+    const { error } = await supabaseServer
+      .from('categorias')
+      .upsert(payload, { onConflict: 'user_id, bling_id' });
+
+    if (error) throw error;
+  },
+};
+
+const handlers = createCategoryHandlers({
+  resolveActor: resolveActorContext,
+  catalog: new CategoryCatalog(categorySource, categoryStore),
+});
+
+export const GET = handlers.GET;
+export const POST = handlers.POST;

@@ -83,6 +83,20 @@ export class PedidoRepository {
     return data || null;
   }
 
+  /** Delete an order only inside the previously verified tenant boundary. */
+  async deleteByBlingId(tenant: VerifiedTenant, blingId: string): Promise<void> {
+    const { error } = await supabaseServer
+      .from('pedidos')
+      .delete()
+      .eq('user_id', tenant.id)
+      .eq('bling_id', blingId);
+
+    if (error) {
+      console.error(`Erro ao apagar pedido por Bling ID ${blingId} no Supabase:`, error);
+      throw error;
+    }
+  }
+
   async upsert(tenant: VerifiedTenant, pedido: Pedido): Promise<Pedido> {
     const payload = { ...pedido, user_id: tenant.id };
     const { data, error } = await supabaseServer
@@ -160,5 +174,4 @@ export class PedidoRepository {
 }
 
 export const pedidoRepository = new PedidoRepository();
-
 
