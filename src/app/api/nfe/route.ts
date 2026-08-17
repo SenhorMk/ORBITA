@@ -29,7 +29,10 @@ export async function POST(request: Request) {
     // C8: Prevenir double-faturamento no Bling checando se o pedido já tem NF-e local
     if (!(process.env.MOCK_MODE === 'true' && process.env.NODE_ENV === 'development')) {
       // 1. Tentar obter lock exclusivo no pedido (Advisory Lock)
-      const { data: lockAcquired, error: lockError } = await supabaseServer.rpc('try_nfe_lock', { p_pedido_id: pedidoId });
+      const { data: lockAcquired, error: lockError } = await supabaseServer.rpc('try_nfe_lock', {
+        p_user_id: session.tenant.id,
+        p_pedido_id: pedidoId,
+      });
       
       if (lockError || !lockAcquired) {
         return NextResponse.json({ success: false, error: 'Outra emissão de nota já está em andamento para este pedido.' }, { status: 429 });
@@ -121,7 +124,10 @@ export async function POST(request: Request) {
           { status: 500 }
         );
       } finally {
-        await supabaseServer.rpc('unlock_nfe', { p_pedido_id: pedidoId });
+        await supabaseServer.rpc('unlock_nfe', {
+          p_user_id: session.tenant.id,
+          p_pedido_id: pedidoId,
+        });
       }
     } else {
         // Implementar lógica de mock se necessário

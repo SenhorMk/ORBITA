@@ -277,7 +277,7 @@ export class SyncService {
       this.isSyncing = false;
       if (dbLocked) {
         try {
-          await supabaseServer.rpc('unlock_sync', { p_user_id: userId });
+          await supabaseServer.rpc('advisory_unlock_sync', { p_user_id: userId });
         } catch {
           // Silencioso se RPC não existir
         }
