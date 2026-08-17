@@ -142,7 +142,7 @@ export async function POST(request: Request) {
     console.log(`✅ Sincronização Chatwoot concluída: +${contactsCount} contatos, +${conversationsCount} conversas, +${messagesCount} mensagens.`);
 
     // 2. Acionar Auto-Registro e Vínculo SAC-ERP
-    const linkResult = await integrationService.linkSacToErp();
+    const linkResult = await integrationService.linkSacToErp(session.tenant);
     console.log('✅ Resultado do Link SAC-ERP:', linkResult);
 
     return NextResponse.json({

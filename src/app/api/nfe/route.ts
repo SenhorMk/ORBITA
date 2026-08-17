@@ -41,7 +41,7 @@ export async function POST(request: Request) {
           .from('nfes')
           .select('*')
           .eq('pedido_id', pedidoId)
-          .eq('user_id', session.user.id)
+          .eq('user_id', session.tenant.id)
           .maybeSingle();
 
         if (nfeError) {
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
 
         // 1. Emitir nota fiscal através do Bling Client
         console.log(`🧾 Emitindo nota fiscal no Bling para o pedido ${blingPedidoId}...`);
-        const blingClient = session.user?.id ? bling.forUser(session!.user.id) : bling;
+        const blingClient = bling.forUser(session.tenant);
         const nfeResult = await blingClient.createNfe(blingPedidoId);
 
         // Bling v3 envelopa a resposta em { data: {...} }; extrair com fallbacks defensivos.
@@ -80,7 +80,7 @@ export async function POST(request: Request) {
         let nfeCache;
         try {
           // 2. Persistir nota fiscal gerada no cache local associando ao ID do pedido
-          nfeCache = await pedidoRepository.upsertNfe(session!.user.id, {
+          nfeCache = await pedidoRepository.upsertNfe(session!.tenant, {
             bling_id: nfeBlingId,
             numero: String(nfeNumero),
             chave: nfeChave,
@@ -89,9 +89,9 @@ export async function POST(request: Request) {
           });
 
           // 3. Atualizar status do pedido local para Atendido/Faturado
-          const pedidoLocal = await pedidoRepository.getById(session!.user.id, pedidoId);
+          const pedidoLocal = await pedidoRepository.getById(session!.tenant, pedidoId);
           if (pedidoLocal) {
-            await pedidoRepository.upsert(session!.user.id, {
+            await pedidoRepository.upsert(session!.tenant, {
               ...pedidoLocal,
               status: 'Atendido'
             });

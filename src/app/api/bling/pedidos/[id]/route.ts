@@ -19,8 +19,7 @@ export async function GET(
       return NextResponse.json({ success: false, error: 'ID do pedido obrigatório' }, { status: 400 });
     }
 
-    const userId = session.user?.id;
-    const blingClient = userId ? bling.forUser(userId) : bling;
+    const blingClient = bling.forUser(session.tenant);
     const pedido = await blingClient.getPedido(id);
 
     if (!pedido) {
@@ -54,8 +53,7 @@ export async function DELETE(
 
     id = decodeURIComponent(id);
 
-    const userId = session.user?.id;
-    const blingClient = userId ? bling.forUser(userId) : bling;
+    const blingClient = bling.forUser(session.tenant);
     
     // 1. Tenta apagar no Bling primeiro (fonte da verdade)
     // Se for manual (#MANUAL-...), não precisa apagar no Bling.
@@ -108,8 +106,7 @@ export async function PUT(
       return NextResponse.json({ error: 'ID do pedido não fornecido' }, { status: 400 });
     }
 
-    const userId = session.user?.id;
-    const blingClient = userId ? bling.forUser(userId) : bling;
+    const blingClient = bling.forUser(session.tenant);
 
     // Tenta atualizar no Bling
     let updatedPedidoData = null;

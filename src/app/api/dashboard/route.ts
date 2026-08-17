@@ -21,20 +21,20 @@ export async function GET(request: Request) {
     let categorias: any[] = [];
 
     try {
-      produtos = await produtoRepository.getAll(session.user.id);
+      produtos = await produtoRepository.getAll(session.tenant);
     } catch (e: any) {
       console.error('Erro ao carregar produtos no dashboard:', e);
     }
 
     try {
-      clientes = await clienteRepository.getAll(session.user.id);
+      clientes = await clienteRepository.getAll(session.tenant);
     } catch (e: any) {
       console.error('Erro ao carregar clientes no dashboard:', e);
     }
 
     try {
-      pedidos = await pedidoRepository.getAllEnriched(session.user.id);
-      stats = await pedidoRepository.getDashboardStats(session.user.id);
+      pedidos = await pedidoRepository.getAllEnriched(session.tenant);
+      stats = await pedidoRepository.getDashboardStats(session.tenant);
     } catch (e: any) {
       console.error('Erro ao carregar pedidos no dashboard:', e);
     }
@@ -43,7 +43,7 @@ export async function GET(request: Request) {
       const { data: catData } = await supabaseServer
         .from('categorias')
         .select('*')
-        .eq('user_id', session.user.id);
+        .eq('user_id', session.tenant.id);
       if (catData) categorias = catData;
     } catch (e: any) {
       console.error('Erro ao carregar categorias no dashboard:', e);

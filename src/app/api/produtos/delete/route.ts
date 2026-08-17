@@ -15,8 +15,7 @@ export async function POST(request: Request) {
     if (session.role !== 'dono') {
       return NextResponse.json({ success: false, error: 'Acesso negado: apenas o dono pode realizar esta ação.' }, { status: 403 });
     }
-    const userId = session.user.id;
-    const blingClient = bling.forUser(userId);
+    const blingClient = bling.forUser(session.tenant);
 
     const body = await request.json();
     const { id, bling_id, nome } = body;
@@ -46,7 +45,7 @@ export async function POST(request: Request) {
     // 2. Deletar do banco Supabase
     logEntries.push(`[${new Date().toISOString()}] 💾 Excluindo registro do banco Supabase...`);
     try {
-      await produtoRepository.delete(userId, id);
+      await produtoRepository.delete(session.tenant, id);
       logEntries.push(`[${new Date().toISOString()}] ✅ Registro excluído do Supabase!`);
     } catch (dbErr: any) {
       logEntries.push(`[${new Date().toISOString()}] ❌ ERRO SUPABASE: ${dbErr.message || dbErr}`);

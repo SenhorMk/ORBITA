@@ -25,8 +25,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const userId = session.user?.id;
-    const blingClient = userId ? bling.forUser(userId) : bling;
+    const blingClient = bling.forUser(session.tenant);
 
     // 1. Verificar se o token do Bling é válido (isso já tenta renovar o refresh_token se estiver expirado)
     let isBlingAlive = false;
@@ -52,7 +51,7 @@ export async function POST(request: Request) {
     }
 
     // 3. Executar o sync completo (Produtos, Clientes, Pedidos)
-    const syncResult = await syncService.syncAll(userId);
+    const syncResult = await syncService.syncAll(session.tenant);
 
     return NextResponse.json({
       success: true,

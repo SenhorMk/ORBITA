@@ -1,17 +1,15 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
-import { supabaseServer } from '@/lib/supabaseServer';
+import { verifySessionAndRole } from '@/lib/auth';
 
 export async function GET(request: Request) {
   try {
-    const { data: { session }, error: sessionError } = await supabaseServer.auth.getSession();
-    
-    if (sessionError || !session) {
+    const session = await verifySessionAndRole(request);
+    if (!session) {
       return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
     }
 
-    const userId = session.user.id;
-    const blingClient = userId ? bling.forUser(userId) : bling;
+    const blingClient = bling.forUser(session.tenant);
     
     const situacoes = await blingClient.getSituacoesModulo(9);
     

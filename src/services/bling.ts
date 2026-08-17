@@ -1,6 +1,7 @@
 import { BlingPedido, BlingCliente, BlingProduto, BlingCategoria } from '../types';
 import { supabaseServer } from '../lib/supabaseServer';
 import { encrypt, decrypt } from '../lib/crypto';
+import type { VerifiedTenant } from '../lib/auth';
 
 const clientCache = new Map<string, BlingClient>();
 const refreshLocks = new Map<string, Promise<string>>();
@@ -14,18 +15,18 @@ export class BlingClient {
   private lastRequestTime: number = 0;
   private requestQueuePromise: Promise<void> = Promise.resolve();
 
-  private userId?: string;
+  private readonly userId: string;
 
-  constructor(userId?: string) {
+  private constructor(tenant: VerifiedTenant) {
     this.apiKey = process.env.BLING_API_KEY || '';
-    this.userId = userId;
+    this.userId = tenant.id;
   }
 
-  forUser(userId: string): BlingClient {
-    let c = clientCache.get(userId);
+  static forUser(tenant: VerifiedTenant): BlingClient {
+    let c = clientCache.get(tenant.id);
     if (!c) {
-      c = new BlingClient(userId);
-      clientCache.set(userId, c);
+      c = new BlingClient(tenant);
+      clientCache.set(tenant.id, c);
     }
     return c;
   }
@@ -1004,5 +1005,7 @@ export function extractProductImageUrl(data: any): string | undefined {
   return url;
 }
 
-export const bling = new BlingClient();
+export const bling = {
+  forUser: (tenant: VerifiedTenant) => BlingClient.forUser(tenant),
+};
 export const extractBlingImageUrl = extractProductImageUrl;

@@ -1,12 +1,13 @@
 import { supabaseServer } from '../lib/supabaseServer';
+import type { VerifiedTenant } from '../lib/auth';
 import { Cliente } from '../types';
 
 export class ClienteRepository {
-  async getAll(userId: string): Promise<Cliente[]> {
+  async getAll(tenant: VerifiedTenant): Promise<Cliente[]> {
     const { data, error } = await supabaseServer
       .from('clientes')
       .select('*')
-      .eq('user_id', userId)
+      .eq('user_id', tenant.id)
       .order('nome', { ascending: true });
 
     if (error) {
@@ -16,11 +17,11 @@ export class ClienteRepository {
     return data || [];
   }
 
-  async getByBlingId(userId: string, blingId: string): Promise<Cliente | null> {
+  async getByBlingId(tenant: VerifiedTenant, blingId: string): Promise<Cliente | null> {
     const { data, error } = await supabaseServer
       .from('clientes')
       .select('*')
-      .eq('user_id', userId)
+      .eq('user_id', tenant.id)
       .eq('bling_id', blingId)
       .maybeSingle();
 
@@ -31,8 +32,8 @@ export class ClienteRepository {
     return data || null;
   }
 
-  async upsert(userId: string, cliente: Cliente): Promise<Cliente> {
-    const payload: any = { ...cliente, user_id: userId };
+  async upsert(tenant: VerifiedTenant, cliente: Cliente): Promise<Cliente> {
+    const payload: any = { ...cliente, user_id: tenant.id };
     delete payload.telefone_normalizado;
 
     const { data, error } = await supabaseServer
@@ -48,12 +49,12 @@ export class ClienteRepository {
     return data;
   }
 
-  async delete(userId: string, id: string): Promise<void> {
+  async delete(tenant: VerifiedTenant, id: string): Promise<void> {
     const { error } = await supabaseServer
       .from('clientes')
       .delete()
       .eq('id', id)
-      .eq('user_id', userId);
+      .eq('user_id', tenant.id);
 
     if (error) {
       console.error('Erro ao excluir cliente no Supabase:', error);

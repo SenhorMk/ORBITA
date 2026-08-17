@@ -12,7 +12,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
     }
 
-    const blingClient = session.user?.id ? bling.forUser(session.user.id) : bling;
+    const blingClient = bling.forUser(session.tenant);
 
     // Buscamos os primeiros 200 contatos
     const contatos = await blingClient.getClientes(1, 200);
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
     }
 
-    const blingClient = session.user?.id ? bling.forUser(session.user.id) : bling;
+    const blingClient = bling.forUser(session.tenant);
 
     const body = await request.json();
     const { cnpj, nome, nome_fantasia, logradouro, numero, bairro, municipio, uf, cep, telefone, email } = body;

@@ -1,13 +1,14 @@
 import { supabaseServer } from '@/lib/supabaseServer';
 import { normalizeToE164 } from '@/lib/utils';
 import type { Cliente } from '@/types';
+import type { VerifiedTenant } from '@/lib/auth';
 
 export class IntegrationService {
   /**
    * Vincula os contatos do Chatwoot aos Clientes do ERP (Bling/Supabase).
    * Caso o cliente não exista, ele será criado automaticamente para ser enviado ao Bling no próximo sync.
    */
-  async linkSacToErp() {
+  async linkSacToErp(tenant: VerifiedTenant) {
     console.log('🔄 Iniciando verificação de auto-registro e vínculo SAC-ERP...');
     let novosClientes = 0;
 
@@ -16,6 +17,7 @@ export class IntegrationService {
       const { data: chatwootContacts, error: cwError } = await supabaseServer
         .from('chatwoot_contacts')
         .select('*')
+        .eq('user_id', tenant.id)
         .not('phone_normalizado', 'is', null);
 
       if (cwError) throw cwError;
@@ -23,7 +25,8 @@ export class IntegrationService {
       // 2. Buscar todos os clientes existentes que tenham telefone normalizado
       const { data: clientes, error: clError } = await supabaseServer
         .from('clientes')
-        .select('id, telefone_normalizado');
+        .select('id, telefone_normalizado')
+        .eq('user_id', tenant.id);
 
       if (clError) throw clError;
 
@@ -52,7 +55,7 @@ export class IntegrationService {
 
           const { error: insertError } = await supabaseServer
             .from('clientes')
-            .insert([novoCliente]);
+            .insert([{ ...novoCliente, user_id: tenant.id }]);
 
           if (insertError) {
             console.error(`❌ Erro ao criar cliente auto-registrado (${contact.name}):`, insertError);
