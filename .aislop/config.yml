@@ -1,0 +1,26 @@
+version: 1
+
+engines:
+  format: true
+  lint: true
+  code-quality: true
+  ai-slop: true
+  architecture: false
+  security: true
+
+quality:
+  maxFunctionLoc: 80
+  maxFileLoc: 400
+  maxNesting: 5
+  maxParams: 6
+
+scoring:
+  thresholds:
+    good: 75
+    ok: 50
+
+# `scripts/check-aislop-ratchet.mjs` compares per-file diagnostic
+# fingerprints with `quality/aislop-baseline.json`.
+
+telemetry:
+  enabled: false

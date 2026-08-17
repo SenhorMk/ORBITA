@@ -1,0 +1,4 @@
+interface:
+  display_name: "ORBITA Modular Monolith"
+  short_description: "Enforce safe module boundaries"
+  default_prompt: "Use $orbita-modular-monolith to design this change as a cohesive ORBITA module."

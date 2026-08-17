@@ -1,0 +1,4 @@
+interface:
+  display_name: "ORBITA Bling"
+  short_description: "Build reliable Bling v3 integrations"
+  default_prompt: "Use $orbita-bling to implement or review this Bling v3 integration."

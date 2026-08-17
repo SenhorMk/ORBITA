@@ -1,0 +1,4 @@
+interface:
+  display_name: "ORBITA Integrations"
+  short_description: "Build resilient external adapters"
+  default_prompt: "Use $orbita-integrations to implement or review this external API integration."

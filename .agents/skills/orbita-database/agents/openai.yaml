@@ -1,0 +1,4 @@
+interface:
+  display_name: "ORBITA Database"
+  short_description: "Evolve Supabase data safely"
+  default_prompt: "Use $orbita-database to design or review this ORBITA database change."

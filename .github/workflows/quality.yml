@@ -1,0 +1,59 @@
+name: Quality gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - feature/correcoes-arquiteturais
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-test-public-key-not-a-secret
+      NEXT_PUBLIC_SUPABASE_URL: https://ci-test.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ci-test-service-role-not-a-secret
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Check secrets
+        run: npm run secrets:check
+
+      - name: Check secrets in proposed commits
+        if: github.event_name == 'pull_request'
+        run: npm run secrets:check -- --git-range "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
+      - name: Check secrets in pushed commits
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        run: npm run secrets:check -- --git-range "${{ github.event.before }}..${{ github.event.after }}"
+
+      - name: Run tests
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Enforce lint ratchet
+        run: npm run lint:ratchet
+
+      - name: Enforce AI slop ratchet
+        run: npm run aislop
+
+      - name: Build production bundle
+        run: npm run build

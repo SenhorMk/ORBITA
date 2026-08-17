@@ -1,0 +1,4 @@
+interface:
+  display_name: "ORBITA Testing"
+  short_description: "Choose and enforce ORBITA test seams"
+  default_prompt: "Use $orbita-testing to design tests for this ORBITA change."

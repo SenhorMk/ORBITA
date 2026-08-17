@@ -1,0 +1,392 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import {
+  X,
+  User,
+  Mail,
+  Phone,
+  FileText,
+  MapPin,
+  Save,
+  CheckCircle2,
+  AlertTriangle
+} from 'lucide-react';
+import type { Cliente } from '@/types';
+import { GlassModal } from '@/components/ui/glass-modal';
+import { supabase } from '@/lib/supabaseClient';
+import { ErrorLogModal } from './ErrorLogModal';
+import { Button } from '@/components/ui/button';
+
+interface ClienteEditModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  cliente: Cliente | null;
+  onSave?: (updatedCliente: Cliente) => void;
+}
+
+export function ClienteEditModal({
+  isOpen,
+  onClose,
+  cliente,
+  onSave,
+}: ClienteEditModalProps) {
+  const isNew = !cliente;
+
+  // Form State
+  const [nome, setNome] = useState('');
+  const [email, setEmail] = useState('');
+  const [telefone, setTelefone] = useState('');
+  const [cpfCnpj, setCpfCnpj] = useState('');
+  
+  // Extra fields for Bling
+  const [tipo, setTipo] = useState('F');
+  const [contribuinte, setContribuinte] = useState('9');
+  const [cep, setCep] = useState('');
+  const [endereco, setEndereco] = useState('');
+  const [numero, setNumero] = useState('');
+  const [bairro, setBairro] = useState('');
+  const [cidade, setCidade] = useState('');
+  const [uf, setUf] = useState('');
+
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedSuccess, setSavedSuccess] = useState(false);
+  const [errors, setErrors] = useState<{ [key: string]: string }>({});
+
+  const [errorLogData, setErrorLogData] = useState<{
+    isOpen: boolean;
+    title: string;
+    errorMessage: string;
+    details?: string;
+    logs?: string[];
+  }>({
+    isOpen: false,
+    title: '',
+    errorMessage: '',
+  });
+
+  useEffect(() => {
+    if (isOpen) {
+      if (cliente) {
+        setNome(cliente.nome || '');
+        setEmail(cliente.email || '');
+        setTelefone(cliente.telefone || '');
+        setCpfCnpj(cliente.cpf_cnpj || '');
+        setTipo(cliente.tipo || 'F');
+        setContribuinte(cliente.contribuinte !== undefined ? String(cliente.contribuinte) : '9');
+        setCep(cliente.cep || '');
+        setEndereco(cliente.endereco || '');
+        setNumero(cliente.numero || '');
+        setBairro(cliente.bairro || '');
+        setCidade(cliente.cidade || '');
+        setUf(cliente.uf || '');
+      } else {
+        setNome('');
+        setEmail('');
+        setTelefone('');
+        setCpfCnpj('');
+        setTipo('F');
+        setContribuinte('9');
+        setCep('');
+        setEndereco('');
+        setNumero('');
+        setBairro('');
+        setCidade('');
+        setUf('');
+      }
+      setErrors({});
+    }
+  }, [cliente, isOpen]);
+
+  // Inferência automática baseada no tamanho do documento (opcional para melhorar UX)
+  const handleDocChange = (val: string) => {
+    setCpfCnpj(val);
+    const digits = val.replace(/\D/g, '');
+    if (digits.length === 14) {
+      setTipo('J');
+      setContribuinte('1');
+    } else if (digits.length === 11) {
+      setTipo('F');
+      setContribuinte('9');
+    }
+  };
+
+  const handleSave = async () => {
+    const newErrors: { [key: string]: string } = {};
+
+    if (!nome.trim()) {
+      newErrors.nome = 'Campo obrigatório';
+    }
+
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
+
+    setErrors({});
+    setIsSaving(true);
+    setSavedSuccess(false);
+
+    try {
+      const payload: any = {
+        id: cliente?.id,
+        bling_id: cliente?.bling_id,
+        nome: nome.trim(),
+        email: email.trim(),
+        telefone: telefone.trim(),
+        cpf_cnpj: cpfCnpj.trim(),
+        tipo,
+        contribuinte: parseInt(contribuinte, 10),
+        cep: cep.trim(),
+        endereco: endereco.trim(),
+        numero: numero.trim(),
+        bairro: bairro.trim(),
+        cidade: cidade.trim(),
+        uf: uf.trim().toUpperCase()
+      };
+
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      const res = await fetch('/api/clientes/update', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const resData = await res.json();
+
+      if (!res.ok || !resData.success) {
+        setErrorLogData({
+          isOpen: true,
+          title: isNew ? 'Falha ao Cadastrar Contato' : 'Falha ao Atualizar Contato',
+          errorMessage: resData.error || 'Erro ao processar sincronização.',
+          details: resData.details || '',
+          logs: resData.logs || [`[${new Date().toISOString()}] HTTP Status: ${res.status}`],
+        });
+        setIsSaving(false);
+        return;
+      }
+
+      if (onSave) {
+        // Mock the returned client with the extra fields so the UI can use them if needed
+        onSave({ ...resData.client, ...payload });
+      }
+
+      setIsSaving(false);
+      setSavedSuccess(true);
+      setTimeout(() => {
+        setSavedSuccess(false);
+        onClose();
+      }, 1500);
+    } catch (err: any) {
+      setErrorLogData({
+        isOpen: true,
+        title: 'Erro de Execução (Node.js)',
+        errorMessage: err.message || 'Falha ao enviar dados.',
+        details: String(err),
+      });
+      setIsSaving(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <>
+      <div className="relative z-40">
+        <GlassModal
+          isOpen={isOpen}
+        onClose={onClose}
+        title={isNew ? 'Cadastrar Novo Contato' : 'Editar Contato'}
+        subtitle={isNew ? 'Sincronização em tempo real com Bling ERP' : `ID Bling: ${cliente?.bling_id}`}
+        icon={<User className="w-6 h-6 text-blue-400" />}
+        footer={
+          <>
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              {savedSuccess && (
+                <span className="text-emerald-400 font-semibold flex items-center gap-1 animate-in fade-in">
+                  <CheckCircle2 className="w-4 h-4" /> Salvo com sucesso!
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={onClose}
+                className="bg-white/5 border-white/15 text-slate-300 hover:bg-white/10"
+              >
+                Cancelar
+              </Button>
+
+              <Button
+                onClick={handleSave}
+                disabled={isSaving}
+                className="glass-button-primary gap-2 bg-blue-600/80 hover:bg-blue-600"
+              >
+                <Save className="w-4 h-4" />
+                <span>{isSaving ? 'Salvando...' : 'Salvar Contato'}</span>
+              </Button>
+            </div>
+          </>
+        }
+      >
+        <div className="space-y-6">
+                  {/* Dados Pessoais / Principais */}
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider mb-4 flex items-center gap-2">
+                      <User className="w-4 h-4 text-blue-400" /> Dados Principais
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1.5 md:col-span-2">
+                        <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                          Nome / Razão Social *
+                        </label>
+                        <input
+                          type="text"
+                          value={nome}
+                          onChange={(e) => {
+                            setNome(e.target.value);
+                            if (errors.nome) setErrors(prev => ({ ...prev, nome: '' }));
+                          }}
+                          className={`w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium ${errors.nome ? 'border-rose-500/50 focus:border-rose-500 bg-rose-500/5' : ''}`}
+                          placeholder="Ex: João da Silva / Empresa X"
+                        />
+                        {errors.nome && <span className="text-xs text-rose-400 font-semibold">{errors.nome}</span>}
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                          Email
+                        </label>
+                        <div className="relative">
+                          <Mail className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
+                          <input
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="w-full pl-9 pr-4 py-2.5 rounded-2xl glass-input text-sm outline-none"
+                            placeholder="contato@exemplo.com"
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                          Telefone / Celular
+                        </label>
+                        <div className="relative">
+                          <Phone className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
+                          <input
+                            type="text"
+                            value={telefone}
+                            onChange={(e) => setTelefone(e.target.value)}
+                            className="w-full pl-9 pr-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-mono"
+                            placeholder="(11) 98765-4321"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Documento & Tributação (Bling) */}
+                  <div className="p-5 rounded-2xl glass-card border border-white/10 bg-white/[0.02]">
+                    <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider mb-4 flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-purple-400" /> Documento & Tributação
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                          CPF / CNPJ
+                        </label>
+                        <input
+                          type="text"
+                          value={cpfCnpj}
+                          onChange={(e) => handleDocChange(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50 font-mono"
+                          placeholder="000.000.000-00"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                          Tipo de Pessoa *
+                        </label>
+                        <select 
+                          value={tipo} 
+                          onChange={(e) => setTipo(e.target.value)} 
+                          className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50"
+                        >
+                          <option value="F">Física (F)</option>
+                          <option value="J">Jurídica (J)</option>
+                          <option value="E">Estrangeiro (E)</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                          Tipo de Contribuinte *
+                        </label>
+                        <select 
+                          value={contribuinte} 
+                          onChange={(e) => setContribuinte(e.target.value)} 
+                          className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50"
+                        >
+                          <option value="1">1 - Contribuinte ICMS</option>
+                          <option value="2">2 - Contribuinte isento</option>
+                          <option value="9">9 - Não contribuinte</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Endereço */}
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider mb-4 flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-emerald-400" /> Endereço
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">CEP</label>
+                        <input type="text" value={cep} onChange={e => setCep(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="00000-000" />
+                      </div>
+                      <div className="space-y-1.5 md:col-span-2">
+                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Endereço / Rua</label>
+                        <input type="text" value={endereco} onChange={e => setEndereco(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="Rua Exemplo" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Número</label>
+                        <input type="text" value={numero} onChange={e => setNumero(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="123" />
+                      </div>
+                      <div className="space-y-1.5 md:col-span-2">
+                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Bairro</label>
+                        <input type="text" value={bairro} onChange={e => setBairro(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="Centro" />
+                      </div>
+                      <div className="space-y-1.5 md:col-span-1">
+                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Cidade</label>
+                        <input type="text" value={cidade} onChange={e => setCidade(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="São Paulo" />
+                      </div>
+                      <div className="space-y-1.5 md:col-span-1">
+                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">UF</label>
+                        <input type="text" value={uf} onChange={e => setUf(e.target.value)} maxLength={2} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 uppercase" placeholder="SP" />
+                      </div>
+                    </div>
+                  </div>
+        </div>
+      </GlassModal>
+      </div>
+
+      <div className="relative z-50">
+        <ErrorLogModal
+          isOpen={errorLogData.isOpen}
+          onClose={() => setErrorLogData(prev => ({ ...prev, isOpen: false }))}
+          title={errorLogData.title}
+          errorMessage={errorLogData.errorMessage}
+          details={errorLogData.details}
+          logs={errorLogData.logs}
+          onRetry={handleSave}
+        />
+      </div>
+    </>
+  );
+}
