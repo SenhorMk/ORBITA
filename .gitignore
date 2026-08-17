@@ -46,7 +46,10 @@ next-env.d.ts
 # agent tools/logs
 .fcc/
 graphify-out/
-.agents/skills/database-sentinel/
+/AGENTS.md
+/.agents/
+/.codex/
+/.scratch/
 skills-lock.json
 
 # Arquivos de Agentes e Documentacao Extra

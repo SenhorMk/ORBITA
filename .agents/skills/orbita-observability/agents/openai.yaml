@@ -1,4 +1,0 @@
-interface:
-  display_name: "ORBITA Observability"
-  short_description: "Standardize safe correlated telemetry"
-  default_prompt: "Use $orbita-observability to add safe logs and request correlation to this flow."
