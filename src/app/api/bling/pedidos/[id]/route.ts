@@ -1,125 +1,68 @@
-import { NextResponse } from 'next/server';
-import { verifySessionAndRole } from '@/lib/auth';
+import { resolveActorContext } from '@/lib/auth';
+import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { bling } from '@/services/bling';
+import {
+  OrderAccess,
+  type OrderProvider,
+  type OrderProviderResult,
+  type OrderStore,
+} from '@/services/orderAccess';
+
+import { createOrderByIdHandlers } from './handlers';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+function isProviderNotFound(error: unknown): boolean {
+  return error instanceof Error && /(?:HTTP\s*)?404\b/i.test(error.message);
+}
+
+async function callProvider<T>(operation: () => Promise<T>): Promise<OrderProviderResult<T>> {
   try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-    }
-
-    const { id } = await params;
-    if (!id) {
-      return NextResponse.json({ success: false, error: 'ID do pedido obrigatório' }, { status: 400 });
-    }
-
-    const blingClient = bling.forUser(session.tenant);
-    const pedido = await blingClient.getPedido(id);
-
-    if (!pedido) {
-      return NextResponse.json({ success: false, error: 'Pedido não encontrado no Bling' }, { status: 404 });
-    }
-
-    return NextResponse.json({ success: true, data: pedido });
-  } catch (error: any) {
-    console.error(`Erro ao buscar pedido no Bling:`, error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Erro interno ao buscar pedido' },
-      { status: 500 }
-    );
+    return { _tag: 'OrderProviderSucceeded', value: await operation() };
+  } catch (error: unknown) {
+    return isProviderNotFound(error)
+      ? { _tag: 'OrderProviderNotFound' }
+      : { _tag: 'OrderProviderUnavailable' };
   }
 }
 
-export async function DELETE(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-    }
+const orderStore: OrderStore = {
+  async findByExternalId(tenant, externalId) {
+    const pedido = await pedidoRepository.getByBlingId(tenant, externalId);
+    return pedido
+      ? { externalId: pedido.bling_id, localValue: pedido }
+      : null;
+  },
+  async deleteByExternalId(tenant, externalId) {
+    await pedidoRepository.deleteByBlingId(tenant, externalId);
+  },
+};
 
-    let { id } = await params;
-    if (!id) {
-      return NextResponse.json({ success: false, error: 'ID do pedido obrigatório' }, { status: 400 });
-    }
+const orderProvider: OrderProvider = {
+  async read(tenant, externalId) {
+    const result = await callProvider(() => bling.forUser(tenant).getPedido(externalId));
+    return result._tag === 'OrderProviderSucceeded' && result.value === null
+      ? { _tag: 'OrderProviderNotFound' }
+      : result;
+  },
+  async update(tenant, externalId, changes) {
+    return callProvider(() => bling.forUser(tenant).updatePedido(externalId, changes));
+  },
+  async remove(tenant, externalId) {
+    const result = await callProvider(() => bling.forUser(tenant).deletePedido(externalId));
+    return result._tag === 'OrderProviderSucceeded'
+      ? { _tag: 'OrderProviderSucceeded', value: undefined }
+      : result;
+  },
+};
 
-    id = decodeURIComponent(id);
+const handlers = createOrderByIdHandlers({
+  resolveActor(request, capability) {
+    return resolveActorContext(request, capability);
+  },
+  orders: new OrderAccess(orderStore, orderProvider),
+});
 
-    const blingClient = bling.forUser(session.tenant);
-    
-    // 1. Tenta apagar no Bling primeiro (fonte da verdade)
-    // Se for manual (#MANUAL-...), não precisa apagar no Bling.
-    if (!id.startsWith('#MANUAL-')) {
-      try {
-        await blingClient.deletePedido(id);
-      } catch (err: any) {
-        // Se já não existe no Bling (404), ignoramos o erro para poder limpar o cache local (pedido órfão)
-        if (!err.message.includes('404')) {
-          throw err;
-        }
-      }
-    }
-
-    // 2. Apaga do banco local (cache)
-    const { supabaseServer } = await import('@/lib/supabaseServer');
-    const { error: dbError } = await supabaseServer
-      .from('pedidos')
-      .delete()
-      .eq('bling_id', id);
-
-    if (dbError) {
-      throw new Error(`Bling OK, mas erro ao apagar cache local: ${dbError.message}`);
-    }
-
-    return NextResponse.json({ success: true, message: 'Pedido apagado com sucesso' });
-  } catch (error: any) {
-    console.error(`Erro ao apagar pedido:`, error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Erro interno ao apagar pedido' },
-      { status: 500 }
-    );
-  }
-}
-
-export async function PUT(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-    }
-
-    const { id } = await params;
-    const body = await request.json();
-
-    if (!id) {
-      return NextResponse.json({ error: 'ID do pedido não fornecido' }, { status: 400 });
-    }
-
-    const blingClient = bling.forUser(session.tenant);
-
-    // Tenta atualizar no Bling
-    let updatedPedidoData = null;
-    if (!id.startsWith('#MANUAL-')) {
-      updatedPedidoData = await blingClient.updatePedido(id, body);
-    }
-
-    return NextResponse.json({ success: true, data: updatedPedidoData });
-  } catch (error: any) {
-    console.error(`Erro ao atualizar pedido no Bling:`, error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Erro interno ao atualizar pedido' },
-      { status: 500 }
-    );
-  }
-}
+export const GET = handlers.GET;
+export const DELETE = handlers.DELETE;
+export const PUT = handlers.PUT;
