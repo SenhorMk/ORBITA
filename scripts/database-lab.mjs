@@ -1,10 +1,20 @@
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const SUPABASE_CLI_ENTRY = require.resolve('supabase/dist/supabase.js');
 
 const PROJECT_ID = 'orbita-database-lab';
+const DATABASE_DIRECTORY = path.resolve(process.cwd(), 'database');
+const GENERATED_INCLUDE_DIRECTORY = path.resolve(
+  process.cwd(),
+  'supabase',
+  'tests',
+  'database',
+  '.generated',
+);
 
 export const DATABASE_LAB_STEPS = Object.freeze([
   Object.freeze({ name: 'start isolated Postgres', args: Object.freeze(['db', 'start']) }),
@@ -22,6 +32,45 @@ export const DATABASE_LAB_CLEANUP = Object.freeze({
   name: 'destroy isolated Supabase lab',
   args: Object.freeze(['stop', '--project-id', PROJECT_ID, '--no-backup']),
 });
+
+/** Resolve the generated pgTAP include path for one canonical SQL file. */
+export function generatedIncludePath(fileName) {
+  return path.join(
+    GENERATED_INCLUDE_DIRECTORY,
+    fileName.replace(/\.sql$/i, '.inc'),
+  );
+}
+
+/**
+ * Copy canonical SQL into the test mount without creating duplicate test files.
+ *
+ * @param {{
+ *   mkdirSync?: (directory: string, options: { recursive: true }) => unknown,
+ *   readdirSync?: (directory: string) => string[],
+ *   copyFileSync?: (source: string, destination: string) => void,
+ * }} [operations]
+ */
+export function prepareDatabaseTestIncludes({
+  mkdirSync = fs.mkdirSync,
+  readdirSync = fs.readdirSync,
+  copyFileSync = fs.copyFileSync,
+} = {}) {
+  mkdirSync(GENERATED_INCLUDE_DIRECTORY, { recursive: true });
+
+  for (const fileName of readdirSync(DATABASE_DIRECTORY)) {
+    if (!fileName.endsWith('.sql')) continue;
+
+    copyFileSync(
+      path.join(DATABASE_DIRECTORY, fileName),
+      generatedIncludePath(fileName),
+    );
+  }
+}
+
+/** Remove only generated pgTAP includes after the disposable run. */
+export function cleanupDatabaseTestIncludes(fileSystem = fs) {
+  fileSystem.rmSync(GENERATED_INCLUDE_DIRECTORY, { recursive: true, force: true });
+}
 
 const REMOTE_FLAGS = new Set(['--db-url', '--linked', '--project-ref']);
 const ALLOWED_SIGNATURES = new Set([
@@ -105,12 +154,17 @@ export function executeSupabaseStep(step) {
   }
 }
 
-export function runDatabaseLab({ execute = executeSupabaseStep } = {}) {
+export function runDatabaseLab({
+  execute = executeSupabaseStep,
+  prepareIncludes = prepareDatabaseTestIncludes,
+  cleanupIncludes = cleanupDatabaseTestIncludes,
+} = {}) {
   assertLocalOnlyPlan();
 
   let failure;
 
   try {
+    prepareIncludes();
     for (const step of DATABASE_LAB_STEPS) {
       execute(step);
     }
@@ -126,6 +180,7 @@ export function runDatabaseLab({ execute = executeSupabaseStep } = {}) {
         failure = cleanupError;
       }
     }
+    cleanupIncludes();
   }
 
   if (failure) {

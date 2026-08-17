@@ -4,6 +4,8 @@ import {
   assertLocalOnlyPlan,
   DATABASE_LAB_CLEANUP,
   DATABASE_LAB_STEPS,
+  generatedIncludePath,
+  prepareDatabaseTestIncludes,
   runDatabaseLab,
 } from './database-lab.mjs';
 
@@ -38,7 +40,34 @@ describe('database lab lifecycle', () => {
       }
     });
 
-    expect(() => runDatabaseLab({ execute })).toThrow('test failure');
+    expect(() => runDatabaseLab({
+      execute,
+      prepareIncludes() {},
+      cleanupIncludes() {},
+    })).toThrow('test failure');
     expect(executedSteps.at(-1)).toBe('destroy isolated Supabase lab');
+  });
+
+  it('copies canonical SQL into a non-test include consumed by pgTAP', () => {
+    const copiedFiles: Array<{ source: string; destination: string }> = [];
+    const fileSystem = {
+      mkdirSync() {
+        return undefined;
+      },
+      readdirSync() {
+        return ['09_harden_grants_and_rpcs.sql', 'notes.md'];
+      },
+      copyFileSync(source: string, destination: string) {
+        copiedFiles.push({ source, destination });
+      },
+    };
+
+    prepareDatabaseTestIncludes(fileSystem);
+
+    expect(copiedFiles).toEqual([{
+      source: expect.stringMatching(/database[\\/]09_harden_grants_and_rpcs\.sql$/),
+      destination: generatedIncludePath('09_harden_grants_and_rpcs.sql'),
+    }]);
+    expect(copiedFiles[0]?.destination).toMatch(/\.inc$/);
   });
 });

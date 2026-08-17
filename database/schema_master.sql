@@ -131,6 +131,7 @@ CREATE TABLE IF NOT EXISTS integracoes_bling (
     access_token     TEXT,
     refresh_token    TEXT,
     token_expires_at TIMESTAMPTZ,
+    refresh_locked_at TIMESTAMPTZ,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT unique_integracao_user UNIQUE(user_id)
@@ -364,60 +365,118 @@ CREATE TRIGGER tg_prevenir_exclusao_cliente BEFORE DELETE ON clientes FOR EACH R
 -- 4. FUNÇÕES DE SUPORTE
 -- ============================================================================
 
--- Dashboard Stats per user
-CREATE OR REPLACE FUNCTION dashboard_stats(p_user_id UUID)
-RETURNS TABLE (faturamento30 numeric, total bigint, pendentes bigint, cancelados bigint, atendidos bigint) LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+-- Server-only RPCs. Every object is fully qualified because search_path is empty.
+CREATE OR REPLACE FUNCTION public.dashboard_stats(p_user_id UUID)
+RETURNS TABLE (faturamento30 numeric, total bigint, pendentes bigint, cancelados bigint, atendidos bigint)
+LANGUAGE sql SECURITY INVOKER SET search_path = '' AS $$
+    SELECT
+        COALESCE(SUM(p.total) FILTER (
+            WHERE p.status <> 'Cancelado'
+              AND p.data >= (pg_catalog.now() - INTERVAL '30 days')
+        ), 0),
+        COUNT(p.id),
+        COUNT(p.id) FILTER (WHERE p.status = 'Pendente'),
+        COUNT(p.id) FILTER (WHERE p.status = 'Cancelado'),
+        COUNT(p.id) FILTER (WHERE p.status IN ('Atendido', 'Enviado'))
+    FROM public.pedidos p
+    WHERE p.user_id = p_user_id;
+$$;
+
+CREATE OR REPLACE FUNCTION public.try_advisory_lock_sync(p_user_id UUID)
+RETURNS boolean LANGUAGE sql SECURITY INVOKER SET search_path = '' AS $$
+    SELECT pg_catalog.pg_try_advisory_lock(
+        ('x' || pg_catalog.substr(pg_catalog.md5(p_user_id::text), 1, 16))::bit(64)::bigint
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION public.advisory_unlock_sync(p_user_id UUID)
+RETURNS boolean LANGUAGE sql SECURITY INVOKER SET search_path = '' AS $$
+    SELECT pg_catalog.pg_advisory_unlock(
+        ('x' || pg_catalog.substr(pg_catalog.md5(p_user_id::text), 1, 16))::bit(64)::bigint
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION public.acquire_bling_token_lock(
+    p_user_id UUID,
+    p_timeout_seconds INTEGER DEFAULT 30
+)
+RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $$
+DECLARE
+    v_locked_at TIMESTAMPTZ;
+    v_now TIMESTAMPTZ := pg_catalog.now();
 BEGIN
-    RETURN QUERY SELECT
-        COALESCE(SUM(p.total) FILTER (WHERE p.status != 'Cancelado' AND p.data >= (NOW() - INTERVAL '30 days')), 0) as faturamento30,
-        COUNT(p.id) as total, COUNT(p.id) FILTER (WHERE p.status = 'Pendente') as pendentes,
-        COUNT(p.id) FILTER (WHERE p.status = 'Cancelado') as cancelados,
-        COUNT(p.id) FILTER (WHERE p.status IN ('Atendido', 'Enviado')) as atendidos
-    FROM pedidos p WHERE p.user_id = p_user_id;
+    IF p_timeout_seconds < 5 OR p_timeout_seconds > 300 THEN
+        RAISE EXCEPTION 'Timeout de lock fora do intervalo permitido.' USING ERRCODE = '22023';
+    END IF;
+
+    SELECT refresh_locked_at INTO v_locked_at
+    FROM public.integracoes_bling
+    WHERE user_id = p_user_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN RETURN false; END IF;
+
+    IF v_locked_at IS NULL
+       OR v_locked_at < v_now - pg_catalog.make_interval(secs => p_timeout_seconds) THEN
+        UPDATE public.integracoes_bling
+        SET refresh_locked_at = v_now
+        WHERE user_id = p_user_id;
+        RETURN true;
+    END IF;
+
+    RETURN false;
 END;
 $$;
 
--- Multi-tenant Advisory Locks for Syncing
-CREATE OR REPLACE FUNCTION try_advisory_lock_sync(p_user_id UUID) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE lock_id bigint;
+CREATE OR REPLACE FUNCTION public.decrement_estoque(
+    p_user_id UUID,
+    p_produto_id UUID,
+    p_qty INTEGER
+)
+RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $$
 BEGIN
-    lock_id := ('x' || substr(md5(p_user_id::text), 1, 16))::bit(64)::bigint;
-    RETURN pg_try_advisory_lock(lock_id);
+    IF p_qty <= 0 THEN
+        RAISE EXCEPTION 'Quantidade deve ser maior que zero.' USING ERRCODE = '22023';
+    END IF;
+
+    UPDATE public.produtos
+    SET estoque = GREATEST(0, estoque - p_qty)
+    WHERE id = p_produto_id
+      AND user_id = p_user_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Produto não encontrado para o tenant.' USING ERRCODE = 'P0002';
+    END IF;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION advisory_unlock_sync(p_user_id UUID) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE lock_id bigint;
+CREATE OR REPLACE FUNCTION public.try_nfe_lock(p_user_id UUID, p_pedido_id UUID)
+RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $$
 BEGIN
-    lock_id := ('x' || substr(md5(p_user_id::text), 1, 16))::bit(64)::bigint;
-    RETURN pg_advisory_unlock(lock_id);
+    IF NOT EXISTS (
+        SELECT 1 FROM public.pedidos
+        WHERE id = p_pedido_id AND user_id = p_user_id
+    ) THEN RETURN false; END IF;
+
+    RETURN pg_catalog.pg_try_advisory_lock(
+        ('x' || pg_catalog.substr(pg_catalog.md5('nfe_' || p_pedido_id::text), 1, 16))::bit(64)::bigint
+    );
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION try_advisory_lock_sync(UUID) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION advisory_unlock_sync(UUID) TO authenticated, service_role;
-REVOKE EXECUTE ON FUNCTION try_advisory_lock_sync(UUID) FROM anon;
-REVOKE EXECUTE ON FUNCTION advisory_unlock_sync(UUID) FROM anon;
-
--- NFE Locks
-CREATE OR REPLACE FUNCTION try_nfe_lock(p_pedido_id UUID) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE lock_id bigint;
+CREATE OR REPLACE FUNCTION public.unlock_nfe(p_user_id UUID, p_pedido_id UUID)
+RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $$
 BEGIN
-  lock_id := ('x' || substr(md5('nfe_' || p_pedido_id::text), 1, 16))::bit(64)::bigint;
-  RETURN pg_try_advisory_lock(lock_id);
-END; $$;
+    IF NOT EXISTS (
+        SELECT 1 FROM public.pedidos
+        WHERE id = p_pedido_id AND user_id = p_user_id
+    ) THEN RETURN false; END IF;
 
-CREATE OR REPLACE FUNCTION unlock_nfe(p_pedido_id UUID) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE lock_id bigint;
-BEGIN
-  lock_id := ('x' || substr(md5('nfe_' || p_pedido_id::text), 1, 16))::bit(64)::bigint;
-  RETURN pg_advisory_unlock(lock_id);
-END; $$;
-
-GRANT EXECUTE ON FUNCTION try_nfe_lock(UUID) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION unlock_nfe(UUID) TO authenticated, service_role;
-REVOKE EXECUTE ON FUNCTION try_nfe_lock(UUID) FROM anon;
-REVOKE EXECUTE ON FUNCTION unlock_nfe(UUID) FROM anon;
+    RETURN pg_catalog.pg_advisory_unlock(
+        ('x' || pg_catalog.substr(pg_catalog.md5('nfe_' || p_pedido_id::text), 1, 16))::bit(64)::bigint
+    );
+END;
+$$;
 
 -- ============================================================================
 -- 5. RPC - PEDIDO MANUAL E TRANSAÇÕES
@@ -539,4 +598,40 @@ ALTER TABLE public.fornecedores ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Enable all access for contas_financeiras" ON public.contas_financeiras FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all access for fornecedores" ON public.fornecedores FOR ALL USING (true) WITH CHECK (true);
+
+-- ============================================================================
+-- 7. LEAST-PRIVILEGE DATA API CLOSURE (MIGRATION 09)
+-- ============================================================================
+
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM PUBLIC, anon, authenticated;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated, service_role;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres
+    REVOKE ALL PRIVILEGES ON TABLES FROM PUBLIC, anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres
+    REVOKE ALL PRIVILEGES ON SEQUENCES FROM PUBLIC, anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres
+    REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON TABLES FROM PUBLIC, anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON SEQUENCES FROM PUBLIC, anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC, anon, authenticated, service_role;
+
+GRANT SELECT ON TABLE public.clientes TO authenticated;
+GRANT SELECT ON TABLE public.produtos TO authenticated;
+GRANT SELECT ON TABLE public.itens_pedido TO authenticated;
+GRANT SELECT ON TABLE public.chatwoot_contacts TO authenticated;
+GRANT SELECT ON TABLE public.chatwoot_conversations TO authenticated;
+GRANT SELECT ON TABLE public.chatwoot_messages TO authenticated;
+
+GRANT EXECUTE ON FUNCTION public.dashboard_stats(UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.try_advisory_lock_sync(UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.advisory_unlock_sync(UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.acquire_bling_token_lock(UUID, INTEGER) TO service_role;
+GRANT EXECUTE ON FUNCTION public.decrement_estoque(UUID, UUID, INTEGER) TO service_role;
+GRANT EXECUTE ON FUNCTION public.try_nfe_lock(UUID, UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.unlock_nfe(UUID, UUID) TO service_role;
 

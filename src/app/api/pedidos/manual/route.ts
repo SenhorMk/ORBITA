@@ -222,7 +222,15 @@ export async function POST(request: Request) {
       });
 
       // Baixa no estoque local de forma atômica para evitar overselling (Race condition)
-      await supabaseServer.rpc('decrement_estoque', { p_produto_id: item.id, p_qty: item.quantidade_compra });
+      const { error: stockError } = await supabaseServer.rpc('decrement_estoque', {
+        p_user_id: userId,
+        p_produto_id: item.id,
+        p_qty: item.quantidade_compra,
+      });
+
+      if (stockError) {
+        throw new Error(`Erro ao atualizar estoque local: ${stockError.message}`);
+      }
 
       // Movimentação de estoque
       await supabaseServer.from('movimentacao_estoque').insert({

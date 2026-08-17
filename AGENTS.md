@@ -43,10 +43,12 @@ Do not let a workflow skill decide product scope that belongs in the spec. Do no
 - `$orbita-integrations`: Chatwoot and other external adapters.
 - `$orbita-security`: auth, permissions, tenant isolation, cookies, secrets, and webhooks.
 - `$orbita-database`: Supabase/PostgreSQL schema, RLS, migrations, triggers, and repositories.
+- `$supabase`: official Supabase workflow for current product behavior, MCP inspection, CLI safety, and documentation lookup.
+- `$supabase-postgres-best-practices`: official query, schema, privilege, RLS, locking, and performance guidance for every PostgreSQL change.
 - `$orbita-testing`: test seams and the unit/integration/contract/E2E strategy.
 - `$orbita-observability`: structured logs, redaction, request IDs, and audit events.
 - `$apple-design`, `$emil-design-eng`, and `$pick-ui-library`: frontend decisions; motion must improve comprehension, feedback, or orientation.
-- `$database-sentinel`: read-only database/RLS audit. Require explicit opt-in for credentials, network probes, or writes.
+- Do not use `$database-sentinel`; it is disabled for ORBITA until the user explicitly re-enables it. Use the official Supabase skills plus `$orbita-database` and `$orbita-security` instead.
 - Strix skills: use only for authorized high-risk/release security work. Local scans require Docker and an LLM provider; never scan a host without confirmation of ownership and scope.
 
 ## Architecture rules
