@@ -12,6 +12,7 @@
     "aislop": "node scripts/check-aislop-ratchet.mjs",
     "secrets:check": "node scripts/check-secrets.mjs",
     "test": "vitest run",
+    "test:db": "node scripts/test-database-lab.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -45,6 +46,7 @@
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
+    "supabase": "2.114.0",
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
     "typescript": "^5",

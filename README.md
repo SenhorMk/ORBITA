@@ -8,34 +8,33 @@ Orbita é um painel administrativo e orquestrador que integra o ERP **Bling v3**
 
 ### Pré-requisitos
 * Node.js (versão recomendada: 20+)
-* Banco de dados PostgreSQL (Supabase recomendado)
+* Docker Desktop para executar o banco de testes descartável
 
-### 1. Configuração do Banco de Dados
-Para configurar a estrutura e as regras de negócio de banco de dados, acesse o editor SQL do Supabase e execute os scripts na seguinte ordem:
+### 1. Laboratório descartável do banco
 
-* **Para uma base nova:**
-  1. Execute o arquivo [`database/schema.sql`](file:///c:/Users/mateu/OneDrive/Documentos/Mateus/Orbita/database/schema.sql)
-  2. Execute o arquivo [`database/triggers.sql`](file:///c:/Users/mateu/OneDrive/Documentos/Mateus/Orbita/database/triggers.sql)
+Instale as dependências e execute a suíte PostgreSQL/pgTAP:
 
-* **Para uma base preexistente:**
-  1. Execute o arquivo [`database/migration.sql`](file:///c:/Users/mateu/OneDrive/Documentos/Mateus/Orbita/database/migration.sql)
-  2. Execute o arquivo [`database/triggers.sql`](file:///c:/Users/mateu/OneDrive/Documentos/Mateus/Orbita/database/triggers.sql)
+```bash
+npm ci
+npm run test:db
+```
 
-> [!NOTE]
-> O arquivo [`docs/PLANO_DE_TESTES.md`](file:///c:/Users/mateu/OneDrive/Documentos/Mateus/Orbita/docs/PLANO_DE_TESTES.md) possui scripts autossuficientes e casos de teste prontos para serem rodados no banco de dados para atestar as triggers e constraints.
+O comando usa somente o projeto local `orbita-database-lab`, força `db reset` e `test db` com `--local` e remove os containers e volumes ao terminar, inclusive quando um teste falha. Ele não requer login, API key, senha ou acesso ao projeto Supabase hospedado.
+
+> [!WARNING]
+> Os arquivos em `database/` ainda representam o estado legado e não devem ser executados manualmente em um banco remoto. A baseline canônica e o ledger de migrations serão reconciliados nos tickets 14 e 15. Até lá, novos testes de RLS, grants e funções devem ser adicionados em `supabase/tests/database/`.
 
 ### 2. Configuração de Variáveis de Ambiente
-Crie um arquivo `.env.local` na raiz do projeto copiando o modelo de [`env.example`](file:///c:/Users/mateu/OneDrive/Documentos/Mateus/Orbita/.env.example) e preenchendo as suas chaves:
+Crie um arquivo `.env.local` na raiz do projeto copiando o modelo `.env.example` e preenchendo as suas chaves:
 
 ```bash
 cp .env.example .env.local
 ```
 
 ### 3. Instalação e Execução
-Instale as dependências e inicie o servidor de desenvolvimento local:
+Inicie o servidor de desenvolvimento local:
 
 ```bash
-npm install
 npm run dev
 ```
 
