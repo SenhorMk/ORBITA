@@ -2,11 +2,7 @@ import { TituloFinanceiro, CategoriaFinanceira } from '../types';
 import { supabaseServer } from '../lib/supabaseServer';
 
 export class FinanceiroRepository {
-  
-  // =========================================================================
-  // CATEGORIAS FINANCEIRAS
-  // =========================================================================
-  
+
   async getCategorias(userId: string): Promise<CategoriaFinanceira[]> {
     const { data, error } = await supabaseServer
       .from('categorias_financeiras')
@@ -37,10 +33,6 @@ export class FinanceiroRepository {
 
     return data;
   }
-
-  // =========================================================================
-  // TÍTULOS FINANCEIROS (Contas a Pagar e Receber)
-  // =========================================================================
 
   async getResumo(userId: string): Promise<{ receitas: number; despesas: number; saldo: number }> {
     const { data, error } = await supabaseServer

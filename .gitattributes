@@ -1,0 +1,3 @@
+# Keep text content identical across Windows and Linux so generated baselines
+# and source diagnostics are reproducible in local development and CI.
+* text=auto eol=lf

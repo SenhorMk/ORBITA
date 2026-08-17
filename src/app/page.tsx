@@ -814,7 +814,6 @@ export default function Home() {
     : 0;
   const lucroEstimado = totalVendidoMesAtual * 0.42;
 
-  // --- FUNÇÕES DOS MODAIS INTERATIVOS ---
   const getFaturamentoChartData = () => {
     if (!data?.pedidos) return [];
     let filtered = data.pedidos;
@@ -856,8 +855,6 @@ export default function Home() {
 
   const pedidosNfePendente = data?.pedidos?.filter(p => p.status === 'A Emitir' || !p.nfe) || [];
   const novosPedidosFluxo = data?.pedidos?.filter(p => p.status === novosPedidosTab) || [];
-  // -------------------------------------
-
   const filteredPedidosList = getFilteredAndSortedPedidos();
 
   const handleOpenChatwootForPhone = (phone?: string, name?: string) => {
@@ -873,7 +870,6 @@ export default function Home() {
     }
   };
 
-  // ================= TELA DE LOGIN (ANTIGRAVITY SPATIAL GLASS) =================
   if (!session) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 relative select-none overflow-hidden">
@@ -964,7 +960,6 @@ export default function Home() {
     );
   }
 
-  // ================= PAINEL PRINCIPAL ANTIGRAVITY =================
   return (
     <div className="min-h-screen flex font-sans select-none bg-[#0d0818] text-slate-100">
       

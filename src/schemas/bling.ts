@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-// --- PRODUTOS ---
 export const BlingProductSchema = z.object({
   nome: z.string().min(1, "O nome do produto é obrigatório").max(120, "O nome não pode ter mais de 120 caracteres"),
   tipo: z.enum(["P", "S"], { message: "O tipo deve ser 'P' (Produto) ou 'S' (Serviço)" }),
@@ -13,8 +12,6 @@ export const BlingProductSchema = z.object({
 
 export type BlingProductInput = z.infer<typeof BlingProductSchema>;
 
-
-// --- CONTATOS ---
 export const BlingContactSchema = z.object({
   nome: z.string().min(1, "O nome do contato é obrigatório").max(120, "O nome não pode ter mais de 120 caracteres"),
   tipo: z.enum(["F", "J", "E"], { message: "O tipo deve ser 'F' (Física), 'J' (Jurídica) ou 'E' (Estrangeiro)" }),

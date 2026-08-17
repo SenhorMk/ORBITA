@@ -28,7 +28,6 @@ export async function POST(request: Request) {
       contasReceber: 0
     };
 
-    // --- 1. SINCRONIZAR CONTAS A PAGAR ---
     let pagePagar = 1;
     while (pagePagar <= 50) {
       const contasPagar = await blingClient.getContasPagar(pagePagar, 100);
@@ -57,7 +56,6 @@ export async function POST(request: Request) {
       if (contasPagar.length < 100) break;
     }
 
-    // --- 2. SINCRONIZAR CONTAS A RECEBER ---
     let pageReceber = 1;
     while (pageReceber <= 50) {
       const contasReceber = await blingClient.getContasReceber(pageReceber, 100);
