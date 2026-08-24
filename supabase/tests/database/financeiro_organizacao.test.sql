@@ -61,9 +61,9 @@ values ('99000000-0000-4000-8000-000000000001', 'owner-financeiro@orbita.test'),
        ('99000000-0000-4000-8000-000000000002', 'collab-financeiro@orbita.test'),
        ('99000000-0000-4000-8000-000000000003', 'stranger-financeiro@orbita.test');
 
-\ir .generated/20_organizacao_membership_ativa.inc
-\ir .generated/21_convites_papeis_capacidades.inc
-\ir .generated/24_migrar_financeiro_organizacao.inc
+\ir ../../../database/20_organizacao_membership_ativa.sql
+\ir ../../../database/21_convites_papeis_capacidades.sql
+\ir ../../../database/24_migrar_financeiro_organizacao.sql
 
 select plan(10);
 

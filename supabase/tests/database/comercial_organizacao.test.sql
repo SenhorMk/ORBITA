@@ -102,10 +102,10 @@ values ('98000000-0000-4000-8000-000000000001', 'owner-comercial@orbita.test'),
        ('98000000-0000-4000-8000-000000000002', 'collab-comercial@orbita.test'),
        ('98000000-0000-4000-8000-000000000003', 'stranger-comercial@orbita.test');
 
-\ir .generated/20_organizacao_membership_ativa.inc
-\ir .generated/21_convites_papeis_capacidades.inc
-\ir .generated/22_migrar_catalogo_organizacao.inc
-\ir .generated/23_migrar_comercial_estoque_fiscal.inc
+\ir ../../../database/20_organizacao_membership_ativa.sql
+\ir ../../../database/21_convites_papeis_capacidades.sql
+\ir ../../../database/22_migrar_catalogo_organizacao.sql
+\ir ../../../database/23_migrar_comercial_estoque_fiscal.sql
 
 select plan(9);
 

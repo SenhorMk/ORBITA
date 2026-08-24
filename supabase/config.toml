@@ -62,15 +62,17 @@ enabled = true
 # Specifies an ordered list of schema files, directories, or glob patterns that describe your database.
 # Supports paths relative to supabase directory: "./schemas/*.sql", "./database".
 schema_paths = [
-  "../database/schema_master.sql",
+  "./lab/00_bootstrap_schema.sql",
   "../database/03_update_pedidos_status.sql",
+  "./lab/03_legacy_unlock_sync_compat.sql",
   "../database/04_fix_linter_errors.sql",
   "../database/05_add_pedidos_details.sql",
   "../database/06_financeiro.sql",
   "../database/07_bling_auth_lock.sql",
   "../database/07_estoque_rpc.sql",
-  "../database/08_add_user_id.sql",
   "../database/08_contas_financeiras_fornecedores.sql",
+  "../database/08_add_user_id.sql",
+  "./lab/08_prepare_hardened_rpc_replacement.sql",
   "../database/09_harden_grants_and_rpcs.sql",
   "../database/10_contain_financeiro_domain.sql",
   "../database/11_contain_chatwoot_domain.sql",

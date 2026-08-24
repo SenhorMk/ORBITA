@@ -8,8 +8,8 @@ values ('96000000-0000-4000-8000-000000000001', 'owner-invites@orbita.test'),
        ('96000000-0000-4000-8000-000000000002', 'collab-invites@orbita.test'),
        ('96000000-0000-4000-8000-000000000003', 'stranger-invites@orbita.test');
 
-\ir .generated/20_organizacao_membership_ativa.inc
-\ir .generated/21_convites_papeis_capacidades.inc
+\ir ../../../database/20_organizacao_membership_ativa.sql
+\ir ../../../database/21_convites_papeis_capacidades.sql
 
 select plan(7);
 

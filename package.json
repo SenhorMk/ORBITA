@@ -13,6 +13,8 @@
     "secrets:check": "node scripts/check-secrets.mjs",
     "audit:check": "npm audit --omit=dev --audit-level=high",
     "db:drift:check": "node scripts/check-database-drift.mjs",
+    "db:catalog:write": "node scripts/database-catalog.mjs --write-reference",
+    "db:ledger:write": "node scripts/database-ledger.mjs --write",
     "boundaries:check": "node scripts/check-module-boundaries.mjs",
     "deploy:readiness": "node scripts/check-deploy-readiness.mjs",
     "test:backup": "node scripts/test-backup-restore.mjs",

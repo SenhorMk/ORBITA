@@ -46,9 +46,9 @@ insert into public.nfes (
     now()
 );
 
-\ir .generated/14_expand_modelo_fiscal_canonico.inc
-\ir .generated/15_migrar_dados_e_callers_fiscais.inc
-\ir .generated/16_contrair_modelo_fiscal_legado.inc
+\ir ../../../database/14_expand_modelo_fiscal_canonico.sql
+\ir ../../../database/15_migrar_dados_e_callers_fiscais.sql
+\ir ../../../database/16_contrair_modelo_fiscal_legado.sql
 
 select plan(5);
 

@@ -1,78 +1,48 @@
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
-import { checkDatabaseDrift } from './check-database-drift.mjs';
+
+import { validateCanonicalLedger } from './database-ledger.mjs';
 
 describe('checkDatabaseDrift script', () => {
-  it('passes on canonical repository database configuration', () => {
-    const result = checkDatabaseDrift();
-    expect(result.success).toBe(true);
-    expect(result.errors).toEqual([]);
-    expect(result.checkedFiles).toBeGreaterThan(0);
-    expect(result.checkedFiles).toBe(result.registeredFiles);
+  it('passes on the checksum-locked canonical repository ledger', () => {
+    const result = validateCanonicalLedger();
+    expect(result._tag).toBe('ok');
+    if (result._tag === 'ok') {
+      expect(result.value.checkedFiles).toBe(40);
+      expect(result.value.registeredMigrations).toBe(39);
+    }
   });
 
-  it('detects untracked migration files in database/ directory', () => {
-    const mockFs = {
+  it('fails when the locked checksum differs from canonical SQL', () => {
+    const config = '[db.migrations]\nschema_paths = ["./lab/00_bootstrap.sql"]';
+    const ledger = {
+      version: 2,
+      migrations: [{ order: 1, path: './lab/00_bootstrap.sql', sha256: '0'.repeat(64) }],
+      references: [{ path: '../database/schema_master.sql', sha256: '0'.repeat(64) }],
+      duplicatePrefixes: {},
+    };
+    const fileSystem = {
       existsSync: () => true,
-      readdirSync: () => ['schema_master.sql', '03_update_pedidos_status.sql', '99_rogue_migration.sql'],
-      readFileSync: () => `
-        [db.migrations]
-        schema_paths = [
-          "../database/schema_master.sql",
-          "../database/03_update_pedidos_status.sql"
-        ]
-      `,
+      readdirSync(directory: string) {
+        return path.basename(directory) === 'lab' ? ['00_bootstrap.sql'] : ['schema_master.sql'];
+      },
+      readFileSync(filePath: string) {
+        if (filePath.endsWith('.toml')) return config;
+        if (filePath.endsWith('.json')) return JSON.stringify(ledger);
+        return 'select 1;';
+      },
     };
 
-    const result = checkDatabaseDrift({
-      // @ts-expect-error mock filesystem
-      fileSystem: mockFs,
+    const result = validateCanonicalLedger({
+      databaseDir: path.resolve('database'),
+      labDir: path.resolve('supabase/lab'),
+      configPath: path.resolve('supabase/config.toml'),
+      ledgerPath: path.resolve('database/migrations.lock.json'),
+      fileSystem,
     });
 
-    expect(result.success).toBe(false);
-    expect(result.errors.some((e: string) => e.includes('99_rogue_migration.sql'))).toBe(true);
-  });
-
-  it('detects registered migrations that do not exist on disk', () => {
-    const mockFs = {
-      existsSync: (p: string) => !p.includes('missing_migration.sql'),
-      readdirSync: () => ['schema_master.sql'],
-      readFileSync: () => `
-        [db.migrations]
-        schema_paths = [
-          "../database/schema_master.sql",
-          "../database/missing_migration.sql"
-        ]
-      `,
-    };
-
-    const result = checkDatabaseDrift({
-      // @ts-expect-error mock filesystem
-      fileSystem: mockFs,
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.errors.some((e: string) => e.includes('missing_migration.sql'))).toBe(true);
-  });
-
-  it('fails if initial schema is not first in ledger', () => {
-    const mockFs = {
-      existsSync: () => true,
-      readdirSync: () => ['03_update_pedidos_status.sql', 'schema_master.sql'],
-      readFileSync: () => `
-        [db.migrations]
-        schema_paths = [
-          "../database/03_update_pedidos_status.sql",
-          "../database/schema_master.sql"
-        ]
-      `,
-    };
-
-    const result = checkDatabaseDrift({
-      // @ts-expect-error mock filesystem
-      fileSystem: mockFs,
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.errors.some((e: string) => e.includes('Initial schema must be the first'))).toBe(true);
+    expect(result._tag).toBe('err');
+    if (result._tag === 'err') expect(result.error.message).toContain('differs from the committed ledger');
   });
 });

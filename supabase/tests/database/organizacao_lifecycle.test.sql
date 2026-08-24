@@ -13,10 +13,10 @@ values ('96000000-0000-4000-8000-000000000001', 'owner-lifecycle@orbita.test'),
        ('96000000-0000-4000-8000-000000000002', 'stranger-lifecycle@orbita.test')
 on conflict do nothing;
 
-\ir .generated/20_organizacao_membership_ativa.inc
-\ir .generated/33_planos_limites_entitlements.inc
-\ir .generated/34_integrar_stripe_assinaturas.inc
-\ir .generated/35_suspensao_retencao_encerramento.inc
+\ir ../../../database/20_organizacao_membership_ativa.sql
+\ir ../../../database/33_planos_limites_entitlements.sql
+\ir ../../../database/34_integrar_stripe_assinaturas.sql
+\ir ../../../database/35_suspensao_retencao_encerramento.sql
 
 grant usage on schema public to authenticated, anon;
 grant all on all tables in schema public to authenticated, service_role;

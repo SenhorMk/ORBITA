@@ -74,7 +74,7 @@ create table public.titulos_financeiros (
 insert into auth.users (id, email)
 values ('75000000-0000-4000-8000-000000000001', 'tenant-fks@orbita.test');
 
-\ir .generated/17_consolidar_fks_e_triggers.inc
+\ir ../../../database/17_consolidar_fks_e_triggers.sql
 
 select plan(5);
 

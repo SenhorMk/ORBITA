@@ -30,9 +30,9 @@ values ('97000000-0000-4000-8000-000000000001', 'owner-catalog@orbita.test'),
        ('97000000-0000-4000-8000-000000000002', 'collab-catalog@orbita.test'),
        ('97000000-0000-4000-8000-000000000003', 'stranger-catalog@orbita.test');
 
-\ir .generated/20_organizacao_membership_ativa.inc
-\ir .generated/21_convites_papeis_capacidades.inc
-\ir .generated/22_migrar_catalogo_organizacao.inc
+\ir ../../../database/20_organizacao_membership_ativa.sql
+\ir ../../../database/21_convites_papeis_capacidades.sql
+\ir ../../../database/22_migrar_catalogo_organizacao.sql
 
 select plan(7);
 

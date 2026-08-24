@@ -33,7 +33,7 @@ values
     ('62000000-0000-4000-8000-000000000001', '61000000-0000-4000-8000-000000000001', 'PED-001-A'),
     ('62000000-0000-4000-8000-000000000002', '61000000-0000-4000-8000-000000000002', 'PED-001-B');
 
-\ir .generated/14_expand_modelo_fiscal_canonico.inc
+\ir ../../../database/14_expand_modelo_fiscal_canonico.sql
 
 select plan(7);
 

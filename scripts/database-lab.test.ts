@@ -1,19 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
-  assertLocalOnlyPlan,
   DATABASE_LAB_CLEANUP,
-  DATABASE_LAB_STEPS,
-  generatedIncludePath,
-  prepareDatabaseTestIncludes,
+  databaseLabCycleSteps,
+  parseLocalOnlyPlan,
   runDatabaseLab,
 } from './database-lab.mjs';
+import { err, ok } from './script-result.mjs';
 
 describe('database lab lifecycle', () => {
   it('pins every destructive or test operation to the local database', () => {
-    expect(() => assertLocalOnlyPlan()).not.toThrow();
+    expect(parseLocalOnlyPlan()._tag).toBe('ok');
 
-    const commandArguments = [...DATABASE_LAB_STEPS, DATABASE_LAB_CLEANUP]
+    const commandArguments = [...databaseLabCycleSteps(1), DATABASE_LAB_CLEANUP]
       .flatMap(({ args }) => args);
 
     expect(commandArguments).not.toContain('--linked');
@@ -23,51 +22,124 @@ describe('database lab lifecycle', () => {
   });
 
   it('rejects a remote-capable command even when no remote flag is present', () => {
-    const unsafePlan = [
-      { name: 'push database', args: ['db', 'push'] },
-    ];
-
-    expect(() => assertLocalOnlyPlan(unsafePlan, DATABASE_LAB_CLEANUP))
-      .toThrow('is not allowlisted');
+    const unsafePlan = [{ name: 'push database', args: ['db', 'push'] }];
+    const result = parseLocalOnlyPlan(unsafePlan, DATABASE_LAB_CLEANUP);
+    expect(result._tag).toBe('err');
+    if (result._tag === 'err') expect(result.error.message).toContain('is not allowlisted');
   });
 
-  it('destroys the dedicated lab when a database test fails', () => {
+  it('destroys the dedicated lab after a failure in the middle of the migration chain', async () => {
     const executedSteps: string[] = [];
-    const execute = vi.fn((step: { name: string }) => {
+    const execute = async (step: { name: string }) => {
       executedSteps.push(step.name);
-      if (step.name === 'run pgTAP database tests') {
-        throw new Error('test failure');
-      }
+      return ok({ step: step.name });
+    };
+    const result = await runDatabaseLab({
+      execute,
+      runMigrationTests: async () => ok({ files: 0, assertions: 0 }),
+      applyMigrations: async () => err('MigrationApplyFailed', 'migration failed after order 18'),
+      captureCatalog: async () => ok('unused'),
+      validateLedger: () => ok({ checkedFiles: 1 }),
+      cycles: 1,
     });
 
-    expect(() => runDatabaseLab({
-      execute,
-      prepareIncludes() {},
-      cleanupIncludes() {},
-    })).toThrow('test failure');
+    expect(result._tag).toBe('err');
     expect(executedSteps.at(-1)).toBe('destroy isolated Supabase lab');
   });
 
-  it('copies canonical SQL into a non-test include consumed by pgTAP', () => {
-    const copiedFiles: Array<{ source: string; destination: string }> = [];
-    const fileSystem = {
-      mkdirSync() {
-        return undefined;
+  it('recreates two independent clean cycles and compares their catalog fingerprints', async () => {
+    const executedSteps: string[] = [];
+    const cycleEvents: string[] = [];
+    let migrationRuns = 0;
+    let catalogCaptures = 0;
+    const result = await runDatabaseLab({
+      execute: async (step: { name: string }) => {
+        executedSteps.push(step.name);
+        return ok({ step: step.name });
       },
-      readdirSync() {
-        return ['09_harden_grants_and_rpcs.sql', 'notes.md'];
+      runMigrationTests: async () => {
+        cycleEvents.push('historical pgTAP rollback');
+        return ok({ files: 0, assertions: 0 });
       },
-      copyFileSync(source: string, destination: string) {
-        copiedFiles.push({ source, destination });
+      applyMigrations: async () => {
+        migrationRuns += 1;
+        cycleEvents.push('canonical migration chain');
+        return ok([]);
       },
-    };
+      captureCatalog: async () => {
+        catalogCaptures += 1;
+        cycleEvents.push('final catalog');
+        return ok('same-catalog');
+      },
+      validateLedger: () => ok({ checkedFiles: 1 }),
+      cycles: 2,
+    });
 
-    prepareDatabaseTestIncludes(fileSystem);
+    expect(migrationRuns).toBe(2);
+    expect(catalogCaptures).toBe(2);
+    expect(executedSteps.filter((stepName) => stepName === DATABASE_LAB_CLEANUP.name)).toHaveLength(3);
+    expect(cycleEvents).toEqual([
+      'historical pgTAP rollback', 'canonical migration chain', 'final catalog',
+      'historical pgTAP rollback', 'canonical migration chain', 'final catalog',
+    ]);
+    expect(result).toEqual({ _tag: 'ok', value: { catalogFingerprint: 'same-catalog', cycles: 2 } });
+  });
 
-    expect(copiedFiles).toEqual([{
-      source: expect.stringMatching(/database[\\/]09_harden_grants_and_rpcs\.sql$/),
-      destination: generatedIncludePath('09_harden_grants_and_rpcs.sql'),
-    }]);
-    expect(copiedFiles[0]?.destination).toMatch(/\.inc$/);
+  it('fails closed before Docker when the canonical ledger is stale', async () => {
+    const executedSteps: string[] = [];
+    const result = await runDatabaseLab({
+      execute: async (step: { name: string }) => {
+        executedSteps.push(step.name);
+        return ok({ step: step.name });
+      },
+      validateLedger: () => err('DatabaseDriftDetected', 'checksum mismatch'),
+    });
+
+    expect(result._tag).toBe('err');
+    expect(executedSteps).toEqual([]);
+  });
+
+  it('runs teardown when an injected dependency throws unexpectedly', async () => {
+    const executedSteps: string[] = [];
+    const result = await runDatabaseLab({
+      execute: async (step: { name: string }) => {
+        executedSteps.push(step.name);
+        return ok({ step: step.name });
+      },
+      applyMigrations: async () => {
+        throw new Error('unexpected adapter defect');
+      },
+      runMigrationTests: async () => ok({ files: 0, assertions: 0 }),
+      validateLedger: () => ok({ checkedFiles: 1 }),
+      cycles: 1,
+    });
+
+    expect(result._tag).toBe('err');
+    if (result._tag === 'err') expect(result.error._tag).toBe('UnexpectedDatabaseLabFailure');
+    expect(executedSteps.at(-1)).toBe(DATABASE_LAB_CLEANUP.name);
+  });
+
+  it('preserves safe diagnostics when both the primary operation and cleanup fail', async () => {
+    let cleanupRuns = 0;
+    const result = await runDatabaseLab({
+      execute: async (step: { name: string }) => {
+        if (step.name === DATABASE_LAB_CLEANUP.name) {
+          cleanupRuns += 1;
+          if (cleanupRuns > 1) return err('SupabaseStepFailed', 'cleanup failed');
+        }
+        return ok({ step: step.name });
+      },
+      applyMigrations: async () => err('MigrationApplyFailed', 'migration failed'),
+      runMigrationTests: async () => ok({ files: 0, assertions: 0 }),
+      validateLedger: () => ok({ checkedFiles: 1 }),
+      cycles: 1,
+    });
+
+    expect(result._tag).toBe('err');
+    if (result._tag === 'err') {
+      expect(result.error._tag).toBe('DatabaseLabCleanupFailed');
+      expect(result.error.primaryFailure).toEqual({ tag: 'MigrationApplyFailed', message: 'migration failed' });
+      expect(result.error.cleanupFailure).toEqual({ tag: 'SupabaseStepFailed', message: 'cleanup failed' });
+    }
   });
 });

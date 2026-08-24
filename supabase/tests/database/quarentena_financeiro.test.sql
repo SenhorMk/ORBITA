@@ -34,7 +34,7 @@ create table public.contas_financeiras (
 insert into auth.users (id, email)
 values ('80000000-0000-4000-8000-000000000001', 'tenant-quarentena@orbita.test');
 
-\ir .generated/12_quarentena_financeiro_sem_tenant.inc
+\ir ../../../database/12_quarentena_financeiro_sem_tenant.sql
 
 select plan(8);
 

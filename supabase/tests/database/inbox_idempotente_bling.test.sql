@@ -9,10 +9,10 @@ insert into auth.users (id, email)
 values ('97000000-0000-4000-8000-000000000001', 'owner-inbox-bling@orbita.test'),
        ('97000000-0000-4000-8000-000000000002', 'other-inbox-bling@orbita.test');
 
-\ir .generated/20_organizacao_membership_ativa.inc
-\ir .generated/25_conexoes_credenciais_privadas.inc
-\ir .generated/26_migrar_bling_organizacao.inc
-\ir .generated/28_inbox_idempotente_bling.inc
+\ir ../../../database/20_organizacao_membership_ativa.sql
+\ir ../../../database/25_conexoes_credenciais_privadas.sql
+\ir ../../../database/26_migrar_bling_organizacao.sql
+\ir ../../../database/28_inbox_idempotente_bling.sql
 
 select plan(10);
 

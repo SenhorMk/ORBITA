@@ -14,9 +14,9 @@ values ('95000000-0000-4000-8000-000000000001', 'owner-audit-a@orbita.test'),
        ('95000000-0000-4000-8000-000000000003', 'owner-audit-b@orbita.test')
 on conflict do nothing;
 
-\ir .generated/20_organizacao_membership_ativa.inc
-\ir .generated/33_planos_limites_entitlements.inc
-\ir .generated/36_auditoria_correlacao_telemetria.inc
+\ir ../../../database/20_organizacao_membership_ativa.sql
+\ir ../../../database/33_planos_limites_entitlements.sql
+\ir ../../../database/36_auditoria_correlacao_telemetria.sql
 
 grant usage on schema public to authenticated, anon;
 grant all on all tables in schema public to authenticated, service_role;

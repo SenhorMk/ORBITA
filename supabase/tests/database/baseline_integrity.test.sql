@@ -75,7 +75,7 @@ insert into auth.users (id, email)
 values ('85000000-0000-4000-8000-000000000001', 'tenant-a@orbita.test'),
        ('85000000-0000-4000-8000-000000000002', 'tenant-b@orbita.test');
 
-\ir .generated/19_comprovar_integridade_baseline.inc
+\ir ../../../database/19_comprovar_integridade_baseline.sql
 
 select plan(4);
 

@@ -9,9 +9,9 @@ values ('94000000-0000-4000-8000-000000000001', 'owner-conexoes@orbita.test'),
        ('94000000-0000-4000-8000-000000000002', 'collab-conexoes@orbita.test'),
        ('94000000-0000-4000-8000-000000000003', 'stranger-conexoes@orbita.test');
 
-\ir .generated/20_organizacao_membership_ativa.inc
-\ir .generated/21_convites_papeis_capacidades.inc
-\ir .generated/25_conexoes_credenciais_privadas.inc
+\ir ../../../database/20_organizacao_membership_ativa.sql
+\ir ../../../database/21_convites_papeis_capacidades.sql
+\ir ../../../database/25_conexoes_credenciais_privadas.sql
 
 select plan(8);
 

@@ -79,7 +79,7 @@ create table public.chatwoot_messages (
     created_at      timestamptz default now()
 );
 
-\ir .generated/18_indices_tenancy_consultas.inc
+\ir ../../../database/18_indices_tenancy_consultas.sql
 
 select plan(8);
 

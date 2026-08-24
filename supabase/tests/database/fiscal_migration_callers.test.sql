@@ -33,8 +33,8 @@ values
     ('67000000-0000-4000-8000-000000000001', '66000000-0000-4000-8000-000000000001', 'PED-101-A'),
     ('67000000-0000-4000-8000-000000000002', '66000000-0000-4000-8000-000000000002', 'PED-101-B');
 
-\ir .generated/14_expand_modelo_fiscal_canonico.inc
-\ir .generated/15_migrar_dados_e_callers_fiscais.inc
+\ir ../../../database/14_expand_modelo_fiscal_canonico.sql
+\ir ../../../database/15_migrar_dados_e_callers_fiscais.sql
 
 select plan(6);
 

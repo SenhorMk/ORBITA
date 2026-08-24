@@ -133,8 +133,8 @@ values ('99900000-0000-4000-8000-000000000001', 'owner-t36@orbita.test'),
        ('99900000-0000-4000-8000-000000000002', 'collab-t36@orbita.test'),
        ('99900000-0000-4000-8000-000000000003', 'external-t36@orbita.test');
 
-\ir .generated/20_organizacao_membership_ativa.inc
-\ir .generated/32_contrair_tenancy_legado.inc
+\ir ../../../database/20_organizacao_membership_ativa.sql
+\ir ../../../database/32_contrair_tenancy_legado.sql
 
 grant usage on schema public to authenticated;
 grant all on all tables in schema public to authenticated, service_role;

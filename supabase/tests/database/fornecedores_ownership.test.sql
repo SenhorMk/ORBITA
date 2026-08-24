@@ -47,7 +47,7 @@ values
     ('71000000-0000-4000-8000-000000000001', 'tenant-a@orbita.test'),
     ('71000000-0000-4000-8000-000000000002', 'tenant-b@orbita.test');
 
-\ir .generated/13_ownership_fornecedores_ids_externos.inc
+\ir ../../../database/13_ownership_fornecedores_ids_externos.sql
 
 select plan(7);
 

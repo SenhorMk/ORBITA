@@ -7,9 +7,9 @@ insert into auth.users (id, email)
 values ('96000000-0000-4000-8000-000000000001', 'owner-cw@orbita.test'),
        ('96000000-0000-4000-8000-000000000002', 'other-cw@orbita.test');
 
-\ir .generated/20_organizacao_membership_ativa.inc
-\ir .generated/25_conexoes_credenciais_privadas.inc
-\ir .generated/27_migrar_chatwoot_organizacao.inc
+\ir ../../../database/20_organizacao_membership_ativa.sql
+\ir ../../../database/25_conexoes_credenciais_privadas.sql
+\ir ../../../database/27_migrar_chatwoot_organizacao.sql
 
 select plan(9);
 

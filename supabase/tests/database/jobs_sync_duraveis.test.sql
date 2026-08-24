@@ -9,8 +9,8 @@ insert into auth.users (id, email)
 values ('98000000-0000-4000-8000-000000000001', 'owner-sync-jobs@orbita.test'),
        ('98000000-0000-4000-8000-000000000002', 'other-sync-jobs@orbita.test');
 
-\ir .generated/20_organizacao_membership_ativa.inc
-\ir .generated/30_jobs_sync_duraveis.inc
+\ir ../../../database/20_organizacao_membership_ativa.sql
+\ir ../../../database/30_jobs_sync_duraveis.sql
 
 select plan(8);
 
