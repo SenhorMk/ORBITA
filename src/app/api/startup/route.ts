@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
-import { syncService } from '@/services/sync';
+import { syncService, SyncAuthorizationStoreUnavailableError, SyncScopeDeniedError } from '@/services/sync';
 import { verifySessionAndRole } from '@/lib/auth';
 import { checkEncryptionConfiguration } from '@/lib/crypto';
 
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     }
 
     // 3. Executar o sync completo (Produtos, Clientes, Pedidos)
-    const syncResult = await syncService.syncAll(session.tenant);
+    const syncResult = await syncService.syncAll(session);
 
     return NextResponse.json({
       success: true,
@@ -60,7 +60,13 @@ export async function POST(request: Request) {
       stats: syncResult.stats
     });
   } catch (error: unknown) {
-    console.error('Erro no startup sync:', error);
+    if (error instanceof SyncScopeDeniedError) {
+      return NextResponse.json({ success: false, error: 'Escopo organizacional inválido' }, { status: 403 });
+    }
+    if (error instanceof SyncAuthorizationStoreUnavailableError) {
+      return NextResponse.json({ success: false, error: 'Serviço de autorização indisponível' }, { status: 503 });
+    }
+    console.error('Erro interno no startup sync.');
     const errorMsg = error instanceof Error ? error.message : String(error);
     if (errorMsg.includes('em execução')) {
       return NextResponse.json({
@@ -70,7 +76,7 @@ export async function POST(request: Request) {
       });
     }
     return NextResponse.json(
-      { success: false, error: errorMsg || 'Erro interno durante sincronização inicial' },
+      { success: false, error: 'Erro interno durante sincronização inicial' },
       { status: 500 }
     );
   }

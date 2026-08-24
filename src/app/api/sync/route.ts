@@ -1,5 +1,5 @@
 import { NextResponse, after } from 'next/server';
-import { syncService } from '../../../services/sync';
+import { syncService, SyncAuthorizationStoreUnavailableError, SyncScopeDeniedError } from '../../../services/sync';
 import { verifySessionAndRole } from '../../../lib/auth';
 
 export const dynamic = 'force-dynamic';
@@ -23,13 +23,13 @@ export async function POST(request: Request) {
     }
 
     // 1. Registra job ou retorna job ativo existente (idempotente)
-    const { jobId, status, isNew } = await syncService.enqueueSync(session.tenant);
+    const { jobId, status, isNew } = await syncService.enqueueSync(session);
 
     // 2. Dispara processamento assíncrono após o envio da resposta
     //    Se o job já estava ativo (isNew=false), não dispara um segundo processo.
     if (isNew || status === 'queued') {
       after(async () => {
-        await syncService.processJob(jobId, session.tenant);
+        await syncService.processJob(jobId, session);
       });
     }
 
@@ -38,8 +38,13 @@ export async function POST(request: Request) {
       { status: 202 },
     );
   } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : 'Erro interno na sincronização';
-    console.error('❌ /api/sync POST:', msg);
-    return NextResponse.json({ success: false, error: msg }, { status: 500 });
+    if (error instanceof SyncScopeDeniedError) {
+      return NextResponse.json({ success: false, error: 'Escopo organizacional inválido' }, { status: 403 });
+    }
+    if (error instanceof SyncAuthorizationStoreUnavailableError) {
+      return NextResponse.json({ success: false, error: 'Serviço de autorização indisponível' }, { status: 503 });
+    }
+    console.error('❌ /api/sync POST: falha interna não classificada');
+    return NextResponse.json({ success: false, error: 'Erro interno na sincronização' }, { status: 500 });
   }
 }

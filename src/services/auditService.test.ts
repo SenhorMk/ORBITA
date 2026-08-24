@@ -1,15 +1,19 @@
 import { describe, it, expect, vi } from 'vitest';
 import { recordAuditEvent, listAuditEvents } from './auditService';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 describe('auditService', () => {
+  const scope = {
+    organizationId: 'org-123',
+    actorId: 'user-456',
+    role: 'owner',
+  } as unknown as VerifiedOrganizationScope;
   it('recordAuditEvent sanitiza segredos no metadata e chama RPC registrar_evento_auditoria', async () => {
     const rpcMock = vi.fn().mockResolvedValue({ data: 'audit-event-uuid-123', error: null });
     const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
-    const eventId = await recordAuditEvent(fakeClient, {
-      organizacaoId: 'org-123',
-      actorId: 'user-456',
+    const eventId = await recordAuditEvent(fakeClient, scope, {
       acao: 'auth.api_key_created',
       recurso: 'api_key',
       recursoId: 'key-789',

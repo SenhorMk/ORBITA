@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import {
   suspendOrganization,
   reactivateOrganization,
@@ -39,6 +40,11 @@ import {
 describe('ORBITA End-to-End SaaS Lifecycle & Production Rehearsal (Ticket 44)', () => {
   const testOrgId = '95000000-0000-4000-8000-000000000001';
   const testUserId = '95000000-0000-4000-8000-000000000002';
+  const testScope = {
+    organizationId: testOrgId,
+    actorId: testUserId,
+    role: 'owner',
+  } as unknown as VerifiedOrganizationScope;
 
   beforeAll(() => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://orbita-staging.supabase.co';
@@ -263,8 +269,7 @@ describe('ORBITA End-to-End SaaS Lifecycle & Production Rehearsal (Ticket 44)', 
       });
       const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
-      const result = await blingInboxService.registerEvent(fakeClient, {
-        organizacaoId: testOrgId,
+      const result = await blingInboxService.registerEvent(fakeClient, testScope, {
         idempotencyKey: 'bling_order_9999',
         eventType: 'pedidos.criado',
         payload: { id: 9999, valor: 150.0 },
@@ -284,8 +289,7 @@ describe('ORBITA End-to-End SaaS Lifecycle & Production Rehearsal (Ticket 44)', 
       });
       const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
-      const result = await chatwootInboxService.registerEvent(fakeClient, {
-        organizacaoId: testOrgId,
+      const result = await chatwootInboxService.registerEvent(fakeClient, testScope, {
         idempotencyKey: key,
         eventType: 'message_created',
         payload: { content: 'Olá ORBITA' },
@@ -302,8 +306,7 @@ describe('ORBITA End-to-End SaaS Lifecycle & Production Rehearsal (Ticket 44)', 
       });
       const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
-      const result = await outboxService.enqueue(fakeClient, {
-        organizacaoId: testOrgId,
+      const result = await outboxService.enqueue(fakeClient, testScope, {
         idempotencyKey: 'outbox_msg_10',
         destination: 'chatwoot',
         eventType: 'chatwoot.send_message',
@@ -347,14 +350,14 @@ describe('ORBITA End-to-End SaaS Lifecycle & Production Rehearsal (Ticket 44)', 
       const rpcMock = vi.fn().mockResolvedValue({ data: null, error: null });
       const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
-      await suspendOrganization(fakeClient, testOrgId, 'Falta de pagamento', testUserId);
+      await suspendOrganization(fakeClient, testScope, 'Falta de pagamento');
       expect(rpcMock).toHaveBeenCalledWith('suspender_organizacao', {
         p_org_id: testOrgId,
         p_motivo: 'Falta de pagamento',
         p_autor_id: testUserId,
       });
 
-      await reactivateOrganization(fakeClient, testOrgId, 'Fatura quitada', testUserId);
+      await reactivateOrganization(fakeClient, testScope, 'Fatura quitada');
       expect(rpcMock).toHaveBeenCalledWith('reativar_organizacao', {
         p_org_id: testOrgId,
         p_motivo: 'Fatura quitada',
@@ -366,7 +369,7 @@ describe('ORBITA End-to-End SaaS Lifecycle & Production Rehearsal (Ticket 44)', 
       const rpcMock = vi.fn().mockResolvedValue({ data: '2026-09-22T12:00:00Z', error: null });
       const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
-      const scheduled = await scheduleOrganizationDeletion(fakeClient, testOrgId, 'Solicitação do cliente', 30, testUserId);
+      const scheduled = await scheduleOrganizationDeletion(fakeClient, testScope, 'Solicitação do cliente', 30);
       expect(scheduled).toBe('2026-09-22T12:00:00Z');
     });
   });

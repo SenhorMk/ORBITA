@@ -4,6 +4,7 @@ import { supabaseServer } from '../../../../lib/supabaseServer';
 import { verifySessionAndRole } from '../../../../lib/auth';
 import { resolveActiveOrganization } from '../../../../lib/organizationContext';
 import { outboxService } from '../../../../services/outboxService';
+import { verifyOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 
 export const dynamic = 'force-dynamic';
 
@@ -101,6 +102,17 @@ export async function POST(request: Request) {
     const preferredOrgId = request.headers.get('cookie')?.match(/orbita_active_org=([^;]+)/)?.[1];
     const activeOrg = await resolveActiveOrganization(supabaseServer, session.actorId, preferredOrgId);
     const orgId = activeOrg?.organizacao.id ?? session.tenant.id;
+    const scopeResult = await verifyOrganizationScope(supabaseServer, {
+      organizationId: orgId,
+      actorId: session.actorId,
+    });
+    if (scopeResult._tag !== 'OrganizationScopeVerified') {
+      const unavailable = scopeResult._tag === 'OrganizationScopeStoreUnavailable';
+      return NextResponse.json(
+        { success: false, error: unavailable ? 'Serviço de autorização indisponível' : 'Escopo organizacional inválido' },
+        { status: unavailable ? 503 : 403 },
+      );
+    }
 
     const exists = await verifyConversationBelongsToOrg(
       conversationId,
@@ -114,9 +126,7 @@ export async function POST(request: Request) {
     }
 
     const idempotencyKey = `chatwoot_msg_${conversationId}_${Date.now()}`;
-    const outboxRecord = await outboxService.enqueue(supabaseServer, {
-      organizacaoId: orgId,
-      userId: session.tenant.id,
+    const outboxRecord = await outboxService.enqueue(supabaseServer, scopeResult.scope, {
       idempotencyKey,
       destination: 'chatwoot',
       eventType: 'message.send',
@@ -127,12 +137,12 @@ export async function POST(request: Request) {
     try {
       const client = await ChatwootClient.forOrganization(orgId);
       rawMsg = (await client.sendMessageToApi(conversationId, content)) as ChatwootApiMessageResponse;
-      await outboxService.markSent(supabaseServer, outboxRecord.eventoId, {
+      await outboxService.markSent(supabaseServer, scopeResult.scope, outboxRecord.eventoId, {
         id: rawMsg.id,
         created_at: rawMsg.created_at,
       });
     } catch (sendErr: unknown) {
-      await outboxService.markFailed(supabaseServer, outboxRecord.eventoId, sendErr, 0);
+      await outboxService.markFailed(supabaseServer, scopeResult.scope, outboxRecord.eventoId, sendErr, 0);
       throw sendErr;
     }
 

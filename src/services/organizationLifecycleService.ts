@@ -1,4 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 export type OrganizationLifecycleStatus = 'active' | 'suspended' | 'pending_deletion' | 'deleted';
 
@@ -24,13 +25,12 @@ export class OrganizationInactiveError extends Error {
 async function executeLifecycleStatusTransition(
   supabase: SupabaseClient,
   rpcName: 'suspender_organizacao' | 'reativar_organizacao' | 'cancelar_agendamento_encerramento',
-  orgId: string,
+  scope: VerifiedOrganizationScope,
   motivo?: string,
-  authorId?: string,
 ): Promise<void> {
   const params: Record<string, unknown> = {
-    p_org_id: orgId,
-    p_autor_id: authorId ?? null,
+    p_org_id: scope.organizationId,
+    p_autor_id: scope.actorId,
   };
   if (motivo !== undefined) {
     params.p_motivo = motivo;
@@ -46,11 +46,10 @@ async function executeLifecycleStatusTransition(
  */
 export async function suspendOrganization(
   supabase: SupabaseClient,
-  orgId: string,
+  scope: VerifiedOrganizationScope,
   motivo: string,
-  authorId?: string,
 ): Promise<void> {
-  return executeLifecycleStatusTransition(supabase, 'suspender_organizacao', orgId, motivo, authorId);
+  return executeLifecycleStatusTransition(supabase, 'suspender_organizacao', scope, motivo);
 }
 
 /**
@@ -58,11 +57,10 @@ export async function suspendOrganization(
  */
 export async function reactivateOrganization(
   supabase: SupabaseClient,
-  orgId: string,
+  scope: VerifiedOrganizationScope,
   motivo: string,
-  authorId?: string,
 ): Promise<void> {
-  return executeLifecycleStatusTransition(supabase, 'reativar_organizacao', orgId, motivo, authorId);
+  return executeLifecycleStatusTransition(supabase, 'reativar_organizacao', scope, motivo);
 }
 
 /**
@@ -70,16 +68,15 @@ export async function reactivateOrganization(
  */
 export async function scheduleOrganizationDeletion(
   supabase: SupabaseClient,
-  orgId: string,
+  scope: VerifiedOrganizationScope,
   motivo: string,
   diasRetencao = 30,
-  authorId?: string,
 ): Promise<string> {
   const { data, error } = await supabase.rpc('agendar_encerramento_organizacao', {
-    p_org_id: orgId,
+    p_org_id: scope.organizationId,
     p_motivo: motivo,
     p_dias_retencao: diasRetencao,
-    p_autor_id: authorId ?? null,
+    p_autor_id: scope.actorId,
   });
 
   if (error) {
@@ -94,10 +91,9 @@ export async function scheduleOrganizationDeletion(
  */
 export async function cancelOrganizationDeletion(
   supabase: SupabaseClient,
-  orgId: string,
-  authorId?: string,
+  scope: VerifiedOrganizationScope,
 ): Promise<void> {
-  return executeLifecycleStatusTransition(supabase, 'cancelar_agendamento_encerramento', orgId, undefined, authorId);
+  return executeLifecycleStatusTransition(supabase, 'cancelar_agendamento_encerramento', scope);
 }
 
 /**

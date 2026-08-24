@@ -9,15 +9,21 @@ import {
   OrganizationInactiveError,
 } from './organizationLifecycleService';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 describe('organizationLifecycleService', () => {
   const mockOrgId = 'org-1234-5678-9012';
+  const mockScope = {
+    organizationId: mockOrgId,
+    actorId: 'user-owner-1',
+    role: 'owner',
+  } as unknown as VerifiedOrganizationScope;
 
   it('deve suspender a organizacao chamando a RPC suspender_organizacao', async () => {
     const rpcMock = vi.fn().mockResolvedValue({ data: null, error: null });
     const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
-    await suspendOrganization(fakeClient, mockOrgId, 'Inadimplencia Stripe', 'user-owner-1');
+    await suspendOrganization(fakeClient, mockScope, 'Inadimplencia Stripe');
 
     expect(rpcMock).toHaveBeenCalledWith('suspender_organizacao', {
       p_org_id: mockOrgId,
@@ -31,7 +37,7 @@ describe('organizationLifecycleService', () => {
     const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
     await expect(
-      suspendOrganization(fakeClient, mockOrgId, 'Inadimplencia'),
+      suspendOrganization(fakeClient, mockScope, 'Inadimplencia'),
     ).rejects.toThrow('Falha ao executar suspender_organizacao: Acesso negado');
   });
 
@@ -39,7 +45,7 @@ describe('organizationLifecycleService', () => {
     const rpcMock = vi.fn().mockResolvedValue({ data: null, error: null });
     const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
-    await reactivateOrganization(fakeClient, mockOrgId, 'Pagamento regularizado', 'user-owner-1');
+    await reactivateOrganization(fakeClient, mockScope, 'Pagamento regularizado');
 
     expect(rpcMock).toHaveBeenCalledWith('reativar_organizacao', {
       p_org_id: mockOrgId,
@@ -53,7 +59,7 @@ describe('organizationLifecycleService', () => {
     const rpcMock = vi.fn().mockResolvedValue({ data: scheduledDate, error: null });
     const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
-    const result = await scheduleOrganizationDeletion(fakeClient, mockOrgId, 'Encerramento de negocio', 30, 'user-owner-1');
+    const result = await scheduleOrganizationDeletion(fakeClient, mockScope, 'Encerramento de negocio', 30);
 
     expect(result).toBe(scheduledDate);
     expect(rpcMock).toHaveBeenCalledWith('agendar_encerramento_organizacao', {
@@ -68,7 +74,7 @@ describe('organizationLifecycleService', () => {
     const rpcMock = vi.fn().mockResolvedValue({ data: null, error: null });
     const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
-    await cancelOrganizationDeletion(fakeClient, mockOrgId, 'user-owner-1');
+    await cancelOrganizationDeletion(fakeClient, mockScope);
 
     expect(rpcMock).toHaveBeenCalledWith('cancelar_agendamento_encerramento', {
       p_org_id: mockOrgId,

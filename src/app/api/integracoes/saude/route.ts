@@ -3,6 +3,7 @@ import { supabaseServer } from '../../../../lib/supabaseServer';
 import { verifySessionAndRole } from '../../../../lib/auth';
 import { resolveActiveOrganization } from '../../../../lib/organizationContext';
 import { outboxService } from '../../../../services/outboxService';
+import { verifyOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +18,19 @@ export async function GET(request: Request) {
     const activeOrg = await resolveActiveOrganization(supabaseServer, session.actorId, preferredOrgId);
     const orgId = activeOrg?.organizacao.id ?? session.tenant.id;
 
-    const healthList = await outboxService.getIntegrationsHealth(supabaseServer, orgId);
+    const scopeResult = await verifyOrganizationScope(supabaseServer, {
+      organizationId: orgId,
+      actorId: session.actorId,
+    });
+    if (scopeResult._tag !== 'OrganizationScopeVerified') {
+      const unavailable = scopeResult._tag === 'OrganizationScopeStoreUnavailable';
+      return NextResponse.json(
+        { success: false, error: unavailable ? 'Serviço de autorização indisponível' : 'Escopo organizacional inválido' },
+        { status: unavailable ? 503 : 403 },
+      );
+    }
+
+    const healthList = await outboxService.getIntegrationsHealth(supabaseServer, scopeResult.scope);
 
     return NextResponse.json({
       success: true,

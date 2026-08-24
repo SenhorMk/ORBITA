@@ -1,6 +1,6 @@
 begin;
 
-select plan(11);
+select plan(15);
 
 select ok(
   to_regclass('public.organizacoes') is not null,
@@ -101,6 +101,84 @@ select is(
   ),
   0::bigint,
   'browser-executable functions depend on explicit grants, never implicit PUBLIC execution'
+);
+
+select is(
+  (
+    with expected(signature) as (values
+      ('public.usuario_pertence_a_organizacao(uuid)'),
+      ('public.criar_organizacao_atomica(text,text)'),
+      ('public.criar_convite_organizacao(uuid,text,text,text)'),
+      ('public.aceitar_convite_organizacao(text)'),
+      ('public.revogar_membro_organizacao(uuid,uuid)'),
+      ('public.obter_entitlements_organizacao(uuid)'),
+      ('public.usuario_tem_papel_na_organizacao(uuid,text,uuid)'),
+      ('public.agendar_encerramento_organizacao(uuid,text,integer,uuid)'),
+      ('public.cancelar_agendamento_encerramento(uuid,uuid)')
+    ), actual as (
+      select p.oid
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and has_function_privilege('authenticated', p.oid, 'EXECUTE')
+    ), expected_oids as (
+      select to_regprocedure(signature)::oid as oid from expected
+    )
+    select (select count(*) from (select oid from actual except select oid from expected_oids) extras)
+         + (select count(*) from (select oid from expected_oids except select oid from actual) missing)
+  ),
+  0::bigint,
+  'authenticated EXECUTE grants exactly match the reviewed signature allowlist'
+);
+
+select is(
+  (
+    with expected(signature) as (values
+      ('public.registrar_evento_inbox_bling(uuid,uuid,uuid,text,text,jsonb)'),
+      ('public.concluir_evento_inbox_bling(uuid,text,jsonb,text)'),
+      ('public.preparar_replay_evento_inbox_bling(uuid)'),
+      ('public.registrar_evento_inbox_chatwoot(uuid,uuid,uuid,bigint,text,text,jsonb)'),
+      ('public.concluir_evento_inbox_chatwoot(uuid,text,jsonb,text)'),
+      ('public.preparar_replay_evento_inbox_chatwoot(uuid)'),
+      ('public.registrar_job_sync(uuid,uuid)'),
+      ('public.registrar_evento_outbox(uuid,uuid,uuid,text,text,text,jsonb,integer)'),
+      ('public.atualizar_saude_conexao(uuid,text,text)'),
+      ('public.registrar_evento_auditoria(uuid,uuid,text,text,text,text,text,text,jsonb)')
+    )
+    select count(*)
+    from expected
+    where to_regprocedure(signature) is null
+       or not has_function_privilege('service_role', to_regprocedure(signature), 'EXECUTE')
+  ),
+  0::bigint,
+  'service role retains every reviewed infrastructure RPC signature'
+);
+
+select is(
+  (
+    select count(*)
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    join pg_roles r on r.oid = p.proowner
+    where n.nspname = 'public' and r.rolname <> 'postgres'
+  ),
+  0::bigint,
+  'all application functions have the expected owner'
+);
+
+select is(
+  (
+    select count(*)
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname = any (array[
+        'usuario_tem_papel_na_organizacao',
+        'agendar_encerramento_organizacao',
+        'cancelar_agendamento_encerramento'
+      ])
+      and array_position(coalesce(p.proconfig, array[]::text[]), 'search_path=""') is not null
+  ),
+  3::bigint,
+  'Ticket 05 security-definer functions use an empty search path'
 );
 
 select is(

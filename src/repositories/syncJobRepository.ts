@@ -1,4 +1,5 @@
 import { supabaseServer } from '../lib/supabaseServer';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
 export type SyncJobStatus =
   | 'queued'
@@ -35,12 +36,11 @@ export interface EnqueueResult {
 }
 
 export async function enqueueJob(
-  organizacaoId: string,
-  triggeredBy: string,
+  scope: VerifiedOrganizationScope,
 ): Promise<EnqueueResult> {
   const { data, error } = await supabaseServer.rpc('registrar_job_sync', {
-    p_organizacao_id: organizacaoId,
-    p_triggered_by: triggeredBy,
+    p_organizacao_id: scope.organizationId,
+    p_triggered_by: scope.actorId,
   });
 
   if (error) {
@@ -60,9 +60,11 @@ export async function enqueueJob(
 }
 
 export async function acquireLease(
+  scope: VerifiedOrganizationScope,
   jobId: string,
   leaseTtlMinutes = 10,
 ): Promise<boolean> {
+  await assertJobBelongsToScope(scope, jobId);
   const { data, error } = await supabaseServer.rpc('adquirir_lease_job_sync', {
     p_job_id: jobId,
     p_lease_ttl_min: leaseTtlMinutes,
@@ -76,9 +78,11 @@ export async function acquireLease(
 }
 
 export async function advanceCheckpoint(
+  scope: VerifiedOrganizationScope,
   jobId: string,
   progress: SyncJobProgress,
 ): Promise<void> {
+  await assertJobBelongsToScope(scope, jobId);
   const { error } = await supabaseServer.rpc('avancar_checkpoint_job_sync', {
     p_job_id: jobId,
     p_progress: progress,
@@ -90,10 +94,12 @@ export async function advanceCheckpoint(
 }
 
 export async function completeJob(
+  scope: VerifiedOrganizationScope,
   jobId: string,
   status: 'completed' | 'failed' | 'cancelled',
   error?: string,
 ): Promise<void> {
+  await assertJobBelongsToScope(scope, jobId);
   const { error: rpcError } = await supabaseServer.rpc('concluir_job_sync', {
     p_job_id: jobId,
     p_status: status,
@@ -106,14 +112,14 @@ export async function completeJob(
 }
 
 export async function getJobStatus(
+  scope: VerifiedOrganizationScope,
   jobId: string,
-  organizacaoId: string,
 ): Promise<SyncJob | null> {
   const { data, error } = await supabaseServer
     .from('sync_jobs')
     .select('*')
     .eq('id', jobId)
-    .eq('organizacao_id', organizacaoId)
+    .eq('organizacao_id', scope.organizationId)
     .maybeSingle();
 
   if (error) {
@@ -121,6 +127,14 @@ export async function getJobStatus(
   }
 
   return data as SyncJob | null;
+}
+
+async function assertJobBelongsToScope(
+  scope: VerifiedOrganizationScope,
+  jobId: string,
+): Promise<void> {
+  const job = await getJobStatus(scope, jobId);
+  if (!job) throw new Error('Job não pertence à organização verificada.');
 }
 
 export async function releaseExpiredLeases(): Promise<number> {

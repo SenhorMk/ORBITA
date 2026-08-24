@@ -13,8 +13,8 @@ const {
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'server-key-12345678901234567890';
   process.env.ENCRYPTION_KEY = 'ab'.repeat(32);
 
-  const ORG_ID = 'cccccccc-0000-0000-0000-000000000003';
-  const USER_ID = 'dddddddd-0000-0000-0000-000000000004';
+  const ORG_ID = 'cccccccc-0000-4000-8000-000000000003';
+  const USER_ID = 'dddddddd-0000-4000-8000-000000000004';
 
   return {
     ORG_ID,
@@ -27,7 +27,15 @@ const {
 
 vi.mock('../../../../lib/supabaseServer', () => ({
   supabaseServer: {
-    from: vi.fn(),
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            maybeSingle: vi.fn().mockResolvedValue({ data: { papel: 'owner' }, error: null }),
+          }),
+        }),
+      }),
+    }),
     rpc: vi.fn(),
   },
 }));

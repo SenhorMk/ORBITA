@@ -5,6 +5,9 @@ import {
   outboxService,
 } from './outboxService';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+
+const scope = { organizationId: 'org-1', actorId: 'user-1', role: 'owner' } as unknown as VerifiedOrganizationScope;
 
 const mockRpc = vi.fn();
 const mockFrom = vi.fn();
@@ -16,6 +19,15 @@ const mockSupabase = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockFrom.mockReturnValue({
+    select: vi.fn().mockReturnValue({
+      eq: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'scoped' }, error: null }),
+        }),
+      }),
+    }),
+  });
 });
 
 describe('outboxService', () => {
@@ -83,8 +95,7 @@ describe('outboxService', () => {
         error: null,
       });
 
-      const result = await outboxService.enqueue(mockSupabase, {
-        organizacaoId: 'org-1',
+      const result = await outboxService.enqueue(mockSupabase, scope, {
         idempotencyKey: 'key-1',
         destination: 'chatwoot',
         eventType: 'message.send',
@@ -102,8 +113,7 @@ describe('outboxService', () => {
         error: null,
       });
 
-      const result = await outboxService.enqueue(mockSupabase, {
-        organizacaoId: 'org-1',
+      const result = await outboxService.enqueue(mockSupabase, scope, {
         idempotencyKey: 'key-dup',
         destination: 'chatwoot',
         eventType: 'message.send',
@@ -121,8 +131,7 @@ describe('outboxService', () => {
       });
 
       await expect(
-        outboxService.enqueue(mockSupabase, {
-          organizacaoId: 'org-1',
+        outboxService.enqueue(mockSupabase, scope, {
           idempotencyKey: 'key-err',
           destination: 'chatwoot',
           eventType: 'message.send',
@@ -150,7 +159,7 @@ describe('outboxService', () => {
     it('calls concluir_evento_outbox with status sent on success', async () => {
       mockRpc.mockResolvedValueOnce({ data: null, error: null });
 
-      await outboxService.markSent(mockSupabase, 'evt-1', { messageId: 456 });
+      await outboxService.markSent(mockSupabase, scope, 'evt-1', { messageId: 456 });
 
       expect(mockRpc).toHaveBeenCalledWith('concluir_evento_outbox', {
         p_evento_id: 'evt-1',
@@ -167,6 +176,7 @@ describe('outboxService', () => {
 
       await outboxService.markFailed(
         mockSupabase,
+        scope,
         'evt-1',
         new Error('503 Service Unavailable'),
         1,
@@ -188,6 +198,7 @@ describe('outboxService', () => {
 
       await outboxService.markFailed(
         mockSupabase,
+        scope,
         'evt-1',
         new Error('400 Bad Request: Invalid parameters'),
         0,
@@ -233,7 +244,7 @@ describe('outboxService', () => {
         order: vi.fn().mockResolvedValueOnce({ data: mockConnections, error: null }),
       });
 
-      const result = await outboxService.getIntegrationsHealth(mockSupabase, 'org-1');
+      const result = await outboxService.getIntegrationsHealth(mockSupabase, scope);
       expect(result).toHaveLength(2);
       expect(result[0].health_status).toBe('healthy');
       expect(result[1].health_status).toBe('degraded');

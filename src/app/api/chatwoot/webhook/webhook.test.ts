@@ -44,10 +44,28 @@ vi.mock('../../../../lib/supabaseServer', () => ({
         return {
           select: () => ({
             eq: () => ({
+              eq: () => ({
+                maybeSingle: () => Promise.resolve({ data: { papel: 'owner' }, error: null }),
+              }),
               order: () => ({
                 limit: () => ({
-                  maybeSingle: () => Promise.resolve({ data: { organizacao_id: 'org-test-123' }, error: null }),
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: { organizacao_id: '22222222-2222-4222-8222-222222222222' },
+                      error: null,
+                    }),
                 }),
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === 'inbox_eventos_chatwoot') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: () => Promise.resolve({ data: { id: 'chatwoot-inbox-evt-1' }, error: null }),
               }),
             }),
           }),
@@ -153,7 +171,10 @@ describe('Chatwoot Webhook Endpoint Security & Idempotent Inbox', () => {
 
   it('processes webhook and registers in inbox when signature is valid and inbox is registered', async () => {
     const verifiedTenantId = '70000000-0000-4000-8000-000000000001';
-    mockInboxLookup = { user_id: verifiedTenantId, organizacao_id: 'org-test-123' };
+    mockInboxLookup = {
+      user_id: verifiedTenantId,
+      organizacao_id: '22222222-2222-4222-8222-222222222222',
+    };
     mockInboxResult = {
       evento_id: 'chatwoot-inbox-evt-1',
       status: 'received',
@@ -207,7 +228,7 @@ describe('Chatwoot Webhook Endpoint Security & Idempotent Inbox', () => {
     expect(mockRpc).toHaveBeenCalledWith('registrar_evento_inbox_chatwoot', expect.objectContaining({
       p_idempotency_key: 'event_message_created_msg_501_conv_201',
       p_event_type: 'message_created',
-      p_organizacao_id: 'org-test-123',
+      p_organizacao_id: '22222222-2222-4222-8222-222222222222',
     }));
 
     expect(mockRpc).toHaveBeenCalledWith('concluir_evento_inbox_chatwoot', expect.objectContaining({
@@ -220,7 +241,7 @@ describe('Chatwoot Webhook Endpoint Security & Idempotent Inbox', () => {
       expect.objectContaining({
         id: 101,
         user_id: verifiedTenantId,
-        organizacao_id: 'org-test-123',
+        organizacao_id: '22222222-2222-4222-8222-222222222222',
         name: 'Cliente Teste',
       }),
     );
@@ -228,7 +249,10 @@ describe('Chatwoot Webhook Endpoint Security & Idempotent Inbox', () => {
 
   it('handles duplicate webhook delivery safely by returning cached response without repeating side effects', async () => {
     const verifiedTenantId = '70000000-0000-4000-8000-000000000001';
-    mockInboxLookup = { user_id: verifiedTenantId, organizacao_id: 'org-test-123' };
+    mockInboxLookup = {
+      user_id: verifiedTenantId,
+      organizacao_id: '22222222-2222-4222-8222-222222222222',
+    };
     mockInboxResult = {
       evento_id: 'chatwoot-inbox-evt-1',
       status: 'processed',
@@ -267,7 +291,10 @@ describe('Chatwoot Webhook Endpoint Security & Idempotent Inbox', () => {
 
   it('updates conversation status when conversation_status_changed event is received', async () => {
     const verifiedTenantId = '70000000-0000-4000-8000-000000000001';
-    mockInboxLookup = { user_id: verifiedTenantId, organizacao_id: 'org-test-123' };
+    mockInboxLookup = {
+      user_id: verifiedTenantId,
+      organizacao_id: '22222222-2222-4222-8222-222222222222',
+    };
     mockInboxResult = {
       evento_id: 'chatwoot-inbox-evt-2',
       status: 'received',

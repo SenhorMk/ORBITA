@@ -1,9 +1,8 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { redactSensitiveData } from '@/lib/observability/logger';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 export interface AuditEventInput {
-  organizacaoId?: string | null;
-  actorId?: string | null;
   acao: string;
   recurso: string;
   recursoId?: string | null;
@@ -40,6 +39,7 @@ export interface ListAuditEventsQuery {
  */
 export async function recordAuditEvent(
   supabase: SupabaseClient,
+  scope: VerifiedOrganizationScope,
   input: AuditEventInput,
 ): Promise<string> {
   const sanitizedMetadata = input.metadata
@@ -47,8 +47,8 @@ export async function recordAuditEvent(
     : {};
 
   const { data, error } = await supabase.rpc('registrar_evento_auditoria', {
-    p_org_id: input.organizacaoId ?? null,
-    p_actor_id: input.actorId ?? null,
+    p_org_id: scope.organizationId,
+    p_actor_id: scope.actorId,
     p_acao: input.acao,
     p_recurso: input.recurso,
     p_recurso_id: input.recursoId ?? null,

@@ -4,6 +4,24 @@ import {
   generateBlingIdempotencyKey,
 } from './blingInboxService';
 import { SupabaseClient } from '@supabase/supabase-js';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+
+const scope = { organizationId: 'org-123', actorId: 'user-789', role: 'owner' } as unknown as VerifiedOrganizationScope;
+
+function scopedClient(rpc: ReturnType<typeof vi.fn>): SupabaseClient {
+  return {
+    rpc,
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'scoped' }, error: null }),
+          }),
+        }),
+      }),
+    }),
+  } as unknown as SupabaseClient;
+}
 
 describe('BlingInboxService & Idempotency Boundary', () => {
   describe('generateBlingIdempotencyKey', () => {
@@ -63,10 +81,8 @@ describe('BlingInboxService & Idempotency Boundary', () => {
       } as unknown as SupabaseClient;
 
       const service = new BlingInboxService();
-      const result = await service.registerEvent(mockClient, {
-        organizacaoId: 'org-123',
+      const result = await service.registerEvent(mockClient, scope, {
         conexaoId: 'conn-456',
-        userId: 'user-789',
         idempotencyKey: 'order_1001',
         eventType: 'pedidos',
         payload: { id: 1001 },
@@ -104,8 +120,7 @@ describe('BlingInboxService & Idempotency Boundary', () => {
       } as unknown as SupabaseClient;
 
       const service = new BlingInboxService();
-      const result = await service.registerEvent(mockClient, {
-        organizacaoId: 'org-123',
+      const result = await service.registerEvent(mockClient, scope, {
         idempotencyKey: 'order_1001',
         eventType: 'pedidos',
         payload: { id: 1001 },
@@ -126,8 +141,7 @@ describe('BlingInboxService & Idempotency Boundary', () => {
 
       const service = new BlingInboxService();
       await expect(
-        service.registerEvent(mockClient, {
-          organizacaoId: 'org-123',
+        service.registerEvent(mockClient, scope, {
           idempotencyKey: 'order_1001',
           eventType: 'pedidos',
           payload: {},
@@ -138,12 +152,10 @@ describe('BlingInboxService & Idempotency Boundary', () => {
 
   describe('markProcessed & markFailed', () => {
     it('marks event as processed storing response_body', async () => {
-      const mockClient = {
-        rpc: vi.fn().mockResolvedValue({ error: null }),
-      } as unknown as SupabaseClient;
+      const mockClient = scopedClient(vi.fn().mockResolvedValue({ error: null }));
 
       const service = new BlingInboxService();
-      await service.markProcessed(mockClient, 'evt-uuid-1', { success: true, count: 5 });
+      await service.markProcessed(mockClient, scope, 'evt-uuid-1', { success: true, count: 5 });
 
       expect(mockClient.rpc).toHaveBeenCalledWith('concluir_evento_inbox_bling', {
         p_evento_id: 'evt-uuid-1',
@@ -154,13 +166,11 @@ describe('BlingInboxService & Idempotency Boundary', () => {
     });
 
     it('marks event as failed redacting sensitive error information', async () => {
-      const mockClient = {
-        rpc: vi.fn().mockResolvedValue({ error: null }),
-      } as unknown as SupabaseClient;
+      const mockClient = scopedClient(vi.fn().mockResolvedValue({ error: null }));
 
       const service = new BlingInboxService();
       const errorWithSecret = new Error('HTTP 401 with token bearer secret_token_12345');
-      await service.markFailed(mockClient, 'evt-uuid-1', errorWithSecret);
+      await service.markFailed(mockClient, scope, 'evt-uuid-1', errorWithSecret);
 
       expect(mockClient.rpc).toHaveBeenCalledWith('concluir_evento_inbox_bling', {
         p_evento_id: 'evt-uuid-1',
@@ -173,8 +183,7 @@ describe('BlingInboxService & Idempotency Boundary', () => {
 
   describe('prepareReplay', () => {
     it('prepares event for replay and restores payload', async () => {
-      const mockClient = {
-        rpc: vi.fn().mockResolvedValue({
+      const mockClient = scopedClient(vi.fn().mockResolvedValue({
           data: [
             {
               evento_id: 'evt-uuid-failed',
@@ -186,11 +195,10 @@ describe('BlingInboxService & Idempotency Boundary', () => {
             },
           ],
           error: null,
-        }),
-      } as unknown as SupabaseClient;
+        }));
 
       const service = new BlingInboxService();
-      const replayData = await service.prepareReplay(mockClient, 'evt-uuid-failed');
+      const replayData = await service.prepareReplay(mockClient, scope, 'evt-uuid-failed');
 
       expect(mockClient.rpc).toHaveBeenCalledWith('preparar_replay_evento_inbox_bling', {
         p_evento_id: 'evt-uuid-failed',

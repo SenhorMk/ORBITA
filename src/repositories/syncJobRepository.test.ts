@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
 // Mock do supabaseServer antes de qualquer importação do módulo
 const mockRpc = vi.fn();
@@ -27,7 +28,21 @@ import {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockFrom.mockReturnValue({
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    maybeSingle: vi.fn().mockResolvedValue({
+      data: { id: 'job-abc', organizacao_id: 'org-123', status: 'running' },
+      error: null,
+    }),
+  });
 });
+
+const scope = {
+  organizationId: 'org-123',
+  actorId: 'user-abc',
+  role: 'owner',
+} as unknown as VerifiedOrganizationScope;
 
 // ---------------------------------------------------------------------------
 // enqueueJob
@@ -41,7 +56,7 @@ describe('syncJobRepository', () => {
         error: null,
       });
 
-      const result = await enqueueJob('org-123', 'user-abc');
+      const result = await enqueueJob(scope);
       expect(result.jobId).toBe('uuid-novo');
       expect(result.status).toBe('queued');
       expect(result.isNew).toBe(true);
@@ -53,7 +68,7 @@ describe('syncJobRepository', () => {
         error: null,
       });
 
-      const result = await enqueueJob('org-123', 'user-abc');
+      const result = await enqueueJob(scope);
       expect(result.jobId).toBe('uuid-existente');
       expect(result.isNew).toBe(false);
     });
@@ -61,7 +76,7 @@ describe('syncJobRepository', () => {
     it('lança erro quando RPC falha', async () => {
       mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'DB error' } });
 
-      await expect(enqueueJob('org-123', 'user-abc')).rejects.toThrow(
+      await expect(enqueueJob(scope)).rejects.toThrow(
         'Falha ao registrar job de sincronização: DB error',
       );
     });
@@ -74,17 +89,17 @@ describe('syncJobRepository', () => {
   describe('acquireLease', () => {
     it('retorna true quando o lease é adquirido com sucesso', async () => {
       mockRpc.mockResolvedValueOnce({ data: true, error: null });
-      expect(await acquireLease('job-abc')).toBe(true);
+      expect(await acquireLease(scope, 'job-abc')).toBe(true);
     });
 
     it('retorna false quando outro processo já possui o lease', async () => {
       mockRpc.mockResolvedValueOnce({ data: false, error: null });
-      expect(await acquireLease('job-abc')).toBe(false);
+      expect(await acquireLease(scope, 'job-abc')).toBe(false);
     });
 
     it('lança erro quando RPC falha', async () => {
       mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'lock timeout' } });
-      await expect(acquireLease('job-abc')).rejects.toThrow(
+      await expect(acquireLease(scope, 'job-abc')).rejects.toThrow(
         'Falha ao adquirir lease do job job-abc: lock timeout',
       );
     });
@@ -99,14 +114,14 @@ describe('syncJobRepository', () => {
       mockRpc.mockResolvedValueOnce({ data: null, error: null });
 
       await expect(
-        advanceCheckpoint('job-abc', { clientes_processados: 50, etapa_atual: 'clientes' }),
+        advanceCheckpoint(scope, 'job-abc', { clientes_processados: 50, etapa_atual: 'clientes' }),
       ).resolves.toBeUndefined();
     });
 
     it('lança erro quando checkpoint falha no banco', async () => {
       mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'checkpoint failed' } });
 
-      await expect(advanceCheckpoint('job-abc', {})).rejects.toThrow(
+      await expect(advanceCheckpoint(scope, 'job-abc', {})).rejects.toThrow(
         'Falha ao avançar checkpoint do job job-abc: checkpoint failed',
       );
     });
@@ -119,13 +134,13 @@ describe('syncJobRepository', () => {
   describe('completeJob', () => {
     it('conclui job com status completed sem erro', async () => {
       mockRpc.mockResolvedValueOnce({ data: null, error: null });
-      await expect(completeJob('job-abc', 'completed')).resolves.toBeUndefined();
+      await expect(completeJob(scope, 'job-abc', 'completed')).resolves.toBeUndefined();
     });
 
     it('conclui job com status failed e mensagem de erro redigida', async () => {
       mockRpc.mockResolvedValueOnce({ data: null, error: null });
 
-      await completeJob('job-abc', 'failed', 'Timeout ao acessar API Bling');
+      await completeJob(scope, 'job-abc', 'failed', 'Timeout ao acessar API Bling');
 
       expect(mockRpc).toHaveBeenCalledWith('concluir_job_sync', expect.objectContaining({
         p_status: 'failed',
@@ -135,7 +150,7 @@ describe('syncJobRepository', () => {
 
     it('lança erro quando RPC falha', async () => {
       mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'RPC error' } });
-      await expect(completeJob('job-abc', 'completed')).rejects.toThrow(
+      await expect(completeJob(scope, 'job-abc', 'completed')).rejects.toThrow(
         'Falha ao concluir job job-abc: RPC error',
       );
     });
@@ -164,7 +179,7 @@ describe('syncJobRepository', () => {
         maybeSingle: vi.fn().mockResolvedValueOnce({ data: jobData, error: null }),
       });
 
-      const result = await getJobStatus('job-abc', 'org-123');
+      const result = await getJobStatus(scope, 'job-abc');
       expect(result?.status).toBe('running');
     });
 
@@ -175,7 +190,7 @@ describe('syncJobRepository', () => {
         maybeSingle: vi.fn().mockResolvedValueOnce({ data: null, error: null }),
       });
 
-      const result = await getJobStatus('nao-existe', 'org-123');
+      const result = await getJobStatus(scope, 'nao-existe');
       expect(result).toBeNull();
     });
   });

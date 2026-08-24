@@ -73,7 +73,7 @@ vi.mock('../../../../lib/supabaseServer', () => ({
                   limit: () => ({
                     maybeSingle: () =>
                       Promise.resolve({
-                        data: { id: 'conn-123', organizacao_id: 'org-123' },
+                        data: { id: 'conn-123', organizacao_id: '11111111-1111-4111-8111-111111111111' },
                         error: null,
                       }),
                   }),
@@ -87,14 +87,28 @@ vi.mock('../../../../lib/supabaseServer', () => ({
         return {
           select: () => ({
             eq: () => ({
+              eq: () => ({
+                maybeSingle: () => Promise.resolve({ data: { papel: 'owner' }, error: null }),
+              }),
               order: () => ({
                 limit: () => ({
                   maybeSingle: () =>
                     Promise.resolve({
-                      data: { organizacao_id: 'org-123' },
+                      data: { organizacao_id: '11111111-1111-4111-8111-111111111111' },
                       error: null,
                     }),
                 }),
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === 'inbox_eventos_bling') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: () => Promise.resolve({ data: { id: 'inbox-evt-1' }, error: null }),
               }),
             }),
           }),

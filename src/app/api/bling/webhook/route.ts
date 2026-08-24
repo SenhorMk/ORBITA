@@ -8,6 +8,7 @@ import { supabaseServer } from '../../../../lib/supabaseServer';
 import { mapBlingStatus, normalizeToE164 } from '../../../../lib/utils';
 import { authorizeSignedServiceTenant } from '../../../../lib/auth';
 import { blingInboxService, generateBlingIdempotencyKey } from '../../../../services/blingInboxService';
+import { verifyOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 
 export async function GET() {
   return NextResponse.json({
@@ -92,6 +93,18 @@ export async function POST(req: NextRequest) {
     }
 
     const blingClient = bling.forOrganization(organizacaoId, conexaoId || undefined);
+    const scopeResult = await verifyOrganizationScope(supabaseServer, {
+      organizationId: organizacaoId,
+      actorId: tenant.id,
+    });
+    if (scopeResult._tag !== 'OrganizationScopeVerified') {
+      const unavailable = scopeResult._tag === 'OrganizationScopeStoreUnavailable';
+      return NextResponse.json(
+        { success: false, error: unavailable ? 'Serviço de autorização indisponível' : 'Escopo organizacional inválido' },
+        { status: unavailable ? 503 : 403 },
+      );
+    }
+    const organizationScope = scopeResult.scope;
 
     let body: unknown;
     const contentType = req.headers.get('content-type') || '';
@@ -118,10 +131,8 @@ export async function POST(req: NextRequest) {
       const idempotencyKey = generateBlingIdempotencyKey(event);
 
       // 1. Registro prévio no inbox idempotente
-      const inboxResult = await blingInboxService.registerEvent(supabaseServer, {
-        organizacaoId,
+      const inboxResult = await blingInboxService.registerEvent(supabaseServer, organizationScope, {
         conexaoId,
-        userId: tenant.id,
         idempotencyKey,
         eventType: entity || 'desconhecido',
         payload: event,
@@ -154,7 +165,7 @@ export async function POST(req: NextRequest) {
             };
             await clienteRepository.upsert(tenant, cliente);
           }
-          await blingInboxService.markProcessed(supabaseServer, inboxResult.eventoId, { success: true, entity: 'contato', blingId });
+          await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, { success: true, entity: 'contato', blingId });
           continue;
         }
 
@@ -201,7 +212,7 @@ export async function POST(req: NextRequest) {
               }
             }
           }
-          await blingInboxService.markProcessed(supabaseServer, inboxResult.eventoId, { success: true, entity: 'pedido', blingId });
+          await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, { success: true, entity: 'pedido', blingId });
           continue;
         }
 
@@ -217,7 +228,7 @@ export async function POST(req: NextRequest) {
 
           if (!blingId) {
             console.warn('⚠️ Webhook Bling: Evento recebido sem ID de produto válido.');
-            await blingInboxService.markProcessed(supabaseServer, inboxResult.eventoId, { success: true, ignored: true, reason: 'missing_id' });
+            await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, { success: true, ignored: true, reason: 'missing_id' });
             continue;
           }
 
@@ -260,7 +271,7 @@ export async function POST(req: NextRequest) {
 
           await produtoRepository.upsert(tenant, produto);
           processedProducts++;
-          await blingInboxService.markProcessed(supabaseServer, inboxResult.eventoId, {
+          await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, {
             success: true,
             entity: 'produto',
             blingId,
@@ -268,7 +279,7 @@ export async function POST(req: NextRequest) {
           });
         }
       } catch (err: unknown) {
-        await blingInboxService.markFailed(supabaseServer, inboxResult.eventoId, err);
+        await blingInboxService.markFailed(supabaseServer, organizationScope, inboxResult.eventoId, err);
         console.error(`❌ Erro ao processar evento do webhook Bling (Key: ${idempotencyKey}):`, err);
       }
     }

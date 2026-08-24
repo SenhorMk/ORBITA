@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { syncService } from '../../../../services/sync';
+import { syncService, SyncAuthorizationStoreUnavailableError, SyncScopeDeniedError } from '../../../../services/sync';
 import { verifySessionAndRole } from '../../../../lib/auth';
 
 export const dynamic = 'force-dynamic';
@@ -25,7 +25,7 @@ export async function GET(request: Request) {
       );
     }
 
-    const job = await syncService.getJobStatus(jobId, session.tenant);
+    const job = await syncService.getJobStatus(jobId, session);
 
     if (!job) {
       return NextResponse.json(
@@ -47,8 +47,13 @@ export async function GET(request: Request) {
       },
     });
   } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : 'Erro interno';
-    console.error('❌ /api/sync/status GET:', msg);
-    return NextResponse.json({ success: false, error: msg }, { status: 500 });
+    if (error instanceof SyncScopeDeniedError) {
+      return NextResponse.json({ success: false, error: 'Escopo organizacional inválido' }, { status: 403 });
+    }
+    if (error instanceof SyncAuthorizationStoreUnavailableError) {
+      return NextResponse.json({ success: false, error: 'Serviço de autorização indisponível' }, { status: 503 });
+    }
+    console.error('❌ /api/sync/status GET: falha interna não classificada');
+    return NextResponse.json({ success: false, error: 'Erro interno' }, { status: 500 });
   }
 }

@@ -195,6 +195,11 @@
       "order": 39,
       "path": "../database/36_auditoria_correlacao_telemetria.sql",
       "sha256": "66331b3772c08020fe09e389d5bda4c20cb9c72ab717a5a21b886ce0648b254d"
+    },
+    {
+      "order": 40,
+      "path": "../database/37_fechar_rpcs_grants_perigosos.sql",
+      "sha256": "7df9ca060a0f588504a75eaa679ada750b7a64e2ab4c492da75706ae1d360002"
     }
   ],
   "references": [

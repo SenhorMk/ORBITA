@@ -1,4 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 export type OutboxDestination = 'chatwoot' | 'bling' | 'webhook_externo';
 
@@ -117,12 +118,26 @@ export function calculateBackoffSeconds(
 }
 
 export class OutboxService {
+  private async assertRecordScope(
+    supabase: SupabaseClient,
+    table: 'eventos_outbox' | 'conexoes_integracao',
+    scope: VerifiedOrganizationScope,
+    id: string,
+  ): Promise<void> {
+    const { data, error } = await supabase
+      .from(table)
+      .select('id')
+      .eq('id', id)
+      .eq('organizacao_id', scope.organizationId)
+      .maybeSingle();
+    if (error) throw new Error(`Falha ao validar escopo de ${table}: ${error.message}`);
+    if (!data) throw new Error(`${table} fora do escopo organizacional verificado.`);
+  }
   async enqueue(
     supabase: SupabaseClient,
+    scope: VerifiedOrganizationScope,
     params: {
-      organizacaoId: string;
       conexaoId?: string | null;
-      userId?: string | null;
       idempotencyKey: string;
       destination: OutboxDestination;
       eventType: string;
@@ -131,9 +146,9 @@ export class OutboxService {
     },
   ): Promise<RegisterOutboxResult> {
     const { data, error } = await supabase.rpc('registrar_evento_outbox', {
-      p_organizacao_id: params.organizacaoId,
+      p_organizacao_id: scope.organizationId,
       p_conexao_id: params.conexaoId || null,
-      p_user_id: params.userId || null,
+      p_user_id: scope.actorId,
       p_idempotency_key: params.idempotencyKey,
       p_destination: params.destination,
       p_event_type: params.eventType,
@@ -177,9 +192,11 @@ export class OutboxService {
 
   async markSent(
     supabase: SupabaseClient,
+    scope: VerifiedOrganizationScope,
     eventoId: string,
     responseBody?: Record<string, unknown> | null,
   ): Promise<void> {
+    await this.assertRecordScope(supabase, 'eventos_outbox', scope, eventoId);
     const { error } = await supabase.rpc('concluir_evento_outbox', {
       p_evento_id: eventoId,
       p_status: 'sent',
@@ -196,6 +213,7 @@ export class OutboxService {
 
   async markFailed(
     supabase: SupabaseClient,
+    scope: VerifiedOrganizationScope,
     eventoId: string,
     error: unknown,
     currentAttempts = 0,
@@ -204,6 +222,7 @@ export class OutboxService {
     const retryDelay = calculateBackoffSeconds(currentAttempts);
     const status = classified.isTransient ? 'failed_transient' : 'dead_letter';
 
+    await this.assertRecordScope(supabase, 'eventos_outbox', scope, eventoId);
     const { error: rpcError } = await supabase.rpc('concluir_evento_outbox', {
       p_evento_id: eventoId,
       p_status: status,
@@ -220,12 +239,12 @@ export class OutboxService {
 
   async getIntegrationsHealth(
     supabase: SupabaseClient,
-    organizacaoId: string,
+    scope: VerifiedOrganizationScope,
   ): Promise<IntegrationHealthSummary[]> {
     const { data, error } = await supabase
       .from('conexoes_integracao')
       .select('id, provedor, nome, status, health_status, last_health_check_at, last_health_error')
-      .eq('organizacao_id', organizacaoId)
+      .eq('organizacao_id', scope.organizationId)
       .order('created_at', { ascending: true });
 
     if (error) {
@@ -245,10 +264,12 @@ export class OutboxService {
 
   async updateConnectionHealth(
     supabase: SupabaseClient,
+    scope: VerifiedOrganizationScope,
     conexaoId: string,
     healthStatus: 'healthy' | 'degraded' | 'disconnected' | 'error',
     error?: string,
   ): Promise<void> {
+    await this.assertRecordScope(supabase, 'conexoes_integracao', scope, conexaoId);
     const sanitizedError = error ? sanitizeErrorMessage(error) : null;
     const { error: rpcError } = await supabase.rpc('atualizar_saude_conexao', {
       p_conexao_id: conexaoId,

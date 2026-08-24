@@ -5,7 +5,8 @@ import { pedidoRepository } from '../repositories/pedidoRepository';
 import { Cliente, Produto, Pedido, ItemPedido } from '../types';
 import { supabaseServer } from '../lib/supabaseServer';
 import { mapBlingStatus, normalizeToE164 } from '../lib/utils';
-import type { VerifiedTenant } from '../lib/auth';
+import type { ActorContext, VerifiedTenant } from '../lib/auth';
+import { verifyOrganizationScope, type VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import {
   enqueueJob,
   acquireLease,
@@ -107,15 +108,40 @@ export interface SyncAllResult {
 }
 
 export class SyncService {
-  async enqueueSync(tenant: VerifiedTenant): Promise<EnqueueSyncResult> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
-    return enqueueJob(orgId, tenant.id);
+  private async resolveScope(context: ActorContext): Promise<VerifiedOrganizationScope> {
+    const organizationId = await resolveTenantOrgId(supabaseServer, context.tenant);
+    const result = await verifyOrganizationScope(supabaseServer, {
+      organizationId,
+      actorId: context.actorId,
+    });
+    if (result._tag === 'OrganizationScopeDenied') {
+      throw new SyncScopeDeniedError();
+    }
+    if (result._tag === 'OrganizationScopeStoreUnavailable') {
+      throw new SyncAuthorizationStoreUnavailableError();
+    }
+    return result.scope;
   }
 
-  async processJob(jobId: string, tenant: VerifiedTenant): Promise<void> {
+  async enqueueSync(context: ActorContext): Promise<EnqueueSyncResult> {
+    return enqueueJob(await this.resolveScope(context));
+  }
+
+  async processJob(jobId: string, context: ActorContext): Promise<void> {
+    let scope: VerifiedOrganizationScope;
+    try {
+      scope = await this.resolveScope(context);
+    } catch (error: unknown) {
+      if (error instanceof SyncScopeDeniedError || error instanceof SyncAuthorizationStoreUnavailableError) {
+        console.error('Sincronização não iniciada: escopo organizacional indisponível ou revogado.');
+        return;
+      }
+      throw error;
+    }
+    const tenant = context.tenant;
     await releaseExpiredLeases();
 
-    const leaseAcquired = await acquireLease(jobId);
+    const leaseAcquired = await acquireLease(scope, jobId);
     if (!leaseAcquired) {
       return;
     }
@@ -141,19 +167,19 @@ export class SyncService {
           etapa: 'clientes',
           proxima: 'produtos',
           field: 'clientes_processados',
-          action: () => this._syncClientes(jobId, tenant, blingClient, progress),
+          action: () => this._syncClientes(scope, jobId, tenant, blingClient, progress),
         },
         {
           etapa: 'produtos',
           proxima: 'pedidos',
           field: 'produtos_processados',
-          action: () => this._syncProdutos(jobId, tenant, blingClient, progress),
+          action: () => this._syncProdutos(scope, jobId, tenant, blingClient, progress),
         },
         {
           etapa: 'pedidos',
           proxima: 'concluido',
           field: 'pedidos_processados',
-          action: () => this._syncPedidos(jobId, tenant, blingClient, progress),
+          action: () => this._syncPedidos(scope, jobId, tenant, blingClient, progress),
         },
       ];
 
@@ -163,29 +189,28 @@ export class SyncService {
         progress[step.field] = count;
         progress.etapa_atual = step.proxima;
         progress.pagina_atual = 1;
-        await advanceCheckpoint(jobId, { ...progress });
+        await advanceCheckpoint(scope, jobId, { ...progress });
       }
 
-      await completeJob(jobId, 'completed');
+      await completeJob(scope, jobId, 'completed');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       const redacted = msg
         .replace(/Bearer\s+\S+/gi, '[REDACTED]')
         .replace(/key=[^&\s]*/gi, 'key=[REDACTED]');
       console.error('❌ Sincronização Orbita: Job falhou.', { jobId, error: redacted });
-      await completeJob(jobId, 'failed', redacted);
+      await completeJob(scope, jobId, 'failed', redacted);
     }
   }
 
-  async getJobStatus(jobId: string, tenant: VerifiedTenant): Promise<SyncJob | null> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
-    return getJobStatus(jobId, orgId);
+  async getJobStatus(jobId: string, context: ActorContext): Promise<SyncJob | null> {
+    return getJobStatus(await this.resolveScope(context), jobId);
   }
 
-  async syncAll(tenant: VerifiedTenant): Promise<SyncAllResult> {
-    const { jobId } = await this.enqueueSync(tenant);
-    await this.processJob(jobId, tenant);
-    const status = await this.getJobStatus(jobId, tenant);
+  async syncAll(context: ActorContext): Promise<SyncAllResult> {
+    const { jobId } = await this.enqueueSync(context);
+    await this.processJob(jobId, context);
+    const status = await this.getJobStatus(jobId, context);
 
     return {
       success: status?.status === 'completed',
@@ -198,6 +223,7 @@ export class SyncService {
   }
 
   private async _syncClientes(
+    scope: VerifiedOrganizationScope,
     jobId: string,
     tenant: VerifiedTenant,
     blingClient: ReturnType<typeof bling.forUser>,
@@ -222,7 +248,7 @@ export class SyncService {
         async (page, count) => {
           progress.pagina_atual = page;
           progress.clientes_processados = count;
-          await advanceCheckpoint(jobId, { ...progress });
+          await advanceCheckpoint(scope, jobId, { ...progress });
         },
       );
 
@@ -236,6 +262,7 @@ export class SyncService {
   }
 
   private async _syncProdutos(
+    scope: VerifiedOrganizationScope,
     jobId: string,
     tenant: VerifiedTenant,
     blingClient: ReturnType<typeof bling.forUser>,
@@ -296,7 +323,7 @@ export class SyncService {
         async (page, count) => {
           progress.pagina_atual = page;
           progress.produtos_processados = count;
-          await advanceCheckpoint(jobId, { ...progress });
+          await advanceCheckpoint(scope, jobId, { ...progress });
         },
       );
 
@@ -310,6 +337,7 @@ export class SyncService {
   }
 
   private async _syncPedidos(
+    scope: VerifiedOrganizationScope,
     jobId: string,
     tenant: VerifiedTenant,
     blingClient: ReturnType<typeof bling.forUser>,
@@ -367,7 +395,7 @@ export class SyncService {
         async (page, count) => {
           progress.pagina_atual = page;
           progress.pedidos_processados = count;
-          await advanceCheckpoint(jobId, { ...progress });
+          await advanceCheckpoint(scope, jobId, { ...progress });
         },
       );
 
@@ -378,6 +406,22 @@ export class SyncService {
       console.warn('⚠️ Etapa pedidos falhou:', msg);
       return 0;
     }
+  }
+}
+
+export class SyncScopeDeniedError extends Error {
+  readonly _tag = 'SyncScopeDeniedError';
+  constructor() {
+    super('Escopo organizacional não verificado.');
+    this.name = 'SyncScopeDeniedError';
+  }
+}
+
+export class SyncAuthorizationStoreUnavailableError extends Error {
+  readonly _tag = 'SyncAuthorizationStoreUnavailableError';
+  constructor() {
+    super('Serviço de autorização temporariamente indisponível.');
+    this.name = 'SyncAuthorizationStoreUnavailableError';
   }
 }
 

@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { supabaseServer } from '../../../../lib/supabaseServer';
 import { normalizeToE164 } from '../../../../lib/utils';
 import { chatwootInboxService, generateChatwootIdempotencyKey } from '../../../../services/chatwootInboxService';
+import { verifyOrganizationScope, type VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 
 // Força a rota a ser dinâmica (Next.js App Router)
 export const dynamic = 'force-dynamic';
@@ -81,6 +82,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   let inboxEventoId: string | null = null;
+  let organizationScope: VerifiedOrganizationScope | null = null;
 
   try {
     const rawBody = await request.text();
@@ -167,13 +169,24 @@ export async function POST(request: Request) {
       organizacaoId = userId;
     }
 
+    const scopeResult = await verifyOrganizationScope(supabaseServer, {
+      organizationId: organizacaoId,
+      actorId: userId,
+    });
+    if (scopeResult._tag !== 'OrganizationScopeVerified') {
+      const unavailable = scopeResult._tag === 'OrganizationScopeStoreUnavailable';
+      return NextResponse.json(
+        { success: false, error: unavailable ? 'Serviço de autorização indisponível' : 'Escopo organizacional inválido' },
+        { status: unavailable ? 503 : 403 },
+      );
+    }
+    organizationScope = scopeResult.scope;
+
     const idempotencyKey = generateChatwootIdempotencyKey(payload);
 
     // 1. Registro prévio no inbox idempotente
-    const inboxResult = await chatwootInboxService.registerEvent(supabaseServer, {
-      organizacaoId,
+    const inboxResult = await chatwootInboxService.registerEvent(supabaseServer, organizationScope, {
       conexaoId,
-      userId,
       inboxId: inboxId ?? undefined,
       idempotencyKey,
       eventType: event,
@@ -246,7 +259,7 @@ export async function POST(request: Request) {
         }
       }
       if (inboxEventoId) {
-        await chatwootInboxService.markProcessed(supabaseServer, inboxEventoId, { success: true, event: 'conversation_status_changed', convId });
+        await chatwootInboxService.markProcessed(supabaseServer, organizationScope, inboxEventoId, { success: true, event: 'conversation_status_changed', convId });
       }
       return NextResponse.json({ success: true });
     }
@@ -341,7 +354,7 @@ export async function POST(request: Request) {
     }
 
     if (inboxEventoId) {
-      await chatwootInboxService.markProcessed(supabaseServer, inboxEventoId, {
+      await chatwootInboxService.markProcessed(supabaseServer, organizationScope, inboxEventoId, {
         success: true,
         event,
         contactId,
@@ -352,9 +365,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
-    if (inboxEventoId) {
+    if (inboxEventoId && organizationScope) {
       try {
-        await chatwootInboxService.markFailed(supabaseServer, inboxEventoId, error);
+        await chatwootInboxService.markFailed(supabaseServer, organizationScope, inboxEventoId, error);
       } catch (markErr) {
         console.error('❌ Falha ao gravar status de falha no inbox Chatwoot:', markErr);
       }

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { redactSensitiveData } from '../lib/integrations/credentialsVault';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
 export interface BlingInboxEventRecord {
   id: string;
@@ -52,25 +53,38 @@ export function generateBlingIdempotencyKey(event: unknown, fallbackPrefix = 'bl
 }
 
 export class BlingInboxService {
+  private async assertEventScope(
+    supabase: SupabaseClient,
+    scope: VerifiedOrganizationScope,
+    eventoId: string,
+  ): Promise<void> {
+    const { data, error } = await supabase
+      .from('inbox_eventos_bling')
+      .select('id')
+      .eq('id', eventoId)
+      .eq('organizacao_id', scope.organizationId)
+      .maybeSingle();
+    if (error) throw new Error(`Falha ao validar escopo do evento Bling: ${error.message}`);
+    if (!data) throw new Error('Evento Bling fora do escopo organizacional verificado.');
+  }
   /**
    * Registra o evento no inbox de forma atômica no banco de dados.
    * Se o evento já existir para a organização, retorna isDuplicate = true e o resultado cacheado se houver.
    */
   async registerEvent(
     supabase: SupabaseClient,
+    scope: VerifiedOrganizationScope,
     params: {
-      organizacaoId: string;
       conexaoId?: string | null;
-      userId?: string | null;
       idempotencyKey: string;
       eventType: string;
       payload: unknown;
     }
   ): Promise<RegisterInboxResult> {
     const { data, error } = await supabase.rpc('registrar_evento_inbox_bling', {
-      p_organizacao_id: params.organizacaoId,
+      p_organizacao_id: scope.organizationId,
       p_conexao_id: params.conexaoId || null,
-      p_user_id: params.userId || null,
+      p_user_id: scope.actorId,
       p_idempotency_key: params.idempotencyKey,
       p_event_type: params.eventType,
       p_payload: (params.payload && typeof params.payload === 'object') ? params.payload : { raw: params.payload },
@@ -98,9 +112,11 @@ export class BlingInboxService {
    */
   async markProcessed(
     supabase: SupabaseClient,
+    scope: VerifiedOrganizationScope,
     eventoId: string,
     responseBody: Record<string, unknown>
   ): Promise<void> {
+    await this.assertEventScope(supabase, scope, eventoId);
     const { error } = await supabase.rpc('concluir_evento_inbox_bling', {
       p_evento_id: eventoId,
       p_status: 'processed',
@@ -118,6 +134,7 @@ export class BlingInboxService {
    */
   async markFailed(
     supabase: SupabaseClient,
+    scope: VerifiedOrganizationScope,
     eventoId: string,
     error: unknown
   ): Promise<void> {
@@ -133,6 +150,7 @@ export class BlingInboxService {
       ? (redactSensitiveData(sanitizedMessage) as string)
       : sanitizedMessage;
 
+    await this.assertEventScope(supabase, scope, eventoId);
     const { error: dbError } = await supabase.rpc('concluir_evento_inbox_bling', {
       p_evento_id: eventoId,
       p_status: 'failed',
@@ -150,6 +168,7 @@ export class BlingInboxService {
    */
   async prepareReplay(
     supabase: SupabaseClient,
+    scope: VerifiedOrganizationScope,
     eventoId: string
   ): Promise<{
     eventoId: string;
@@ -159,6 +178,7 @@ export class BlingInboxService {
     eventType: string;
     payload: Record<string, unknown>;
   } | null> {
+    await this.assertEventScope(supabase, scope, eventoId);
     const { data, error } = await supabase.rpc('preparar_replay_evento_inbox_bling', {
       p_evento_id: eventoId,
     });

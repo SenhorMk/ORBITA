@@ -8,6 +8,14 @@ import {
   scheduleOrganizationDeletion,
   cancelOrganizationDeletion,
 } from '@/services/organizationLifecycleService';
+import { verifyOrganizationScope } from '@/lib/verifiedOrganizationScope';
+
+function organizationScopeFailureResponse(unavailable: boolean) {
+  return NextResponse.json(
+    { error: unavailable ? 'Servico de autorizacao indisponivel' : 'Acesso nao autorizado a organizacao' },
+    { status: unavailable ? 503 : 403 },
+  );
+}
 
 const lifecycleActionSchema = z.discriminatedUnion('action', [
   z.object({
@@ -28,18 +36,6 @@ const lifecycleActionSchema = z.discriminatedUnion('action', [
   }),
 ]);
 
-async function verifyOrgMember(orgId: string, userId: string): Promise<string | null> {
-  const { data, error } = await supabaseServer
-    .from('membros_organizacao')
-    .select('papel')
-    .eq('organizacao_id', orgId)
-    .eq('user_id', userId)
-    .single();
-
-  if (error || !data) return null;
-  return data.papel;
-}
-
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -51,9 +47,12 @@ export async function GET(
     }
     const { id: orgId } = await params;
 
-    const userRole = await verifyOrgMember(orgId, session.actorId);
-    if (!userRole) {
-      return NextResponse.json({ error: 'Acesso nao autorizado a organizacao' }, { status: 403 });
+    const scopeResult = await verifyOrganizationScope(supabaseServer, {
+      organizationId: orgId,
+      actorId: session.actorId,
+    });
+    if (scopeResult._tag !== 'OrganizationScopeVerified') {
+      return organizationScopeFailureResponse(scopeResult._tag === 'OrganizationScopeStoreUnavailable');
     }
 
     const { data: org, error: orgErr } = await supabaseServer
@@ -104,18 +103,23 @@ export async function POST(
       );
     }
 
-    const userRole = await verifyOrgMember(orgId, session.actorId);
-    if (!userRole) {
-      return NextResponse.json({ error: 'Acesso nao autorizado a organizacao' }, { status: 403 });
+    const scopeResult = await verifyOrganizationScope(supabaseServer, {
+      organizationId: orgId,
+      actorId: session.actorId,
+    });
+    if (scopeResult._tag !== 'OrganizationScopeVerified') {
+      return organizationScopeFailureResponse(scopeResult._tag === 'OrganizationScopeStoreUnavailable');
     }
 
     const actionData = parsed.data;
+    const scope = scopeResult.scope;
+    const userRole = scope.role;
 
     if (actionData.action === 'suspend') {
       if (userRole !== 'owner' && userRole !== 'admin') {
         return NextResponse.json({ error: 'Apenas administradores podem suspender a organizacao' }, { status: 403 });
       }
-      await suspendOrganization(supabaseServer, orgId, actionData.motivo, session.actorId);
+      await suspendOrganization(supabaseServer, scope, actionData.motivo);
       return NextResponse.json({ success: true, status: 'suspended' });
     }
 
@@ -123,7 +127,7 @@ export async function POST(
       if (userRole !== 'owner' && userRole !== 'admin') {
         return NextResponse.json({ error: 'Apenas administradores podem reativar a organizacao' }, { status: 403 });
       }
-      await reactivateOrganization(supabaseServer, orgId, actionData.motivo, session.actorId);
+      await reactivateOrganization(supabaseServer, scope, actionData.motivo);
       return NextResponse.json({ success: true, status: 'active' });
     }
 
@@ -133,10 +137,9 @@ export async function POST(
       }
       const scheduledDate = await scheduleOrganizationDeletion(
         supabaseServer,
-        orgId,
+        scope,
         actionData.motivo,
         actionData.diasRetencao,
-        session.actorId,
       );
       return NextResponse.json({ success: true, status: 'pending_deletion', exclusaoAgendadaPara: scheduledDate });
     }
@@ -145,7 +148,7 @@ export async function POST(
       if (userRole !== 'owner') {
         return NextResponse.json({ error: 'Apenas o Owner pode cancelar o encerramento da organizacao' }, { status: 403 });
       }
-      await cancelOrganizationDeletion(supabaseServer, orgId, session.actorId);
+      await cancelOrganizationDeletion(supabaseServer, scope);
       return NextResponse.json({ success: true, status: 'active' });
     }
 

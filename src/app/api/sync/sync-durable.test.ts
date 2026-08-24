@@ -55,6 +55,8 @@ vi.mock('../../../lib/auth', () => ({
 }));
 
 vi.mock('../../../services/sync', () => ({
+  SyncScopeDeniedError: class SyncScopeDeniedError extends Error {},
+  SyncAuthorizationStoreUnavailableError: class SyncAuthorizationStoreUnavailableError extends Error {},
   syncService: {
     enqueueSync: (...args: unknown[]) => mockEnqueueSync(...args),
     processJob: (...args: unknown[]) => mockProcessJob(...args),
@@ -76,6 +78,7 @@ vi.mock('next/server', async (importOriginal) => {
 
 import { POST as syncPost } from './route';
 import { GET as syncStatusGet } from './status/route';
+import { SyncAuthorizationStoreUnavailableError, SyncScopeDeniedError } from '../../../services/sync';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -161,6 +164,31 @@ describe('POST /api/sync — Jobs duráveis', () => {
     const res = await syncPost(req);
     expect(res.status).toBe(403);
   });
+
+  it('retorna 403 quando o escopo persistido foi revogado', async () => {
+    mockEnqueueSync.mockRejectedValueOnce(new SyncScopeDeniedError());
+    const res = await syncPost(new NextRequest('http://localhost/api/sync', { method: 'POST' }));
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({ error: 'Escopo organizacional inválido' });
+  });
+
+  it('retorna 503 sem expor diagnóstico quando o authorization store está indisponível', async () => {
+    mockEnqueueSync.mockRejectedValueOnce(new SyncAuthorizationStoreUnavailableError());
+    const res = await syncPost(new NextRequest('http://localhost/api/sync', { method: 'POST' }));
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.error).toBe('Serviço de autorização indisponível');
+    expect(JSON.stringify(body)).not.toContain('postgres detail');
+  });
+
+  it('mascara erros internos desconhecidos', async () => {
+    mockEnqueueSync.mockRejectedValueOnce(new Error('password authentication failed for postgres'));
+    const res = await syncPost(new NextRequest('http://localhost/api/sync', { method: 'POST' }));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toBe('Erro interno na sincronização');
+    expect(JSON.stringify(body)).not.toContain('postgres');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -237,5 +265,15 @@ describe('GET /api/sync/status — Estado observável', () => {
     const body = await res.json();
     expect(body.job.status).toBe('completed');
     expect(body.job.completed_at).toBeTruthy();
+  });
+
+  it('retorna 503 sanitizado quando o authorization store falha', async () => {
+    mockGetJobStatus.mockRejectedValueOnce(new SyncAuthorizationStoreUnavailableError());
+    const req = new NextRequest(`http://localhost/api/sync/status?job_id=${JOB_ID_NOVO}`);
+    const res = await syncStatusGet(req);
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.error).toBe('Serviço de autorização indisponível');
+    expect(JSON.stringify(body)).not.toContain('relation missing');
   });
 });

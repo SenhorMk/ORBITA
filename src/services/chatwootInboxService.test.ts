@@ -4,6 +4,24 @@ import {
   generateChatwootIdempotencyKey,
 } from './chatwootInboxService';
 import { SupabaseClient } from '@supabase/supabase-js';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+
+const scope = { organizationId: 'org-abc', actorId: 'user-123', role: 'owner' } as unknown as VerifiedOrganizationScope;
+
+function scopedClient(rpc: ReturnType<typeof vi.fn>): SupabaseClient {
+  return {
+    rpc,
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'scoped' }, error: null }),
+          }),
+        }),
+      }),
+    }),
+  } as unknown as SupabaseClient;
+}
 
 describe('ChatwootInboxService & Idempotency Boundary', () => {
   describe('generateChatwootIdempotencyKey', () => {
@@ -63,13 +81,11 @@ describe('ChatwootInboxService & Idempotency Boundary', () => {
         error: null,
       });
 
-      const mockSupabase = { rpc: mockRpc } as unknown as SupabaseClient;
+      const mockSupabase = scopedClient(mockRpc);
       const service = new ChatwootInboxService();
 
-      const result = await service.registerEvent(mockSupabase, {
-        organizacaoId: 'org-abc',
+      const result = await service.registerEvent(mockSupabase, scope, {
         conexaoId: 'conn-123',
-        userId: 'user-123',
         inboxId: 10,
         idempotencyKey: 'event_message_created_msg_123',
         eventType: 'message_created',
@@ -103,11 +119,10 @@ describe('ChatwootInboxService & Idempotency Boundary', () => {
         error: null,
       });
 
-      const mockSupabase = { rpc: mockRpc } as unknown as SupabaseClient;
+      const mockSupabase = scopedClient(mockRpc);
       const service = new ChatwootInboxService();
 
-      const result = await service.registerEvent(mockSupabase, {
-        organizacaoId: 'org-abc',
+      const result = await service.registerEvent(mockSupabase, scope, {
         idempotencyKey: 'event_message_created_msg_123',
         eventType: 'message_created',
         payload: { id: 123 },
@@ -124,11 +139,10 @@ describe('ChatwootInboxService & Idempotency Boundary', () => {
         error: { message: 'Database constraint violation' },
       });
 
-      const mockSupabase = { rpc: mockRpc } as unknown as SupabaseClient;
+      const mockSupabase = scopedClient(mockRpc);
       const service = new ChatwootInboxService();
 
-      await expect(service.registerEvent(mockSupabase, {
-        organizacaoId: 'org-abc',
+      await expect(service.registerEvent(mockSupabase, scope, {
         idempotencyKey: 'event_1',
         eventType: 'test',
         payload: {},
@@ -139,10 +153,10 @@ describe('ChatwootInboxService & Idempotency Boundary', () => {
   describe('markProcessed', () => {
     it('calls concluir_evento_inbox_chatwoot with status processed and responseBody', async () => {
       const mockRpc = vi.fn().mockResolvedValue({ data: null, error: null });
-      const mockSupabase = { rpc: mockRpc } as unknown as SupabaseClient;
+      const mockSupabase = scopedClient(mockRpc);
       const service = new ChatwootInboxService();
 
-      await service.markProcessed(mockSupabase, 'evt-123', { success: true, count: 1 });
+      await service.markProcessed(mockSupabase, scope, 'evt-123', { success: true, count: 1 });
 
       expect(mockRpc).toHaveBeenCalledWith('concluir_evento_inbox_chatwoot', {
         p_evento_id: 'evt-123',
@@ -156,11 +170,11 @@ describe('ChatwootInboxService & Idempotency Boundary', () => {
   describe('markFailed', () => {
     it('redacts sensitive credentials before recording last_error in database', async () => {
       const mockRpc = vi.fn().mockResolvedValue({ data: null, error: null });
-      const mockSupabase = { rpc: mockRpc } as unknown as SupabaseClient;
+      const mockSupabase = scopedClient(mockRpc);
       const service = new ChatwootInboxService();
 
       const sensitiveError = new Error('Falha de autenticação com token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.do_not_leak_this_secret');
-      await service.markFailed(mockSupabase, 'evt-123', sensitiveError);
+      await service.markFailed(mockSupabase, scope, 'evt-123', sensitiveError);
 
       expect(mockRpc).toHaveBeenCalledWith('concluir_evento_inbox_chatwoot', expect.objectContaining({
         p_evento_id: 'evt-123',
@@ -185,10 +199,10 @@ describe('ChatwootInboxService & Idempotency Boundary', () => {
         error: null,
       });
 
-      const mockSupabase = { rpc: mockRpc } as unknown as SupabaseClient;
+      const mockSupabase = scopedClient(mockRpc);
       const service = new ChatwootInboxService();
 
-      const replay = await service.prepareReplay(mockSupabase, 'evt-123');
+      const replay = await service.prepareReplay(mockSupabase, scope, 'evt-123');
 
       expect(mockRpc).toHaveBeenCalledWith('preparar_replay_evento_inbox_chatwoot', {
         p_evento_id: 'evt-123',
