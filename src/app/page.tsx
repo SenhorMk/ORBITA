@@ -207,7 +207,7 @@ export default function Home() {
     }
 
     const headers: Record<string, string> = {
-      ...((options.headers as Record<string, string>) || {}),
+      ...(options.headers as Record<string, string> | undefined),
     };
 
     if (token) {
