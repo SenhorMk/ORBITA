@@ -45,10 +45,11 @@ next-env.d.ts
 # agent tools/logs
 .fcc/
 graphify-out/
-.agents/
-.codex/
-.scratch/
-.aislop/history.jsonl
+/AGENTS.md
+/.agents/
+/.codex/
+/.scratch/
+/.aislop/history.jsonl
 skills-lock.json
 
 # Arquivos de Agentes e Documentacao Extra
