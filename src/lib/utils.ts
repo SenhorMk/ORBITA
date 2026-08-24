@@ -6,27 +6,27 @@ import { twMerge } from "tailwind-merge";
  */
 export function normalizeToE164(phone?: string): string | null {
   if (!phone) return null;
-  
+
   const trimmed = phone.trim();
   const hasPlus = trimmed.startsWith('+');
   const digits = trimmed.replace(/\D/g, '');
-  
+
   if (!digits) return null;
-  
+
   if (hasPlus) {
     return `+${digits}`;
   }
-  
+
   // Se for número nacional do Brasil sem DDI (ex: 11987654321 ou 1187654321)
   if (digits.length === 10 || digits.length === 11) {
     return `+55${digits}`;
   }
-  
+
   // Se já tiver DDI do Brasil (55) com 12 ou 13 dígitos
   if (digits.startsWith('55') && (digits.length === 12 || digits.length === 13)) {
     return `+${digits}`;
   }
-  
+
   return `+${digits}`;
 }
 
@@ -36,9 +36,9 @@ export function normalizeToE164(phone?: string): string | null {
  */
 export function mapBlingStatus(status?: string): string {
   if (!status) return 'Novo';
-  
+
   const normalized = status.trim().toLowerCase();
-  
+
   switch (normalized) {
     case 'novo':
       return 'Novo';
@@ -91,7 +91,7 @@ export interface ProdutoValidationResult {
  */
 export function sanitizeProductName(name: string): string {
   // Remove caracteres não permitidos, mantém letras acentuadas, números, espaços, hífens, barras, pontos, &, ç, aspas
-  return name.replace(/[^a-zA-ZÀ-ÿçÇ0-9\s\-\/\.\,\(\)\&\'\"]/g, '').trim();
+  return name.replace(/[^a-zA-ZÀ-ÿçÇ0-9\s\-/\.,\()\&'\"]/g, '').trim();
 }
 
 import { BlingProductSchema } from '../schemas/bling';
@@ -112,7 +112,7 @@ export function validateProdutoForBling(produto: {
   unidade?: string;
 }): ProdutoValidationResult {
   const precoNum = typeof produto.preco === 'string' ? parseFloat(produto.preco) : produto.preco;
-  
+
   // Adaptamos o input para o Zod Schema
   const parseResult = BlingProductSchema.safeParse({
     nome: produto.nome || '',
@@ -166,4 +166,3 @@ export function isProdutoSynced(blingId?: string): boolean {
   if (!blingId) return false;
   return /^\d+$/.test(blingId.trim());
 }
-

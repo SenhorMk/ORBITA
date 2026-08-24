@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import { useState } from "react";
 import { Activity, Database, ShoppingBag, MessageCircle, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
 
 interface HealthMonitorProps {

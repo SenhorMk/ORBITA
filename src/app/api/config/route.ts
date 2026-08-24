@@ -29,7 +29,7 @@ export async function GET(request: Request) {
     const realClientSecret = blingConfig?.client_secret || (process.env.BLING_CLIENT_SECRET !== 'sua_chave_de_api_bling_aqui' ? process.env.BLING_CLIENT_SECRET : '');
 
     const isBlingConnected = Boolean(
-      blingConfig?.access_token && 
+      blingConfig?.access_token &&
       blingConfig.access_token !== 'access_token_placeholder'
     );
 
@@ -49,9 +49,10 @@ export async function GET(request: Request) {
         }
       }
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : 'Erro ao carregar configurações';
     return NextResponse.json(
-      { success: false, error: error.message || 'Erro ao carregar configurações' },
+      { success: false, error: errMsg },
       { status: 500 }
     );
   }
@@ -77,7 +78,7 @@ export async function POST(request: Request) {
     }
 
     const userId = session.tenant.id;
-    
+
     const { data: existing } = await supabaseServer
       .from('integracoes_bling')
       .select('id')
@@ -113,9 +114,10 @@ export async function POST(request: Request) {
       success: true,
       message: 'Configurações do Bling salvas com sucesso!'
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : 'Erro ao salvar configurações';
     return NextResponse.json(
-      { success: false, error: error.message || 'Erro ao salvar configurações' },
+      { success: false, error: errMsg },
       { status: 500 }
     );
   }

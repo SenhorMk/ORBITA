@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Loader2, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { useEffect, useState } from "react";
+import { CheckCircle2, AlertTriangle, RefreshCw } from "lucide-react";
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from './ui/button';
 
@@ -17,17 +17,17 @@ export function StartupLoader({ onComplete, onNeedsAuth, fetchWithAuth, isVisibl
 
   useEffect(() => {
     if (!isVisible) return;
-    
+
     let isMounted = true;
-    
+
     const runStartupSync = async () => {
       try {
         setStatus('verifying');
         setProgressText('Testando conexão com o servidor Bling...');
-        
+
         const response = await fetchWithAuth('/api/startup', { method: 'POST' });
         const data = await response.json();
-        
+
         if (!isMounted) return;
 
         if (data.needsAuth || response.status === 401) {
@@ -46,15 +46,15 @@ export function StartupLoader({ onComplete, onNeedsAuth, fetchWithAuth, isVisibl
           setStatus('error');
           setErrorMessage(data.error || 'Falha ao sincronizar com o Bling.');
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!isMounted) return;
         setStatus('error');
-        setErrorMessage(err.message || 'Erro de rede ou servidor.');
+        setErrorMessage(err instanceof Error ? err.message : 'Erro de rede ou servidor.');
       }
     };
 
     runStartupSync();
-    
+
     return () => {
       isMounted = false;
     };

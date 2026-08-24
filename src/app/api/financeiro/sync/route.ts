@@ -14,6 +14,77 @@ function mapSituacao(idSituacao: number): 'aberto' | 'pago' | 'cancelado' {
   return 'aberto'; // fallback
 }
 
+interface RawContaFinanceira {
+  id?: number | string;
+  situacao?: number | string;
+  valor?: number | string;
+  vencimento?: string;
+  pagamento?: { data?: string };
+  historico?: string;
+}
+
+async function syncContasPagar(client: ReturnType<typeof bling.forUser>, tenant: Parameters<typeof financeiroRepository.upsertTitulo>[0]): Promise<number> {
+  let count = 0;
+  let page = 1;
+  while (page <= 50) {
+    const contasPagar: RawContaFinanceira[] = (await client.getContasPagar(page, 100)) as RawContaFinanceira[];
+    if (contasPagar.length === 0) break;
+
+    for (const cp of contasPagar) {
+      try {
+        const titulo: TituloFinanceiro = {
+          bling_id: Number(cp.id),
+          tipo: 'pagar',
+          situacao: mapSituacao(Number(cp.situacao)),
+          valor: Number(cp.valor),
+          data_vencimento: String(cp.vencimento),
+          data_pagamento: cp.pagamento?.data || undefined,
+          descricao: cp.historico || `Conta a Pagar #${cp.id}`,
+        };
+        await financeiroRepository.upsertTitulo(tenant, titulo);
+        count++;
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.warn(`Erro ao sincronizar Conta a Pagar ${cp.id}:`, errMsg);
+      }
+    }
+    page++;
+    if (contasPagar.length < 100) break;
+  }
+  return count;
+}
+
+async function syncContasReceber(client: ReturnType<typeof bling.forUser>, tenant: Parameters<typeof financeiroRepository.upsertTitulo>[0]): Promise<number> {
+  let count = 0;
+  let page = 1;
+  while (page <= 50) {
+    const contasReceber: RawContaFinanceira[] = (await client.getContasReceber(page, 100)) as RawContaFinanceira[];
+    if (contasReceber.length === 0) break;
+
+    for (const cr of contasReceber) {
+      try {
+        const titulo: TituloFinanceiro = {
+          bling_id: Number(cr.id),
+          tipo: 'receber',
+          situacao: mapSituacao(Number(cr.situacao)),
+          valor: Number(cr.valor),
+          data_vencimento: String(cr.vencimento),
+          data_pagamento: cr.pagamento?.data || undefined,
+          descricao: cr.historico || `Conta a Receber #${cr.id}`,
+        };
+        await financeiroRepository.upsertTitulo(tenant, titulo);
+        count++;
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.warn(`Erro ao sincronizar Conta a Receber ${cr.id}:`, errMsg);
+      }
+    }
+    page++;
+    if (contasReceber.length < 100) break;
+  }
+  return count;
+}
+
 export async function POST(request: Request) {
   try {
     const session = await verifySessionAndRole(request);
@@ -21,73 +92,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
     }
     const blingClient = bling.forUser(session.tenant);
-    
-    let stats = {
-      contasPagar: 0,
-      contasReceber: 0
-    };
 
-    let pagePagar = 1;
-    while (pagePagar <= 50) {
-      const contasPagar = await blingClient.getContasPagar(pagePagar, 100);
-      if (contasPagar.length === 0) break;
-      
-      for (const cp of contasPagar) {
-        try {
-          const titulo: TituloFinanceiro = {
-            bling_id: cp.id,
-            tipo: 'pagar',
-            situacao: mapSituacao(cp.situacao),
-            valor: Number(cp.valor),
-            data_vencimento: cp.vencimento,
-            data_pagamento: cp.pagamento?.data || undefined,
-            descricao: cp.historico || `Conta a Pagar #${cp.id}`,
-          };
-          
-          await financeiroRepository.upsertTitulo(session.tenant, titulo);
-          stats.contasPagar++;
-        } catch (err: any) {
-          console.warn(`Erro ao sincronizar Conta a Pagar ${cp.id}:`, err.message);
-        }
-      }
-      
-      pagePagar++;
-      if (contasPagar.length < 100) break;
-    }
+    const contasPagar = await syncContasPagar(blingClient, session.tenant);
+    const contasReceber = await syncContasReceber(blingClient, session.tenant);
 
-    let pageReceber = 1;
-    while (pageReceber <= 50) {
-      const contasReceber = await blingClient.getContasReceber(pageReceber, 100);
-      if (contasReceber.length === 0) break;
-      
-      for (const cr of contasReceber) {
-        try {
-          const titulo: TituloFinanceiro = {
-            bling_id: cr.id,
-            tipo: 'receber',
-            situacao: mapSituacao(cr.situacao),
-            valor: Number(cr.valor),
-            data_vencimento: cr.vencimento,
-            data_pagamento: cr.pagamento?.data || undefined,
-            descricao: cr.historico || `Conta a Receber #${cr.id}`,
-          };
-          
-          await financeiroRepository.upsertTitulo(session.tenant, titulo);
-          stats.contasReceber++;
-        } catch (err: any) {
-          console.warn(`Erro ao sincronizar Conta a Receber ${cr.id}:`, err.message);
-        }
-      }
-      
-      pageReceber++;
-      if (contasReceber.length < 100) break;
-    }
-
-    return NextResponse.json({ success: true, stats });
-  } catch (error: any) {
+    return NextResponse.json({
+      success: true,
+      stats: { contasPagar, contasReceber }
+    });
+  } catch (error: unknown) {
     console.error('Erro na API de Sincronização Financeira:', error);
+    const errMsg = error instanceof Error ? error.message : 'Erro interno na sincronização financeira';
     return NextResponse.json(
-      { success: false, error: error.message || 'Erro interno na sincronização financeira' },
+      { success: false, error: errMsg },
       { status: 500 }
     );
   }

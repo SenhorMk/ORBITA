@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -9,7 +9,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Loader2, Package, User, MapPin, Truck, Calendar, FileText, CheckCircle2, AlertCircle, Clock, Trash2, Pencil, Receipt } from 'lucide-react';
+import { Loader2, Package, User, Truck, Calendar, FileText, AlertCircle, Trash2, Pencil, Receipt } from "lucide-react";
 import { BlingPedido } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
 import { ErrorLogModal } from '@/components/ErrorLogModal';
@@ -22,19 +22,50 @@ interface OrderDetailModalProps {
   pedidoBlingId: string | null;
 }
 
-export function OrderDetailModal({ open, onOpenChange, pedidoId, pedidoBlingId }: OrderDetailModalProps) {
+export function OrderDetailModal({ open, onOpenChange, pedidoBlingId }: OrderDetailModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pedido, setPedido] = useState<BlingPedido | null>(null);
   const [isEditOpen, setIsEditOpen] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
     if (open && pedidoBlingId) {
-      fetchPedido(pedidoBlingId);
-    } else {
-      setPedido(null);
-      setError(null);
+      void (async () => {
+        try {
+          if (isMounted) {
+            setLoading(true);
+            setError(null);
+          }
+
+          const { data: { session } } = await supabase.auth.getSession();
+          const token = session?.access_token;
+
+          // Ensure the ID is URI encoded to handle '#MANUAL-...' IDs that break the API route URL
+          const res = await fetch(`/api/bling/pedidos/${encodeURIComponent(pedidoBlingId)}`, {
+            headers: (token ? { Authorization: `Bearer ${token}` } : {})
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || 'Erro ao carregar detalhes do pedido');
+          }
+          if (isMounted) {
+            setPedido(data.data);
+          }
+        } catch (err: unknown) {
+          if (isMounted) {
+            setError(err instanceof Error ? err.message : String(err));
+          }
+        } finally {
+          if (isMounted) {
+            setLoading(false);
+          }
+        }
+      })();
     }
+    return () => {
+      isMounted = false;
+    };
   }, [open, pedidoBlingId]);
 
   const fetchPedido = async (id: string) => {
@@ -47,17 +78,15 @@ export function OrderDetailModal({ open, onOpenChange, pedidoId, pedidoBlingId }
 
       // Ensure the ID is URI encoded to handle '#MANUAL-...' IDs that break the API route URL
       const res = await fetch(`/api/bling/pedidos/${encodeURIComponent(id)}`, {
-        headers: {
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
+        headers: (token ? { Authorization: `Bearer ${token}` } : {})
       });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Erro ao carregar detalhes do pedido');
       }
       setPedido(data.data);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
@@ -72,25 +101,23 @@ export function OrderDetailModal({ open, onOpenChange, pedidoId, pedidoBlingId }
 
   const handleDelete = async () => {
     if (!pedidoBlingId) return;
-    
+
     // Confirmação dupla
     if (!confirm('ATENÇÃO: Tem certeza que deseja apagar este pedido? Esta ação excluirá os dados no App e também no Bling ERP.')) return;
 
     try {
       setIsDeleting(true);
-      
+
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
-      
+
       const res = await fetch(`/api/bling/pedidos/${encodeURIComponent(pedidoBlingId)}`, {
         method: 'DELETE',
-        headers: {
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
+        headers: (token ? { Authorization: `Bearer ${token}` } : {})
       });
-      
+
       const data = await res.json();
-      
+
       if (!res.ok) {
         throw new Error(data.error || 'Falha ao excluir o pedido');
       }
@@ -99,20 +126,21 @@ export function OrderDetailModal({ open, onOpenChange, pedidoId, pedidoBlingId }
       onOpenChange(false);
       // Aqui idealmente recarregamos a lista chamando uma função do pai, mas só fechando o modal já ajuda. (Pode disparar um event)
       window.dispatchEvent(new CustomEvent('pedido-apagado')); // Evento customizado para a lista recarregar, caso queira implementar
-      
-    } catch (err: any) {
+
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       setErrorLog({
         isOpen: true,
         message: 'Erro ao Apagar Pedido',
-        details: err.message,
-        logs: [`DELETE /api/bling/pedidos/${pedidoBlingId}`, `Erro retornado: ${err.message}`]
+        details: errMsg,
+        logs: [`DELETE /api/bling/pedidos/${pedidoBlingId}`, `Erro retornado: ${errMsg}`]
       });
     } finally {
       setIsDeleting(false);
     }
   };
 
-  const getStatusColor = (status?: any) => {
+  const getStatusColor = (status?: unknown) => {
     if (!status) return 'bg-slate-500/15 text-slate-400 border-slate-500/30';
     const s = String(status).toLowerCase();
     if (s.includes('atendido') || s.includes('entregue') || s.includes('enviado')) return 'bg-[#30D158]/15 text-[#30D158] border-[#30D158]/30';
@@ -152,7 +180,7 @@ export function OrderDetailModal({ open, onOpenChange, pedidoId, pedidoBlingId }
 
         {pedido && !loading && (
           <div className="mt-6 space-y-6">
-            
+
             {/* Header Info */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white/5 p-4 rounded-2xl border border-white/10">
               <div>
@@ -269,16 +297,16 @@ export function OrderDetailModal({ open, onOpenChange, pedidoId, pedidoBlingId }
 
         {/* Actions Footer - Sempre Visível para permitir Exclusão de Pedidos Órfãos */}
         <div className="flex flex-col sm:flex-row items-center justify-end gap-3 mt-6 pt-6 border-t border-white/10">
-          <Button 
-            variant="outline" 
+          <Button
+            variant="outline"
             onClick={handleDelete}
             disabled={isDeleting}
             className="w-full sm:w-auto border-white/10 hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/30 text-slate-300 transition-colors">
             {isDeleting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
             {isDeleting ? 'Apagando...' : 'Apagar'}
           </Button>
-          <Button 
-            variant="outline" 
+          <Button
+            variant="outline"
             onClick={() => {
               if (!pedido) return;
               if (String(pedido.situacao?.valor || '').toLowerCase().includes('emitid')) {
@@ -292,7 +320,7 @@ export function OrderDetailModal({ open, onOpenChange, pedidoId, pedidoBlingId }
             <Pencil className="w-4 h-4 mr-2" />
             Editar Pedido
           </Button>
-          <Button 
+          <Button
             disabled={!pedido}
             className="w-full sm:w-auto bg-[#30D158] hover:bg-[#28B84E] text-[#0a0f1c] border border-[#30D158] font-bold shadow-lg shadow-[#30D158]/20 transition-all disabled:opacity-50">
             <Receipt className="w-4 h-4 mr-2" />
@@ -300,7 +328,7 @@ export function OrderDetailModal({ open, onOpenChange, pedidoId, pedidoBlingId }
           </Button>
         </div>
 
-        <ErrorLogModal 
+        <ErrorLogModal
           isOpen={errorLog.isOpen}
           onClose={() => setErrorLog(prev => ({ ...prev, isOpen: false }))}
           title={errorLog.message}
@@ -311,9 +339,9 @@ export function OrderDetailModal({ open, onOpenChange, pedidoId, pedidoBlingId }
 
       </DialogContent>
 
-      <EditOrderModal 
-        open={isEditOpen} 
-        onOpenChange={setIsEditOpen} 
+      <EditOrderModal
+        open={isEditOpen}
+        onOpenChange={setIsEditOpen}
         pedido={pedido}
         onSuccess={() => {
           setIsEditOpen(false);
@@ -321,8 +349,8 @@ export function OrderDetailModal({ open, onOpenChange, pedidoId, pedidoBlingId }
           setLoading(true);
           if (pedidoBlingId) fetchPedido(pedidoBlingId);
           // Evento para atualizar a listagem
-          window.dispatchEvent(new CustomEvent('pedido-apagado')); 
-        }} 
+          window.dispatchEvent(new CustomEvent('pedido-apagado'));
+        }}
       />
     </Dialog>
   );

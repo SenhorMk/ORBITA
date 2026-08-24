@@ -14,7 +14,7 @@ export async function POST(request: Request) {
 
     const blingClient = bling.forUser(session.tenant);
     const body = await request.json();
-    const { syncBling, contatoId, itens, parcelas, total, formaPagamento, desconto, frete, observacoes } = body;
+    const { syncBling, contatoId, itens, parcelas: _parcelas, total, formaPagamento, desconto, frete, observacoes } = body;
 
     logEntries.push(`[${new Date().toISOString()}] Recebido requisição de Pedido Manual (Sync Bling: ${syncBling})`);
 
@@ -33,14 +33,14 @@ export async function POST(request: Request) {
     // Buscar cliente no Supabase por ID (UUID) ou por bling_id
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(contatoId));
     let query = supabaseServer.from('clientes').select('*').eq('user_id', userId);
-    
+
     if (isUUID) {
       query = query.or(`id.eq.${contatoId},bling_id.eq.${contatoId}`);
     } else {
       query = query.eq('bling_id', contatoId);
     }
 
-    const { data: clienteData, error: dbErr } = await query.maybeSingle();
+    const { data: clienteData, error: _dbErr } = await query.maybeSingle();
 
     if (!clienteData) {
       return NextResponse.json({
@@ -61,12 +61,12 @@ export async function POST(request: Request) {
       // Registrar obrigatoriamente o contato no Bling ERP v3 para obter o ID oficial
       logEntries.push(`[${new Date().toISOString()}] ➕ Cliente não possui cadastro no Bling. Enviando cadastro de contato para o Bling...`);
       try {
-        const resCriar = await blingClient.createContato({
+        const resCriar = (await blingClient.createContato({
           nome: clienteData.nome,
           email: clienteData.email,
           telefone: clienteData.telefone,
           cnpj: clienteData.cpf_cnpj,
-        });
+        })) as { data?: { id?: number | string } };
 
         if (resCriar?.data?.id) {
           numericBlingId = Number(resCriar.data.id);
@@ -80,18 +80,28 @@ export async function POST(request: Request) {
         } else {
           throw new Error('Bling confirmou a criação do contato mas não retornou um ID numérico válido.');
         }
-      } catch (cErr: any) {
-        logEntries.push(`[${new Date().toISOString()}] ❌ Erro ao cadastrar contato no Bling: ${cErr.message}`);
+      } catch (cErr: unknown) {
+        const cErrMsg = cErr instanceof Error ? cErr.message : String(cErr);
+        logEntries.push(`[${new Date().toISOString()}] ❌ Erro ao cadastrar contato no Bling: ${cErrMsg}`);
         return NextResponse.json({
           success: false,
-          error: `Não foi possível cadastrar o contato no Bling para a venda: ${cErr.message}`,
+          error: `Não foi possível cadastrar o contato no Bling para a venda: ${cErrMsg}`,
           logs: logEntries
         }, { status: 400 });
       }
     }
 
     // 2. Validar produtos e estoque
-    const itensValidados = [];
+    interface ItemValidado {
+      id?: string;
+      codigo?: string | null;
+      bling_id?: string | null;
+      nome?: string;
+      quantidade_compra: number;
+      valor_unitario: number;
+    }
+
+    const itensValidados: ItemValidado[] = [];
     for (const i of itens) {
       const { data: pData } = await supabaseServer
         .from('produtos')
@@ -99,15 +109,15 @@ export async function POST(request: Request) {
         .eq('user_id', userId)
         .eq(i.produto_id ? 'id' : 'codigo', i.produto_id || i.codigo)
         .maybeSingle();
-      
+
       if (!pData) {
         return NextResponse.json({ success: false, error: `Produto local não encontrado: ${i.codigo || i.produto_id}`, logs: logEntries }, { status: 400 });
       }
-      
+
       const estoqueAtual = pData.estoque || 0;
       const reservado = pData.estoque_reservado || 0;
       const disponivel = estoqueAtual - reservado;
-      
+
       if (disponivel < i.quantidade) {
          return NextResponse.json({ success: false, error: `Estoque insuficiente para ${pData.nome}. Disponível: ${disponivel}, Tentou comprar: ${i.quantidade}`, logs: logEntries }, { status: 400 });
       }
@@ -136,12 +146,30 @@ export async function POST(request: Request) {
 
       logEntries.push(`[${new Date().toISOString()}] Enviando pedido de venda ao Bling ERP (Contato ID: ${numericBlingId})...`);
 
-      const payload: any = {
+      interface BlingItemPayload {
+        descricao?: string;
+        quantidade: number;
+        valor: number;
+        produto?: { id: number };
+        codigo?: string;
+      }
+
+      interface BlingPedidoCreatePayload {
+        contato: { id: number };
+        data: string;
+        situacao: { id: number };
+        itens: BlingItemPayload[];
+        observacoes?: string;
+        desconto?: { valor: number; unidade: string };
+        transporte?: { frete: number };
+      }
+
+      const payload: BlingPedidoCreatePayload = {
         contato: { id: numericBlingId },
         data: dataStr,
         situacao: { id: 9 }, // 9 = Atendido
-        itens: itensValidados.map((item: any) => {
-          const payloadItem: any = {
+        itens: itensValidados.map((item) => {
+          const payloadItem: BlingItemPayload = {
             descricao: item.nome,
             quantidade: item.quantidade_compra,
             valor: item.valor_unitario
@@ -160,7 +188,7 @@ export async function POST(request: Request) {
       if (frete && Number(frete) > 0) payload.transporte = { frete: Number(frete) };
 
       try {
-        const blingRes = await blingClient.createPedido(payload);
+        const blingRes = (await blingClient.createPedido(payload)) as { data?: { id?: number | string; numero?: number | string } };
         if (blingRes?.data?.id) {
           realBlingId = String(blingRes.data.id);
           realNumero = blingRes.data.numero ? String(blingRes.data.numero) : realBlingId;
@@ -174,17 +202,19 @@ export async function POST(request: Request) {
               }
             }
             logEntries.push(`[${new Date().toISOString()}] ✅ Baixa de estoque efetuada no Bling!`);
-          } catch (e: any) {
-            logEntries.push(`[${new Date().toISOString()}] ⚠️ Alerta na baixa de estoque do Bling: ${e.message}`);
+          } catch (e: unknown) {
+            const eMsg = e instanceof Error ? e.message : String(e);
+            logEntries.push(`[${new Date().toISOString()}] ⚠️ Alerta na baixa de estoque do Bling: ${eMsg}`);
           }
         } else {
           throw new Error('Bling retornou confirmação sem informar o ID da venda.');
         }
-      } catch (err: any) {
-        logEntries.push(`[${new Date().toISOString()}] ❌ Erro na API Bling ao criar pedido: ${err.message}`);
+      } catch (err: unknown) {
+        const errMessage = err instanceof Error ? err.message : String(err);
+        logEntries.push(`[${new Date().toISOString()}] ❌ Erro na API Bling ao criar pedido: ${errMessage}`);
         return NextResponse.json({
           success: false,
-          error: `Erro na API Bling ao criar pedido: ${err.message}`,
+          error: `Erro na API Bling ao criar pedido: ${errMessage}`,
           logs: logEntries
         }, { status: 400 });
       }
@@ -192,7 +222,7 @@ export async function POST(request: Request) {
 
     // 4. Salvar no Banco Local (Supabase)
     logEntries.push(`[${new Date().toISOString()}] 💾 Registrando venda no banco de dados local...`);
-    
+
     // a) Criar Pedido
     const { data: novoPedido, error: pedErr } = await supabaseServer.from('pedidos').insert({
       user_id: userId,
@@ -261,11 +291,12 @@ export async function POST(request: Request) {
       logs: logEntries
     });
 
-  } catch (err: any) {
-    logEntries.push(`[${new Date().toISOString()}] 💥 Erro Crítico: ${err.message}`);
+  } catch (err: unknown) {
+    const errMessage = err instanceof Error ? err.message : String(err);
+    logEntries.push(`[${new Date().toISOString()}] 💥 Erro Crítico: ${errMessage}`);
     return NextResponse.json({
       success: false,
-      error: `Erro interno: ${err.message}`,
+      error: `Erro interno: ${errMessage}`,
       logs: logEntries
     }, { status: 500 });
   }

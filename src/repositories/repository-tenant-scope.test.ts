@@ -25,4 +25,19 @@ describe('privileged repository tenant scope', () => {
     expectTypeOf<Parameters<IntegrationService['linkSacToErp']>[0]>()
       .toEqualTypeOf<VerifiedTenant>();
   });
+
+  it('requires a verified tenant for all FinanceiroRepository financial-domain operations', () => {
+    // getCategoriaByBlingId: (tenant, blingId) — tenant must be VerifiedTenant
+    expectTypeOf<Parameters<FinanceiroRepository['getCategoriaByBlingId']>[0]>()
+      .toEqualTypeOf<VerifiedTenant>();
+    // getResumo: (tenant) — tenant must be VerifiedTenant
+    expectTypeOf<Parameters<FinanceiroRepository['getResumo']>[0]>()
+      .toEqualTypeOf<VerifiedTenant>();
+    // getTitulosFiltro: (tenant, filtros?) — tenant must be VerifiedTenant
+    expectTypeOf<Parameters<FinanceiroRepository['getTitulosFiltro']>[0]>()
+      .toEqualTypeOf<VerifiedTenant>();
+    // upsertTitulo: (tenant, titulo) — tenant must be VerifiedTenant
+    expectTypeOf<Parameters<FinanceiroRepository['upsertTitulo']>[0]>()
+      .toEqualTypeOf<VerifiedTenant>();
+  });
 });

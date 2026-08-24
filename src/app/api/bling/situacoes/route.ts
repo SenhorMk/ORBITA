@@ -10,12 +10,13 @@ export async function GET(request: Request) {
     }
 
     const blingClient = bling.forUser(session.tenant);
-    
+
     const situacoes = await blingClient.getSituacoesModulo(9);
-    
+
     return NextResponse.json(situacoes);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Erro ao buscar situações no Bling:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const errMsg = error instanceof Error ? error.message : 'Erro ao buscar situações no Bling';
+    return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }

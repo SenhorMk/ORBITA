@@ -32,6 +32,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Audit production dependencies
+        run: npm run audit:check
+
       - name: Check secrets
         run: npm run secrets:check
 
@@ -42,6 +45,9 @@ jobs:
       - name: Check secrets in pushed commits
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
         run: npm run secrets:check -- --git-range "${{ github.event.before }}..${{ github.event.after }}"
+
+      - name: Check database drift
+        run: npm run db:drift:check
 
       - name: Run tests
         run: npm test

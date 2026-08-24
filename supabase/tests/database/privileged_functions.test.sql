@@ -48,7 +48,7 @@ as $$ select true $$;
 grant execute on function public.decrement_estoque(uuid, integer) to public, anon, authenticated, service_role;
 grant execute on function public.acquire_bling_token_lock(uuid, integer) to public, anon, authenticated, service_role;
 
-\ir .generated/09_harden_grants_and_rpcs.inc
+\ir ../../../database/09_harden_grants_and_rpcs.sql
 
 create table public.ticket06_future_table (id bigint primary key);
 create function public.ticket06_future_function()

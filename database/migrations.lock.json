@@ -1,0 +1,226 @@
+{
+  "version": 2,
+  "migrations": [
+    {
+      "order": 1,
+      "path": "./lab/00_bootstrap_schema.sql",
+      "sha256": "69833e3b6ab8c27160e5ae4e0e8d154c42bb47f62f234d85dec06b18a23da812"
+    },
+    {
+      "order": 2,
+      "path": "../database/03_update_pedidos_status.sql",
+      "sha256": "d5c12eff74b70dfdcd94b343f782e57ef8cdaade5221c9ba299a0694a432680e"
+    },
+    {
+      "order": 3,
+      "path": "./lab/03_legacy_unlock_sync_compat.sql",
+      "sha256": "91df65de907d289b2faf22ab84d60f57d1ebb823d9b96fc0e84fd91fd0f8bb1b"
+    },
+    {
+      "order": 4,
+      "path": "../database/04_fix_linter_errors.sql",
+      "sha256": "17e0c416df7bb3e0984586bc6f76086ffddcec8f1a14b6fe3ae30d9137e87d79"
+    },
+    {
+      "order": 5,
+      "path": "../database/05_add_pedidos_details.sql",
+      "sha256": "9fe212a6f577bf2a909bb056f020cbda886c9321280b70f23b564966788f4429"
+    },
+    {
+      "order": 6,
+      "path": "../database/06_financeiro.sql",
+      "sha256": "33b0726c1acf8fc7a1c3845aa9ddb304653a590ae83e6321bcbc4a4862a7bc35"
+    },
+    {
+      "order": 7,
+      "path": "../database/07_bling_auth_lock.sql",
+      "sha256": "894647b86633b1c4325dfc0d6e2c98ac3f7877d87f3aaaef8827254a01e52ead"
+    },
+    {
+      "order": 8,
+      "path": "../database/07_estoque_rpc.sql",
+      "sha256": "9cf6301c5a02e99c187aa12b6622c689235904f7e80c99c10f5b4bbb519163ce"
+    },
+    {
+      "order": 9,
+      "path": "../database/08_contas_financeiras_fornecedores.sql",
+      "sha256": "af798df9523272b2386af82cce1394485796dea68f9cdbeb1145759253458a7d"
+    },
+    {
+      "order": 10,
+      "path": "../database/08_add_user_id.sql",
+      "sha256": "14141dcacfc2e0907c8d522a1e5523388c427255f84130139959744558816ba2"
+    },
+    {
+      "order": 11,
+      "path": "./lab/08_prepare_hardened_rpc_replacement.sql",
+      "sha256": "c03c36eacdeb3792c87161276f179ac4c23ddeea92a12c22da7ba060d42df7f0"
+    },
+    {
+      "order": 12,
+      "path": "../database/09_harden_grants_and_rpcs.sql",
+      "sha256": "30eb04345834c955e9e1326df3dd7ace4a572119153187e3e603e2f8f47cfbfb"
+    },
+    {
+      "order": 13,
+      "path": "../database/10_contain_financeiro_domain.sql",
+      "sha256": "11c368d784d476c90ee0195ca1884c3620d4de764bd7feab3167b81de218e802"
+    },
+    {
+      "order": 14,
+      "path": "../database/11_contain_chatwoot_domain.sql",
+      "sha256": "5323e457deddadfe6d03ac689d0d6569785807a0a020a25516e7e9a1d69faf41"
+    },
+    {
+      "order": 15,
+      "path": "../database/12_quarentena_financeiro_sem_tenant.sql",
+      "sha256": "1c7f248547870d9436fc469200959c4a2787bc03637dc320748dd1ee4961a8af"
+    },
+    {
+      "order": 16,
+      "path": "../database/13_ownership_fornecedores_ids_externos.sql",
+      "sha256": "c3457da9e6efebf64fa910bcf9d73cb76df06359c66760a47fb5d71c46899192"
+    },
+    {
+      "order": 17,
+      "path": "../database/14_expand_modelo_fiscal_canonico.sql",
+      "sha256": "8408da24e55875ae6ae7d8e2145ae9f9ed3e2b1b97aa9213ea44cfdb66f07bc6"
+    },
+    {
+      "order": 18,
+      "path": "../database/15_migrar_dados_e_callers_fiscais.sql",
+      "sha256": "d1b803c81529fa9e8833559dc273bca605364f2cade5319f5910fb71d9601129"
+    },
+    {
+      "order": 19,
+      "path": "../database/16_contrair_modelo_fiscal_legado.sql",
+      "sha256": "6922fa52be50f9040459efb4f3b74d7a952ccd42dffbcb6d08157b76c9d4b25b"
+    },
+    {
+      "order": 20,
+      "path": "../database/17_consolidar_fks_e_triggers.sql",
+      "sha256": "66365aa532b1b9d45ee182b6baea0de3823726802a62fdd8aa92e3509b6e2ac9"
+    },
+    {
+      "order": 21,
+      "path": "../database/18_indices_tenancy_consultas.sql",
+      "sha256": "32e39cda9903d2cbef3d92055d76bafa1b3a158289716cd5832f43c5533c114c"
+    },
+    {
+      "order": 22,
+      "path": "../database/19_comprovar_integridade_baseline.sql",
+      "sha256": "769ca83641746034dbd8b15705b3c92b0fba0217bdada0ea3caca0ee115d59b1"
+    },
+    {
+      "order": 23,
+      "path": "../database/20_organizacao_membership_ativa.sql",
+      "sha256": "8a88b9ec87e860b35b3a9ad5a342eed25136f3e6f71e6b27d61ebe4e1e99d744"
+    },
+    {
+      "order": 24,
+      "path": "../database/21_convites_papeis_capacidades.sql",
+      "sha256": "3908c1564256f6cb619caff9c933915b61e0a6a41e44626626b485b27a02ccf7"
+    },
+    {
+      "order": 25,
+      "path": "../database/22_migrar_catalogo_organizacao.sql",
+      "sha256": "8f6c5e99a4480178cfd50923b0d83619a60033160637e735b871e20c5874be32"
+    },
+    {
+      "order": 26,
+      "path": "../database/23_migrar_comercial_estoque_fiscal.sql",
+      "sha256": "65a1bf47f5f06aea0628f57b62558551401ad791c58ca6f66fb18396abb18caf"
+    },
+    {
+      "order": 27,
+      "path": "../database/24_migrar_financeiro_organizacao.sql",
+      "sha256": "02b2ba58c47771bef592cd0f30f0e1fe0f1e09db67a4d3a1c83a1643e7461abe"
+    },
+    {
+      "order": 28,
+      "path": "../database/25_conexoes_credenciais_privadas.sql",
+      "sha256": "a05a87c9711f85caf5e046d8ee78ab13eeb9ad60514710fa81a742dbe3fa622e"
+    },
+    {
+      "order": 29,
+      "path": "../database/26_migrar_bling_organizacao.sql",
+      "sha256": "226f769c3f14966f29891e4219e19894bcadb7fdc44f393e7235ed68b4eac6e3"
+    },
+    {
+      "order": 30,
+      "path": "../database/27_migrar_chatwoot_organizacao.sql",
+      "sha256": "48ec5cc74fc28a472637d69fb6276b27b582f442154e60034e79444c7b5bd799"
+    },
+    {
+      "order": 31,
+      "path": "../database/28_inbox_idempotente_bling.sql",
+      "sha256": "90f0e39c3c43340ff07366cffee8252327c4c6929f997b1aa4b702d486cc4966"
+    },
+    {
+      "order": 32,
+      "path": "../database/29_inbox_idempotente_chatwoot.sql",
+      "sha256": "962c71ee0cd946386e690634c40501adaf63eee8483404e13af587fd38a0a074"
+    },
+    {
+      "order": 33,
+      "path": "../database/30_jobs_sync_duraveis.sql",
+      "sha256": "808b2db2f751a2c32fc619f620a1e3e0f11f08aca63355101d5345e88f550300"
+    },
+    {
+      "order": 34,
+      "path": "../database/31_outbox_retries_saude_integracoes.sql",
+      "sha256": "dd85e9ed47244cf01eb13472cb9742c8e262f17b90b7e13efbcd5b4770bea913"
+    },
+    {
+      "order": 35,
+      "path": "../database/32_contrair_tenancy_legado.sql",
+      "sha256": "6452810934b555927e7078510a6746c79f145a515bb3cf5b056ea67e26f1ee7b"
+    },
+    {
+      "order": 36,
+      "path": "../database/33_planos_limites_entitlements.sql",
+      "sha256": "a2232311fdc5a7c2501caacb22ed17c4219a31af618a571cb49f6e54c51926b9"
+    },
+    {
+      "order": 37,
+      "path": "../database/34_integrar_stripe_assinaturas.sql",
+      "sha256": "f316f7f338daa3f6d5ef1179a5be93f3ee0bab107219e18b801d20898e061eef"
+    },
+    {
+      "order": 38,
+      "path": "../database/35_suspensao_retencao_encerramento.sql",
+      "sha256": "6907cc3c20fcc086f9a1e245610642592f80103ed521f698a9c702411e13cb75"
+    },
+    {
+      "order": 39,
+      "path": "../database/36_auditoria_correlacao_telemetria.sql",
+      "sha256": "66331b3772c08020fe09e389d5bda4c20cb9c72ab717a5a21b886ce0648b254d"
+    },
+    {
+      "order": 40,
+      "path": "../database/37_fechar_rpcs_grants_perigosos.sql",
+      "sha256": "7df9ca060a0f588504a75eaa679ada750b7a64e2ab4c492da75706ae1d360002"
+    }
+  ],
+  "references": [
+    {
+      "path": "../database/schema_master.sql",
+      "sha256": "d018c32b56e3f9f3a6a57f1a4018dd0f2674ab904ceca46bca8b4d9a20709e1a"
+    }
+  ],
+  "duplicatePrefixes": {
+    "03": [
+      "03_update_pedidos_status.sql",
+      "03_legacy_unlock_sync_compat.sql"
+    ],
+    "07": [
+      "07_bling_auth_lock.sql",
+      "07_estoque_rpc.sql"
+    ],
+    "08": [
+      "08_contas_financeiras_fornecedores.sql",
+      "08_add_user_id.sql",
+      "08_prepare_hardened_rpc_replacement.sql"
+    ]
+  }
+}

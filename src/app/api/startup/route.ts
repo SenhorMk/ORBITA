@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
-import { syncService } from '@/services/sync';
+import { syncService, SyncAuthorizationStoreUnavailableError, SyncScopeDeniedError } from '@/services/sync';
 import { verifySessionAndRole } from '@/lib/auth';
 import { checkEncryptionConfiguration } from '@/lib/crypto';
 
@@ -31,11 +31,12 @@ export async function POST(request: Request) {
     let isBlingAlive = false;
     try {
       isBlingAlive = await blingClient.ping();
-    } catch (err: any) {
-      if (err.message === 'BLING_INVALID_GRANT') {
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      if (errMessage === 'BLING_INVALID_GRANT') {
         return NextResponse.json({
-          success: false, 
-          needsAuth: true, 
+          success: false,
+          needsAuth: true,
           error: 'Conexão com Bling expirada. Por favor, conecte a API novamente.'
         }, { status: 401 });
       }
@@ -45,22 +46,29 @@ export async function POST(request: Request) {
     // 2. Se a API respondeu mas não foi OK por outro motivo
     if (!isBlingAlive) {
       return NextResponse.json({
-        success: false, 
+        success: false,
         error: 'A API do Bling não está respondendo corretamente no momento.'
       }, { status: 502 });
     }
 
     // 3. Executar o sync completo (Produtos, Clientes, Pedidos)
-    const syncResult = await syncService.syncAll(session.tenant);
+    const syncResult = await syncService.syncAll(session);
 
     return NextResponse.json({
       success: true,
       message: 'Sincronização inicial concluída com sucesso.',
       stats: syncResult.stats
     });
-  } catch (error: any) {
-    console.error('Erro no startup sync:', error);
-    if (error.message && error.message.includes('em execução')) {
+  } catch (error: unknown) {
+    if (error instanceof SyncScopeDeniedError) {
+      return NextResponse.json({ success: false, error: 'Escopo organizacional inválido' }, { status: 403 });
+    }
+    if (error instanceof SyncAuthorizationStoreUnavailableError) {
+      return NextResponse.json({ success: false, error: 'Serviço de autorização indisponível' }, { status: 503 });
+    }
+    console.error('Erro interno no startup sync.');
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    if (errorMsg.includes('em execução')) {
       return NextResponse.json({
         success: true,
         message: 'A sincronização já está rodando em segundo plano.',
@@ -68,7 +76,7 @@ export async function POST(request: Request) {
       });
     }
     return NextResponse.json(
-      { success: false, error: error.message || 'Erro interno durante sincronização inicial' },
+      { success: false, error: 'Erro interno durante sincronização inicial' },
       { status: 500 }
     );
   }

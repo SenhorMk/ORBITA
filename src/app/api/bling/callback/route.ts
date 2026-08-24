@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
-import { supabaseServer } from '@/lib/supabaseServer';
-import { encrypt, decrypt } from '@/lib/crypto';
-import { readOAuthTransaction } from '@/lib/oauth-transaction';
-import { exchangeBlingAuthorizationCode } from '@/services/blingOAuth';
+import { supabaseServer } from '../../../../lib/supabaseServer';
+import { encrypt, decrypt } from '../../../../lib/crypto';
+import { readOAuthTransaction } from '../../../../lib/oauth-transaction';
+import { exchangeBlingAuthorizationCode } from '../../../../services/blingOAuth';
+import { credentialsVault } from '../../../../lib/integrations/credentialsVault';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +31,7 @@ export async function GET(request: Request) {
     );
   }
   const userId = transaction.userId;
+  const organizacaoId = transaction.organizacaoId;
 
   if (errorParam) {
     console.warn('[callback] Bling recusou a autorização.', { error: errorParam });
@@ -45,24 +47,43 @@ export async function GET(request: Request) {
 
   let clientId: string | null = null;
   let clientSecret: string | null = null;
-  let recordId: string | null = null;
-  let tableName = 'integracoes_bling';
-  let expiresColumn = 'token_expires_at';
+  let legacyRecordId: string | null = null;
 
-  const { data, error } = await supabaseServer
-    .from('integracoes_bling')
-    .select('id, client_id, client_secret')
-    .eq('user_id', userId)
-    .maybeSingle();
+  // 1. Tentar recuperar credenciais da organização
+  if (organizacaoId) {
+    const { data: conn } = await supabaseServer
+      .from('conexoes_integracao')
+      .select('id, metadata')
+      .eq('organizacao_id', organizacaoId)
+      .eq('provedor', 'bling')
+      .maybeSingle();
 
-  if (error) {
-    console.error('[callback] Falha ao carregar integração Bling:', error.message);
+    if (conn?.id) {
+      const creds = await credentialsVault.getDecryptedCredentials(organizacaoId, conn.id);
+      if (creds?.client_id && creds?.client_secret) {
+        clientId = creds.client_id as string;
+        clientSecret = creds.client_secret as string;
+      }
+    }
   }
 
-  if (data?.client_id && data?.client_secret) {
-    clientId = data.client_id;
-    clientSecret = decrypt(data.client_secret);
-    recordId = data.id;
+  // 2. Fallback para integracoes_bling legada
+  if (!clientId || !clientSecret) {
+    const { data, error } = await supabaseServer
+      .from('integracoes_bling')
+      .select('id, client_id, client_secret')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[callback] Falha ao carregar integração Bling:', error.message);
+    }
+
+    if (data?.client_id && data?.client_secret) {
+      clientId = data.client_id;
+      clientSecret = decrypt(data.client_secret);
+      legacyRecordId = data.id;
+    }
   }
 
   if (!clientId || !clientSecret) {
@@ -92,39 +113,63 @@ export async function GET(request: Request) {
 
   console.info('[callback] Tokens do Bling recebidos.');
 
-  // Salvar tokens no banco
-  const payload: any = {
-    access_token: encrypt(tokenData.access_token),
-    refresh_token: encrypt(tokenData.refresh_token),
-    [expiresColumn]: expiresAt,
-  };
+  // 3. Persistir tokens na conexão de organização (Cofre Privado)
+  if (organizacaoId) {
+    const { data: conn, error: connErr } = await supabaseServer
+      .from('conexoes_integracao')
+      .upsert(
+        {
+          organizacao_id: organizacaoId,
+          provedor: 'bling',
+          nome: 'Principal',
+          status: 'conectado',
+          metadata: { client_id: clientId },
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'organizacao_id, provedor, nome' },
+      )
+      .select('id')
+      .single();
 
-  let saveErr: any = null;
-
-  if (recordId) {
-    const { error } = await supabaseServer.from(tableName).update(payload).eq('id', recordId);
-    saveErr = error;
-  } else if (userId) {
-    // Nenhum registro ainda — inserir
-    const { error } = await supabaseServer.from('integracoes_bling').insert({
-      user_id: userId,
-      client_id: clientId,
-      client_secret: encrypt(clientSecret),
-      access_token: encrypt(tokenData.access_token),
-      refresh_token: encrypt(tokenData.refresh_token),
-      token_expires_at: expiresAt,
-    });
-    saveErr = error;
+    if (connErr || !conn?.id) {
+      console.error('[callback] Erro ao persistir conexao_integracao:', connErr?.message);
+    } else {
+      await credentialsVault.saveEncryptedCredentials(organizacaoId, conn.id, {
+        client_id: clientId,
+        client_secret: clientSecret,
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token,
+        token_expires_at: expiresAt,
+      });
+      console.info('[callback] Conexao e credenciais privadas salvas no cofre da organizacao.');
+    }
   }
 
-  if (saveErr) {
-    console.error('[callback] Erro ao salvar tokens:', saveErr.message);
-    return clearOAuthTransaction(
-      htmlPage('error', 'Tokens gerados, mas não foi possível persistir a conexão.'),
+  // 4. Manter compatibilidade com integracoes_bling legada durante migração
+  if (legacyRecordId) {
+    await supabaseServer
+      .from('integracoes_bling')
+      .update({
+        access_token: encrypt(tokenData.access_token),
+        refresh_token: encrypt(tokenData.refresh_token),
+        token_expires_at: expiresAt,
+      })
+      .eq('id', legacyRecordId);
+  } else if (userId) {
+    await supabaseServer.from('integracoes_bling').upsert(
+      {
+        user_id: userId,
+        client_id: clientId,
+        client_secret: encrypt(clientSecret),
+        access_token: encrypt(tokenData.access_token),
+        refresh_token: encrypt(tokenData.refresh_token),
+        token_expires_at: expiresAt,
+      },
+      { onConflict: 'user_id' },
     );
   }
 
-  console.log('[callback] ✅ Tokens salvos com sucesso na tabela:', tableName);
+  console.log('[callback] ✅ Tokens salvos com sucesso.');
 
   return clearOAuthTransaction(htmlPage('success', ''));
 }
@@ -140,46 +185,80 @@ function clearOAuthTransaction(response: NextResponse): NextResponse {
   return response;
 }
 
-function htmlPage(type: 'success' | 'error', message: string): NextResponse {
-  if (type === 'success') {
-    const html = `<!DOCTYPE html>
-<html lang="pt-BR">
-<head><meta charset="UTF-8"/><title>Bling Conectado!</title>
-<meta http-equiv="refresh" content="2;url=/" />
-<style>
-  body{font-family:sans-serif;background:#0d0818;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
-  .card{background:#1a1f35;border:1px solid #22c55e44;border-radius:24px;padding:48px;text-align:center;max-width:440px}
-  h1{color:#22c55e;font-size:24px;margin:0 0 8px}
-  p{color:#94a3b8;margin:0 0 24px}
-  .spinner{width:40px;height:40px;border:3px solid #334155;border-top-color:#7c3aed;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 16px}
-  @keyframes spin{to{transform:rotate(360deg)}}
-</style></head>
-<body><div class="card">
-  <div class="spinner"></div>
-  <h1>✅ Bling Conectado!</h1>
-  <p>Tokens gerados e salvos com sucesso.<br/>Redirecionando para o Orbita...</p>
-</div></body></html>`;
-    return new NextResponse(html, { status: 200, headers: { 'Content-Type': 'text/html' } });
-  }
-
-  const escapedMessage = typeof message === 'string' 
-    ? message.replace(/</g, '&lt;').replace(/>/g, '&gt;') 
-    : String(message);
+function htmlPage(status: 'success' | 'error', message: string, statusCode: number = status === 'error' ? 400 : 200) {
+  const isSuccess = status === 'success';
+  const icon = isSuccess ? '✅' : '❌';
+  const title = isSuccess ? 'Conexão Realizada!' : 'Erro na Conexão';
+  const desc = isSuccess
+    ? 'Sua conta do Bling foi vinculada com sucesso. Você já pode fechar esta janela.'
+    : message;
+  const color = isSuccess ? '#10b981' : '#ef4444';
 
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
-<head><meta charset="UTF-8"/><title>Erro</title>
-<style>
-  body{font-family:sans-serif;background:#0d0818;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
-  .card{background:#1a1f35;border:1px solid #ef444433;border-radius:24px;padding:48px;text-align:center;max-width:500px}
-  h1{color:#ef4444;font-size:22px;margin:0 0 12px}
-  p{color:#94a3b8;font-size:13px;word-break:break-word}
-  a{display:inline-block;margin-top:20px;background:#1e293b;color:#94a3b8;padding:10px 24px;border-radius:10px;text-decoration:none;border:1px solid #334155}
-</style></head>
-<body><div class="card">
-  <h1>❌ Erro na Conexão</h1>
-  <p>${escapedMessage}</p>
-  <a href="/">← Voltar ao Orbita</a>
-</div></body></html>`;
-  return new NextResponse(html, { status: 400, headers: { 'Content-Type': 'text/html' } });
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title} - ORBITA</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #09090b;
+      color: #f4f4f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 1rem;
+    }
+    .card {
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 12px;
+      padding: 2.5rem;
+      max-width: 440px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+    .icon { font-size: 3.5rem; margin-bottom: 1rem; }
+    h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 0.75rem 0; color: #fff; }
+    p { font-size: 0.95rem; color: #a1a1aa; line-height: 1.5; margin: 0 0 1.5rem 0; }
+    .btn {
+      display: inline-block;
+      background: ${color};
+      color: #fff;
+      font-weight: 500;
+      font-size: 0.9rem;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      text-decoration: none;
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.9; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">${icon}</div>
+    <h1>${title}</h1>
+    <p>${desc}</p>
+    <button class="btn" onclick="window.close()">Fechar Janela</button>
+  </div>
+  <script>
+    if (window.opener) {
+      window.opener.postMessage({ type: 'BLING_AUTH_COMPLETE', status: '${status}' }, '*');
+      setTimeout(() => window.close(), 2500);
+    }
+  </script>
+</body>
+</html>`;
+
+  return new NextResponse(html, {
+    status: statusCode,
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  });
 }

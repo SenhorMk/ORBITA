@@ -1,7 +1,6 @@
-import { supabaseServer } from '@/lib/supabaseServer';
-import { normalizeToE164 } from '@/lib/utils';
-import type { Cliente } from '@/types';
-import type { VerifiedTenant } from '@/lib/auth';
+import { supabaseServer } from '../lib/supabaseServer';
+import type { Cliente } from '../types';
+import type { VerifiedTenant } from '../lib/auth';
 
 export class IntegrationService {
   /**
@@ -9,7 +8,6 @@ export class IntegrationService {
    * Caso o cliente não exista, ele será criado automaticamente para ser enviado ao Bling no próximo sync.
    */
   async linkSacToErp(tenant: VerifiedTenant) {
-    console.log('🔄 Iniciando verificação de auto-registro e vínculo SAC-ERP...');
     let novosClientes = 0;
 
     try {
@@ -43,8 +41,7 @@ export class IntegrationService {
         const telefoneExiste = telefonesERP.has(contact.phone_normalizado);
 
         if (!telefoneExiste) {
-          console.log(`🆕 Novo contato no SAC encontrado: ${contact.name}. Criando cliente no ERP...`);
-          
+
           const novoCliente: Cliente = {
             bling_id: `temp_${crypto.randomUUID().split('-')[0]}`, // Temporário, será substituído pelo SyncPush
             nome: contact.name || 'Cliente Chatwoot',
@@ -66,11 +63,11 @@ export class IntegrationService {
         }
       }
 
-      console.log(`✅ Verificação SAC-ERP concluída. +${novosClientes} clientes auto-registrados.`);
       return { success: true, novosClientes };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('❌ Erro na integração SAC-ERP:', error);
-      return { success: false, error: error.message };
+      const errMsg = error instanceof Error ? error.message : String(error);
+      return { success: false, error: errMsg };
     }
   }
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from "react";
 import {
   ShoppingBag,
   FileText,
@@ -18,7 +18,6 @@ import {
 import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { DropdownMenu } from './DropdownMenu';
 import { OrderDetailModal } from './OrderDetailModal';
-import { useState } from 'react';
 
 interface TransactionListProps {
   pedidos: PedidoEnriquecido[];
@@ -46,18 +45,18 @@ export const TransactionList = React.memo(function TransactionList({
   const confirmCancel = async () => {
     if (!pedidoToCancel) return;
     setIsCanceling(true);
-    
+
     try {
       // 1. Busca as situações
       const sitRes = await fetch('/api/bling/situacoes');
-      const situacoes = await sitRes.json();
-      
-      const situacaoCancelado = situacoes.find((s: any) => s.nome.toLowerCase() === 'cancelado' || s.nome.toLowerCase() === 'cancelada');
-      
+      const situacoes = (await sitRes.json()) as Array<{ id: number; nome: string }>;
+
+      const situacaoCancelado = situacoes.find((s) => s.nome.toLowerCase() === 'cancelado' || s.nome.toLowerCase() === 'cancelada');
+
       if (!situacaoCancelado) {
         throw new Error('Situação "Cancelado" não encontrada no Bling.');
       }
-      
+
       // 2. Faz o cancelamento
       const cancelRes = await fetch('/api/pedidos/status', {
         method: 'POST',
@@ -75,8 +74,8 @@ export const TransactionList = React.memo(function TransactionList({
       alert('Pedido cancelado e estoque alinhado com sucesso!');
       // Recarrega a página ou chama um callback onRefresh (aqui simplificado via window.location)
       window.location.reload();
-    } catch (err: any) {
-      alert(`Erro: ${err.message}`);
+    } catch (err: unknown) {
+      alert(`Erro: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsCanceling(false);
       setCancelModalOpen(false);
@@ -114,7 +113,7 @@ export const TransactionList = React.memo(function TransactionList({
         </div>
         <h4 className="text-xs font-semibold text-slate-200">Sem pedidos registrados</h4>
         <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
-          Nenhum pedido real foi encontrado no banco de dados do Supabase. Conecte o Bling v3 e clique em "Sincronizar Bling".
+          Nenhum pedido real foi encontrado no banco de dados do Supabase. Conecte o Bling v3 e clique em &quot;Sincronizar Bling&quot;.
         </p>
       </div>
     );
@@ -264,7 +263,9 @@ export const TransactionList = React.memo(function TransactionList({
                           shortcut: '⌘+N',
                           onClick: (e?: React.MouseEvent) => {
                             e?.stopPropagation();
-                            onEmitirNfe && onEmitirNfe(pedido);
+                            if (onEmitirNfe) {
+                              onEmitirNfe(pedido);
+                            }
                           }
                         },
                         {
@@ -305,10 +306,10 @@ export const TransactionList = React.memo(function TransactionList({
         );
       })}
       </div>
-      <OrderDetailModal 
-        open={!!selectedPedidoId} 
-        onOpenChange={(open) => !open && setSelectedPedidoId(null)} 
-        pedidoBlingId={selectedPedidoId} 
+      <OrderDetailModal
+        open={!!selectedPedidoId}
+        onOpenChange={(open) => !open && setSelectedPedidoId(null)}
+        pedidoBlingId={selectedPedidoId}
       />
 
       {/* Modal de Cancelamento Simplificado (One Way Sync) */}
@@ -324,7 +325,7 @@ export const TransactionList = React.memo(function TransactionList({
                 <p className="text-sm text-slate-400">Pedido #{pedidoToCancel.numero}</p>
               </div>
             </div>
-            
+
             <p className="text-sm text-slate-300 mb-6 leading-relaxed">
               Tem certeza que deseja cancelar este pedido? O estoque será atualizado localmente de forma sincronizada, conforme as regras do seu ERP.
             </p>

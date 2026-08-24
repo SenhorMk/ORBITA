@@ -2,36 +2,25 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  X,
   Package,
-  User,
   DollarSign,
   Box,
   Tag,
   FileText,
-  MessageCircle,
-  Phone,
-  Mail,
-  FileCheck,
   MoreVertical,
   CheckCircle2,
   AlertTriangle,
   RefreshCw,
-  Edit3,
-  ExternalLink,
   Copy,
   Layers,
   Sparkles,
-  ShoppingBag,
   Save,
-  Image as ImageIcon
-} from 'lucide-react';
+} from "lucide-react";
 import type { Produto, Cliente, Categoria } from '@/types';
 import { GlassModal } from '@/components/ui/glass-modal';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuGroup, DropdownMenuLabel, DropdownMenuSeparator } from './ui/dropdown-menu';
 import { ErrorLogModal } from './ErrorLogModal';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { validateProdutoForBling, sanitizeProductName } from '@/lib/utils';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -48,46 +37,33 @@ export function ProductDetailModal({
   isOpen,
   onClose,
   produto,
-  cliente,
   onSave,
-  onOpenChatwoot
 }: ProductDetailModalProps) {
   // Form editable state
-  const [nome, setNome] = useState('');
-  const [codigo, setCodigo] = useState('');
-  const [preco, setPreco] = useState('');
-  const [estoque, setEstoque] = useState('');
-  const [categoriaId, setCategoriaId] = useState('');
+  const [nome, setNome] = useState(produto?.nome || '');
+  const [codigo, setCodigo] = useState(produto?.codigo || (produto?.bling_id ? `BLING-${produto.bling_id}` : ''));
+  const [preco, setPreco] = useState(produto?.preco !== undefined ? String(produto.preco) : '0.00');
+  const [estoque, setEstoque] = useState(produto?.estoque !== undefined ? String(produto.estoque) : '0');
+  const [categoriaId, setCategoriaId] = useState(produto?.categoria_id || '');
   const [categorias, setCategorias] = useState<Categoria[]>([]);
-  
+
   // Bling mandatory fields
   const [tipo, setTipo] = useState('P');
   const [situacao, setSituacao] = useState('A');
   const [formato, setFormato] = useState('S');
   const [unidade, setUnidade] = useState('UN');
 
-  const [status, setStatus] = useState<'Ativo' | 'Inativo' | 'Em Produção'>('Ativo');
   const [observacao, setObservacao] = useState('');
   const [isCopied, setIsCopied] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
-  // Error Log Modal State
-  const [errorLogData, setErrorLogData] = useState<{
-    isOpen: boolean;
-    title: string;
-    errorMessage: string;
-    details?: string;
-    logs?: string[];
-  }>({
-    isOpen: false,
-    title: '',
-    errorMessage: '',
-  });
+  const [prevProduto, setPrevProduto] = useState<Produto | null>(produto);
+  const [prevOpen, setPrevOpen] = useState(isOpen);
 
-  const isNew = !produto;
-
-  useEffect(() => {
+  if (isOpen !== prevOpen || produto !== prevProduto) {
+    setPrevOpen(isOpen);
+    setPrevProduto(produto);
     if (produto) {
       setNome(produto.nome || '');
       setCodigo(produto.codigo || `BLING-${produto.bling_id}`);
@@ -111,32 +87,45 @@ export function ProductDetailModal({
       setCategoriaId('');
       setObservacao('Novo produto a ser cadastrado simultaneamente no Bling ERP v3 e Supabase.');
     }
-  }, [produto, isOpen]);
+  }
+
+  // Error Log Modal State
+  const [errorLogData, setErrorLogData] = useState<{
+    isOpen: boolean;
+    title: string;
+    errorMessage: string;
+    details?: string;
+    logs?: string[];
+  }>({
+    isOpen: false,
+    title: '',
+    errorMessage: '',
+  });
+
+  const isNew = !produto;
 
   useEffect(() => {
+    let isMounted = true;
     if (isOpen) {
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        const token = session?.access_token;
-        fetch('/api/categorias/sync', {
-          headers: token ? { 'Authorization': `Bearer ${token}` } : {}
-        })
-          .then(async (res) => {
-            const text = await res.text();
-            try {
-              return JSON.parse(text);
-            } catch (e) {
-              console.warn('API de categorias retornou HTML em vez de JSON. Ignorando.');
-              return { success: false };
-            }
-          })
-          .then(data => {
-            if (data.success && data.data) {
-              setCategorias(data.data);
-            }
-          })
-          .catch(err => console.error('Erro ao buscar categorias', err));
-      });
+      void (async () => {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          const token = session?.access_token;
+          const res = await fetch('/api/categorias/sync', {
+            headers: token ? { Authorization: `Bearer ${token}` } : {}
+          });
+          const data = (await res.json()) as { success?: boolean; data?: Categoria[] };
+          if (isMounted && data.success && Array.isArray(data.data)) {
+            setCategorias(data.data);
+          }
+        } catch (err) {
+          console.warn('Erro ao buscar categorias:', err);
+        }
+      })();
     }
+    return () => {
+      isMounted = false;
+    };
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -199,7 +188,7 @@ export function ProductDetailModal({
 
       const res = await fetch('/api/produtos/update', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
@@ -231,13 +220,14 @@ export function ProductDetailModal({
         setSavedSuccess(false);
         onClose();
       }, 1500);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : 'Falha ao enviar dados de atualização.';
       setErrorLogData({
         isOpen: true,
         title: 'Erro de Execução (Node.js / Servidor)',
-        errorMessage: err.message || 'Falha ao enviar dados de atualização.',
+        errorMessage: errMsg,
         details: String(err),
-        logs: [`[${new Date().toISOString()}] Exceção no cliente/fetch: ${err.message || err}`],
+        logs: [`[${new Date().toISOString()}] Exceção no cliente/fetch: ${errMsg}`],
       });
       setIsSaving(false);
     }
@@ -275,20 +265,20 @@ export function ProductDetailModal({
           id: 'set-active',
           label: 'Marcar como Ativo',
           icon: CheckCircle2,
-          onClick: () => setStatus('Ativo'),
+          onClick: () => setSituacao('A'),
         },
         {
           id: 'set-production',
           label: 'Marcar em Produção',
           icon: Sparkles,
-          onClick: () => setStatus('Em Produção'),
+          onClick: () => setSituacao('A'),
         },
         {
           id: 'set-inactive',
           label: 'Inativar Produto',
           icon: AlertTriangle,
           danger: true,
-          onClick: () => setStatus('Inativo'),
+          onClick: () => setSituacao('I'),
         },
       ],
     },
@@ -326,11 +316,11 @@ export function ProductDetailModal({
         headerActions={
           <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                
+
               <button className="p-2.5 rounded-2xl glass-card text-slate-300 hover:text-white hover:border-white/20 transition">
                 <MoreVertical className="w-4 h-4" />
               </button>
-            
+
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56 glass-panel border border-white/10 rounded-xl p-1 shadow-2xl bg-[#1A1A1A]">
                 {dropdownSections.map((section, idx) => (
@@ -343,8 +333,8 @@ export function ProductDetailModal({
                       {section.actions.map(action => {
                         const Icon = action.icon;
                         return (
-                          <DropdownMenuItem 
-                            key={action.id} 
+                          <DropdownMenuItem
+                            key={action.id}
                             onClick={action.onClick}
                             className={`cursor-pointer flex items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors ${action.danger ? 'text-rose-400 focus:bg-rose-500/20 focus:text-rose-300' : 'text-slate-200 focus:bg-white/10 focus:text-white'}`}
                           >

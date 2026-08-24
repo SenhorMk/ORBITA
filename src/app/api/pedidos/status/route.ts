@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { bling } from '@/services/bling';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
-import { produtoRepository } from '@/repositories/produtoRepository';
 import { mapBlingStatus } from '@/lib/utils';
 import { verifySessionAndRole } from '@/lib/auth';
 
@@ -57,7 +56,7 @@ export async function POST(request: Request) {
     if (itens && itens.length > 0) {
       // Pega os IDs locais dos produtos
       const produtosIds = itens.map(i => i.produto_id);
-      
+
       // Busca os bling_ids correspondentes
       const { data: produtosData, error: produtosError } = await supabaseServer
         .from('produtos')
@@ -67,13 +66,13 @@ export async function POST(request: Request) {
 
       if (!produtosError && produtosData && produtosData.length > 0) {
         const blingIdsParaSincronizar = produtosData.filter(p => p.bling_id).map(p => p.bling_id!);
-        
+
         if (blingIdsParaSincronizar.length > 0) {
           // Puxa o saldo ATUALIZADO do Bling
           const saldosArray = await blingClient.getEstoquesSaldos(blingIdsParaSincronizar);
-          
-          const saldosMap = new Map();
-          saldosArray.forEach((item: any) => {
+
+          const saldosMap = new Map<string, number>();
+          (saldosArray as Array<{ produto?: { id: number | string }; saldoFisicoTotal?: number; saldoFisico?: number }>).forEach((item) => {
             if (item.produto?.id) {
               saldosMap.set(String(item.produto.id), Number(item.saldoFisicoTotal ?? item.saldoFisico ?? 0));
             }
@@ -89,7 +88,7 @@ export async function POST(request: Request) {
                   .update({ estoque: novoEstoque })
                   .eq('id', prod.id)
                   .eq('user_id', userId);
-                  
+
                 if (updateError) {
                   console.error(`Erro ao atualizar estoque do produto ${prod.id}:`, updateError);
                 }
@@ -101,8 +100,9 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({ success: true, status: novoStatusCanonico });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Erro ao atualizar status do pedido:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const errMsg = error instanceof Error ? error.message : 'Erro interno';
+    return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }

@@ -1,8 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import { useState } from "react";
 import {
-  X,
   User,
   Mail,
   Phone,
@@ -10,8 +9,7 @@ import {
   MapPin,
   Save,
   CheckCircle2,
-  AlertTriangle
-} from 'lucide-react';
+} from "lucide-react";
 import type { Cliente } from '@/types';
 import { GlassModal } from '@/components/ui/glass-modal';
 import { supabase } from '@/lib/supabaseClient';
@@ -34,24 +32,59 @@ export function ClienteEditModal({
   const isNew = !cliente;
 
   // Form State
-  const [nome, setNome] = useState('');
-  const [email, setEmail] = useState('');
-  const [telefone, setTelefone] = useState('');
-  const [cpfCnpj, setCpfCnpj] = useState('');
-  
+  const [nome, setNome] = useState(cliente?.nome || '');
+  const [email, setEmail] = useState(cliente?.email || '');
+  const [telefone, setTelefone] = useState(cliente?.telefone || '');
+  const [cpfCnpj, setCpfCnpj] = useState(cliente?.cpf_cnpj || '');
+
   // Extra fields for Bling
-  const [tipo, setTipo] = useState('F');
-  const [contribuinte, setContribuinte] = useState('9');
-  const [cep, setCep] = useState('');
-  const [endereco, setEndereco] = useState('');
-  const [numero, setNumero] = useState('');
-  const [bairro, setBairro] = useState('');
-  const [cidade, setCidade] = useState('');
-  const [uf, setUf] = useState('');
+  const [tipo, setTipo] = useState(cliente?.tipo || 'F');
+  const [contribuinte, setContribuinte] = useState(cliente?.contribuinte !== undefined ? String(cliente.contribuinte) : '9');
+  const [cep, setCep] = useState(cliente?.cep || '');
+  const [endereco, setEndereco] = useState(cliente?.endereco || '');
+  const [numero, setNumero] = useState(cliente?.numero || '');
+  const [bairro, setBairro] = useState(cliente?.bairro || '');
+  const [cidade, setCidade] = useState(cliente?.cidade || '');
+  const [uf, setUf] = useState(cliente?.uf || '');
 
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
+
+  const [prevCliente, setPrevCliente] = useState<Cliente | null>(cliente);
+  const [prevOpen, setPrevOpen] = useState(isOpen);
+
+  if (isOpen !== prevOpen || cliente !== prevCliente) {
+    setPrevOpen(isOpen);
+    setPrevCliente(cliente);
+    if (cliente) {
+      setNome(cliente.nome || '');
+      setEmail(cliente.email || '');
+      setTelefone(cliente.telefone || '');
+      setCpfCnpj(cliente.cpf_cnpj || '');
+      setTipo(cliente.tipo || 'F');
+      setContribuinte(cliente.contribuinte !== undefined ? String(cliente.contribuinte) : '9');
+      setCep(cliente.cep || '');
+      setEndereco(cliente.endereco || '');
+      setNumero(cliente.numero || '');
+      setBairro(cliente.bairro || '');
+      setCidade(cliente.cidade || '');
+      setUf(cliente.uf || '');
+    } else {
+      setNome('');
+      setEmail('');
+      setTelefone('');
+      setCpfCnpj('');
+      setTipo('F');
+      setContribuinte('9');
+      setCep('');
+      setEndereco('');
+      setNumero('');
+      setBairro('');
+      setCidade('');
+      setUf('');
+    }
+  }
 
   const [errorLogData, setErrorLogData] = useState<{
     isOpen: boolean;
@@ -64,39 +97,6 @@ export function ClienteEditModal({
     title: '',
     errorMessage: '',
   });
-
-  useEffect(() => {
-    if (isOpen) {
-      if (cliente) {
-        setNome(cliente.nome || '');
-        setEmail(cliente.email || '');
-        setTelefone(cliente.telefone || '');
-        setCpfCnpj(cliente.cpf_cnpj || '');
-        setTipo(cliente.tipo || 'F');
-        setContribuinte(cliente.contribuinte !== undefined ? String(cliente.contribuinte) : '9');
-        setCep(cliente.cep || '');
-        setEndereco(cliente.endereco || '');
-        setNumero(cliente.numero || '');
-        setBairro(cliente.bairro || '');
-        setCidade(cliente.cidade || '');
-        setUf(cliente.uf || '');
-      } else {
-        setNome('');
-        setEmail('');
-        setTelefone('');
-        setCpfCnpj('');
-        setTipo('F');
-        setContribuinte('9');
-        setCep('');
-        setEndereco('');
-        setNumero('');
-        setBairro('');
-        setCidade('');
-        setUf('');
-      }
-      setErrors({});
-    }
-  }, [cliente, isOpen]);
 
   // Inferência automática baseada no tamanho do documento (opcional para melhorar UX)
   const handleDocChange = (val: string) => {
@@ -128,7 +128,7 @@ export function ClienteEditModal({
     setSavedSuccess(false);
 
     try {
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         id: cliente?.id,
         bling_id: cliente?.bling_id,
         nome: nome.trim(),
@@ -150,7 +150,7 @@ export function ClienteEditModal({
 
       const res = await fetch('/api/clientes/update', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
@@ -182,11 +182,12 @@ export function ClienteEditModal({
         setSavedSuccess(false);
         onClose();
       }, 1500);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : 'Falha ao enviar dados.';
       setErrorLogData({
         isOpen: true,
         title: 'Erro de Execução (Node.js)',
-        errorMessage: err.message || 'Falha ao enviar dados.',
+        errorMessage: errMsg,
         details: String(err),
       });
       setIsSaving(false);
@@ -313,9 +314,9 @@ export function ClienteEditModal({
                         <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
                           Tipo de Pessoa *
                         </label>
-                        <select 
-                          value={tipo} 
-                          onChange={(e) => setTipo(e.target.value)} 
+                        <select
+                          value={tipo}
+                          onChange={(e) => setTipo(e.target.value)}
                           className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50"
                         >
                           <option value="F">Física (F)</option>
@@ -327,9 +328,9 @@ export function ClienteEditModal({
                         <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
                           Tipo de Contribuinte *
                         </label>
-                        <select 
-                          value={contribuinte} 
-                          onChange={(e) => setContribuinte(e.target.value)} 
+                        <select
+                          value={contribuinte}
+                          onChange={(e) => setContribuinte(e.target.value)}
                           className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50"
                         >
                           <option value="1">1 - Contribuinte ICMS</option>

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import { useState } from "react";
 import {
   User,
   Mail,
@@ -97,12 +97,12 @@ export function ClienteDetailModal({
         >
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              
+
               <div className="p-4 rounded-2xl glass-card border border-white/10 bg-white/[0.02] space-y-4">
                 <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2 mb-3">
                   <Mail className="w-4 h-4 text-cyan-400" /> Contato
                 </h3>
-                
+
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-slate-400">Telefone</span>
@@ -146,7 +146,7 @@ export function ClienteDetailModal({
                 <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2 mb-3">
                   <FileText className="w-4 h-4 text-purple-400" /> Documento & Endereço
                 </h3>
-                
+
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-slate-400">CPF/CNPJ</span>
@@ -163,7 +163,6 @@ export function ClienteDetailModal({
                     <span className="text-xs text-slate-400">Endereço</span>
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-white truncate max-w-[150px]">
-                        {/*@ts-ignore*/}
                         {[cliente.endereco, cliente.numero, cliente.bairro, cliente.cidade, cliente.uf].filter(Boolean).join(', ') || '-'}
                       </span>
                     </div>
@@ -171,7 +170,6 @@ export function ClienteDetailModal({
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-slate-400">CEP</span>
                     <div className="flex items-center gap-2">
-                      {/*@ts-ignore*/}
                       <span className="text-sm font-mono text-white">{cliente.cep || '-'}</span>
                     </div>
                   </div>

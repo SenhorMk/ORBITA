@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import { useState } from "react";
 import {
   LayoutDashboard,
   ShoppingBag,
@@ -9,13 +9,10 @@ import {
   MessageSquare,
   MessageCircle,
   Sliders,
-  LogOut,
-  Shield,
-  User,
   Menu,
   X,
-  DollarSign
-} from 'lucide-react';
+  DollarSign,
+} from "lucide-react";
 import { DockTabs, DockItem } from '@/components/ui/dock-tabs';
 
 export type TabType = 'dashboard' | 'sales' | 'inventory' | 'contacts' | 'finance' | 'sac' | 'chats';
@@ -56,8 +53,7 @@ export function Sidebar({
   setActiveTab,
   session,
   onOpenSetup,
-  onLogout,
-  badges
+  onLogout
 }: SidebarProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [hoveredFooterItem, setHoveredFooterItem] = useState<string | null>(null);

@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
-import { chatwootService } from '@/services/chatwoot';
-import { supabaseServer } from '@/lib/supabaseServer';
-import { verifySessionAndRole } from '@/lib/auth';
+import { ChatwootClient } from '../../../../services/chatwoot';
+import { supabaseServer } from '../../../../lib/supabaseServer';
+import { verifySessionAndRole } from '../../../../lib/auth';
+import { resolveActiveOrganization } from '../../../../lib/organizationContext';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,12 +23,36 @@ export async function POST(request: Request) {
       );
     }
 
-    console.log(`🔄 Alterando status da conversa ${conversationId} para "${status}"...`);
-    
-    // 1. Alterar status via API do Chatwoot
-    await chatwootService.toggleConversationStatus(conversationId, status);
+    const preferredOrgId = request.headers.get('cookie')?.match(/orbita_active_org=([^;]+)/)?.[1];
+    const activeOrg = await resolveActiveOrganization(supabaseServer, session.actorId, preferredOrgId);
+    const orgId = activeOrg?.organizacao.id ?? session.tenant.id;
 
-    // 2. Atualizar no Supabase local
+    // 1. Verificar se a conversa pertence ao tenant/organização autenticado antes de alterar na API externa
+    let convCheckQuery = supabaseServer
+      .from('chatwoot_conversations')
+      .select('id')
+      .eq('id', conversationId);
+
+    if (activeOrg) {
+      convCheckQuery = convCheckQuery.or(`organizacao_id.eq.${orgId},user_id.eq.${session.tenant.id}`);
+    } else {
+      convCheckQuery = convCheckQuery.eq('user_id', session.tenant.id);
+    }
+
+    const { data: existingConv, error: convCheckError } = await convCheckQuery.maybeSingle();
+
+    if (convCheckError || !existingConv) {
+      return NextResponse.json(
+        { success: false, error: 'Conversa não encontrada' },
+        { status: 404 }
+      );
+    }
+
+    // 2. Alterar status via API do Chatwoot usando client da organização
+    const client = await ChatwootClient.forOrganization(orgId);
+    await client.toggleStatusInApi(conversationId, status);
+
+    // 3. Atualizar no Supabase com escopo estrito do tenant/organizacao
     const { error: dbError } = await supabaseServer
       .from('chatwoot_conversations')
       .update({ status: status, updated_at: new Date().toISOString() })
@@ -40,10 +65,11 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('❌ Erro na API de alteração de status do Chatwoot:', error);
+    const errMsg = error instanceof Error ? error.message : 'Erro ao alterar status da conversa';
     return NextResponse.json(
-      { success: false, error: error.message || 'Erro ao alterar status da conversa' },
+      { success: false, error: errMsg },
       { status: 500 }
     );
   }

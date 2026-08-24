@@ -15,27 +15,27 @@ export async function GET(request: Request) {
     }
 
     let stats = { faturamento30: 0, total: 0, pendentes: 0, cancelados: 0, atendidos: 0 };
-    let pedidos: any[] = [];
-    let produtos: any[] = [];
-    let clientes: any[] = [];
-    let categorias: any[] = [];
+    let pedidos: unknown[] = [];
+    let produtos: unknown[] = [];
+    let clientes: unknown[] = [];
+    let categorias: unknown[] = [];
 
     try {
       produtos = await produtoRepository.getAll(session.tenant);
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('Erro ao carregar produtos no dashboard:', e);
     }
 
     try {
       clientes = await clienteRepository.getAll(session.tenant);
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('Erro ao carregar clientes no dashboard:', e);
     }
 
     try {
       pedidos = await pedidoRepository.getAllEnriched(session.tenant);
       stats = await pedidoRepository.getDashboardStats(session.tenant);
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('Erro ao carregar pedidos no dashboard:', e);
     }
 
@@ -45,7 +45,7 @@ export async function GET(request: Request) {
         .select('*')
         .eq('user_id', session.tenant.id);
       if (catData) categorias = catData;
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('Erro ao carregar categorias no dashboard:', e);
     }
 
@@ -65,12 +65,12 @@ export async function GET(request: Request) {
         }
       }
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Erro ao ler dados do painel:', error);
+    const errMsg = error instanceof Error ? error.message : 'Erro ao carregar dados do dashboard';
     return NextResponse.json(
-      { success: false, error: error.message || 'Erro ao carregar dados do dashboard' },
+      { success: false, error: errMsg },
       { status: 500 }
     );
   }
 }
-

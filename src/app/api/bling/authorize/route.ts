@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server';
-import { supabaseServer } from '@/lib/supabaseServer';
-import { verifySessionAndRole } from '@/lib/auth';
-import { createOAuthTransaction } from '@/lib/oauth-transaction';
+import { supabaseServer } from '../../../../lib/supabaseServer';
+import { verifySessionAndRole } from '../../../../lib/auth';
+import { createOAuthTransaction } from '../../../../lib/oauth-transaction';
+import { resolveActiveOrganization } from '../../../../lib/organizationContext';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   const session = await verifySessionAndRole(request);
-  
+
   if (!session) {
     return NextResponse.json(
       { success: false, error: 'Sessão inválida ou expirada.' },
@@ -16,14 +17,34 @@ export async function GET(request: Request) {
   }
 
   const userId = session.tenant.id;
+  const activeOrg = await resolveActiveOrganization(supabaseServer, userId);
+  const organizacaoId = activeOrg?.organizacao.id;
 
-  const { data: tenantData } = await supabaseServer
-    .from('integracoes_bling')
-    .select('client_id')
-    .eq('user_id', userId)
-    .maybeSingle();
+  let clientId: string | null = null;
 
-  const clientId: string | null = tenantData?.client_id || null;
+  if (organizacaoId) {
+    const { data: connData } = await supabaseServer
+      .from('conexoes_integracao')
+      .select('metadata')
+      .eq('organizacao_id', organizacaoId)
+      .eq('provedor', 'bling')
+      .maybeSingle();
+
+    const meta = connData?.metadata as Record<string, unknown> | undefined;
+    if (meta && typeof meta.client_id === 'string' && meta.client_id.length > 0) {
+      clientId = meta.client_id;
+    }
+  }
+
+  if (!clientId) {
+    const { data: tenantData } = await supabaseServer
+      .from('integracoes_bling')
+      .select('client_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    clientId = tenantData?.client_id || null;
+  }
 
   if (!clientId) {
     return NextResponse.json(
@@ -32,7 +53,7 @@ export async function GET(request: Request) {
     );
   }
 
-  const transaction = createOAuthTransaction(userId);
+  const transaction = createOAuthTransaction(userId, organizacaoId);
   if (transaction._tag === 'OAuthTransactionCreationFailed') {
     console.error('[authorize] Configuração de criptografia indisponível.');
     return NextResponse.json(

@@ -80,7 +80,6 @@ export default function TableWithDialog({
   title = "Base de Clientes Cadastrados",
   onViewDetails
 }: TableWithDialogProps) {
-  const [selectedUser, setSelectedUser] = useState<UserItem | null>(null);
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
 
   const toggleAll = (checked: boolean) => {
@@ -160,13 +159,8 @@ export default function TableWithDialog({
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      console.log("Button clicked for user:", user);
-                      setSelectedUser(user);
                       if (onViewDetails) {
-                        console.log("Calling onViewDetails with:", user);
                         onViewDetails(user);
-                      } else {
-                        console.log("onViewDetails is NOT defined!");
                       }
                     }}
                     className="bg-white/5 border-white/20 text-white hover:bg-white/10"

@@ -59,7 +59,7 @@ export async function POST(request: Request) {
 
     const nomeSanitizado = sanitizeProductName(nome!);
     let realBlingId = bling_id;
-    let blingResult: any = null;
+    let blingResult: unknown = null;
     let blingError: string | null = null;
 
     // 1. Tentar atualizar ou criar no Bling ERP v3 em tempo real
@@ -78,19 +78,20 @@ export async function POST(request: Request) {
           unidade
         });
         logEntries.push(`[${new Date().toISOString()}] ✅ Produto atualizado no Bling ERP com sucesso!`);
-        
+
         // Sincronizar estoque no Bling se fornecido
         if (estoque !== undefined) {
           logEntries.push(`[${new Date().toISOString()}] 📦 Lançando estoque de ${estoque} para o produto existente...`);
           try {
             await blingClient.lancamentoEstoque(bling_id, Number(estoque), 'B');
             logEntries.push(`[${new Date().toISOString()}] ✅ Estoque lançado com sucesso!`);
-          } catch (estoqueErr: any) {
-            throw new Error(`Falha ao lançar estoque no Bling: ${estoqueErr.message || estoqueErr}`);
+          } catch (estoqueErr: unknown) {
+            const estoqueMsg = estoqueErr instanceof Error ? estoqueErr.message : String(estoqueErr);
+            throw new Error(`Falha ao lançar estoque no Bling: ${estoqueMsg}`);
           }
         }
-      } catch (updateErr: any) {
-        blingError = updateErr.message || String(updateErr);
+      } catch (updateErr: unknown) {
+        blingError = updateErr instanceof Error ? updateErr.message : String(updateErr);
         logEntries.push(`[${new Date().toISOString()}] ⚠️ Falha ao atualizar no Bling: ${blingError}`);
       }
     } else {
@@ -98,7 +99,7 @@ export async function POST(request: Request) {
       logEntries.push(`[${new Date().toISOString()}] ➕ Verificando existência ou criando cadastro oficial do produto no Bling ERP v3...`);
       try {
         let existingBlingId: string | null = null;
-        
+
         // Evitar duplicação: buscar por SKU antes
         if (codigo) {
           const searchRes = await blingClient.getProdutos(1, 1, codigo);
@@ -121,7 +122,7 @@ export async function POST(request: Request) {
           });
           realBlingId = existingBlingId;
           logEntries.push(`[${new Date().toISOString()}] ✅ Produto existente atualizado no Bling ERP com sucesso!`);
-          
+
           if (estoque !== undefined) {
             logEntries.push(`[${new Date().toISOString()}] 📦 Lançando estoque de ${estoque} para o produto existente...`);
             await blingClient.lancamentoEstoque(existingBlingId, Number(estoque), 'B');
@@ -139,10 +140,11 @@ export async function POST(request: Request) {
             unidade
           });
 
-          if (blingResult?.data?.id) {
-            realBlingId = String(blingResult.data.id);
+          const createdData = (blingResult as { data?: { id?: number | string } })?.data;
+          if (createdData?.id) {
+            realBlingId = String(createdData.id);
             logEntries.push(`[${new Date().toISOString()}] ✅ Produto cadastrado no Bling ERP com sucesso! Novo Bling ID real: ${realBlingId}`);
-            
+
             if (Number(estoque) > 0) {
               logEntries.push(`[${new Date().toISOString()}] 📦 Lançando estoque inicial de ${estoque}...`);
               await blingClient.lancamentoEstoque(realBlingId, Number(estoque), 'B');
@@ -152,8 +154,8 @@ export async function POST(request: Request) {
             throw new Error('API do Bling não retornou o ID numérico do produto criado.');
           }
         }
-      } catch (createErr: any) {
-        blingError = createErr.message || String(createErr);
+      } catch (createErr: unknown) {
+        blingError = createErr instanceof Error ? createErr.message : String(createErr);
         logEntries.push(`[${new Date().toISOString()}] ⚠️ Falha ao criar no Bling: ${blingError}`);
       }
     }
@@ -184,13 +186,14 @@ export async function POST(request: Request) {
     try {
       savedProduct = await produtoRepository.upsert(session.tenant, updatedProductPayload);
       logEntries.push(`[${new Date().toISOString()}] ✅ Registro persistido no Supabase! ID: ${savedProduct.id}`);
-    } catch (dbErr: any) {
-      logEntries.push(`[${new Date().toISOString()}] ❌ ERRO SUPABASE: ${dbErr.message || dbErr}`);
+    } catch (dbErr: unknown) {
+      const dbErrMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);
+      logEntries.push(`[${new Date().toISOString()}] ❌ ERRO SUPABASE: ${dbErrMsg}`);
       return NextResponse.json(
         {
           success: false,
           error: 'Falha ao salvar no banco de dados Supabase.',
-          details: dbErr.message || String(dbErr),
+          details: dbErrMsg,
           logs: logEntries,
         },
         { status: 500 }
@@ -203,13 +206,14 @@ export async function POST(request: Request) {
       blingResult,
       logs: logEntries,
     });
-  } catch (err: any) {
-    logEntries.push(`[${new Date().toISOString()}] 💥 ERRO CRÍTICO NA API DE PRODUTOS: ${err.message || err}`);
+  } catch (err: unknown) {
+    const errMessage = err instanceof Error ? err.message : String(err);
+    logEntries.push(`[${new Date().toISOString()}] 💥 ERRO CRÍTICO NA API DE PRODUTOS: ${errMessage}`);
     return NextResponse.json(
       {
         success: false,
         error: 'Erro crítico interno ao processar a atualização do produto.',
-        details: err.message || String(err),
+        details: errMessage,
         logs: logEntries,
       },
       { status: 500 }

@@ -33,15 +33,15 @@ export async function POST(request: Request) {
         p_user_id: session.tenant.id,
         p_pedido_id: pedidoId,
       });
-      
+
       if (lockError || !lockAcquired) {
         return NextResponse.json({ success: false, error: 'Outra emissão de nota já está em andamento para este pedido.' }, { status: 429 });
       }
 
       try {
-        // 2. Verificar no banco se a NF-e já existe
+        // 2. Verificar no banco se a NF-e já existe na tabela canônica
         const { data: nfeExistente, error: nfeError } = await supabaseServer
-          .from('nfes')
+          .from('documentos_fiscais')
           .select('*')
           .eq('pedido_id', pedidoId)
           .eq('user_id', session.tenant.id)
@@ -58,13 +58,24 @@ export async function POST(request: Request) {
           );
         }
 
+interface NfeApiResponse {
+  id?: number | string;
+  bling_id?: number | string;
+  numero?: string;
+  numeroNFE?: string;
+  chave?: string;
+  chaveAcesso?: string;
+  status?: string;
+  situacao?: string;
+  data?: NfeApiResponse;
+}
+
         // 1. Emitir nota fiscal através do Bling Client
-        console.log(`🧾 Emitindo nota fiscal no Bling para o pedido ${blingPedidoId}...`);
         const blingClient = bling.forUser(session.tenant);
-        const nfeResult = await blingClient.createNfe(blingPedidoId);
+        const nfeResult = (await blingClient.createNfe(blingPedidoId)) as NfeApiResponse;
 
         // Bling v3 envelopa a resposta em { data: {...} }; extrair com fallbacks defensivos.
-        const nfeData: any = nfeResult?.data ?? nfeResult ?? {};
+        const nfeData = (nfeResult?.data ?? nfeResult ?? {}) as NfeApiResponse;
         const nfeBlingId = String(nfeData.id ?? nfeData.bling_id ?? '');
         const nfeNumero = nfeData.numero ?? nfeData.numeroNFE ?? '';
         const nfeChave = nfeData.chave ?? nfeData.chaveAcesso ?? null;
@@ -86,7 +97,7 @@ export async function POST(request: Request) {
           nfeCache = await pedidoRepository.upsertNfe(session!.tenant, {
             bling_id: nfeBlingId,
             numero: String(nfeNumero),
-            chave: nfeChave,
+            chave: nfeChave || '',
             status: nfeStatus,
             pedido_id: pedidoId,
           });
@@ -99,7 +110,8 @@ export async function POST(request: Request) {
               status: 'Atendido'
             });
           }
-        } catch (dbError: any) {
+        } catch (dbError: unknown) {
+          const dbErrMsg = dbError instanceof Error ? dbError.message : String(dbError);
           console.error('❌ CRÍTICO: NF-e emitida com sucesso no Bling, mas ocorreu uma falha ao atualizar o banco local!', dbError);
           return NextResponse.json({
             success: false,
@@ -108,7 +120,7 @@ export async function POST(request: Request) {
             bling_nfe_id: nfeBlingId,
             numero: String(nfeNumero),
             chave: nfeChave,
-            db_error: dbError.message || dbError
+            db_error: dbErrMsg
           }, { status: 500 });
         }
 
@@ -117,10 +129,11 @@ export async function POST(request: Request) {
           data: nfeCache,
         });
 
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('Erro na emissão de NF-e:', error);
+        const errMsg = error instanceof Error ? error.message : 'Falha ao emitir nota fiscal no ERP';
         return NextResponse.json(
-          { success: false, error: error.message || 'Falha ao emitir nota fiscal no ERP' },
+          { success: false, error: errMsg },
           { status: 500 }
         );
       } finally {
@@ -133,10 +146,11 @@ export async function POST(request: Request) {
         // Implementar lógica de mock se necessário
         return NextResponse.json({ success: true, data: { status: 'mock' } });
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Erro na emissão de NF-e:', error);
+    const errMsg = error instanceof Error ? error.message : 'Falha ao processar solicitação';
     return NextResponse.json(
-      { success: false, error: error.message || 'Falha ao processar solicitação' },
+      { success: false, error: errMsg },
       { status: 500 }
     );
   }

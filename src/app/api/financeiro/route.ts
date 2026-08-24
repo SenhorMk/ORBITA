@@ -6,6 +6,13 @@ import { TituloFinanceiro } from '@/types';
 
 export const dynamic = 'force-dynamic';
 
+interface IdCarrier {
+  id?: number | string;
+  data?: {
+    id?: number | string;
+  };
+}
+
 export async function GET(request: Request) {
   try {
     const session = await verifySessionAndRole(request);
@@ -33,10 +40,11 @@ export async function GET(request: Request) {
       }
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Erro no GET /api/financeiro:', error);
+    const errMsg = error instanceof Error ? error.message : 'Erro interno';
     return NextResponse.json(
-      { success: false, error: error.message || 'Erro interno' },
+      { success: false, error: errMsg },
       { status: 500 }
     );
   }
@@ -79,7 +87,7 @@ export async function POST(request: Request) {
     // MODO CONTÁBIL: Integrado com o Bling ERP
     // ═══════════════════════════════════════════════════
     const blingClient = bling.forUser(session.tenant);
-    
+
     // Obter a categoria no Supabase para ver se tem bling_id
     let idCategoriaBling: number | undefined = undefined;
     if (categoria_id) {
@@ -103,27 +111,30 @@ export async function POST(request: Request) {
       try {
         const contatosExistentes = await blingClient.getContatosByNome(NOME_FORNECEDOR);
         const fornecedor = Array.isArray(contatosExistentes) && contatosExistentes.length > 0
-          ? contatosExistentes.find((c: any) => (c.nome || '').toLowerCase().includes('fornecedor diverso')) || contatosExistentes[0]
+          ? contatosExistentes.find((c) => (c.nome || '').toLowerCase().includes('fornecedor diverso')) || contatosExistentes[0]
           : null;
 
         if (fornecedor) {
-          contatoId = Number(fornecedor.id || (fornecedor as any).contato?.id);
+          const contatoObj = fornecedor as { id?: number | string; contato?: { id?: number | string } };
+          contatoId = Number(contatoObj.id || contatoObj.contato?.id);
         }
 
-      } catch (err: any) {
-        console.warn('[financeiro] Erro ao buscar contato genérico:', err.message);
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.warn('[financeiro] Erro ao buscar contato genérico:', errMsg);
       }
 
       if (!contatoId) {
         try {
-          const res = await blingClient.createContato({
+          const res = (await blingClient.createContato({
             nome: NOME_FORNECEDOR,
             tipo: 'F',
-          });
+          })) as IdCarrier;
 
           contatoId = Number(res?.id || res?.data?.id);
-        } catch (err: any) {
-          console.error('[financeiro] Erro ao criar contato genérico:', err.message);
+        } catch (err: unknown) {
+          const errMessage = err instanceof Error ? err.message : String(err);
+          console.error('[financeiro] Erro ao criar contato genérico:', errMessage);
         }
       }
 
@@ -144,18 +155,20 @@ export async function POST(request: Request) {
       contato: { id: contatoId }
     };
 
-    let resBling: any;
+    let resBling: unknown;
     try {
       resBling = await blingClient.createContaPagar(payloadPagar);
-    } catch (blingErr: any) {
-      console.error('[financeiro] Bling recusou a conta a pagar:', blingErr.message);
+    } catch (blingErr: unknown) {
+      const blingErrMsg = blingErr instanceof Error ? blingErr.message : String(blingErr);
+      console.error('[financeiro] Bling recusou a conta a pagar:', blingErrMsg);
       return NextResponse.json(
-        { success: false, error: `Bling recusou o lançamento: ${blingErr.message}` },
+        { success: false, error: `Bling recusou o lançamento: ${blingErrMsg}` },
         { status: 422 }
       );
     }
 
-    const blingId: number | undefined = resBling?.data?.id ?? resBling?.id;
+    const resObj = (resBling || {}) as IdCarrier;
+    const blingId: number | string | undefined = resObj?.data?.id ?? resObj?.id;
 
     if (!blingId || Number(blingId) <= 0) {
       return NextResponse.json(
@@ -181,13 +194,11 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, data: tituloSalvo });
 
-
-
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Erro no POST /api/financeiro:', error);
+    const errMsg = error instanceof Error ? error.message : 'Erro interno ao criar despesa';
     return NextResponse.json(
-      { success: false, error: error.message || 'Erro interno ao criar despesa' },
-
+      { success: false, error: errMsg },
       { status: 500 }
     );
   }

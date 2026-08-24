@@ -1,13 +1,15 @@
 import { supabaseServer } from '../lib/supabaseServer';
 import type { VerifiedTenant } from '../lib/auth';
+import { resolveTenantOrgId } from '../lib/organizationContext';
 import { Cliente } from '../types';
 
 export class ClienteRepository {
   async getAll(tenant: VerifiedTenant): Promise<Cliente[]> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
     const { data, error } = await supabaseServer
       .from('clientes')
       .select('*')
-      .eq('user_id', tenant.id)
+      .eq('organizacao_id', orgId)
       .order('nome', { ascending: true });
 
     if (error) {
@@ -18,10 +20,11 @@ export class ClienteRepository {
   }
 
   async getByBlingId(tenant: VerifiedTenant, blingId: string): Promise<Cliente | null> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
     const { data, error } = await supabaseServer
       .from('clientes')
       .select('*')
-      .eq('user_id', tenant.id)
+      .eq('organizacao_id', orgId)
       .eq('bling_id', blingId)
       .maybeSingle();
 
@@ -33,12 +36,17 @@ export class ClienteRepository {
   }
 
   async upsert(tenant: VerifiedTenant, cliente: Cliente): Promise<Cliente> {
-    const payload: any = { ...cliente, user_id: tenant.id };
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+    const payload: Record<string, unknown> = {
+      ...cliente,
+      organizacao_id: orgId,
+      user_id: tenant.id,
+    };
     delete payload.telefone_normalizado;
 
     const { data, error } = await supabaseServer
       .from('clientes')
-      .upsert(payload, { onConflict: 'user_id, bling_id' })
+      .upsert(payload, { onConflict: 'organizacao_id, bling_id' })
       .select()
       .single();
 
@@ -50,11 +58,12 @@ export class ClienteRepository {
   }
 
   async delete(tenant: VerifiedTenant, id: string): Promise<void> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
     const { error } = await supabaseServer
       .from('clientes')
       .delete()
       .eq('id', id)
-      .eq('user_id', tenant.id);
+      .eq('organizacao_id', orgId);
 
     if (error) {
       console.error('Erro ao excluir cliente no Supabase:', error);
@@ -64,4 +73,3 @@ export class ClienteRepository {
 }
 
 export const clienteRepository = new ClienteRepository();
-
