@@ -31,11 +31,12 @@ export async function POST(request: Request) {
     let isBlingAlive = false;
     try {
       isBlingAlive = await blingClient.ping();
-    } catch (err: any) {
-      if (err.message === 'BLING_INVALID_GRANT') {
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      if (errMessage === 'BLING_INVALID_GRANT') {
         return NextResponse.json({
-          success: false, 
-          needsAuth: true, 
+          success: false,
+          needsAuth: true,
           error: 'Conexão com Bling expirada. Por favor, conecte a API novamente.'
         }, { status: 401 });
       }
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
     // 2. Se a API respondeu mas não foi OK por outro motivo
     if (!isBlingAlive) {
       return NextResponse.json({
-        success: false, 
+        success: false,
         error: 'A API do Bling não está respondendo corretamente no momento.'
       }, { status: 502 });
     }
@@ -58,9 +59,10 @@ export async function POST(request: Request) {
       message: 'Sincronização inicial concluída com sucesso.',
       stats: syncResult.stats
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Erro no startup sync:', error);
-    if (error.message && error.message.includes('em execução')) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    if (errorMsg.includes('em execução')) {
       return NextResponse.json({
         success: true,
         message: 'A sincronização já está rodando em segundo plano.',
@@ -68,7 +70,7 @@ export async function POST(request: Request) {
       });
     }
     return NextResponse.json(
-      { success: false, error: error.message || 'Erro interno durante sincronização inicial' },
+      { success: false, error: errorMsg || 'Erro interno durante sincronização inicial' },
       { status: 500 }
     );
   }

@@ -21,7 +21,14 @@ export type BlingAuthorizationCodeInput = {
   readonly code: string;
 };
 
-/** Typed outcome of exchanging a Bling authorization code. */
+/** Credentials and refresh token required for rotating Bling tokens. */
+export type BlingRefreshTokenInput = {
+  readonly clientId: string;
+  readonly clientSecret: string;
+  readonly refreshToken: string;
+};
+
+/** Typed outcome of exchanging or refreshing a Bling OAuth token. */
 export type BlingOAuthTokenExchangeResult =
   | {
       readonly _tag: 'BlingOAuthTokenExchangeSucceeded';
@@ -31,17 +38,19 @@ export type BlingOAuthTokenExchangeResult =
     }
   | {
       readonly _tag: 'BlingOAuthTokenExchangeFailed';
-      readonly reason: 'http' | 'invalid-response' | 'network' | 'timeout';
+      readonly reason: 'http' | 'invalid-response' | 'network' | 'rate-limited' | 'timeout';
       readonly status?: number;
+      readonly retryAfterSeconds?: number;
     };
 
-/** Exchange a one-time code without retries and with a bounded provider deadline. */
-export async function exchangeBlingAuthorizationCode(
-  input: BlingAuthorizationCodeInput,
+async function executeBlingTokenRequest(
+  clientId: string,
+  clientSecret: string,
+  params: Record<string, string>,
   fetchImplementation: FetchImplementation = fetch,
 ): Promise<BlingOAuthTokenExchangeResult> {
   const credentials = Buffer.from(
-    `${input.clientId}:${input.clientSecret}`,
+    `${clientId}:${clientSecret}`,
     'utf8',
   ).toString('base64');
 
@@ -55,10 +64,7 @@ export async function exchangeBlingAuthorizationCode(
         'Content-Type': 'application/x-www-form-urlencoded',
         'enable-jwt': '1',
       },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code: input.code,
-      }),
+      body: new URLSearchParams(params),
       signal: AbortSignal.timeout(BLING_OAUTH_TIMEOUT_MS),
     });
   } catch (error: unknown) {
@@ -67,6 +73,17 @@ export async function exchangeBlingAuthorizationCode(
     return {
       _tag: 'BlingOAuthTokenExchangeFailed',
       reason: isTimeout ? 'timeout' : 'network',
+    };
+  }
+
+  if (response.status === 429) {
+    const retryHeader = response.headers?.get('Retry-After');
+    const retryAfter = retryHeader ? Number.parseInt(retryHeader, 10) : undefined;
+    return {
+      _tag: 'BlingOAuthTokenExchangeFailed',
+      reason: 'rate-limited',
+      status: 429,
+      retryAfterSeconds: Number.isFinite(retryAfter) ? retryAfter : 60,
     };
   }
 
@@ -95,4 +112,36 @@ export async function exchangeBlingAuthorizationCode(
       reason: 'invalid-response',
     };
   }
+}
+
+/** Exchange a one-time code without retries and with a bounded provider deadline. */
+export async function exchangeBlingAuthorizationCode(
+  input: BlingAuthorizationCodeInput,
+  fetchImplementation: FetchImplementation = fetch,
+): Promise<BlingOAuthTokenExchangeResult> {
+  return executeBlingTokenRequest(
+    input.clientId,
+    input.clientSecret,
+    {
+      grant_type: 'authorization_code',
+      code: input.code,
+    },
+    fetchImplementation,
+  );
+}
+
+/** Refresh an existing Bling access token using its refresh token. */
+export async function refreshBlingToken(
+  input: BlingRefreshTokenInput,
+  fetchImplementation: FetchImplementation = fetch,
+): Promise<BlingOAuthTokenExchangeResult> {
+  return executeBlingTokenRequest(
+    input.clientId,
+    input.clientSecret,
+    {
+      grant_type: 'refresh_token',
+      refresh_token: input.refreshToken,
+    },
+    fetchImplementation,
+  );
 }

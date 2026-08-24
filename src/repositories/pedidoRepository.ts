@@ -1,5 +1,6 @@
 import { supabaseServer } from '../lib/supabaseServer';
 import type { VerifiedTenant } from '../lib/auth';
+import { resolveTenantOrgId } from '../lib/organizationContext';
 import { Pedido, ItemPedido, Nfe, Cliente } from '../types';
 import { clienteRepository } from './clienteRepository';
 
@@ -10,55 +11,93 @@ export interface PedidoEnriquecido extends Pedido {
   nfe?: Nfe;
 }
 
+interface RawDocumentoFiscal {
+  id?: string;
+  organizacao_id?: string;
+  user_id?: string;
+  bling_id?: string;
+  numero?: string;
+  chave_acesso?: string;
+  chave?: string;
+  status?: string;
+  pedido_id?: string;
+  emitida_em?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+function mapDocumentoToNfe(doc?: RawDocumentoFiscal | null): Nfe | undefined {
+  if (!doc) return undefined;
+  return {
+    id: doc.id,
+    organizacao_id: doc.organizacao_id,
+    user_id: doc.user_id,
+    bling_id: doc.bling_id || '',
+    numero: doc.numero || '',
+    chave: doc.chave_acesso || doc.chave || '',
+    status: doc.status || 'Pendente',
+    pedido_id: doc.pedido_id || '',
+    emitida_em: doc.emitida_em,
+    created_at: doc.created_at,
+    updated_at: doc.updated_at,
+  };
+}
+
 export class PedidoRepository {
   async getAllEnriched(tenant: VerifiedTenant): Promise<PedidoEnriquecido[]> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
     try {
       const { data, error } = await supabaseServer
         .from('pedidos')
         .select(`
           *,
           cliente:clientes!fk_pedido_cliente(*),
-          nfe:nfes(*)
+          nfe:documentos_fiscais(*)
         `)
-        .eq('user_id', tenant.id)
+        .eq('organizacao_id', orgId)
         .order('data', { ascending: false });
 
       if (!error && data) {
-        return data;
+        return (data as PedidoEnriquecido[]).map((p) => ({
+          ...p,
+          nfe: Array.isArray(p.nfe) ? mapDocumentoToNfe(p.nfe[0]) : mapDocumentoToNfe(p.nfe),
+        }));
       }
-    } catch (e: any) {
-      console.warn('⚠️ Alerta: Busca de pedidos com join explícito falhou, tentando fallback simples:', e.message);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn('⚠️ Alerta: Busca de pedidos com join explícito falhou, tentando fallback simples:', msg);
     }
 
-    // Fallback caso a relação PostgREST apresente duplicidade de FK
     try {
       const { data: rawPedidos, error: pErr } = await supabaseServer
         .from('pedidos')
-        .select('*, nfe:nfes(*)')
-        .eq('user_id', tenant.id)
+        .select('*, nfe:documentos_fiscais(*)')
+        .eq('organizacao_id', orgId)
         .order('data', { ascending: false });
 
       if (pErr) throw pErr;
 
       const clientes = await clienteRepository.getAll(tenant);
-      const clienteMap = new Map(clientes.map(c => [c.id, c]));
+      const clienteMap = new Map(clientes.map((c) => [c.id, c]));
 
-      return (rawPedidos || []).map(p => ({
+      return ((rawPedidos || []) as PedidoEnriquecido[]).map((p) => ({
         ...p,
-        cliente: clienteMap.get(p.cliente_id)
+        cliente: p.cliente_id ? clienteMap.get(p.cliente_id) : undefined,
+        nfe: Array.isArray(p.nfe) ? mapDocumentoToNfe(p.nfe[0]) : mapDocumentoToNfe(p.nfe),
       }));
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Erro ao buscar pedidos no fallback:', err);
       return [];
     }
   }
 
   async getById(tenant: VerifiedTenant, id: string): Promise<Pedido | null> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
     const { data, error } = await supabaseServer
       .from('pedidos')
       .select('*')
       .eq('id', id)
-      .eq('user_id', tenant.id)
+      .eq('organizacao_id', orgId)
       .maybeSingle();
 
     if (error) {
@@ -69,10 +108,11 @@ export class PedidoRepository {
   }
 
   async getByBlingId(tenant: VerifiedTenant, blingId: string): Promise<Pedido | null> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
     const { data, error } = await supabaseServer
       .from('pedidos')
       .select('*')
-      .eq('user_id', tenant.id)
+      .eq('organizacao_id', orgId)
       .eq('bling_id', blingId)
       .maybeSingle();
 
@@ -83,12 +123,13 @@ export class PedidoRepository {
     return data || null;
   }
 
-  /** Delete an order only inside the previously verified tenant boundary. */
+  /** Delete an order only inside the previously verified tenant organization boundary. */
   async deleteByBlingId(tenant: VerifiedTenant, blingId: string): Promise<void> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
     const { error } = await supabaseServer
       .from('pedidos')
       .delete()
-      .eq('user_id', tenant.id)
+      .eq('organizacao_id', orgId)
       .eq('bling_id', blingId);
 
     if (error) {
@@ -98,10 +139,15 @@ export class PedidoRepository {
   }
 
   async upsert(tenant: VerifiedTenant, pedido: Pedido): Promise<Pedido> {
-    const payload = { ...pedido, user_id: tenant.id };
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+    const payload = {
+      ...pedido,
+      organizacao_id: orgId,
+      user_id: tenant.id,
+    };
     const { data, error } = await supabaseServer
       .from('pedidos')
-      .upsert(payload, { onConflict: 'user_id, bling_id' })
+      .upsert(payload, { onConflict: 'organizacao_id, bling_id' })
       .select()
       .single();
 
@@ -114,11 +160,15 @@ export class PedidoRepository {
 
   // Operações para Itens de Pedido
   async addItems(tenant: VerifiedTenant, items: ItemPedido[]): Promise<void> {
-    const itemsWithUser = items.map(i => ({ ...i, user_id: tenant.id }));
-    // Utiliza upsert composto (pedido_id, produto_id) para garantir idempotência (CT-001)
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+    const itemsWithOrg = items.map((i) => ({
+      ...i,
+      organizacao_id: orgId,
+      user_id: tenant.id,
+    }));
     const { error } = await supabaseServer
       .from('itens_pedido')
-      .upsert(itemsWithUser, { onConflict: 'pedido_id,produto_id' });
+      .upsert(itemsWithOrg, { onConflict: 'pedido_id,produto_id' });
 
     if (error) {
       console.error('Erro ao salvar itens de pedido no Supabase:', error);
@@ -126,52 +176,97 @@ export class PedidoRepository {
     }
   }
 
-  // Operações para NF-es
+  // Operações para Documentos Fiscais (Canônico)
   async upsertNfe(tenant: VerifiedTenant, nfe: Nfe): Promise<Nfe> {
-    const payload = { ...nfe, user_id: tenant.id };
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+    const payload = {
+      organizacao_id: orgId,
+      user_id: tenant.id,
+      bling_id: nfe.bling_id,
+      numero: nfe.numero,
+      chave_acesso: nfe.chave || null,
+      status: nfe.status,
+      pedido_id: nfe.pedido_id,
+      tipo: 'NFE',
+    };
+
     const { data, error } = await supabaseServer
-      .from('nfes')
-      .upsert(payload, { onConflict: 'user_id, bling_id' })
+      .from('documentos_fiscais')
+      .upsert(payload, { onConflict: 'organizacao_id, bling_id' })
       .select()
       .single();
 
     if (error) {
-      console.error('Erro ao persistir NF-e no Supabase:', error);
+      console.error('Erro ao persistir Documento Fiscal no Supabase:', error);
       throw error;
     }
-    return data;
+
+    return {
+      id: data.id,
+      organizacao_id: data.organizacao_id,
+      user_id: data.user_id,
+      bling_id: data.bling_id,
+      numero: data.numero,
+      chave: data.chave_acesso || '',
+      status: data.status,
+      pedido_id: data.pedido_id,
+      emitida_em: data.emitida_em,
+      created_at: data.created_at,
+      updated_at: data.updated_at,
+    };
   }
 
   // Obter faturamento mensal total
   async getFaturamentoMensal(tenant: VerifiedTenant): Promise<number> {
     const pedidos = await this.getAllEnriched(tenant);
     const trintaDiasAtras = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    
+
     return pedidos
-      .filter(p => p.status !== 'Cancelado' && new Date(p.data).getTime() >= trintaDiasAtras)
-      .reduce((acc, current) => acc + Number(current.total), 0);
+      .filter((p) => new Date(p.data).getTime() >= trintaDiasAtras)
+      .reduce((acc, p) => acc + Number(p.total || 0), 0);
   }
 
-  async getDashboardStats(tenant: VerifiedTenant): Promise<{ faturamento30: number; total: number; pendentes: number; cancelados: number; atendidos: number }> {
-    try {
-      const { data, error } = await supabaseServer.rpc('dashboard_stats', { p_user_id: tenant.id }).maybeSingle();
-      if (!error && data) {
-        const d = data as any;
-        return {
-          faturamento30: Number(d.faturamento30) || 0,
-          total: Number(d.total) || 0,
-          pendentes: Number(d.pendentes) || 0,
-          cancelados: Number(d.cancelados) || 0,
-          atendidos: Number(d.atendidos) || 0,
-        };
+  // Estatísticas para o Dashboard
+  async getDashboardStats(tenant: VerifiedTenant): Promise<{
+    faturamento30: number;
+    total: number;
+    pendentes: number;
+    cancelados: number;
+    atendidos: number;
+  }> {
+    const pedidos = await this.getAllEnriched(tenant);
+    const trintaDiasAtras = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+    let faturamento30 = 0;
+    let pendentes = 0;
+    let cancelados = 0;
+    let atendidos = 0;
+
+    for (const p of pedidos) {
+      const valor = Number(p.total || 0);
+      const dataTime = new Date(p.data).getTime();
+      if (dataTime >= trintaDiasAtras) {
+        faturamento30 += valor;
       }
-    } catch (e) {
-      console.warn('Alerta: rpc dashboard_stats falhou.', e);
+
+      const st = (p.status || '').toLowerCase();
+      if (st.includes('pend') || st.includes('aberto')) {
+        pendentes++;
+      } else if (st.includes('canc')) {
+        cancelados++;
+      } else if (st.includes('atend') || st.includes('fatur')) {
+        atendidos++;
+      }
     }
-    
-    return { faturamento30: 0, total: 0, pendentes: 0, cancelados: 0, atendidos: 0 };
+
+    return {
+      faturamento30,
+      total: pedidos.length,
+      pendentes,
+      cancelados,
+      atendidos,
+    };
   }
 }
 
 export const pedidoRepository = new PedidoRepository();
-

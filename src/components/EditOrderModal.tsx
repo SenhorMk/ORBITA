@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/lib/supabaseClient';
@@ -15,18 +15,44 @@ interface EditOrderModalProps {
   pedido: BlingPedido | null;
 }
 
+interface ClienteOption {
+  id: string;
+  nome: string;
+  bling_id: string;
+}
+
+interface ProdutoOption {
+  id: string;
+  nome: string;
+  codigo?: string;
+  preco: number;
+  estoque?: number;
+  estoque_reservado?: number;
+  bling_id: string;
+}
+
+interface ItemPedidoEdit {
+  produto_id: string;
+  nome: string;
+  codigo?: string;
+  valor_unitario: number;
+  quantidade: number;
+  max_quantidade: number;
+  bling_id?: string;
+}
+
 export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOrderModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncBling, setSyncBling] = useState(true);
 
   // Form State
-  const [syncBling, setSyncBling] = useState(true);
-  const [clientes, setClientes] = useState<any[]>([]);
-  const [produtos, setProdutos] = useState<any[]>([]);
+  const [clientes, setClientes] = useState<ClienteOption[]>([]);
+  const [produtos, setProdutos] = useState<ProdutoOption[]>([]);
   const [selectedCliente, setSelectedCliente] = useState<string>('');
   const [formaPagamento, setFormaPagamento] = useState<string>('Dinheiro');
-  const [itens, setItens] = useState<any[]>([]);
-  
+  const [itens, setItens] = useState<ItemPedidoEdit[]>([]);
+
   // Detalhes Opcionais
   const [desconto, setDesconto] = useState<number | ''>('');
   const [frete, setFrete] = useState<number | ''>('');
@@ -36,61 +62,65 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
   const [searchProduto, setSearchProduto] = useState('');
 
   useEffect(() => {
+    let isMounted = true;
     if (open) {
-      loadInitialData();
-    }
-  }, [open]);
+      void (async () => {
+        try {
+          const [cRes, pRes] = await Promise.all([
+            fetch('/api/clientes'),
+            fetch('/api/produtos')
+          ]);
+          const cData = await cRes.json();
+          const pData = await pRes.json();
 
-  const loadInitialData = async () => {
-    try {
-      const { data: userRes } = await supabase.auth.getUser();
-      if (!userRes.user) return;
+          if (!isMounted) return;
 
-      const [clientesRes, produtosRes] = await Promise.all([
-        supabase.from('clientes').select('id, nome, bling_id').eq('user_id', userRes.user.id).order('nome'),
-        supabase.from('produtos').select('id, nome, codigo, preco, estoque, estoque_reservado, bling_id').eq('user_id', userRes.user.id).order('nome'),
-      ]);
+          const loadedClientes: ClienteOption[] = cData.clientes || [];
+          const loadedProdutos: ProdutoOption[] = pData.produtos || [];
 
-      if (clientesRes.data) setClientes(clientesRes.data);
-      if (produtosRes.data) setProdutos(produtosRes.data);
-      
-      // Hydrate state
-      if (pedido && clientesRes.data && produtosRes.data) {
-        // Find matching client
-        const matchedCliente = clientesRes.data.find(c => String(c.bling_id) === String(pedido.contato?.id));
-        if (matchedCliente) setSelectedCliente(matchedCliente.id);
-        
-        setDesconto(pedido.desconto?.valor || '');
-        setFrete(pedido.transporte?.frete || '');
-        setObservacoes(pedido.observacoes || '');
-        
-        // Map items
-        if (pedido.itens && pedido.itens.length > 0) {
-          const mappedItems = pedido.itens.map(item => {
-            const prod = produtosRes.data.find(p => p.codigo === item.codigo || String(p.bling_id) === String(item.produto?.id));
-            return {
-              produto_id: prod?.id || item.codigo || 'unknown',
-              nome: item.descricao,
-              codigo: item.codigo,
-              valor_unitario: item.valor,
-              quantidade: item.quantidade,
-              max_quantidade: prod ? (prod.estoque - prod.estoque_reservado + item.quantidade) : item.quantidade, // Add current qty to max available
-              bling_id: item.produto?.id
-            };
-          });
-          setItens(mappedItems);
+          setClientes(loadedClientes);
+          setProdutos(loadedProdutos);
+
+          // Hydrate state
+          if (pedido && loadedClientes.length > 0 && loadedProdutos.length > 0) {
+            const matchedCliente = loadedClientes.find(c => String(c.bling_id) === String(pedido.contato?.id));
+            if (matchedCliente) setSelectedCliente(matchedCliente.id);
+
+            setDesconto(pedido.desconto?.valor || '');
+            setFrete(pedido.transporte?.frete || '');
+            setObservacoes(pedido.observacoes || '');
+
+            if (pedido.itens && pedido.itens.length > 0) {
+              const mappedItems: ItemPedidoEdit[] = pedido.itens.map(item => {
+                const prod = loadedProdutos.find(p => p.codigo === item.codigo || String(p.bling_id) === String(item.produto?.id));
+                return {
+                  produto_id: prod?.id || item.codigo || 'unknown',
+                  nome: item.descricao || 'Produto sem descrição',
+                  codigo: item.codigo,
+                  valor_unitario: Number(item.valor || 0),
+                  quantidade: Number(item.quantidade || 1),
+                  max_quantidade: prod ? (Number(prod.estoque || 0) - Number(prod.estoque_reservado || 0) + Number(item.quantidade || 1)) : Number(item.quantidade || 1),
+                  bling_id: item.produto?.id ? String(item.produto.id) : undefined
+                };
+              });
+              setItens(mappedItems);
+            }
+          }
+        } catch (err) {
+          console.error(err);
         }
-      }
-    } catch (err) {
-      console.error(err);
+      })();
     }
-  };
+    return () => {
+      isMounted = false;
+    };
+  }, [open, pedido]);
 
   const addItem = (produtoId: string) => {
     const prod = produtos.find(p => p.id === produtoId);
     if (!prod) return;
 
-    const available = prod.estoque - prod.estoque_reservado;
+    const available = (prod.estoque ?? 0) - (prod.estoque_reservado ?? 0);
     if (available <= 0) {
       setError(`Produto ${prod.nome} sem estoque disponível.`);
       return;
@@ -160,8 +190,8 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
       const payload = {
         data: pedido?.data || new Date().toISOString().split('T')[0],
         numero: pedido?.numero,
-        contato: { 
-          id: cliente?.bling_id 
+        contato: {
+          id: cliente?.bling_id
         },
         observacoes,
         desconto: {
@@ -172,19 +202,19 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
           frete: Number(frete) || 0
         },
         itens: itens.map(i => {
-          const itemPayload: any = {
+          const itemPayload: Record<string, unknown> = {
             descricao: i.nome || 'Produto sem nome',
             quantidade: Number(i.quantidade),
             valor: Number(i.valor_unitario)
           };
-          
+
           if (i.bling_id) {
             itemPayload.produto = { id: Number(i.bling_id) };
           } else {
             // Só manda código se for item avulso
-            itemPayload.codigo = String(i.codigo || '');
+            itemPayload.codigo = i.codigo || '';
           }
-          
+
           return itemPayload;
         })
       };
@@ -198,7 +228,7 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
 
       const res = await fetch(`/api/bling/pedidos/${pedido.id}`, {
         method: 'PUT',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
@@ -217,11 +247,12 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
       setDesconto('');
       setFrete('');
       setObservacoes('');
-    } catch (err: any) {
-      if (err.message.includes('Informa\\u00e7\\u00f5es id\\u00eanticas a \\u00faltima venda salva') || err.message.includes('code":3')) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('Informa\\u00e7\\u00f5es id\\u00eanticas a \\u00faltima venda salva') || errMsg.includes('code":3')) {
         setError('Erro: Venda Duplicada. Não é permitido enviar um pedido idêntico ao anterior (mesmo cliente, produtos e valores). Altere alguma informação ou aguarde se for intencional.');
       } else {
-        setError(err.message);
+        setError(errMsg);
       }
     } finally {
       setLoading(false);
@@ -247,7 +278,7 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
           <div className="space-y-4">
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-1">Cliente</label>
-              <select 
+              <select
                 className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                 value={selectedCliente}
                 onChange={e => setSelectedCliente(e.target.value)}
@@ -262,7 +293,7 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-1">Buscar Produto</label>
               <div className="relative">
-                <input 
+                <input
                   type="text"
                   placeholder="Nome ou SKU..."
                   className="w-full border border-gray-300 rounded-md p-2 pl-9 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
@@ -271,7 +302,7 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
                 />
                 <Search className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
               </div>
-              
+
               {searchProduto.length > 1 && (
                 <div className="mt-2 border rounded-md max-h-48 overflow-y-auto bg-white shadow-sm absolute z-10 w-full max-w-sm">
                   {produtos
@@ -281,7 +312,7 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
                     <div key={p.id} className="p-2 hover:bg-gray-50 border-b flex justify-between items-center text-sm cursor-pointer" onClick={() => addItem(p.id)}>
                       <div>
                         <p className="font-medium text-gray-800">{p.nome}</p>
-                        <p className="text-xs text-gray-500">SKU: {p.codigo || 'N/A'} | Disp: {p.estoque - p.estoque_reservado}</p>
+                        <p className="text-xs text-gray-500">SKU: {p.codigo || 'N/A'} | Disp: {(p.estoque ?? 0) - (p.estoque_reservado ?? 0)}</p>
                       </div>
                       <Plus className="w-4 h-4 text-blue-500" />
                     </div>
@@ -292,7 +323,7 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
 
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-1">Forma de Pagamento</label>
-              <select 
+              <select
                 className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                 value={formaPagamento}
                 onChange={e => setFormaPagamento(e.target.value)}
@@ -307,7 +338,7 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium text-gray-700 block mb-1">Desconto (R$)</label>
-                <input 
+                <input
                   type="number"
                   placeholder="0.00"
                   className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
@@ -317,7 +348,7 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-700 block mb-1">Frete (R$)</label>
-                <input 
+                <input
                   type="number"
                   placeholder="0.00"
                   className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
@@ -330,7 +361,7 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="md:col-span-2">
                 <label className="text-sm font-medium text-gray-700 block mb-1">Observações</label>
-                <textarea 
+                <textarea
                   rows={2}
                   placeholder="Observações adicionais do pedido..."
                   className="w-full border border-gray-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none"
@@ -350,7 +381,7 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
 
           <div className="border rounded-md p-4 bg-gray-50 flex flex-col">
             <h3 className="font-medium text-gray-800 mb-4 border-b pb-2">Itens do Pedido</h3>
-            
+
             <div className="flex-1 overflow-y-auto space-y-3 min-h-[200px]">
               {itens.length === 0 ? (
                 <div className="text-center text-sm text-gray-400 py-10">
@@ -363,14 +394,14 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
                       <p className="text-sm font-medium text-gray-800 truncate">{item.nome}</p>
                       <p className="text-xs text-gray-500">R$ {item.valor_unitario.toFixed(2)}</p>
                     </div>
-                    
+
                     <div className="flex items-center gap-3">
                       <div className="flex items-center border rounded">
                         <button onClick={() => updateItemQty(item.produto_id, -1)} className="px-2 py-1 text-gray-600 hover:bg-gray-100">-</button>
                         <span className="text-sm font-medium px-2 min-w-[2rem] text-center">{item.quantidade}</span>
                         <button onClick={() => updateItemQty(item.produto_id, 1)} className="px-2 py-1 text-gray-600 hover:bg-gray-100">+</button>
                       </div>
-                      
+
                       <button onClick={() => removeItem(item.produto_id)} className="text-red-500 hover:bg-red-50 p-1 rounded">
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -414,8 +445,8 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
 
         <div className="flex justify-end gap-3 mt-6">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button 
-            onClick={handleSubmit} 
+          <Button
+            onClick={handleSubmit}
             disabled={loading}
             className="bg-blue-600 hover:bg-blue-700 text-white"
           >

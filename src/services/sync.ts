@@ -6,282 +6,377 @@ import { Cliente, Produto, Pedido, ItemPedido } from '../types';
 import { supabaseServer } from '../lib/supabaseServer';
 import { mapBlingStatus, normalizeToE164 } from '../lib/utils';
 import type { VerifiedTenant } from '../lib/auth';
+import {
+  enqueueJob,
+  acquireLease,
+  advanceCheckpoint,
+  completeJob,
+  getJobStatus,
+  releaseExpiredLeases,
+  type SyncJobProgress,
+  type SyncJob,
+} from '../repositories/syncJobRepository';
+
+import { resolveTenantOrgId } from '../lib/organizationContext';
+
+async function getLastSyncedAt(orgId: string, entidade: string): Promise<string | null> {
+  const { data } = await supabaseServer
+    .from('sync_state')
+    .select('last_synced_at')
+    .eq('entidade', entidade)
+    .eq('organizacao_id', orgId)
+    .maybeSingle();
+  return data?.last_synced_at ?? null;
+}
+
+async function touchSyncState(orgId: string, userId: string, entidade: string): Promise<void> {
+  const now = new Date().toISOString();
+  await supabaseServer
+    .from('sync_state')
+    .upsert(
+      {
+        organizacao_id: orgId,
+        user_id: userId,
+        entidade,
+        last_synced_at: now,
+        updated_at: now,
+      },
+      { onConflict: 'organizacao_id, entidade' },
+    );
+}
+
+function getBlingDateTime(isoString?: string | null): string | undefined {
+  if (!isoString) return undefined;
+  const d = new Date(isoString);
+  const formatter = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(d);
+  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
+}
+
+async function syncPaginatedEntities<T>(
+  fetchPage: (page: number) => Promise<T[]>,
+  processItem: (item: T) => Promise<void>,
+  onPageDone: (page: number, count: number) => Promise<void>,
+): Promise<number> {
+  let total = 0;
+  let page = 1;
+  while (true) {
+    const items = await fetchPage(page);
+    if (items.length === 0) break;
+
+    for (const item of items) {
+      try {
+        await processItem(item);
+        total++;
+      } catch (itemErr: unknown) {
+        const msg = itemErr instanceof Error ? itemErr.message : String(itemErr);
+        console.warn(`⚠️ sync item error: ${msg}`);
+      }
+    }
+
+    await onPageDone(page, total);
+    page++;
+    if (items.length < 100) break;
+  }
+  return total;
+}
+
+export interface EnqueueSyncResult {
+  jobId: string;
+  status: string;
+  isNew: boolean;
+}
+
+export interface SyncAllResult {
+  success: boolean;
+  stats: {
+    clientes: number;
+    produtos: number;
+    pedidos: number;
+  };
+}
 
 export class SyncService {
-  private isSyncing = false;
+  async enqueueSync(tenant: VerifiedTenant): Promise<EnqueueSyncResult> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+    return enqueueJob(orgId, tenant.id);
+  }
 
-  async syncAll(tenant: VerifiedTenant): Promise<{ success: boolean; stats: { clientes: number; produtos: number; pedidos: number } }> {
-    const userId = tenant.id;
-    if (this.isSyncing) {
-      throw new Error('Uma sincronização de dados já está em execução neste processo.');
+  async processJob(jobId: string, tenant: VerifiedTenant): Promise<void> {
+    await releaseExpiredLeases();
+
+    const leaseAcquired = await acquireLease(jobId);
+    if (!leaseAcquired) {
+      return;
     }
 
-    let dbLocked = false;
-
-    // 0. Trava de concorrência pg_advisory_lock via RPC no banco
-    try {
-      const { data: lockAcquired, error: lockError } = await supabaseServer.rpc('try_advisory_lock_sync', { p_user_id: userId });
-      if (lockError) {
-        console.warn('⚠️ Alerta: Função RPC de lock não disponível, prosseguindo com trava local:', lockError.message);
-      } else if (lockAcquired === false) {
-        throw new Error('Uma sincronização de dados já está em execução (lock distribuído ativo no banco).');
-      } else if (lockAcquired === true) {
-        dbLocked = true;
-      }
-    } catch (err: any) {
-      if (err.message.includes('lock distribuído')) {
-        throw err;
-      }
-      console.warn('⚠️ Alerta: Não foi possível obter lock distribuído, prosseguindo com trava local:', err.message);
-    }
-
-    this.isSyncing = true;
-    console.log('🔄 Sincronização Orbita: Iniciando ETL incremental da API Bling...');
-
-    const stats = {
-      clientes: 0,
-      produtos: 0,
-      pedidos: 0,
+    const progress: SyncJobProgress = {
+      clientes_processados: 0,
+      produtos_processados: 0,
+      pedidos_processados: 0,
+      etapa_atual: 'clientes',
+      pagina_atual: 1,
     };
 
-    const blingClient = bling.forUser(tenant);
-
     try {
-      // 0. Sincronizar Categorias
-      try {
-        let page = 1;
-        while (true) {
-          const categorias = await blingClient.getCategoriasProdutos(page, 100);
-          if (categorias.length === 0) break;
-          console.log(`🔄 Sincronização: Processando página ${page} de categorias do Bling...`);
+      const blingClient = bling.forUser(tenant);
 
-          const upsertPromises = categorias.map(async (cat) => {
-            const payload = {
-              bling_id: String(cat.id),
-              user_id: userId,
-              descricao: cat.descricao,
-              categoria_pai_id: cat.categoriaPai?.id ? String(cat.categoriaPai.id) : null,
-            };
-            return supabaseServer.from('categorias').upsert(payload, { onConflict: 'user_id, bling_id' });
-          });
-          await Promise.all(upsertPromises);
-          
-          page++;
-          if (categorias.length < 100) break;
-        }
-      } catch (err: any) {
-        console.warn('⚠️ Sincronização Categorias:', err.message);
+      const steps: Array<{
+        etapa: 'clientes' | 'produtos' | 'pedidos';
+        proxima: 'produtos' | 'pedidos' | 'concluido';
+        field: 'clientes_processados' | 'produtos_processados' | 'pedidos_processados';
+        action: () => Promise<number>;
+      }> = [
+        {
+          etapa: 'clientes',
+          proxima: 'produtos',
+          field: 'clientes_processados',
+          action: () => this._syncClientes(jobId, tenant, blingClient, progress),
+        },
+        {
+          etapa: 'produtos',
+          proxima: 'pedidos',
+          field: 'produtos_processados',
+          action: () => this._syncProdutos(jobId, tenant, blingClient, progress),
+        },
+        {
+          etapa: 'pedidos',
+          proxima: 'concluido',
+          field: 'pedidos_processados',
+          action: () => this._syncPedidos(jobId, tenant, blingClient, progress),
+        },
+      ];
+
+      for (const step of steps) {
+        progress.etapa_atual = step.etapa;
+        const count = await step.action();
+        progress[step.field] = count;
+        progress.etapa_atual = step.proxima;
+        progress.pagina_atual = 1;
+        await advanceCheckpoint(jobId, { ...progress });
       }
 
-      // Função auxiliar para converter ISO string para YYYY-MM-DD HH:mm:ss no fuso de Brasília
-      const getBlingDateTime = (isoString?: string | null) => {
-        if (!isoString) return undefined;
-        const d = new Date(isoString);
-        
-        const formatter = new Intl.DateTimeFormat('pt-BR', {
-          timeZone: 'America/Sao_Paulo',
-          year: 'numeric', month: '2-digit', day: '2-digit',
-          hour: '2-digit', minute: '2-digit', second: '2-digit',
-          hour12: false
-        });
-        
-        const parts = formatter.formatToParts(d);
-        const p = Object.fromEntries(parts.map(x => [x.type, x.value]));
-        
-        return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
-      };
+      await completeJob(jobId, 'completed');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const redacted = msg
+        .replace(/Bearer\s+\S+/gi, '[REDACTED]')
+        .replace(/key=[^&\s]*/gi, 'key=[REDACTED]');
+      console.error('❌ Sincronização Orbita: Job falhou.', { jobId, error: redacted });
+      await completeJob(jobId, 'failed', redacted);
+    }
+  }
 
-      // 1. Sincronizar Clientes (Contatos no Bling)
-      try {
-        let lastSyncedAt: string | null = null;
-        const { data: state } = await supabaseServer.from('sync_state').select('last_synced_at').eq('entidade', 'clientes').eq('user_id', userId).maybeSingle();
-        let page = 1;
-        while (true) {
-          const blingClientes = await blingClient.getClientes(page, 100);
+  async getJobStatus(jobId: string, tenant: VerifiedTenant): Promise<SyncJob | null> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+    return getJobStatus(jobId, orgId);
+  }
 
-          if (blingClientes.length === 0) break;
-          console.log(`🔄 Sincronização: Processando página ${page} de contatos do Bling...`);
-          
-          for (const bc of blingClientes) {
-            try {
-              const tel = bc.telefone || bc.celular || undefined;
-              const cliente: Cliente = {
-                bling_id: String(bc.id),
-                nome: bc.nome,
-                cpf_cnpj: bc.cnpj || bc.numeroDocumento || undefined,
-                email: bc.email || undefined,
-                telefone: tel,
-                telefone_normalizado: normalizeToE164(tel) || undefined,
-              };
-              await clienteRepository.upsert(tenant, cliente);
-              stats.clientes++;
-            } catch (itemErr: any) {
-              console.warn(`⚠️ Erro ao salvar cliente Bling ID ${bc.id} no Supabase: ${itemErr.message}`);
-            }
-          }
-          page++;
-          if (blingClientes.length < 100) break;
-        }
-        await supabaseServer.from('sync_state').upsert({ user_id: userId, entidade: 'clientes', last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() }, { onConflict: 'user_id, entidade' });
-      } catch (err: any) {
-        console.warn('⚠️ Sincronização Clientes (via Pedidos):', err.message);
-      }
+  async syncAll(tenant: VerifiedTenant): Promise<SyncAllResult> {
+    const { jobId } = await this.enqueueSync(tenant);
+    await this.processJob(jobId, tenant);
+    const status = await this.getJobStatus(jobId, tenant);
 
-      // Remoção do passo 1.5 (Full sync contatos) devido a arquitetura de Strict Schema Mirroring e Push Síncrono
+    return {
+      success: status?.status === 'completed',
+      stats: {
+        clientes: status?.progress.clientes_processados ?? 0,
+        produtos: status?.progress.produtos_processados ?? 0,
+        pedidos: status?.progress.pedidos_processados ?? 0,
+      },
+    };
+  }
 
-      // 2. Sincronizar Produtos (Pull do Bling -> Supabase)
-      try {
-        let lastSyncedAt: string | null = null;
-        const { data: state } = await supabaseServer.from('sync_state').select('last_synced_at').eq('entidade', 'produtos').eq('user_id', userId).maybeSingle();
-        if (state?.last_synced_at) lastSyncedAt = state.last_synced_at;
-        const dataAlteracao = getBlingDateTime(lastSyncedAt);
+  private async _syncClientes(
+    jobId: string,
+    tenant: VerifiedTenant,
+    blingClient: ReturnType<typeof bling.forUser>,
+    progress: SyncJobProgress,
+  ): Promise<number> {
+    try {
+      const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+      const total = await syncPaginatedEntities(
+        (page) => blingClient.getClientes(page, 100),
+        async (bc) => {
+          const tel = bc.telefone || bc.celular || undefined;
+          const cliente: Cliente = {
+            bling_id: String(bc.id),
+            nome: bc.nome,
+            cpf_cnpj: bc.cnpj || bc.numeroDocumento || undefined,
+            email: bc.email || undefined,
+            telefone: tel,
+            telefone_normalizado: normalizeToE164(tel) || undefined,
+          };
+          await clienteRepository.upsert(tenant, cliente);
+        },
+        async (page, count) => {
+          progress.pagina_atual = page;
+          progress.clientes_processados = count;
+          await advanceCheckpoint(jobId, { ...progress });
+        },
+      );
 
-        let page = 1;
-        while (true) {
+      await touchSyncState(orgId, tenant.id, 'clientes');
+      return total;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('⚠️ Etapa clientes falhou:', msg);
+      return 0;
+    }
+  }
+
+  private async _syncProdutos(
+    jobId: string,
+    tenant: VerifiedTenant,
+    blingClient: ReturnType<typeof bling.forUser>,
+    progress: SyncJobProgress,
+  ): Promise<number> {
+    try {
+      const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+      const lastSynced = await getLastSyncedAt(orgId, 'produtos');
+      const dataAlteracao = getBlingDateTime(lastSynced);
+
+      const total = await syncPaginatedEntities(
+        async (page) => {
           const blingProdutos = await blingClient.getProdutos(page, 100, undefined, dataAlteracao);
-          if (blingProdutos.length === 0) break;
-          console.log(`🔄 Sincronização: Processando página ${page} de produtos do Bling...`);
-          
-          // Buscar saldos físicos reais em lote (Bling API v3 limita a 50 ids por requisição em estoques/saldos)
-          const idsToFetch = blingProdutos.map((p: any) => String(p.id));
-          let saldosArray: any[] = [];
+          if (blingProdutos.length === 0) return [];
+
+          const idsToFetch = blingProdutos.map((p: { id: number | string }) => String(p.id));
+          let saldosArray: unknown[] = [];
           for (let i = 0; i < idsToFetch.length; i += 50) {
             const chunk = idsToFetch.slice(i, i + 50);
             const saldosChunk = await blingClient.getEstoquesSaldos(chunk);
             saldosArray = saldosArray.concat(saldosChunk);
           }
 
-          const saldosMap = new Map();
-          saldosArray.forEach((item: any) => {
+          const saldosMap = new Map<string, number>();
+          (
+            saldosArray as Array<{
+              produto?: { id: number | string };
+              saldoFisicoTotal?: number;
+              saldoFisico?: number;
+            }>
+          ).forEach((item) => {
             if (item.produto?.id) {
-              saldosMap.set(String(item.produto.id), Number(item.saldoFisicoTotal ?? item.saldoFisico ?? 0));
+              saldosMap.set(
+                String(item.produto.id),
+                Number(item.saldoFisicoTotal ?? item.saldoFisico ?? 0),
+              );
             }
           });
-          
-          for (const bp of blingProdutos) {
-            try {
-              const imgUrl = extractBlingImageUrl(bp);
-              const saldoFisico = saldosMap.get(String(bp.id)) ?? 0;
-              
-              const produto: Produto = {
-                bling_id: String(bp.id),
-                codigo: bp.codigo || undefined,
-                nome: bp.nome,
-                preco: Number(bp.preco),
-                unidade: bp.unidade || 'UN',
-                imagem_url: imgUrl,
-                estoque: saldoFisico,
-              };
-              await produtoRepository.upsert(tenant, produto);
-              stats.produtos++;
-            } catch (itemErr: any) {
-              console.warn(`⚠️ Erro ao salvar produto Bling ID ${bp.id} no Supabase: ${itemErr.message}`);
+
+          return blingProdutos.map((bp) => ({
+            raw: bp,
+            saldo: saldosMap.get(String(bp.id)) ?? 0,
+          }));
+        },
+        async ({ raw: bp, saldo }) => {
+          const imgUrl = extractBlingImageUrl(bp);
+          const produto: Produto = {
+            bling_id: String(bp.id),
+            codigo: bp.codigo || undefined,
+            nome: bp.nome,
+            preco: Number(bp.preco),
+            unidade: bp.unidade || 'UN',
+            imagem_url: imgUrl,
+            estoque: saldo,
+          };
+          await produtoRepository.upsert(tenant, produto);
+        },
+        async (page, count) => {
+          progress.pagina_atual = page;
+          progress.produtos_processados = count;
+          await advanceCheckpoint(jobId, { ...progress });
+        },
+      );
+
+      await touchSyncState(orgId, tenant.id, 'produtos');
+      return total;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('⚠️ Etapa produtos falhou:', msg);
+      return 0;
+    }
+  }
+
+  private async _syncPedidos(
+    jobId: string,
+    tenant: VerifiedTenant,
+    blingClient: ReturnType<typeof bling.forUser>,
+    progress: SyncJobProgress,
+  ): Promise<number> {
+    try {
+      const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+      const lastSynced = await getLastSyncedAt(orgId, 'pedidos');
+      const dataInicial = lastSynced ? new Date(lastSynced).toISOString().split('T')[0] : undefined;
+
+      const total = await syncPaginatedEntities(
+        (page) => blingClient.getPedidos(page, 100, dataInicial),
+        async (bp) => {
+          const clienteLocal = await clienteRepository.getByBlingId(tenant, bp.contato.id);
+          if (!clienteLocal?.id) {
+            console.warn(
+              `⚠️ sync pedidos: cliente Bling ID ${bp.contato.id} não encontrado, pedido ${bp.numero} ignorado.`,
+            );
+            return;
+          }
+
+          const statusCanonico = mapBlingStatus(bp.situacao.valor);
+          const pedido: Pedido = {
+            bling_id: bp.id,
+            numero: bp.numero,
+            data: bp.data,
+            total: Number(bp.total),
+            status: statusCanonico,
+            cliente_id: clienteLocal.id,
+          };
+
+          const savedPedido = await pedidoRepository.upsert(tenant, pedido);
+
+          const itemsParaSalvar: ItemPedido[] = [];
+          for (const item of bp.itens) {
+            if (item.produto?.id) {
+              const produtoLocal = await produtoRepository.getByBlingId(
+                tenant,
+                item.produto.id,
+              );
+              if (produtoLocal?.id && savedPedido.id) {
+                itemsParaSalvar.push({
+                  pedido_id: savedPedido.id,
+                  produto_id: produtoLocal.id,
+                  quantidade: item.quantidade,
+                  valor_unitario: Number(item.valorunitario ?? item.valor ?? 0),
+                });
+              }
             }
           }
-          page++;
-          if (blingProdutos.length < 100) break;
-        }
-        await supabaseServer.from('sync_state').upsert({ user_id: userId, entidade: 'produtos', last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() }, { onConflict: 'user_id, entidade' });
-      } catch (err: any) {
-        console.warn('⚠️ Sincronização Produtos (Pull):', err.message);
-      }
-
-      // Reconciliações (2.1 Produtos e 1.1 Clientes) foram removidas da rotina de batch sync.
-      // A arquitetura foi alterada para Push Unitário Síncrono garantido pelo Strict Schema Mirroring.
-
-      // 3. Sincronizar Pedidos e seus itens relacionais
-      try {
-        let lastSyncedAt: string | null = null;
-        const { data: state } = await supabaseServer
-          .from('sync_state')
-          .select('last_synced_at')
-          .eq('entidade', 'pedidos')
-          .eq('user_id', userId)
-          .maybeSingle();
-
-        if (state?.last_synced_at) {
-          lastSyncedAt = state.last_synced_at;
-        }
-
-        const dataInicial = lastSyncedAt ? new Date(lastSyncedAt).toISOString().split('T')[0] : undefined;
-
-        let page = 1;
-        while (true) {
-          const blingPedidos = await blingClient.getPedidos(page, 100, dataInicial);
-          if (blingPedidos.length === 0) break;
-          console.log(`🔄 Sincronização: Processando página ${page} de pedidos do Bling...`);
-          
-          for (const bp of blingPedidos) {
-            try {
-              const clienteLocal = await clienteRepository.getByBlingId(tenant, bp.contato.id);
-              
-              if (!clienteLocal || !clienteLocal.id) {
-                console.warn(`⚠️ Sincronização: Pulando pedido Bling ${bp.numero} porque o cliente associado (Bling ID: ${bp.contato.id}) não existe localmente.`);
-                continue;
-              }
-
-              const statusCanonico = mapBlingStatus(bp.situacao.valor);
-
-              const pedido: Pedido = {
-                bling_id: bp.id,
-                numero: bp.numero,
-                data: bp.data,
-                total: Number(bp.total),
-                status: statusCanonico,
-                cliente_id: clienteLocal.id,
-              };
-
-              const savedPedido = await pedidoRepository.upsert(tenant, pedido);
-              stats.pedidos++;
-
-              const itemsParaSalvar: ItemPedido[] = [];
-              for (const item of bp.itens) {
-                if (item.produto?.id) {
-                  const produtoLocal = await produtoRepository.getByBlingId(tenant, item.produto.id);
-                  if (produtoLocal?.id && savedPedido.id) {
-                    itemsParaSalvar.push({
-                      pedido_id: savedPedido.id,
-                      produto_id: produtoLocal.id,
-                      quantidade: item.quantidade,
-                      valor_unitario: Number(item.valorunitario ?? item.valor ?? 0),
-                    });
-                  }
-                }
-              }
-
-              if (itemsParaSalvar.length > 0) {
-                await pedidoRepository.addItems(tenant, itemsParaSalvar);
-              }
-            } catch (itemErr: any) {
-              console.warn(`⚠️ Erro ao salvar pedido Bling ID ${bp.id} no Supabase: ${itemErr.message}`);
-            }
+          if (itemsParaSalvar.length > 0) {
+            await pedidoRepository.addItems(tenant, itemsParaSalvar);
           }
-          page++;
-          if (blingPedidos.length < 100) break;
-        }
-      } catch (err: any) {
-        console.warn('⚠️ Sincronização Pedidos:', err.message);
-      }
+        },
+        async (page, count) => {
+          progress.pagina_atual = page;
+          progress.pedidos_processados = count;
+          await advanceCheckpoint(jobId, { ...progress });
+        },
+      );
 
-      // Atualizar watermark no sync_state
-      await supabaseServer
-        .from('sync_state')
-        .upsert({ user_id: userId, entidade: 'pedidos',
-          last_synced_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id, entidade' });
-
-      console.log('✅ Sincronização Orbita: Concluída com sucesso!', stats);
-      return { success: true, stats };
-    } finally {
-      this.isSyncing = false;
-      if (dbLocked) {
-        try {
-          await supabaseServer.rpc('advisory_unlock_sync', { p_user_id: userId });
-        } catch {
-          // Silencioso se RPC não existir
-        }
-      }
+      await touchSyncState(orgId, tenant.id, 'pedidos');
+      return total;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('⚠️ Etapa pedidos falhou:', msg);
+      return 0;
     }
   }
 }

@@ -61,7 +61,45 @@ max_client_conn = 100
 enabled = true
 # Specifies an ordered list of schema files, directories, or glob patterns that describe your database.
 # Supports paths relative to supabase directory: "./schemas/*.sql", "./database".
-schema_paths = []
+schema_paths = [
+  "../database/schema_master.sql",
+  "../database/03_update_pedidos_status.sql",
+  "../database/04_fix_linter_errors.sql",
+  "../database/05_add_pedidos_details.sql",
+  "../database/06_financeiro.sql",
+  "../database/07_bling_auth_lock.sql",
+  "../database/07_estoque_rpc.sql",
+  "../database/08_add_user_id.sql",
+  "../database/08_contas_financeiras_fornecedores.sql",
+  "../database/09_harden_grants_and_rpcs.sql",
+  "../database/10_contain_financeiro_domain.sql",
+  "../database/11_contain_chatwoot_domain.sql",
+  "../database/12_quarentena_financeiro_sem_tenant.sql",
+  "../database/13_ownership_fornecedores_ids_externos.sql",
+  "../database/14_expand_modelo_fiscal_canonico.sql",
+  "../database/15_migrar_dados_e_callers_fiscais.sql",
+  "../database/16_contrair_modelo_fiscal_legado.sql",
+  "../database/17_consolidar_fks_e_triggers.sql",
+  "../database/18_indices_tenancy_consultas.sql",
+  "../database/19_comprovar_integridade_baseline.sql",
+  "../database/20_organizacao_membership_ativa.sql",
+  "../database/21_convites_papeis_capacidades.sql",
+  "../database/22_migrar_catalogo_organizacao.sql",
+  "../database/23_migrar_comercial_estoque_fiscal.sql",
+  "../database/24_migrar_financeiro_organizacao.sql",
+  "../database/25_conexoes_credenciais_privadas.sql",
+  "../database/26_migrar_bling_organizacao.sql",
+  "../database/27_migrar_chatwoot_organizacao.sql",
+  "../database/28_inbox_idempotente_bling.sql",
+  "../database/29_inbox_idempotente_chatwoot.sql",
+  "../database/30_jobs_sync_duraveis.sql",
+  "../database/31_outbox_retries_saude_integracoes.sql",
+  "../database/32_contrair_tenancy_legado.sql",
+  "../database/33_planos_limites_entitlements.sql",
+  "../database/34_integrar_stripe_assinaturas.sql",
+  "../database/35_suspensao_retencao_encerramento.sql",
+  "../database/36_auditoria_correlacao_telemetria.sql"
+]
 
 [db.seed]
 # If enabled, seeds the database after migrations during a db reset.

@@ -1,7 +1,7 @@
 -- ============================================================================
 -- O.R.B.I.T.A. - SCHEMA MESTRE UNIFICADO (MULTI-TENANT SaaS)
 -- Dialeto: PostgreSQL 15+ (Supabase)
--- 
+--
 -- Este é o único schema oficial. Substitui todos os outros schemas antigos
 -- (schema.sql, migration.sql, multi_tenant_migration.sql, triggers.sql, schema_completo.sql)
 -- ============================================================================
@@ -50,7 +50,6 @@ SELECT
 FROM produtos p;
 
 CREATE TABLE IF NOT EXISTS pedidos (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     bling_id        TEXT NOT NULL,
@@ -235,12 +234,12 @@ DO $$
 DECLARE
     t TEXT;
 BEGIN
-    FOR t IN 
+    FOR t IN
         SELECT unnest(ARRAY['clientes', 'produtos', 'pedidos', 'itens_pedido', 'nfes', 'categorias', 'sync_state', 'integracoes_bling', 'movimentacao_estoque', 'financeiro', 'chatwoot_inboxes', 'chatwoot_contacts', 'chatwoot_conversations', 'chatwoot_messages'])
     LOOP
         EXECUTE format('
             DROP POLICY IF EXISTS "Isolamento por tenant" ON %I;
-            CREATE POLICY "Isolamento por tenant" 
+            CREATE POLICY "Isolamento por tenant"
             ON %I FOR ALL USING ((select auth.uid()) = user_id) WITH CHECK ((select auth.uid()) = user_id);
         ', t, t);
     END LOOP;
@@ -261,7 +260,7 @@ DO $$
 DECLARE
     t TEXT;
 BEGIN
-    FOR t IN 
+    FOR t IN
         SELECT unnest(ARRAY['clientes', 'produtos', 'pedidos', 'itens_pedido', 'nfes', 'sync_state', 'integracoes_bling', 'categorias', 'movimentacao_estoque', 'financeiro'])
     LOOP
         EXECUTE format('
@@ -514,7 +513,7 @@ BEGIN
         v_valor_unitario := (v_item->>'valor_unitario')::NUMERIC;
 
         -- Verificar estoque atual com LOCK
-        SELECT COALESCE(estoque, 0), COALESCE(estoque_reservado, 0) INTO v_estoque_atual, v_estoque_reservado 
+        SELECT COALESCE(estoque, 0), COALESCE(estoque_reservado, 0) INTO v_estoque_atual, v_estoque_reservado
         FROM produtos WHERE id = v_produto_id AND user_id = p_user_id FOR UPDATE;
 
         IF NOT FOUND THEN
@@ -554,6 +553,7 @@ $$;
 
 CREATE TABLE IF NOT EXISTS public.contas_financeiras (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE,
     bling_id bigint UNIQUE,
     descricao text NOT NULL,
     tipo smallint NOT NULL DEFAULT 1, -- 1 = Caixa, 2 = Banco, 3 = Cartão de Crédito, 4 = Outros
@@ -567,6 +567,7 @@ CREATE TABLE IF NOT EXISTS public.contas_financeiras (
 
 CREATE TABLE IF NOT EXISTS public.fornecedores (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE,
     bling_id bigint UNIQUE,
     nome text NOT NULL,
     nome_fantasia text,
@@ -583,7 +584,7 @@ CREATE TABLE IF NOT EXISTS public.fornecedores (
     updated_at timestamptz DEFAULT now()
 );
 
-ALTER TABLE public.titulos_financeiros 
+ALTER TABLE public.titulos_financeiros
     ADD COLUMN IF NOT EXISTS conta_financeira_id uuid REFERENCES public.contas_financeiras(id) ON DELETE SET NULL,
     ADD COLUMN IF NOT EXISTS fornecedor_id uuid REFERENCES public.fornecedores(id) ON DELETE SET NULL;
 
@@ -596,8 +597,10 @@ CREATE INDEX IF NOT EXISTS idx_titulos_abertos_vencimento ON public.titulos_fina
 ALTER TABLE public.contas_financeiras ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.fornecedores ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Enable all access for contas_financeiras" ON public.contas_financeiras FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Enable all access for fornecedores" ON public.fornecedores FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Isolamento por tenant" ON public.contas_financeiras
+    FOR ALL USING ((select auth.uid()) = user_id) WITH CHECK ((select auth.uid()) = user_id);
+CREATE POLICY "Isolamento por tenant" ON public.fornecedores
+    FOR ALL USING ((select auth.uid()) = user_id) WITH CHECK ((select auth.uid()) = user_id);
 
 -- ============================================================================
 -- 7. LEAST-PRIVILEGE DATA API CLOSURE (MIGRATION 09)
@@ -635,3 +638,63 @@ GRANT EXECUTE ON FUNCTION public.decrement_estoque(UUID, UUID, INTEGER) TO servi
 GRANT EXECUTE ON FUNCTION public.try_nfe_lock(UUID, UUID) TO service_role;
 GRANT EXECUTE ON FUNCTION public.unlock_nfe(UUID, UUID) TO service_role;
 
+-- ============================================================================
+-- 8. FINANCIAL DOMAIN CONTAINMENT (MIGRATION 10)
+-- ============================================================================
+
+-- Add ownership column to financial mirror tables (nullable to preserve existing rows).
+ALTER TABLE public.categorias_financeiras
+    ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE;
+
+ALTER TABLE public.titulos_financeiros
+    ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE;
+
+-- Performance indexes on user_id (tenant-filter hot path)
+CREATE INDEX IF NOT EXISTS idx_categorias_financeiras_user ON public.categorias_financeiras(user_id);
+CREATE INDEX IF NOT EXISTS idx_titulos_financeiros_user ON public.titulos_financeiros(user_id);
+CREATE INDEX IF NOT EXISTS idx_contas_financeiras_user ON public.contas_financeiras(user_id);
+CREATE INDEX IF NOT EXISTS idx_fornecedores_user ON public.fornecedores(user_id);
+
+-- Remove permissive global policies created in migrations 06/08.
+DROP POLICY IF EXISTS "Enable all access for categorias_financeiras" ON public.categorias_financeiras;
+DROP POLICY IF EXISTS "Enable all access for titulos_financeiros" ON public.titulos_financeiros;
+
+-- Install tenant-scoped policies for all four financial tables.
+CREATE POLICY "Isolamento por tenant" ON public.categorias_financeiras
+    FOR ALL USING ((select auth.uid()) = user_id) WITH CHECK ((select auth.uid()) = user_id);
+
+CREATE POLICY "Isolamento por tenant" ON public.titulos_financeiros
+    FOR ALL USING ((select auth.uid()) = user_id) WITH CHECK ((select auth.uid()) = user_id);
+
+ALTER TABLE public.categorias_financeiras ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.titulos_financeiros ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================================
+-- 9. CHATWOOT DOMAIN CONTAINMENT (MIGRATION 11)
+-- ============================================================================
+
+-- Drop broad role-based and permissive legacy policies
+DROP POLICY IF EXISTS "Allow public all on contacts" ON public.chatwoot_contacts;
+DROP POLICY IF EXISTS "Allow public all on conversations" ON public.chatwoot_conversations;
+DROP POLICY IF EXISTS "Allow public all on messages" ON public.chatwoot_messages;
+DROP POLICY IF EXISTS "Acesso seguro contatos" ON public.chatwoot_contacts;
+DROP POLICY IF EXISTS "Acesso seguro conversas" ON public.chatwoot_conversations;
+DROP POLICY IF EXISTS "Acesso seguro mensagens" ON public.chatwoot_messages;
+
+-- Performance indexes on user_id and foreign keys
+CREATE INDEX IF NOT EXISTS idx_chatwoot_inboxes_user ON public.chatwoot_inboxes(user_id);
+CREATE INDEX IF NOT EXISTS idx_chatwoot_contacts_user ON public.chatwoot_contacts(user_id);
+CREATE INDEX IF NOT EXISTS idx_chatwoot_conversations_user ON public.chatwoot_conversations(user_id);
+CREATE INDEX IF NOT EXISTS idx_chatwoot_messages_user ON public.chatwoot_messages(user_id);
+CREATE INDEX IF NOT EXISTS idx_chatwoot_conversations_contact ON public.chatwoot_conversations(contact_id);
+CREATE INDEX IF NOT EXISTS idx_chatwoot_messages_conversation ON public.chatwoot_messages(conversation_id);
+
+-- Enforce tenant-scoped RLS policies
+CREATE POLICY "Isolamento por tenant" ON public.chatwoot_inboxes
+    FOR ALL USING ((select auth.uid()) = user_id) WITH CHECK ((select auth.uid()) = user_id);
+CREATE POLICY "Isolamento por tenant" ON public.chatwoot_contacts
+    FOR ALL USING ((select auth.uid()) = user_id) WITH CHECK ((select auth.uid()) = user_id);
+CREATE POLICY "Isolamento por tenant" ON public.chatwoot_conversations
+    FOR ALL USING ((select auth.uid()) = user_id) WITH CHECK ((select auth.uid()) = user_id);
+CREATE POLICY "Isolamento por tenant" ON public.chatwoot_messages
+    FOR ALL USING ((select auth.uid()) = user_id) WITH CHECK ((select auth.uid()) = user_id);

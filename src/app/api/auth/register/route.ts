@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabaseServer } from '@/lib/supabaseServer';
+import { supabaseServer } from '../../../../lib/supabaseServer';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,24 +21,19 @@ export async function POST(request: Request) {
       );
     }
 
-    // Cria o usuário usando a API de Administração (Service Role)
-    // Isso nos permite forçar o app_metadata com a role de 'dono', o que
-    // isola este tenant e garante que o backend confie nos privilégios dele.
-    const { data, error } = await supabaseServer.auth.admin.createUser({
+    // Cadastro padrão sem elevação indevida de privilégios ou auto-confirmação via service_role admin
+    const { data, error } = await supabaseServer.auth.signUp({
       email,
       password,
-      email_confirm: true, // Auto-confirmamos o email para simplificar o onboarding
-      user_metadata: {
-        full_name: name
+      options: {
+        data: {
+          full_name: name,
+        },
       },
-      app_metadata: {
-        role: 'dono'
-      }
     });
 
     if (error) {
-      console.error('Erro ao criar usuário admin via API:', error);
-      // Retornar mensagens de erro amigáveis
+      console.error('Erro ao registrar usuário:', error);
       let errorMessage = 'Erro ao criar conta. Tente novamente mais tarde.';
       if (error.message.includes('already registered')) {
         errorMessage = 'Este e-mail já está cadastrado. Tente fazer login.';
@@ -48,11 +43,11 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      message: 'Conta criada com sucesso. Você já pode fazer login!',
-      user: data.user
+      message: 'Conta criada com sucesso. Verifique seu e-mail para confirmar seu cadastro se aplicável.',
+      user: data.user ? { id: data.user.id, email: data.user.email } : null,
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Erro crítico no endpoint de registro:', error);
     return NextResponse.json(
       { success: false, error: 'Falha interna no servidor ao processar o cadastro.' },

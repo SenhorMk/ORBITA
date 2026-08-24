@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import { useState } from "react";
 import { motion, AnimatePresence } from 'framer-motion';
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { AlertTriangle, X, Copy, Check, Terminal, ShieldAlert, RefreshCw } from 'lucide-react';

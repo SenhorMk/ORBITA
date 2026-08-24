@@ -57,7 +57,7 @@ export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [filtroTipo, setFiltroTipo] = useState<'todos' | 'receber' | 'pagar'>('todos');
-  
+
   // Modais
   const [isNovaDespesaModalOpen, setIsNovaDespesaModalOpen] = useState(false);
   const [isNovoFornecedorModalOpen, setIsNovoFornecedorModalOpen] = useState(false);
@@ -71,15 +71,14 @@ export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
   const [showFornecedorDropdown, setShowFornecedorDropdown] = useState(false);
   const [searchFornecedor, setSearchFornecedor] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
-  
+
   // Estado do novo fornecedor via CNPJ
   const [cnpj, setCnpj] = useState('');
   const [dadosCNPJ, setDadosCNPJ] = useState<DadosCNPJ | null>(null);
   const [buscandoCNPJ, setBuscandoCNPJ] = useState(false);
   const [erroCNPJ, setErroCNPJ] = useState('');
   const [salvandoFornecedor, setSalvandoFornecedor] = useState(false);
-
-  const fetchFinanceiro = async () => {
+  const fetchFinanceiro = React.useCallback(async () => {
     setLoading(true);
     try {
       const url = filtroTipo === 'todos' ? '/api/financeiro' : `/api/financeiro?tipo=${filtroTipo}`;
@@ -94,19 +93,7 @@ export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
     } finally {
       setLoading(false);
     }
-  };
-
-  const fetchFornecedores = async () => {
-    try {
-      const res = await fetchWithAuth('/api/financeiro/fornecedores');
-      if (res.ok) {
-        const { data } = await res.json();
-        setFornecedores(data || []);
-      }
-    } catch (err) {
-      console.error('Erro ao buscar fornecedores:', err);
-    }
-  };
+  }, [filtroTipo, fetchWithAuth]);
 
   const syncFinanceiro = async () => {
     setSyncing(true);
@@ -121,14 +108,51 @@ export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
   };
 
   useEffect(() => {
-    fetchFinanceiro();
-  }, [filtroTipo]);
+    let isMounted = true;
+    void (async () => {
+      setLoading(true);
+      try {
+        const url = filtroTipo === 'todos' ? '/api/financeiro' : `/api/financeiro?tipo=${filtroTipo}`;
+        const res = await fetchWithAuth(url);
+        const { data } = await res.json();
+        if (isMounted && data) {
+          setTitulos(data.titulos || []);
+          setResumo(data.resumo || { receitas: 0, despesas: 0, saldo: 0 });
+        }
+      } catch (err) {
+        console.error('Erro ao buscar financeiro:', err);
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, [filtroTipo, fetchWithAuth]);
 
   useEffect(() => {
+    let isMounted = true;
     if (isNovaDespesaModalOpen) {
-      fetchFornecedores();
+      void (async () => {
+        try {
+          const res = await fetchWithAuth('/api/financeiro/fornecedores');
+          if (res.ok) {
+            const { data } = await res.json();
+            if (isMounted) {
+              setFornecedores(data || []);
+            }
+          }
+        } catch (err) {
+          console.error('Erro ao buscar fornecedores:', err);
+        }
+      })();
     }
-  }, [isNovaDespesaModalOpen]);
+    return () => {
+      isMounted = false;
+    };
+  }, [isNovaDespesaModalOpen, fetchWithAuth]);
 
   // Fechar dropdown ao clicar fora
   useEffect(() => {
@@ -161,16 +185,12 @@ export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
     try {
       const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpjLimpo}`);
       if (!res.ok) {
-        setErroCNPJ('CNPJ não encontrado na Receita Federal.');
-        return;
+        throw new Error('CNPJ não encontrado ou inválido na Receita Federal.');
       }
-      const data: DadosCNPJ = await res.json();
-      if (data.descricao_situacao_cadastral && !data.descricao_situacao_cadastral.includes('ATIVA')) {
-        setErroCNPJ(`⚠️ Situação cadastral: ${data.descricao_situacao_cadastral}`);
-      }
+      const data = await res.json();
       setDadosCNPJ(data);
-    } catch {
-      setErroCNPJ('Erro ao consultar a Receita Federal. Tente novamente.');
+    } catch (err: unknown) {
+      setErroCNPJ(err instanceof Error ? err.message : 'Falha ao consultar CNPJ');
     } finally {
       setBuscandoCNPJ(false);
     }
@@ -188,33 +208,41 @@ export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
   };
 
   const salvarFornecedor = async () => {
-    if (!dadosCNPJ) return;
+    if (!dadosCNPJ && !searchFornecedor.trim()) {
+      alert('Preencha o nome do fornecedor ou busque um CNPJ válido.');
+      return;
+    }
+
     setSalvandoFornecedor(true);
     try {
+      const payload = {
+        nome: dadosCNPJ ? (dadosCNPJ.nome_fantasia || dadosCNPJ.razao_social) : searchFornecedor.trim(),
+        fantasia: dadosCNPJ?.nome_fantasia || undefined,
+        cpf_cnpj: cnpj.replace(/\D/g, '') || undefined,
+        telefone: dadosCNPJ?.ddd_telefone_1 || undefined,
+        email: dadosCNPJ?.email || undefined,
+        endereco: dadosCNPJ?.logradouro || undefined,
+        numero: dadosCNPJ?.numero || undefined,
+        bairro: dadosCNPJ?.bairro || undefined,
+        cidade: dadosCNPJ?.municipio || undefined,
+        uf: dadosCNPJ?.uf || undefined,
+        cep: dadosCNPJ?.cep || undefined,
+      };
+
       const res = await fetchWithAuth('/api/financeiro/fornecedores', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cnpj: cnpj.replace(/\D/g, ''),
-          nome: dadosCNPJ.razao_social,
-          nome_fantasia: dadosCNPJ.nome_fantasia,
-          logradouro: dadosCNPJ.logradouro,
-          numero: dadosCNPJ.numero,
-          bairro: dadosCNPJ.bairro,
-          municipio: dadosCNPJ.municipio,
-          uf: dadosCNPJ.uf,
-          cep: dadosCNPJ.cep,
-          telefone: dadosCNPJ.ddd_telefone_1,
-          email: dadosCNPJ.email,
-        }),
+        body: JSON.stringify(payload),
       });
+
       const json = await res.json();
-      if (json.success && json.data) {
+
+      if (res.ok && json.data) {
         const novoFornecedor: Fornecedor = {
-          id: json.data.id,
-          nome: dadosCNPJ.razao_social,
-          fantasia: dadosCNPJ.nome_fantasia,
-          numeroDocumento: cnpj,
+          id: json.data.bling_id || json.data.id,
+          nome: json.data.nome,
+          fantasia: json.data.fantasia,
+          numeroDocumento: json.data.cpf_cnpj,
         };
         setFornecedores(prev => [novoFornecedor, ...prev]);
         setFornecedorSelecionado(novoFornecedor);
@@ -224,16 +252,22 @@ export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
       } else {
         alert('Erro ao salvar fornecedor: ' + (json.error || 'Desconhecido'));
       }
-    } catch (err: any) {
-      alert('Erro: ' + err.message);
+    } catch (err: unknown) {
+      alert('Erro: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       setSalvandoFornecedor(false);
     }
   };
 
+  interface ChartDataPoint {
+    date: string;
+    receitas: number;
+    despesas: number;
+  }
+
   const chartData = titulos
     .filter(t => t.situacao === 'pago' || t.situacao === 'aberto')
-    .reduce((acc: any[], curr) => {
+    .reduce<ChartDataPoint[]>((acc, curr) => {
       const date = curr.data_vencimento?.split('T')[0] || curr.data_vencimento;
       const existing = acc.find(d => d.date === date);
       if (existing) {
@@ -337,7 +371,7 @@ export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
               <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(val) => `R$${(val / 1000).toFixed(0)}k`} />
               <Tooltip contentStyle={{ backgroundColor: '#18181b', borderColor: 'rgba(255,255,255,0.1)', borderRadius: '1rem' }}
                 labelFormatter={(val) => { try { return format(parseISO(val as string), "dd 'de' MMMM", { locale: ptBR }); } catch { return val; } }}
-                formatter={(value: any) => [formatCurrency(Number(value || 0)), '']} />
+                formatter={(value: unknown) => [formatCurrency(Number(value || 0)), '']} />
               <Area type="monotone" dataKey="receitas" name="Entradas" stroke="#30D158" strokeWidth={3} fillOpacity={1} fill="url(#colorReceita)" />
               <Area type="monotone" dataKey="despesas" name="Saídas" stroke="#FF453A" strokeWidth={3} fillOpacity={1} fill="url(#colorDespesa)" />
             </AreaChart>
@@ -445,8 +479,8 @@ export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
               e.preventDefault();
               const formData = new FormData(e.currentTarget);
               const vencimento = formData.get('data_vencimento') as string;
-              
-              const payload: any = {
+
+              const payload: Record<string, unknown> = {
                 descricao: formData.get('descricao'),
                 valor: formData.get('valor'),
                 data_vencimento: vencimento,
@@ -469,9 +503,9 @@ export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
                 setIsNovaDespesaModalOpen(false);
                 setFornecedorSelecionado(null);
                 fetchFinanceiro();
-              } catch (err: any) {
+              } catch (err: unknown) {
                 console.error(err);
-                alert('Erro inesperado: ' + err.message);
+                alert('Erro inesperado: ' + (err instanceof Error ? err.message : String(err)));
               } finally {
                 setSyncing(false);
               }

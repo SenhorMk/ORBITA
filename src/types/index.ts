@@ -91,6 +91,7 @@ export interface BlingCategoria {
 // Estruturas do cache local (Banco de Dados Supabase)
 export interface Cliente {
   id?: string;
+  organizacao_id?: string;
   user_id?: string;
   bling_id: string;
   nome: string;
@@ -113,6 +114,7 @@ export interface Cliente {
 
 export interface Categoria {
   id?: string;
+  organizacao_id?: string;
   user_id?: string;
   bling_id: string;
   descricao: string;
@@ -123,6 +125,7 @@ export interface Categoria {
 
 export interface Produto {
   id?: string;
+  organizacao_id?: string;
   user_id?: string;
   bling_id: string;
   codigo?: string;
@@ -139,6 +142,7 @@ export interface Produto {
 
 export interface Pedido {
   id?: string;
+  organizacao_id?: string;
   user_id?: string;
   bling_id: string;
   numero: string;
@@ -152,6 +156,7 @@ export interface Pedido {
 
 export interface ItemPedido {
   id?: string;
+  organizacao_id?: string;
   user_id?: string;
   pedido_id: string; // UUID
   produto_id: string; // UUID
@@ -163,6 +168,7 @@ export interface ItemPedido {
 
 export interface Nfe {
   id?: string;
+  organizacao_id?: string;
   user_id?: string;
   bling_id: string;
   numero: string;
@@ -175,8 +181,21 @@ export interface Nfe {
 }
 
 // Estruturas do Chatwoot
+export interface ChatwootInbox {
+  id?: string;
+  user_id?: string;
+  organizacao_id?: string;
+  conexao_id?: string;
+  inbox_id: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ChatwootContact {
   id: number;
+  user_id?: string;
+  organizacao_id?: string;
+  conexao_id?: string;
   name: string;
   email?: string;
   phone_number?: string;
@@ -188,6 +207,9 @@ export interface ChatwootContact {
 
 export interface ChatwootConversation {
   id: number;
+  user_id?: string;
+  organizacao_id?: string;
+  conexao_id?: string;
   display_id: number;
   contact_id: number;
   status: string;
@@ -201,6 +223,9 @@ export interface ChatwootConversation {
 
 export interface ChatwootMessage {
   id: number;
+  user_id?: string;
+  organizacao_id?: string;
+  conexao_id?: string;
   conversation_id: number;
   content: string;
   message_type: 'incoming' | 'outgoing' | 'template' | 'system' | 'activity' | '0' | '1' | '2' | '3';
@@ -247,6 +272,7 @@ export interface BlingContaReceber {
 
 export interface CategoriaFinanceira {
   id?: string; // UUID local
+  organizacao_id?: string;
   bling_id?: number;
   descricao: string;
   tipo: 'receita' | 'despesa';
@@ -255,6 +281,8 @@ export interface CategoriaFinanceira {
 
 export interface TituloFinanceiro {
   id?: string; // UUID local
+  organizacao_id?: string;
+  user_id?: string;
   bling_id?: number;
   tipo: 'receber' | 'pagar';
   situacao: 'aberto' | 'pago' | 'cancelado';
@@ -263,7 +291,32 @@ export interface TituloFinanceiro {
   data_pagamento?: string;
   descricao: string;
   categoria_id?: string; // UUID local
+  conta_financeira_id?: string; // UUID local
+  fornecedor_id?: string; // UUID local
   created_at?: string;
   updated_at?: string;
 }
 
+export type ProvedorIntegracao = 'bling' | 'chatwoot' | 'stripe' | 'custom';
+export type StatusConexao = 'pendente' | 'conectado' | 'erro' | 'desconectado';
+
+export interface ConexaoIntegracao {
+  id: string;
+  organizacao_id: string;
+  provedor: ProvedorIntegracao;
+  nome: string;
+  status: StatusConexao;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CredencialIntegracao {
+  id: string;
+  conexao_id: string;
+  organizacao_id: string;
+  chave_versao: string;
+  dados_cifrados: string;
+  created_at: string;
+  updated_at: string;
+}

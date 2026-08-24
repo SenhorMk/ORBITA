@@ -1,10 +1,12 @@
 import { BlingPedido, BlingCliente, BlingProduto, BlingCategoria } from '../types';
 import { supabaseServer } from '../lib/supabaseServer';
 import { encrypt, decrypt } from '../lib/crypto';
+import { credentialsVault } from '../lib/integrations/credentialsVault';
+import { refreshBlingToken } from './blingOAuth';
 import type { VerifiedTenant } from '../lib/auth';
 
 const clientCache = new Map<string, BlingClient>();
-const refreshLocks = new Map<string, Promise<string>>();
+const orgClientCache = new Map<string, BlingClient>();
 
 export class BlingClient {
   private baseUrl = 'https://api.bling.com.br/Api/v3';
@@ -15,11 +17,17 @@ export class BlingClient {
   private lastRequestTime: number = 0;
   private requestQueuePromise: Promise<void> = Promise.resolve();
 
-  private readonly userId: string;
+  private readonly tenant?: VerifiedTenant;
+  private readonly userId?: string;
+  private readonly organizacaoId?: string;
+  private conexaoId?: string;
 
-  private constructor(tenant: VerifiedTenant) {
+  private constructor(tenant?: VerifiedTenant, organizacaoId?: string, conexaoId?: string) {
     this.apiKey = process.env.BLING_API_KEY || '';
-    this.userId = tenant.id;
+    this.tenant = tenant;
+    this.userId = tenant?.id;
+    this.organizacaoId = organizacaoId;
+    this.conexaoId = conexaoId;
   }
 
   static forUser(tenant: VerifiedTenant): BlingClient {
@@ -31,15 +39,29 @@ export class BlingClient {
     return c;
   }
 
+  static forOrganization(organizacaoId: string, conexaoId?: string): BlingClient {
+    const key = `${organizacaoId}:${conexaoId || 'primary'}`;
+    let c = orgClientCache.get(key);
+    if (!c) {
+      c = new BlingClient(undefined, organizacaoId, conexaoId);
+      orgClientCache.set(key, c);
+    }
+    return c;
+  }
+
   // Renovação forçada de token OAuth v3 junto ao Bling
   async forceRefreshToken(): Promise<string> {
+    if (this.organizacaoId) {
+      return await this._forceRefreshTokenForOrg();
+    }
+
     if (!this.userId) {
-      throw new Error('UserId é obrigatório para operações com o Bling (Multi-tenant).');
+      throw new Error('UserId ou OrganizacaoId é obrigatório para operações com o Bling (Multi-tenant).');
     }
 
     // Tentar pegar o lock atômico distribuído no banco (PostgreSQL row-level lock)
     const { data: lockAcquired, error: lockError } = await supabaseServer
-      .rpc('acquire_bling_token_lock', { 
+      .rpc('acquire_bling_token_lock', {
         p_user_id: this.userId,
         p_timeout_seconds: 30
       });
@@ -51,11 +73,11 @@ export class BlingClient {
     // Se NÃO conseguimos o lock, significa que OUTRA requisição/lambda já está renovando o token neste momento.
     if (!lockAcquired) {
       console.warn('🔒 Lock distribuído ativo! Outra instância está renovando o token. Aguardando...');
-      
+
       // Polling: vamos aguardar até que o lock seja liberado pelo outro processo e pegar o novo token.
       for (let i = 0; i < 15; i++) {
         await new Promise(r => setTimeout(r, 2000)); // Espera 2 segundos (máx 30s)
-        
+
         const res = await supabaseServer
           .from('integracoes_bling')
           .select('access_token, token_expires_at, refresh_locked_at')
@@ -65,7 +87,6 @@ export class BlingClient {
         const tokenCheck = res.data;
         // Se a coluna refresh_locked_at voltou pra nulo e o token ainda não expirou, a renovação do outro processo concluiu com sucesso!
         if (tokenCheck && !tokenCheck.refresh_locked_at && new Date() < new Date(tokenCheck.token_expires_at)) {
-          console.log('✅ Token renovado por outra instância. Usando o token atualizado do banco.');
           const dec = decrypt(tokenCheck.access_token);
           if (dec) return dec;
         }
@@ -85,6 +106,87 @@ export class BlingClient {
     }
   }
 
+  private async _forceRefreshTokenForOrg(): Promise<string> {
+    if (!this.organizacaoId) {
+      throw new Error('OrganizacaoId é obrigatório.');
+    }
+
+    // Localizar conexao_id se não especificado
+    if (!this.conexaoId) {
+      const { data: conn } = await supabaseServer
+        .from('conexoes_integracao')
+        .select('id')
+        .eq('organizacao_id', this.organizacaoId)
+        .eq('provedor', 'bling')
+        .maybeSingle();
+
+      if (conn?.id) {
+        this.conexaoId = conn.id;
+      }
+    }
+
+    if (!this.conexaoId) {
+      throw new Error('Nenhuma conexao Bling encontrada para esta organizacao.');
+    }
+
+    const { data: lockAcquired, error: lockError } = await supabaseServer
+      .rpc('acquire_conexao_token_lock', {
+        p_conexao_id: this.conexaoId,
+        p_timeout_seconds: 30,
+      });
+
+    if (lockError) {
+      console.error('Erro ao adquirir lock de conexao Bling:', lockError);
+    }
+
+    if (!lockAcquired) {
+      // Polling aguardando liberação
+      for (let i = 0; i < 15; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        const creds = await credentialsVault.getDecryptedCredentials(this.organizacaoId, this.conexaoId);
+        if (creds?.access_token && creds?.token_expires_at) {
+          if (new Date() < new Date(creds.token_expires_at as string)) {
+            return creds.access_token as string;
+          }
+        }
+      }
+      throw new Error('Timeout esperando outro processo renovar token Bling da organizacao.');
+    }
+
+    try {
+      const creds = await credentialsVault.getDecryptedCredentials(this.organizacaoId, this.conexaoId);
+      if (!creds?.client_id || !creds?.client_secret || !creds?.refresh_token) {
+        throw new Error('Credenciais Bling incompletas no cofre da organizacao.');
+      }
+
+      const refreshResult = await refreshBlingToken({
+        clientId: creds.client_id as string,
+        clientSecret: creds.client_secret as string,
+        refreshToken: creds.refresh_token as string,
+      });
+
+      if (refreshResult._tag === 'BlingOAuthTokenExchangeFailed') {
+        throw new Error(`Falha ao renovar token Bling: ${refreshResult.reason}`);
+      }
+
+      const newExpiresAt = new Date(Date.now() + refreshResult.expires_in * 1000).toISOString();
+
+      await credentialsVault.saveEncryptedCredentials(this.organizacaoId, this.conexaoId, {
+        client_id: creds.client_id,
+        client_secret: creds.client_secret,
+        access_token: refreshResult.access_token,
+        refresh_token: refreshResult.refresh_token,
+        token_expires_at: newExpiresAt,
+      });
+
+      return refreshResult.access_token;
+    } finally {
+      await supabaseServer.rpc('release_conexao_token_lock', {
+        p_conexao_id: this.conexaoId,
+      });
+    }
+  }
+
   private async _doForceRefreshToken(): Promise<string> {
       if (!this.userId) {
         throw new Error('UserId é obrigatório para operações com o Bling (Multi-tenant).');
@@ -95,7 +197,7 @@ export class BlingClient {
         .select('*')
         .eq('user_id', this.userId)
         .maybeSingle();
-        
+
       const data = res.data;
       if (!data?.refresh_token || !data?.client_id || !data?.client_secret) {
         throw new Error('Credenciais OAuth incompletas no banco.');
@@ -147,6 +249,31 @@ export class BlingClient {
 
   // Buscar Access Token válido do banco Supabase
   private async getAccessToken(): Promise<string> {
+    if (this.organizacaoId) {
+      if (!this.conexaoId) {
+        const { data: conn } = await supabaseServer
+          .from('conexoes_integracao')
+          .select('id')
+          .eq('organizacao_id', this.organizacaoId)
+          .eq('provedor', 'bling')
+          .maybeSingle();
+
+        if (conn?.id) {
+          this.conexaoId = conn.id;
+        }
+      }
+
+      if (this.conexaoId) {
+        const creds = await credentialsVault.getDecryptedCredentials(this.organizacaoId, this.conexaoId);
+        if (creds?.access_token) {
+          if (creds.token_expires_at && new Date() >= new Date(creds.token_expires_at as string)) {
+            return await this.forceRefreshToken();
+          }
+          return creds.access_token as string;
+        }
+      }
+    }
+
     if (!this.userId) {
       throw new Error('UserId é obrigatório para operações com o Bling (Multi-tenant).');
     }
@@ -156,9 +283,9 @@ export class BlingClient {
       .select('*')
       .eq('user_id', this.userId)
       .maybeSingle();
-      
-    let data = res.data;
-    let error = res.error;
+
+    const data = res.data;
+    const error = res.error;
 
     if (error || !data || !data.access_token) {
       if (this.apiKey) return this.apiKey;
@@ -181,7 +308,7 @@ export class BlingClient {
   private async enforceRateLimit(): Promise<void> {
     const delay = 340;
     const previousPromise = this.requestQueuePromise;
-    
+
     let resolveNext: () => void;
     this.requestQueuePromise = new Promise(res => { resolveNext = res; });
 
@@ -208,7 +335,7 @@ export class BlingClient {
     while (retries < 2) {
       await this.enforceRateLimit();
 
-      let response = await fetch(url, {
+      const response = await fetch(url, {
         ...options,
         headers: {
           ...options.headers,
@@ -232,20 +359,20 @@ export class BlingClient {
           token = await this.forceRefreshToken();
           retries++;
           continue;
-        } catch (err: any) {
-          console.error('❌ BlingClient: Falha na renovação automática do token Bling OAuth v3:', err.message);
-          if (err.message === 'BLING_INVALID_GRANT') {
+        } catch (err: unknown) {
+          const errMessage = err instanceof Error ? err.message : String(err);
+          console.error('❌ BlingClient: Falha na renovação automática do token Bling OAuth v3:', errMessage);
+          if (errMessage === 'BLING_INVALID_GRANT') {
             throw new Error('BLING_INVALID_GRANT');
           }
           throw new Error(
-            `Conexão Bling OAuth v3 (HTTP ${response.status}): ${err.message || 'Token expirado/sem permissão'}. Se você alterou permissões recentemente no Bling, por favor, clique em 'Conectar APIs' no topo da tela para reautorizar.`
+            `Conexão Bling OAuth v3 (HTTP ${response.status}): ${errMessage || 'Token expirado/sem permissão'}. Se você alterou permissões recentemente no Bling, por favor, clique em 'Conectar APIs' no topo da tela para reautorizar.`
           );
         }
       }
 
       return response;
     }
-
 
     throw new Error('Número máximo de retries excedido (HTTP 429 Too Many Requests).');
   }
@@ -255,11 +382,12 @@ export class BlingClient {
     try {
       const response = await this.fetchWithAuth('https://api.bling.com.br/Api/v3/produtos?limite=1');
       return response.ok;
-    } catch (err: any) {
-      if (err.message === 'BLING_INVALID_GRANT') {
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      if (errMessage === 'BLING_INVALID_GRANT') {
         throw err;
       }
-      console.warn('Erro ao testar ping com a API do Bling:', err.message);
+      console.warn('Erro ao testar ping com a API do Bling:', errMessage);
       return false;
     }
   }
@@ -284,8 +412,9 @@ export class BlingClient {
 
       const data = await response.json();
       return (data.data && Array.isArray(data.data)) ? data.data : [];
-    } catch (error: any) {
-      console.warn('⚠️ BlingClient: Erro ao buscar pedidos reais do Bling:', error.message || error);
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.warn('⚠️ BlingClient: Erro ao buscar pedidos reais do Bling:', errorMsg);
       return [];
     }
   }
@@ -322,8 +451,9 @@ export class BlingClient {
 
       const data = await response.json();
       return (data.data && Array.isArray(data.data)) ? data.data : [];
-    } catch (error: any) {
-      console.warn('⚠️ BlingClient: Erro ao buscar contatos do Bling:', error.message || error);
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.warn('⚠️ BlingClient: Erro ao buscar contatos do Bling:', errorMsg);
       return [];
     }
   }
@@ -344,12 +474,12 @@ export class BlingClient {
       const lista = (data.data && Array.isArray(data.data)) ? data.data : [];
       console.log(`[getContatosByNome] Busca por "${nome}": ${lista.length} resultado(s)`);
       return lista;
-    } catch (error: any) {
-      console.warn('[getContatosByNome] Exceção:', error.message);
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.warn('[getContatosByNome] Exceção:', errorMsg);
       return [];
     }
   }
-
 
   // Obter produtos do Bling com paginação
   async getProdutos(pagina = 1, limite = 100, codigo?: string, dataAlteracaoInicial?: string): Promise<BlingProduto[]> {
@@ -372,8 +502,9 @@ export class BlingClient {
 
       const data = await response.json();
       return (data.data && Array.isArray(data.data)) ? data.data : [];
-    } catch (error: any) {
-      console.warn('⚠️ BlingClient: Erro ao buscar produtos do Bling:', error.message || error);
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.warn('⚠️ BlingClient: Erro ao buscar produtos do Bling:', errorMsg);
       return [];
     }
   }
@@ -395,8 +526,9 @@ export class BlingClient {
 
       const data = await response.json();
       return (data.data && Array.isArray(data.data)) ? data.data : [];
-    } catch (error: any) {
-      console.warn('⚠️ BlingClient: Erro ao buscar categorias do Bling:', error.message || error);
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.warn('⚠️ BlingClient: Erro ao buscar categorias do Bling:', errorMsg);
       return [];
     }
   }
@@ -414,12 +546,12 @@ export class BlingClient {
   }
 
   // Deletar um produto no Bling ERP
-  async deleteProduto(id: string): Promise<any> {
+  async deleteProduto(id: string): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/produtos/${id}`;
     const response = await this.fetchWithAuth(url, {
       method: 'DELETE',
     });
-    
+
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`Erro na API Bling ao deletar produto (HTTP ${response.status}): ${errorText}`);
@@ -429,7 +561,7 @@ export class BlingClient {
   }
 
   // Obter saldos de estoque físicos de múltiplos produtos
-  async getEstoquesSaldos(idsProdutos: string[]): Promise<any[]> {
+  async getEstoquesSaldos(idsProdutos: string[]): Promise<unknown[]> {
     if (!idsProdutos.length) return [];
     try {
       const url = new URL('https://api.bling.com.br/Api/v3/estoques/saldos');
@@ -445,15 +577,15 @@ export class BlingClient {
   }
 
   // Lançamento de estoque (Operação 'B' define saldo físico absoluto)
-  async lancamentoEstoque(idProduto: string, quantidade: number, operacao: string = 'B'): Promise<any> {
+  async lancamentoEstoque(idProduto: string, quantidade: number, operacao: string = 'B'): Promise<unknown> {
     const depositosRes = await this.fetchWithAuth('https://api.bling.com.br/Api/v3/depositos');
     if (!depositosRes.ok) {
       const errText = await depositosRes.text();
       throw new Error(`Falha ao buscar depósitos (HTTP ${depositosRes.status}): ${errText}`);
     }
     const depositos = await depositosRes.json();
-    const defaultDeposit = depositos.data?.find((d: any) => d.padrao) || depositos.data?.[0];
-    
+    const defaultDeposit = (depositos.data as Array<{ id: number; padrao?: boolean }>)?.find(d => d.padrao) || (depositos.data as Array<{ id: number; padrao?: boolean }>)?.[0];
+
     if (!defaultDeposit) throw new Error('Nenhum depósito encontrado na conta Bling.');
 
     const url = `https://api.bling.com.br/Api/v3/estoques`;
@@ -479,7 +611,7 @@ export class BlingClient {
   }
 
   // Emitir Nota Fiscal (NF-e) para um pedido no Bling v3
-  async emitirNfe(pedidoId: string): Promise<any> {
+  async emitirNfe(pedidoId: string): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/nfe`;
     const response = await this.fetchWithAuth(url, {
       method: 'POST',
@@ -499,7 +631,7 @@ export class BlingClient {
     return await response.json();
   }
 
-  async createNfe(pedidoId: string): Promise<any> {
+  async createNfe(pedidoId: string): Promise<unknown> {
     return this.emitirNfe(pedidoId);
   }
 
@@ -522,13 +654,13 @@ export class BlingClient {
   // ═══════════════════════════════════════════════════════════════════════
 
   // Atualizar dados de um produto no Bling ERP v3
-  async updateProduto(id: string, payload: { nome?: string; codigo?: string; preco?: number; estoque?: number; tipo?: string; situacao?: string; formato?: string; unidade?: string }): Promise<any> {
+  async updateProduto(id: string, payload: { nome?: string; codigo?: string; preco?: number; estoque?: number; tipo?: string; situacao?: string; formato?: string; unidade?: string }): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/produtos/${id}`;
-    const bodyPayload: any = {};
+    const bodyPayload: Record<string, unknown> = {};
     if (payload.nome !== undefined) bodyPayload.nome = payload.nome;
     if (payload.codigo !== undefined) bodyPayload.codigo = payload.codigo;
     if (payload.preco !== undefined) bodyPayload.preco = payload.preco;
-    
+
     // Campos obrigatórios no PUT do Bling v3
     bodyPayload.tipo = payload.tipo || 'P';
     bodyPayload.situacao = payload.situacao || 'A';
@@ -568,13 +700,13 @@ export class BlingClient {
   // ═══════════════════════════════════════════════════════════════════════
 
   // Atualizar dados de um contato/cliente no Bling ERP v3
-  async updateContato(id: string, payload: { nome?: string; email?: string; telefone?: string; cnpj?: string; tipo?: string; contribuinte?: number; cep?: string; endereco?: string; numero?: string; bairro?: string; cidade?: string; uf?: string }): Promise<any> {
+  async updateContato(id: string, payload: { nome?: string; email?: string; telefone?: string; cnpj?: string; tipo?: string; contribuinte?: number; cep?: string; endereco?: string; numero?: string; bairro?: string; cidade?: string; uf?: string }): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/contatos/${id}`;
-    const bodyPayload: any = {};
+    const bodyPayload: Record<string, unknown> = {};
     if (payload.nome !== undefined) bodyPayload.nome = payload.nome;
     if (payload.email !== undefined) bodyPayload.email = payload.email;
     if (payload.telefone !== undefined) bodyPayload.fone = payload.telefone;
-    
+
     // Configura tipo e contribuinte explícitos se fornecidos
     if (payload.tipo) bodyPayload.tipo = payload.tipo;
     if (payload.contribuinte !== undefined) bodyPayload.contribuinte = payload.contribuinte;
@@ -599,7 +731,7 @@ export class BlingClient {
     }
 
     // Endereço
-    const enderecoPayload: any = {};
+    const enderecoPayload: Record<string, unknown> = {};
     let hasEndereco = false;
     if (payload.cep) { enderecoPayload.cep = payload.cep; hasEndereco = true; }
     if (payload.endereco) { enderecoPayload.endereco = payload.endereco; hasEndereco = true; }
@@ -629,9 +761,9 @@ export class BlingClient {
   }
 
   // Criar um novo produto no Bling ERP v3
-  async createProduto(payload: { nome: string; codigo?: string; preco?: number; estoque?: number; tipo?: string; situacao?: string; formato?: string; unidade?: string }): Promise<any> {
+  async createProduto(payload: { nome: string; codigo?: string; preco?: number; estoque?: number; tipo?: string; situacao?: string; formato?: string; unidade?: string }): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/produtos`;
-    const bodyPayload: any = {
+    const bodyPayload: Record<string, unknown> = {
       nome: payload.nome,
       codigo: payload.codigo || `ORB-${Date.now()}`,
       preco: payload.preco !== undefined ? payload.preco : 0,
@@ -659,9 +791,9 @@ export class BlingClient {
 
   // Criar um novo contato no Bling ERP v3
   // Campos obrigatórios: nome, tipo, contribuinte
-  async createContato(payload: { nome: string; email?: string; telefone?: string; cnpj?: string; tipo?: string; contribuinte?: number; cep?: string; endereco?: string; numero?: string; bairro?: string; cidade?: string; uf?: string }): Promise<any> {
+  async createContato(payload: { nome: string; email?: string; telefone?: string; cnpj?: string; tipo?: string; contribuinte?: number; cep?: string; endereco?: string; numero?: string; bairro?: string; cidade?: string; uf?: string }): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/contatos`;
-    const bodyPayload: any = {
+    const bodyPayload: Record<string, unknown> = {
       nome: payload.nome,
       situacao: 'A',
       tipo: payload.tipo || 'F',           // F = Pessoa Física (padrão)
@@ -671,7 +803,7 @@ export class BlingClient {
     // Campos opcionais — só adicionar se tiverem valor
     if (payload.email) bodyPayload.email = payload.email;
     if (payload.telefone) bodyPayload.fone = payload.telefone;  // Campo correto: "fone"
-    
+
     if (payload.cnpj) {
       bodyPayload.numeroDocumento = payload.cnpj;
       // Se CNPJ tem 14 dígitos e UI não enviou explicitamente, inferir
@@ -685,7 +817,7 @@ export class BlingClient {
     }
 
     // Endereço
-    const enderecoPayload: any = {};
+    const enderecoPayload: Record<string, unknown> = {};
     let hasEndereco = false;
     if (payload.cep) { enderecoPayload.cep = payload.cep; hasEndereco = true; }
     if (payload.endereco) { enderecoPayload.endereco = payload.endereco; hasEndereco = true; }
@@ -715,12 +847,12 @@ export class BlingClient {
   }
 
   // Deletar um contato no Bling ERP
-  async deleteContato(id: string): Promise<any> {
+  async deleteContato(id: string): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/contatos/${id}`;
     const response = await this.fetchWithAuth(url, {
       method: 'DELETE',
     });
-    
+
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`Erro na API Bling ao deletar contato (HTTP ${response.status}): ${errorText}`);
@@ -730,7 +862,7 @@ export class BlingClient {
   }
 
   // Buscar contatos por pesquisa (Nome, CPF/CNPJ, etc.) no Bling ERP v3
-  async getContatosByPesquisa(pesquisa: string): Promise<any[]> {
+  async getContatosByPesquisa(pesquisa: string): Promise<unknown[]> {
     if (!pesquisa || !pesquisa.trim()) return [];
     const url = `https://api.bling.com.br/Api/v3/contatos?pesquisa=${encodeURIComponent(pesquisa.trim())}`;
     const response = await this.fetchWithAuth(url);
@@ -741,15 +873,14 @@ export class BlingClient {
     return json.data && Array.isArray(json.data) ? json.data : [];
   }
 
-
   // ═══════════════════════════════════════════════════════════════════════
   // PEDIDOS DE VENDA — Bling API v3
   // ═══════════════════════════════════════════════════════════════════════
 
   // Atualizar um pedido existente no Bling ERP v3
-  async updatePedido(id: string, payload: any): Promise<any> {
+  async updatePedido(id: string, payload: unknown): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/pedidos/vendas/${id}`;
-    
+
     const response = await this.fetchWithAuth(url, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -767,9 +898,9 @@ export class BlingClient {
   }
 
   // Criar um novo pedido de venda no Bling ERP v3
-  async createPedido(payload: any): Promise<any> {
+  async createPedido(payload: unknown): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/pedidos/vendas`;
-    
+
     const response = await this.fetchWithAuth(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -785,12 +916,12 @@ export class BlingClient {
   }
 
   // Deletar um pedido no Bling ERP
-  async deletePedido(id: string): Promise<any> {
+  async deletePedido(id: string): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/pedidos/vendas/${id}`;
     const response = await this.fetchWithAuth(url, {
       method: 'DELETE',
     });
-    
+
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`Erro na API Bling ao deletar pedido (HTTP ${response.status}): ${errorText}`);
@@ -798,8 +929,6 @@ export class BlingClient {
 
     return { success: true };
   }
-
-
 
   // Buscar o ID do depósito padrão
   async getDefaultDepositoId(): Promise<number> {
@@ -810,8 +939,8 @@ export class BlingClient {
       throw new Error('Não foi possível obter a lista de depósitos do Bling para lançar estoque.');
     }
     const depositos = await depositosRes.json();
-    const defaultDeposit = depositos.data?.find((d: any) => d.padrao) || depositos.data?.[0];
-    
+    const defaultDeposit = (depositos.data as Array<{ id: number; padrao?: boolean }>)?.find(d => d.padrao) || (depositos.data as Array<{ id: number; padrao?: boolean }>)?.[0];
+
     if (!defaultDeposit?.id) {
       throw new Error('Nenhum depósito configurado no Bling. Crie um depósito para habilitar a baixa de estoque.');
     }
@@ -819,12 +948,12 @@ export class BlingClient {
   }
 
   // Lançar baixa de estoque manualmente para um produto (Saída)
-  async lancarBaixaEstoqueProduto(produtoId: string | number, quantidade: number, preco: number = 0): Promise<any> {
+  async lancarBaixaEstoqueProduto(produtoId: string | number, quantidade: number, preco: number = 0): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/estoques`;
-    
+
     // Obter depósito padrão para informar no payload, obrigatório na v3
     const depositoId = await this.getDefaultDepositoId();
-    
+
     const response = await this.fetchWithAuth(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -849,13 +978,13 @@ export class BlingClient {
   }
 
   // Alterar situação (status) de um pedido no Bling ERP
-  async updateSituacaoPedido(idPedido: string | number, idSituacao: string | number): Promise<any> {
+  async updateSituacaoPedido(idPedido: string | number, idSituacao: string | number): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/pedidos/vendas/${idPedido}/situacoes/${idSituacao}`;
     const response = await this.fetchWithAuth(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' }
     });
-    
+
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`Erro na API Bling ao alterar situação do pedido (HTTP ${response.status}): ${errorText}`);
@@ -865,7 +994,7 @@ export class BlingClient {
     if (response.status === 204) {
       return { success: true };
     }
-    
+
     try {
       return await response.json();
     } catch {
@@ -874,10 +1003,10 @@ export class BlingClient {
   }
 
   // Buscar lista de situações de um módulo (9 = Pedidos de Venda)
-  async getSituacoesModulo(idModulo: number = 9): Promise<any> {
+  async getSituacoesModulo(idModulo: number = 9): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/situacoes/modulos`;
     const response = await this.fetchWithAuth(url);
-    
+
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`Erro na API Bling ao buscar situações (HTTP ${response.status}): ${errorText}`);
@@ -886,12 +1015,12 @@ export class BlingClient {
     const data = await response.json();
     // Filtra para retornar apenas as situações do módulo especificado
     if (data && data.data && Array.isArray(data.data)) {
-      const modulo = data.data.find((m: any) => m.id === idModulo);
+      const modulo = (data.data as Array<{ id: number; situacoes?: unknown }>).find((m) => m.id === idModulo);
       if (modulo && modulo.situacoes) {
         return modulo.situacoes;
       }
     }
-    
+
     return [];
   }
 
@@ -899,7 +1028,7 @@ export class BlingClient {
   // CONTAS A PAGAR E RECEBER — Bling API v3
   // ═══════════════════════════════════════════════════════════════════════
 
-  async createContaPagar(payload: any): Promise<any> {
+  async createContaPagar(payload: unknown): Promise<unknown> {
     const url = `https://api.bling.com.br/Api/v3/contas/pagar`;
     console.log('[bling] createContaPagar payload:', JSON.stringify(payload));
     const response = await this.fetchWithAuth(url, {
@@ -918,56 +1047,79 @@ export class BlingClient {
     return json;
   }
 
-  async getContasPagar(pagina = 1, limite = 100, dataVencimentoInicial?: string): Promise<any[]> {
-    const url = new URL(`https://api.bling.com.br/Api/v3/contas/pagar`);
-    url.searchParams.append('pagina', pagina.toString());
-    url.searchParams.append('limite', limite.toString());
-    if (dataVencimentoInicial) url.searchParams.append('dataVencimentoInicial', dataVencimentoInicial);
+  // Obter lançamentos de contas a receber com paginação e filtros
+  async getContasReceber(pagina = 1, limite = 100, dataInicial?: string, dataFinal?: string): Promise<unknown[]> {
+    try {
+      const url = new URL('https://api.bling.com.br/Api/v3/contas/receber');
+      url.searchParams.append('pagina', pagina.toString());
+      url.searchParams.append('limite', limite.toString());
+      if (dataInicial) url.searchParams.append('dataVencimentoInicial', dataInicial);
+      if (dataFinal) url.searchParams.append('dataVencimentoFinal', dataFinal);
 
-    const response = await this.fetchWithAuth(url.toString());
-    if (!response.ok) {
-      console.warn(`Erro ao buscar contas a pagar (HTTP ${response.status}):`, await response.text());
+      const response = await this.fetchWithAuth(url.toString());
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.data && Array.isArray(data.data)) ? data.data : [];
+    } catch {
       return [];
     }
-
-    const data = await response.json();
-    return (data.data && Array.isArray(data.data)) ? data.data : [];
   }
 
-  async createContaReceber(payload: any): Promise<any> {
-    const url = `https://api.bling.com.br/Api/v3/contas/receber`;
-    const response = await this.fetchWithAuth(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+  // Obter lançamentos de contas a pagar com paginação e filtros
+  async getContasPagar(pagina = 1, limite = 100, dataInicial?: string, dataFinal?: string): Promise<unknown[]> {
+    try {
+      const url = new URL('https://api.bling.com.br/Api/v3/contas/pagar');
+      url.searchParams.append('pagina', pagina.toString());
+      url.searchParams.append('limite', limite.toString());
+      if (dataInicial) url.searchParams.append('dataVencimentoInicial', dataInicial);
+      if (dataFinal) url.searchParams.append('dataVencimentoFinal', dataFinal);
+
+      const response = await this.fetchWithAuth(url.toString());
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.data && Array.isArray(data.data)) ? data.data : [];
+    } catch {
+      return [];
+    }
+  }
+
+  // Obter saldo/resumo financeiro consolidado
+  async getResumoFinanceiro(): Promise<{ saldoAtual: number; totalReceber: number; totalPagar: number }> {
+    try {
+      const [receber, pagar] = await Promise.all([
+        this.getContasReceber(1, 100),
+        this.getContasPagar(1, 100)
+      ]);
+
+      const totalReceber = (receber as Array<{ valor?: number; situacao?: number }>).reduce((acc, c) => c.situacao !== 2 ? acc + (Number(c.valor) || 0) : acc, 0);
+      const totalPagar = (pagar as Array<{ valor?: number; situacao?: number }>).reduce((acc, c) => c.situacao !== 2 ? acc + (Number(c.valor) || 0) : acc, 0);
+      const saldoAtual = totalReceber - totalPagar;
+
+      return { saldoAtual, totalReceber, totalPagar };
+    } catch {
+      return { saldoAtual: 0, totalReceber: 0, totalPagar: 0 };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CATEGORIAS DE PRODUTOS
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // Buscar lista de categorias da API Bling v3
+  async getCategorias(pagina = 1, limite = 100): Promise<unknown[]> {
+    const url = `https://api.bling.com.br/Api/v3/categorias/produtos?pagina=${pagina}&limite=${limite}`;
+    const response = await this.fetchWithAuth(url);
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Erro na API Bling ao criar Conta a Receber (HTTP ${response.status}): ${errorText}`);
+      throw new Error(`Erro na API Bling ao buscar categorias (HTTP ${response.status}): ${errorText}`);
     }
-
-    return await response.json();
-  }
-
-  async getContasReceber(pagina = 1, limite = 100, dataVencimentoInicial?: string): Promise<any[]> {
-    const url = new URL(`https://api.bling.com.br/Api/v3/contas/receber`);
-    url.searchParams.append('pagina', pagina.toString());
-    url.searchParams.append('limite', limite.toString());
-    if (dataVencimentoInicial) url.searchParams.append('dataVencimentoInicial', dataVencimentoInicial);
-
-    const response = await this.fetchWithAuth(url.toString());
-    if (!response.ok) {
-      console.warn(`Erro ao buscar contas a receber (HTTP ${response.status}):`, await response.text());
-      return [];
-    }
-
     const data = await response.json();
     return (data.data && Array.isArray(data.data)) ? data.data : [];
   }
 
   // CONTAS FINANCEIRAS (Bancárias / Caixas) - Bling API v3
-  async getContasFinanceiras(): Promise<any[]> {
+  async getContasFinanceiras(): Promise<unknown[]> {
     const url = 'https://api.bling.com.br/Api/v3/contas-financeiras';
     const response = await this.fetchWithAuth(url);
     if (!response.ok) {
@@ -980,23 +1132,36 @@ export class BlingClient {
 
 }
 
+interface BlingImagePayload {
+  imagemURL?: string;
+  imagem_url?: string;
+  urlImagem?: string;
+  imagem?: string | { url?: string };
+  midia?: {
+    imagens?: {
+      externas?: Array<{ link?: string; url?: string }>;
+      internas?: Array<{ link?: string; url?: string }>;
+    };
+  };
+  midias?: Array<{ link?: string; url?: string }>;
+}
 
-
-export function extractProductImageUrl(data: any): string | undefined {
-  if (!data) return undefined;
+export function extractProductImageUrl(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const d = data as BlingImagePayload;
   let url: string | undefined = undefined;
 
-  if (typeof data.imagemURL === 'string' && data.imagemURL.trim()) url = data.imagemURL;
-  else if (typeof data.imagem_url === 'string' && data.imagem_url.trim()) url = data.imagem_url;
-  else if (typeof data.urlImagem === 'string' && data.urlImagem.trim()) url = data.urlImagem;
-  else if (typeof data.imagem === 'string' && data.imagem.trim()) url = data.imagem;
-  else if (typeof data.imagem?.url === 'string' && data.imagem.url.trim()) url = data.imagem.url;
-  else if (data.midia?.imagens?.externas?.[0]?.link) url = data.midia.imagens.externas[0].link;
-  else if (data.midia?.imagens?.internas?.[0]?.link) url = data.midia.imagens.internas[0].link;
-  else if (data.midia?.imagens?.externas?.[0]?.url) url = data.midia.imagens.externas[0].url;
-  else if (data.midia?.imagens?.internas?.[0]?.url) url = data.midia.imagens.internas[0].url;
-  else if (data.midias?.[0]?.url) url = data.midias[0].url;
-  else if (data.midias?.[0]?.link) url = data.midias[0].link;
+  if (typeof d.imagemURL === 'string' && d.imagemURL.trim()) url = d.imagemURL;
+  else if (typeof d.imagem_url === 'string' && d.imagem_url.trim()) url = d.imagem_url;
+  else if (typeof d.urlImagem === 'string' && d.urlImagem.trim()) url = d.urlImagem;
+  else if (typeof d.imagem === 'string' && d.imagem.trim()) url = d.imagem;
+  else if (d.imagem && typeof d.imagem === 'object' && typeof d.imagem.url === 'string' && d.imagem.url.trim()) url = d.imagem.url;
+  else if (d.midia?.imagens?.externas?.[0]?.link) url = d.midia.imagens.externas[0].link;
+  else if (d.midia?.imagens?.internas?.[0]?.link) url = d.midia.imagens.internas[0].link;
+  else if (d.midia?.imagens?.externas?.[0]?.url) url = d.midia.imagens.externas[0].url;
+  else if (d.midia?.imagens?.internas?.[0]?.url) url = d.midia.imagens.internas[0].url;
+  else if (d.midias?.[0]?.url) url = d.midias[0].url;
+  else if (d.midias?.[0]?.link) url = d.midias[0].link;
 
   if (!url) return undefined;
   url = url.trim();
@@ -1007,5 +1172,6 @@ export function extractProductImageUrl(data: any): string | undefined {
 
 export const bling = {
   forUser: (tenant: VerifiedTenant) => BlingClient.forUser(tenant),
+  forOrganization: (organizacaoId: string, conexaoId?: string) => BlingClient.forOrganization(organizacaoId, conexaoId),
 };
 export const extractBlingImageUrl = extractProductImageUrl;

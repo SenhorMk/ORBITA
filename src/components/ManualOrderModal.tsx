@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useDeferredValue } from 'react';
+import { useState, useEffect, useDeferredValue } from "react";
 import { GlassModal } from '@/components/ui/glass-modal';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/lib/supabaseClient';
@@ -12,18 +12,44 @@ interface ManualOrderModalProps {
   onSuccess?: () => void;
 }
 
+interface ClienteOption {
+  id: string;
+  nome: string;
+  bling_id: string;
+}
+
+interface ProdutoOption {
+  id: string;
+  nome: string;
+  codigo?: string;
+  preco: number;
+  estoque?: number;
+  estoque_reservado?: number;
+  bling_id: string;
+}
+
+interface ItemPedidoManual {
+  produto_id: string;
+  bling_id: string;
+  nome: string;
+  codigo?: string;
+  quantidade: number;
+  max_quantidade: number;
+  valor_unitario: number;
+}
+
 export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Form State
   const [syncBling, setSyncBling] = useState(true);
-  const [clientes, setClientes] = useState<any[]>([]);
-  const [produtos, setProdutos] = useState<any[]>([]);
+  const [clientes, setClientes] = useState<ClienteOption[]>([]);
+  const [produtos, setProdutos] = useState<ProdutoOption[]>([]);
   const [selectedCliente, setSelectedCliente] = useState<string>('');
   const [formaPagamento, setFormaPagamento] = useState<string>('Dinheiro');
-  const [itens, setItens] = useState<any[]>([]);
-  
+  const [itens, setItens] = useState<ItemPedidoManual[]>([]);
+
   // Detalhes Opcionais
   const [desconto, setDesconto] = useState<number | ''>('');
   const [frete, setFrete] = useState<number | ''>('');
@@ -34,33 +60,37 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
   const deferredSearchProduto = useDeferredValue(searchProduto);
 
   useEffect(() => {
+    let isMounted = true;
     if (open) {
-      loadInitialData();
+      void (async () => {
+        try {
+          const { data: userRes } = await supabase.auth.getUser();
+          if (!userRes.user || !isMounted) return;
+
+          const [clientesRes, produtosRes] = await Promise.all([
+            supabase.from('clientes').select('id, nome, bling_id').eq('user_id', userRes.user.id).order('nome'),
+            supabase.from('produtos').select('id, nome, codigo, preco, estoque, estoque_reservado, bling_id').eq('user_id', userRes.user.id).order('nome'),
+          ]);
+
+          if (isMounted) {
+            if (clientesRes.data) setClientes(clientesRes.data as ClienteOption[]);
+            if (produtosRes.data) setProdutos(produtosRes.data as ProdutoOption[]);
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      })();
     }
+    return () => {
+      isMounted = false;
+    };
   }, [open]);
-
-  const loadInitialData = async () => {
-    try {
-      const { data: userRes } = await supabase.auth.getUser();
-      if (!userRes.user) return;
-
-      const [clientesRes, produtosRes] = await Promise.all([
-        supabase.from('clientes').select('id, nome, bling_id').eq('user_id', userRes.user.id).order('nome'),
-        supabase.from('produtos').select('id, nome, codigo, preco, estoque, estoque_reservado, bling_id').eq('user_id', userRes.user.id).order('nome'),
-      ]);
-
-      if (clientesRes.data) setClientes(clientesRes.data);
-      if (produtosRes.data) setProdutos(produtosRes.data);
-    } catch (err) {
-      console.error(err);
-    }
-  };
 
   const addItem = (produtoId: string) => {
     const prod = produtos.find(p => p.id === produtoId);
     if (!prod) return;
 
-    const available = prod.estoque - prod.estoque_reservado;
+    const available = (prod.estoque ?? 0) - (prod.estoque_reservado ?? 0);
     if (available <= 0) {
       setError(`Produto ${prod.nome} sem estoque disponível.`);
       return;
@@ -127,7 +157,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
 
     try {
       const cliente = clientes.find(c => c.id === selectedCliente);
-      
+
       const payload = {
         syncBling,
         contatoId: cliente?.bling_id || cliente?.id || selectedCliente,
@@ -156,7 +186,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
 
       const res = await fetch('/api/pedidos/manual', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
@@ -175,11 +205,12 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
       setDesconto('');
       setFrete('');
       setObservacoes('');
-    } catch (err: any) {
-      if (err.message.includes('Informa\\u00e7\\u00f5es id\\u00eanticas a \\u00faltima venda salva') || err.message.includes('code":3')) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('Informa\\u00e7\\u00f5es id\\u00eanticas a \\u00faltima venda salva') || errMsg.includes('code":3')) {
         setError('Erro: Venda Duplicada. Não é permitido enviar um pedido idêntico ao anterior (mesmo cliente, produtos e valores). Altere alguma informação ou aguarde se for intencional.');
       } else {
-        setError(err.message);
+        setError(errMsg);
       }
     } finally {
       setLoading(false);
@@ -221,7 +252,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
           <div className="space-y-5">
             <div>
               <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Cliente</label>
-              <select 
+              <select
                 className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium text-white bg-transparent [&>option]:bg-slate-900"
                 value={selectedCliente}
                 onChange={e => setSelectedCliente(e.target.value)}
@@ -236,7 +267,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
             <div className="relative">
               <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Buscar Produto</label>
               <div className="relative">
-                <input 
+                <input
                   type="text"
                   placeholder="Nome ou SKU..."
                   className="w-full pl-11 pr-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium text-white placeholder:text-slate-500"
@@ -245,7 +276,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
                 />
                 <Search className="w-4 h-4 text-slate-400 absolute left-4 top-3" />
               </div>
-              
+
               {deferredSearchProduto.length > 1 && (
                 <div className="mt-2 border border-white/10 rounded-2xl max-h-48 overflow-y-auto bg-slate-900/95 backdrop-blur-xl shadow-2xl absolute z-20 w-full overflow-hidden custom-scrollbar">
                   {produtos
@@ -255,7 +286,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
                     <div key={p.id} className="p-3 hover:bg-white/5 border-b border-white/5 flex justify-between items-center text-sm cursor-pointer transition-colors" onClick={() => addItem(p.id)}>
                       <div>
                         <p className="font-medium text-slate-200">{p.nome}</p>
-                        <p className="text-xs text-slate-500">SKU: {p.codigo || 'N/A'} <span className="mx-1">•</span> Disp: {p.estoque - p.estoque_reservado}</p>
+                        <p className="text-xs text-slate-500">SKU: {p.codigo || 'N/A'} <span className="mx-1">•</span> Disp: {(p.estoque ?? 0) - (p.estoque_reservado ?? 0)}</p>
                       </div>
                       <Plus className="w-4 h-4 text-blue-400" />
                     </div>
@@ -266,7 +297,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
 
             <div>
               <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Forma de Pagamento</label>
-              <select 
+              <select
                 className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium text-white bg-transparent [&>option]:bg-slate-900"
                 value={formaPagamento}
                 onChange={e => setFormaPagamento(e.target.value)}
@@ -281,7 +312,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Desconto (R$)</label>
-                <input 
+                <input
                   type="number"
                   placeholder="0.00"
                   className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium text-white placeholder:text-slate-500"
@@ -291,7 +322,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Frete (R$)</label>
-                <input 
+                <input
                   type="number"
                   placeholder="0.00"
                   className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium text-white placeholder:text-slate-500"
@@ -304,7 +335,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
             <div className="grid grid-cols-1 gap-4">
               <div>
                 <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Observações</label>
-                <textarea 
+                <textarea
                   rows={2}
                   placeholder="Observações adicionais do pedido..."
                   className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none resize-none font-medium text-white placeholder:text-slate-500"
@@ -324,7 +355,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
 
           <div className="border border-white/10 rounded-3xl p-6 bg-white/[0.02] flex flex-col h-full min-h-[400px]">
             <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider mb-4 border-b border-white/10 pb-3">Itens do Pedido</h3>
-            
+
             <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar pr-2">
               {itens.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-center space-y-3 opacity-50">
@@ -340,14 +371,14 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
                       <p className="text-sm font-bold text-slate-200 truncate">{item.nome}</p>
                       <p className="text-xs text-slate-500 font-mono mt-0.5">R$ {item.valor_unitario.toFixed(2)}</p>
                     </div>
-                    
+
                     <div className="flex items-center gap-3">
                       <div className="flex items-center glass-card rounded-xl border border-white/10 overflow-hidden">
                         <button onClick={() => updateItemQty(item.produto_id, -1)} className="px-3 py-1.5 text-slate-400 hover:text-white hover:bg-white/5 transition">-</button>
                         <span className="text-sm font-bold px-3 min-w-[2.5rem] text-center text-white border-x border-white/5">{item.quantidade}</span>
                         <button onClick={() => updateItemQty(item.produto_id, 1)} className="px-3 py-1.5 text-slate-400 hover:text-white hover:bg-white/5 transition">+</button>
                       </div>
-                      
+
                       <button onClick={() => removeItem(item.produto_id)} className="text-rose-400 hover:text-rose-300 hover:bg-rose-500/20 p-2.5 rounded-xl transition">
                         <Trash2 className="w-4 h-4" />
                       </button>

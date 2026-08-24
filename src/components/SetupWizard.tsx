@@ -1,14 +1,14 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { 
-  Key, 
-  CheckCircle2, 
-  AlertTriangle, 
-  ExternalLink, 
-  ShieldCheck, 
-  Copy, 
-  Check, 
+import { useState, useEffect } from "react";
+import {
+  Key,
+  CheckCircle2,
+  AlertTriangle,
+  ExternalLink,
+  ShieldCheck,
+  Copy,
+  Check,
   HelpCircle,
   MessageCircle,
   Database,
@@ -37,17 +37,9 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
   // Formulário do Bling
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
-  const [manualCodeOrUrl, setManualCodeOrUrl] = useState('');
   const [isBlingConnected, setIsBlingConnected] = useState(false);
   const [copiedCallback, setCopiedCallback] = useState(false);
   const [hasCredentials, setHasCredentials] = useState(false);
-
-  // Status de Configuração
-  useEffect(() => {
-    if (isOpen) {
-      checkCurrentConfig();
-    }
-  }, [isOpen]);
 
   const getAuthToken = async () => {
     try {
@@ -58,31 +50,33 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
     }
   };
 
-  const checkCurrentConfig = async () => {
-    try {
-      const token = await getAuthToken();
-      const res = await fetch('/api/config', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const text = await res.text();
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        console.error('API /api/config não retornou JSON:', text);
-        return;
-      }
-      if (data.success && data.config) {
-        if (data.config.bling.clientId) {
-          setClientId(data.config.bling.clientId);
-          setHasCredentials(true);
+  // Status de Configuração
+  useEffect(() => {
+    let mounted = true;
+    if (isOpen) {
+      void (async () => {
+        try {
+          const token = await getAuthToken();
+          const res = await fetch('/api/config', {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          const data = (await res.json()) as { success?: boolean; config?: { bling?: { clientId?: string; isConnected?: boolean } } };
+          if (mounted && data.success && data.config?.bling) {
+            if (data.config.bling.clientId) {
+              setClientId(data.config.bling.clientId);
+              setHasCredentials(true);
+            }
+            setIsBlingConnected(Boolean(data.config.bling.isConnected));
+          }
+        } catch (err) {
+          console.error('Erro ao verificar status de configuração:', err);
         }
-        setIsBlingConnected(data.config.bling.isConnected);
-      }
-    } catch (err) {
-      console.error('Erro ao verificar status de configuração:', err);
+      })();
     }
-  };
+    return () => {
+      mounted = false;
+    };
+  }, [isOpen]);
 
   const handleSaveBlingCredentials = async () => {
     setLoading(true);
@@ -91,20 +85,25 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
       const token = await getAuthToken();
       const res = await fetch('/api/config', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ clientId, clientSecret }),
+        body: JSON.stringify({
+          bling: {
+            clientId: clientId.trim(),
+            clientSecret: clientSecret.trim()
+          }
+        })
       });
-      
+
       const text = await res.text();
       let data;
       try {
         data = JSON.parse(text);
       } catch {
-        console.error('API /api/config não retornou JSON:', text);
-        setFeedback({ type: 'error', message: `Erro no servidor (status ${res.status}). Verifique o console.` });
+        console.error('API /api/config POST não retornou JSON:', text);
+        setFeedback({ type: 'error', message: `Erro no servidor (${res.status}). Resposta não é JSON válido.` });
         return false;
       }
 
@@ -116,8 +115,9 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
         setFeedback({ type: 'error', message: data.error || 'Erro ao salvar credenciais.' });
         return false;
       }
-    } catch (err: any) {
-      setFeedback({ type: 'error', message: err.message || 'Erro de comunicação com o servidor.' });
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : 'Erro de comunicação com o servidor.';
+      setFeedback({ type: 'error', message: errMsg });
       return false;
     } finally {
       setLoading(false);
@@ -161,54 +161,6 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
     }
   };
 
-  const handleValidateManualCode = async () => {
-    if (!manualCodeOrUrl.trim()) {
-      setFeedback({ type: 'error', message: 'Por favor, cole a URL completa ou o código retornado pelo Bling.' });
-      return;
-    }
-
-    setLoading(true);
-    setFeedback(null);
-
-    try {
-      // Garante que as credenciais mais recentes foram enviadas antes de validar o código
-      await handleSaveBlingCredentials();
-
-      const token = await getAuthToken();
-      const res = await fetch('/api/bling/callback', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ code: manualCodeOrUrl.trim() }),
-      });
-
-      const text = await res.text();
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch (err) {
-        console.error('API /api/bling/callback não retornou JSON:', text);
-        setFeedback({ type: 'error', message: `Erro no servidor (status ${res.status}). Verifique o console.` });
-        return;
-      }
-
-      if (data.success) {
-        setFeedback({ type: 'success', message: '✅ Bling Conectado! Tokens de produção gerados e salvos com sucesso!' });
-        setIsBlingConnected(true);
-        setManualCodeOrUrl('');
-        onConfigSaved();
-      } else {
-        setFeedback({ type: 'error', message: `Falha na conexão: ${data.error}` });
-      }
-    } catch (err: any) {
-      setFeedback({ type: 'error', message: err.message || 'Erro ao validar código do Bling.' });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const copyCallbackUrl = () => {
     const callbackUrl = `${window.location.origin}/api/bling/callback`;
     navigator.clipboard.writeText(callbackUrl);
@@ -222,7 +174,7 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 overflow-hidden">
       <div className="bg-[#0e1322] border border-slate-800 rounded-3xl max-w-3xl w-full p-6 md:p-8 shadow-2xl relative text-white animate-fadeIn max-h-[90vh] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
         {/* Fechar Modal */}
-        <button 
+        <button
           onClick={onClose}
           className="absolute top-6 right-6 p-2 rounded-xl bg-slate-900/60 hover:bg-slate-800 text-slate-400 hover:text-white transition"
         >
@@ -249,8 +201,8 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
           <button
             onClick={() => setActiveStep('bling')}
             className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer ${
-              activeStep === 'bling' 
-                ? 'bg-purple-600/30 text-purple-300 border border-purple-500/50' 
+              activeStep === 'bling'
+                ? 'bg-purple-600/30 text-purple-300 border border-purple-500/50'
                 : 'text-slate-400 hover:text-white hover:bg-slate-900/40'
             }`}
           >
@@ -264,8 +216,8 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
           <button
             onClick={() => setActiveStep('chatwoot')}
             className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer ${
-              activeStep === 'chatwoot' 
-                ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/50' 
+              activeStep === 'chatwoot'
+                ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/50'
                 : 'text-slate-400 hover:text-white hover:bg-slate-900/40'
             }`}
           >
@@ -276,8 +228,8 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
           <button
             onClick={() => setActiveStep('supabase')}
             className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer ${
-              activeStep === 'supabase' 
-                ? 'bg-cyan-600/30 text-cyan-300 border border-cyan-500/50' 
+              activeStep === 'supabase'
+                ? 'bg-cyan-600/30 text-cyan-300 border border-cyan-500/50'
                 : 'text-slate-400 hover:text-white hover:bg-slate-900/40'
             }`}
           >
@@ -289,8 +241,8 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
         {/* Feedback Alert */}
         {feedback && (
           <div className={`p-4 mb-6 rounded-2xl border text-xs font-medium flex items-center gap-3 ${
-            feedback.type === 'success' 
-              ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300' 
+            feedback.type === 'success'
+              ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
               : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
           }`}>
             {feedback.type === 'success' ? <CheckCircle2 className="h-5 w-5 shrink-0" /> : <AlertTriangle className="h-5 w-5 shrink-0" />}
@@ -303,8 +255,8 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
           <div className="space-y-6">
             {/* Status Atual */}
             <div className={`p-4 rounded-2xl border flex items-center justify-between ${
-              isBlingConnected 
-                ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-300' 
+              isBlingConnected
+                ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-300'
                 : 'bg-amber-950/20 border-amber-500/30 text-amber-300'
             }`}>
               <div className="flex items-center gap-3">
@@ -328,7 +280,7 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
                 <span className="bg-purple-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px]">1</span>
                 Credenciais da API (Bling)
               </h4>
-              
+
               {!hasCredentials ? (
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -369,7 +321,7 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
                     <p className="text-xs text-slate-300">As chaves do Bling já estão cadastradas.</p>
                     <p className="text-[10px] text-slate-500">Client ID salvo: {clientId.substring(0, 8)}...</p>
                   </div>
-                  <button 
+                  <button
                     onClick={() => setHasCredentials(false)}
                     className="text-[11px] text-purple-400 hover:text-purple-300 underline"
                   >
@@ -386,7 +338,7 @@ export function SetupWizard({ isOpen, onClose, onConfigSaved }: SetupWizardProps
                   <span className="bg-purple-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px]">2</span>
                   Autorizar Conexão
                 </h4>
-                
+
                 <div className="flex items-center justify-between p-4 rounded-2xl bg-purple-950/20 border border-purple-500/30">
                   <div>
                     <h4 className="text-xs font-bold text-white">Login Direto no Bling (OAuth)</h4>

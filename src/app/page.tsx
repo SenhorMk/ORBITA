@@ -1,50 +1,35 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { 
-  Rocket, 
-  RotateCw, 
-  DollarSign, 
-  TrendingUp, 
-  ShoppingBag, 
-  FileText, 
-  CheckCircle, 
-  AlertTriangle, 
-  MessageSquare, 
+import {
+  DollarSign,
+  TrendingUp,
+  ShoppingBag,
+  FileText,
+  CheckCircle,
+  AlertTriangle,
+  MessageSquare,
   MessageCircle,
   Send,
-  Sparkles, 
-  ArrowRight, 
-  Info,
+  Sparkles,
+  ArrowRight,
   Lock,
   Mail,
   User,
-  Shield,
   Key,
   LogOut,
   ChevronRight,
   Search,
-  Bell,
   Box,
   Percent,
   RefreshCw,
-  Database,
-  Filter,
-  Check,
   X,
-  Calendar,
-  ExternalLink,
-  Layers,
-  Zap,
   Activity,
-  PackageCheck,
   Package,
-  Clock,
-  SlidersHorizontal,
   Image as ImageIcon,
-  Plus
-} from 'lucide-react';
-import type { Produto, Cliente, Categoria } from '@/types';
+  Plus,
+} from "lucide-react";
+import type { Produto, Cliente, Categoria, ChatwootConversation, ChatwootMessage, ItemPedido } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
 import { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { SetupWizard } from '@/components/SetupWizard';
@@ -53,8 +38,8 @@ import { GradientMenu } from '@/components/GradientMenu';
 import { TransactionList } from '@/components/TransactionList';
 import { HealthMonitor } from '@/components/HealthMonitor';
 import { BudgetCard } from '@/components/ui/analytics-bento';
-import { List2, ListItem } from '@/components/ui/list-2';
-import TableWithDialog, { UserItem } from '@/components/ui/table-with-dialog';
+import { List2 } from "@/components/ui/list-2";
+import TableWithDialog from "@/components/ui/table-with-dialog";
 import { ClienteDetailModal } from '@/components/ClienteDetailModal';
 import { ProductDetailModal } from '@/components/ProductDetailModal';
 import { ClienteEditModal } from '@/components/ClienteEditModal';
@@ -115,7 +100,19 @@ function OrbitaLogo({ className = "h-6 w-6" }: { className?: string }) {
 
 export default function Home() {
   // Controle de Autenticação
-  const [session, setSession] = useState<UserSession | null>(null);
+  const [session, setSession] = useState<UserSession | null>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('haux_session');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch {
+          localStorage.removeItem('haux_session');
+        }
+      }
+    }
+    return null;
+  });
   const isOwner = session?.role === 'dono';
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -140,7 +137,7 @@ export default function Home() {
   // Estados para filtros e ordenação na aba Vendas
   const [filterDays, setFilterDays] = useState<string>('all');
   const [sortBy, setSortBy] = useState('recent');
-  
+
   // Estados dos Modais Interativos do Dashboard
   const [faturamentoPeriod, setFaturamentoPeriod] = useState<'7' | '30' | '180' | '365' | 'all'>('30');
   const [novosPedidosTab, setNovosPedidosTab] = useState<'Novo' | 'Aberto' | 'Em Processamento' | 'Despachado' | 'Enviado'>('Novo');
@@ -160,19 +157,19 @@ export default function Home() {
       atendidos: number;
     }
   } | null>(null);
-  
+
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [nfeLoadingId, setNfeLoadingId] = useState<string | null>(null);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
   const [selectedPedido, setSelectedPedido] = useState<PedidoEnriquecido | null>(null);
-  const [selectedPedidoItems, setSelectedPedidoItems] = useState<any[]>([]);
+  const [selectedPedidoItems, setSelectedPedidoItems] = useState<Array<ItemPedido & { produto?: Produto }>>([]);
   const [isItemsLoading, setIsItemsLoading] = useState(false);
 
   // Estados Locais para Modais de Pedido Manual e Cadastro de Contato
   const [isManualOrderOpen, setIsManualOrderOpen] = useState(false);
   const [isClienteEditOpen, setIsClienteEditOpen] = useState(false);
-  const [selectedClienteToEdit, setSelectedClienteToEdit] = useState<any | null>(null);
+  const [selectedClienteToEdit, setSelectedClienteToEdit] = useState<Cliente | null>(null);
 
   // Estados Locais para Filtros da aba Inventário
 
@@ -184,24 +181,24 @@ export default function Home() {
 
   // Relógio Dinâmico de Sincronização Real do Supabase Cache
   const [lastSyncDate, setLastSyncDate] = useState<Date | null>(null);
-  const [syncAgoText, setSyncAgoText] = useState('Não sincronizado');
+  const [_syncAgoText, setSyncAgoText] = useState('Não sincronizado');
 
   // Estados do Chatwoot Recreated UI
-  const [conversas, setConversas] = useState<any[]>([]);
-  const [selectedConversa, setSelectedConversa] = useState<any | null>(null);
-  const [mensagens, setMensagens] = useState<any[]>([]);
+  const [conversas, setConversas] = useState<ChatwootConversation[]>([]);
+  const [selectedConversa, setSelectedConversa] = useState<ChatwootConversation | null>(null);
+  const [mensagens, setMensagens] = useState<ChatwootMessage[]>([]);
   const [newMessageContent, setNewMessageContent] = useState('');
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [conversaFilter, setConversaFilter] = useState<'all' | 'open' | 'resolved'>('open');
   const [conversaSearch, setConversaSearch] = useState('');
   const [isSyncingChatwoot, setIsSyncingChatwoot] = useState(false);
-  const [chatwootFeedback, setChatwootFeedback] = useState<string | null>(null);
+  const [_chatwootFeedback, setChatwootFeedback] = useState<string | null>(null);
   const [isChangingStatus, setIsChangingStatus] = useState(false);
 
   // Helper para fetch autenticado com Supabase JWT
   const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
     let token = '';
-    
+
     try {
       const { data } = await supabase.auth.getSession();
       token = data.session?.access_token || '';
@@ -209,16 +206,13 @@ export default function Home() {
       console.error('Erro ao buscar token do supabase no fetchWithAuth');
     }
 
-    if (!token) {
-      // Se não há token, encerra a sessão e manda para o login
-      window.location.href = '/login';
-      return Promise.reject(new Error("Usuário não autenticado."));
-    }
-
-    const headers = {
-      ...options.headers,
-      'Authorization': `Bearer ${token}`,
+    const headers: Record<string, string> = {
+      ...((options.headers as Record<string, string>) || {}),
     };
+
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
 
     return fetch(url, {
       ...options,
@@ -264,27 +258,36 @@ export default function Home() {
       if (!error && convs) {
         setConversas(convs);
       }
-    } catch (e) {
+    } catch {
       // Silencioso para evitar overlay de erro de RLS
     }
   };
 
-  // Carregar mensagens de uma conversa
-  const loadMessages = async (conversationId: number) => {
-    try {
-      const { data: msgs, error } = await supabase
-        .from('chatwoot_messages')
-        .select('*')
-        .eq('conversation_id', conversationId)
-        .order('created_at', { ascending: true });
-
-      if (!error && msgs) {
-        setMensagens(msgs);
+  // Carregar mensagens de uma conversa selecionada
+  useEffect(() => {
+    let isMounted = true;
+    void (async () => {
+      if (!selectedConversa?.id) {
+        return;
       }
-    } catch (e) {
-      // Silencioso para evitar overlay de erro de RLS
-    }
-  };
+      try {
+        const { data: msgs, error } = await supabase
+          .from('chatwoot_messages')
+          .select('*')
+          .eq('conversation_id', selectedConversa.id)
+          .order('created_at', { ascending: true });
+
+        if (!error && msgs && isMounted) {
+          setMensagens(msgs);
+        }
+      } catch {
+        // Silencioso para evitar overlay de erro de RLS
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedConversa]);
 
   // Sincronizar conversas com o Chatwoot via API
   const handleSyncChatwoot = async () => {
@@ -299,7 +302,7 @@ export default function Home() {
       } else {
         setChatwootFeedback(`Erro: ${result.error}`);
       }
-    } catch (error) {
+    } catch (_error) {
       setChatwootFeedback('Erro ao comunicar com o servidor.');
     } finally {
       setIsSyncingChatwoot(false);
@@ -317,7 +320,7 @@ export default function Home() {
     setIsSendingMessage(true);
 
     const tempId = Math.floor(Math.random() * -1000000);
-    const tempMsg = {
+    const tempMsg: ChatwootMessage = {
       id: tempId,
       conversation_id: selectedConversa.id,
       content: content,
@@ -352,7 +355,7 @@ export default function Home() {
   const handleToggleConversaStatus = async () => {
     if (!selectedConversa || isChangingStatus) return;
     setIsChangingStatus(true);
-    
+
     const newStatus = selectedConversa.status === 'open' ? 'resolved' : 'open';
     try {
       const response = await fetchWithAuth('/api/chatwoot/status', {
@@ -362,7 +365,7 @@ export default function Home() {
       });
       const result = await response.json();
       if (result.success) {
-        setSelectedConversa((prev: any) => prev ? { ...prev, status: newStatus } : null);
+        setSelectedConversa((prev: ChatwootConversation | null) => prev ? { ...prev, status: newStatus } : null);
         setConversas((prev) => prev.map((c) => c.id === selectedConversa.id ? { ...c, status: newStatus } : c));
       } else {
         alert(`Erro ao alterar status: ${result.error}`);
@@ -376,9 +379,10 @@ export default function Home() {
 
   // Carregar itens do pedido selecionado
   useEffect(() => {
+    let isMounted = true;
     const loadPedidoItems = async () => {
       if (!selectedPedido?.id) {
-        setSelectedPedidoItems([]);
+        if (isMounted) setSelectedPedidoItems([]);
         return;
       }
       setIsItemsLoading(true);
@@ -389,29 +393,65 @@ export default function Home() {
           .eq('pedido_id', selectedPedido.id);
 
         if (error) throw error;
-        setSelectedPedidoItems(items || []);
+        if (isMounted) setSelectedPedidoItems(items || []);
       } catch (error) {
         console.error('Erro ao carregar itens do pedido:', error);
       } finally {
-        setIsItemsLoading(false);
+        if (isMounted) setIsItemsLoading(false);
       }
     };
 
-    loadPedidoItems();
+    void loadPedidoItems();
+    return () => {
+      isMounted = false;
+    };
   }, [selectedPedido]);
 
   useEffect(() => {
+    let isMounted = true;
     if (activeTab === 'chats' || activeTab === 'sac') {
-      loadConversations();
+      void (async () => {
+        try {
+          const { data: convs, error } = await supabase
+            .from('chatwoot_conversations')
+            .select('*')
+            .order('updated_at', { ascending: false });
+
+          if (!error && convs && isMounted) {
+            setConversas(convs);
+          }
+        } catch {
+          // Silencioso para evitar overlay
+        }
+      })();
     }
+    return () => {
+      isMounted = false;
+    };
   }, [activeTab]);
 
   useEffect(() => {
+    let isMounted = true;
     if (selectedConversa) {
-      loadMessages(selectedConversa.id);
-    } else {
-      setMensagens([]);
+      void (async () => {
+        try {
+          const { data: msgs, error } = await supabase
+            .from('chatwoot_messages')
+            .select('*')
+            .eq('conversation_id', selectedConversa.id)
+            .order('created_at', { ascending: true });
+
+          if (!error && msgs && isMounted) {
+            setMensagens(msgs);
+          }
+        } catch {
+          // Silencioso para evitar overlay
+        }
+      })();
     }
+    return () => {
+      isMounted = false;
+    };
   }, [selectedConversa]);
 
   // Realtime mensagens
@@ -429,7 +469,7 @@ export default function Home() {
           filter: `conversation_id=eq.${selectedConversa.id}`,
         },
         (payload) => {
-          const newMsg = payload.new as any;
+          const newMsg = payload.new as ChatwootMessage;
           setMensagens((prev) => {
             if (prev.some((m) => m.id === newMsg.id || (m.content === newMsg.content && Math.abs(new Date(m.created_at!).getTime() - new Date(newMsg.created_at!).getTime()) < 5000))) {
               return prev;
@@ -467,66 +507,6 @@ export default function Home() {
     };
   }, []);
 
-  const getBlingIntegrationData = () => {
-    if (!selectedConversa || !data?.pedidos) return { client: null, orders: [], matchedByOrder: false };
-
-    const phone = selectedConversa.contact?.phone_number;
-    const email = selectedConversa.contact?.email;
-    const contactName = selectedConversa.contact?.name || '';
-
-    const cleanPhone = (p: string) => p.replace(/\D/g, '').slice(-8);
-    const targetPhone = phone ? cleanPhone(phone) : '';
-
-    let orderMatch: PedidoEnriquecido | null = null;
-    let matchedByOrder = false;
-
-    for (const msg of mensagens) {
-      if (!msg.content) continue;
-      const text = msg.content.toUpperCase();
-      const match = text.match(/SO-(\d+)/) || text.match(/\b(1\d{3})\b/);
-      if (match) {
-        const orderNum = match[1];
-        const ped = data.pedidos.find(p => p.numero === orderNum);
-        if (ped) {
-          orderMatch = ped;
-          matchedByOrder = true;
-          break;
-        }
-      }
-    }
-
-    let matchedOrders: PedidoEnriquecido[] = [];
-    let matchedClient: any = null;
-
-    if (orderMatch) {
-      matchedClient = orderMatch.cliente;
-      if (matchedClient?.id) {
-        matchedOrders = data.pedidos.filter(p => p.cliente_id === matchedClient.id);
-      } else {
-        matchedOrders = [orderMatch];
-      }
-    } else {
-      const pedWithClient = data.pedidos.find(p => {
-        if (!p.cliente) return false;
-        if (email && p.cliente.email && p.cliente.email.toLowerCase() === email.toLowerCase()) return true;
-        if (targetPhone && p.cliente.telefone && cleanPhone(p.cliente.telefone) === targetPhone) return true;
-        if (contactName && p.cliente.nome && p.cliente.nome.toLowerCase() === contactName.toLowerCase()) return true;
-        return false;
-      });
-
-      if (pedWithClient) {
-        matchedClient = pedWithClient.cliente;
-        matchedOrders = data.pedidos.filter(p => p.cliente_id === matchedClient.id);
-      }
-    }
-
-    matchedOrders.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
-
-    return { client: matchedClient, orders: matchedOrders, matchedByOrder };
-  };
-
-  const blingData = getBlingIntegrationData();
-
   useEffect(() => {
     // Verifica a sessão ativa real diretamente com o Supabase (respeitando a expiração JWT)
     supabase.auth.getSession().then(({ data: { session: supabaseSession }, error }) => {
@@ -534,8 +514,8 @@ export default function Home() {
         setSession(null);
         localStorage.removeItem('haux_session');
       } else {
-        const isOwner = supabaseSession.user.app_metadata?.role === 'dono' || 
-                        supabaseSession.user.email?.includes('dono') || 
+        const isOwner = supabaseSession.user.app_metadata?.role === 'dono' ||
+                        supabaseSession.user.email?.includes('dono') ||
                         supabaseSession.user.email === 'admin@haux.com.br';
         const userDetails: UserSession = {
           email: supabaseSession.user.email || '',
@@ -549,8 +529,8 @@ export default function Home() {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, supabaseSession) => {
       if (supabaseSession?.user) {
-        const isOwner = supabaseSession.user.app_metadata?.role === 'dono' || 
-                        supabaseSession.user.email?.includes('dono') || 
+        const isOwner = supabaseSession.user.app_metadata?.role === 'dono' ||
+                        supabaseSession.user.email?.includes('dono') ||
                         supabaseSession.user.email === 'admin@haux.com.br';
         const userDetails: UserSession = {
           email: supabaseSession.user.email || '',
@@ -618,17 +598,30 @@ export default function Home() {
   };
 
   useEffect(() => {
-    loadDashboardData();
+    let isMounted = true;
+    void (async () => {
+      if (session) {
+        await loadDashboardData();
+      }
+    })();
     const interval = setInterval(() => {
-      loadDashboardData();
+      if (isMounted && session) {
+        void loadDashboardData();
+      }
     }, 30000);
-    return () => clearInterval(interval);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [session]);
 
   useEffect(() => {
     if (session?.role === 'dono' && !hasStartedUp) {
-      setShowStartupLoader(true);
-      setHasStartedUp(true);
+      const timer = setTimeout(() => {
+        setShowStartupLoader(true);
+        setHasStartedUp(true);
+      }, 0);
+      return () => clearTimeout(timer);
     }
   }, [session, hasStartedUp]);
 
@@ -640,7 +633,7 @@ export default function Home() {
     const emailTrim = loginEmail.trim();
     const passwordTrim = loginPassword.trim();
 
-    const isDevelopment = process.env.NODE_ENV !== 'production' || 
+    const isDevelopment = process.env.NODE_ENV !== 'production' ||
                           process.env.NEXT_PUBLIC_SUPABASE_URL === 'https://seu-projeto.supabase.co' ||
                           process.env.NEXT_PUBLIC_SUPABASE_URL?.includes('placeholder');
 
@@ -677,8 +670,8 @@ export default function Home() {
       if (error) throw error;
 
       if (authData.user) {
-        const isOwner = authData.user.app_metadata?.role === 'dono' || 
-                        authData.user.email?.includes('dono') || 
+        const isOwner = authData.user.app_metadata?.role === 'dono' ||
+                        authData.user.email?.includes('dono') ||
                         authData.user.email === 'admin@haux.com.br';
         const userDetails: UserSession = {
           email: authData.user.email || '',
@@ -688,8 +681,9 @@ export default function Home() {
         setSession(userDetails);
         localStorage.setItem('haux_session', JSON.stringify(userDetails));
       }
-    } catch (error: any) {
-      setAuthError(error.message || 'Falha na autenticação. Verifique os dados.');
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : 'Falha na autenticação. Verifique os dados.';
+      setAuthError(errMsg);
     } finally {
       setAuthLoading(false);
     }
@@ -718,7 +712,7 @@ export default function Home() {
       } else {
         setSyncFeedback(`Erro: ${result.error}`);
       }
-    } catch (error) {
+    } catch {
       setSyncFeedback('Erro ao comunicar com o servidor.');
     } finally {
       setIsSyncing(false);
@@ -747,21 +741,23 @@ export default function Home() {
       } else {
         alert(`Erro ao emitir NF-e: ${result.error}`);
       }
-    } catch (error) {
+    } catch {
       alert('Erro de conexão ao emitir NF-e.');
     } finally {
       setNfeLoadingId(null);
     }
   };
 
+  const [currentDateBaseline] = useState(() => Date.now());
+
   const getFilteredAndSortedPedidos = () => {
     if (!data?.pedidos) return [];
-    
+
     let filtered = [...data.pedidos];
 
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(p => 
+      filtered = filtered.filter(p =>
         p.numero.toLowerCase().includes(query) ||
         (p.cliente?.nome && p.cliente.nome.toLowerCase().includes(query)) ||
         (p.status && p.status.toLowerCase().includes(query))
@@ -769,8 +765,8 @@ export default function Home() {
     }
 
     if (filterDays !== 'all') {
-      const days = parseInt(filterDays);
-      const limitTime = Date.now() - days * 24 * 60 * 60 * 1000;
+      const days = parseInt(filterDays, 10);
+      const limitTime = currentDateBaseline - days * 24 * 60 * 60 * 1000;
       filtered = filtered.filter(p => new Date(p.data).getTime() >= limitTime);
     }
 
@@ -809,8 +805,8 @@ export default function Home() {
 
   const totalVendidoMesAtual = data?.estatisticas.faturamento30Dias || 0;
   const faturamentoMesAnterior = 12500;
-  const variacaoFaturamento = totalVendidoMesAtual > 0 
-    ? ((totalVendidoMesAtual - faturamentoMesAnterior) / faturamentoMesAnterior) * 100 
+  const variacaoFaturamento = totalVendidoMesAtual > 0
+    ? ((totalVendidoMesAtual - faturamentoMesAnterior) / faturamentoMesAnterior) * 100
     : 0;
   const lucroEstimado = totalVendidoMesAtual * 0.42;
 
@@ -818,13 +814,13 @@ export default function Home() {
     if (!data?.pedidos) return [];
     let filtered = data.pedidos;
     const now = new Date();
-    
+
     if (faturamentoPeriod !== 'all') {
       const days = parseInt(faturamentoPeriod);
       const cutoff = subDays(now, days);
       filtered = filtered.filter(p => isAfter(parseISO(p.data), cutoff));
     }
-    
+
     const grouped = filtered.reduce((acc, pedido) => {
       const dateKey = format(parseISO(pedido.data), 'yyyy-MM-dd');
       if (!acc[dateKey]) acc[dateKey] = 0;
@@ -857,7 +853,7 @@ export default function Home() {
   const novosPedidosFluxo = data?.pedidos?.filter(p => p.status === novosPedidosTab) || [];
   const filteredPedidosList = getFilteredAndSortedPedidos();
 
-  const handleOpenChatwootForPhone = (phone?: string, name?: string) => {
+  const handleOpenChatwootForPhone = (phone?: string) => {
     setActiveTab('chats');
     if (!phone) return;
     const cleanP = phone.replace(/\D/g, '').slice(-8);
@@ -962,8 +958,8 @@ export default function Home() {
 
   return (
     <div className="min-h-screen flex font-sans select-none bg-[#0d0818] text-slate-100">
-      
-      <StartupLoader 
+
+      <StartupLoader
         isVisible={showStartupLoader}
         onComplete={() => {
           setShowStartupLoader(false);
@@ -994,7 +990,7 @@ export default function Home() {
         {/* SPATIAL TOPBAR */}
         <header className="sticky top-0 z-30 glass-panel border-b border-white/10 px-6 py-3.5 backdrop-blur-xl">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-            
+
             {/* Health Monitor & Search */}
             <div className="flex items-center gap-4">
               <HealthMonitor
@@ -1018,7 +1014,6 @@ export default function Home() {
 
             {/* Sync Status Badge & Actions */}
             <div className="flex items-center gap-3">
-
 
               {isOwner && (
                 <div className="flex items-center gap-2">
@@ -1167,10 +1162,10 @@ export default function Home() {
         {/* TAB 1: DASHBOARD */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
-            
+
             {/* SPATIAL METRIC CARDS 3D GRID */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-              
+
               {/* Card 1: Faturamento Mês Atual */}
               <Dialog>
                 <DialogTrigger asChild>
@@ -1205,7 +1200,7 @@ export default function Home() {
                         key={period}
                         variant={faturamentoPeriod === period ? 'default' : 'outline'}
                         size="sm"
-                        onClick={() => setFaturamentoPeriod(period as any)}
+                        onClick={() => setFaturamentoPeriod(period as '7' | '30' | '180' | '365' | 'all')}
                         className="text-xs rounded-xl"
                       >
                         {period === 'all' ? 'Total' : `${period} Dias`}
@@ -1214,7 +1209,6 @@ export default function Home() {
                   </div>
                   <div className="h-[300px] w-full mt-4">
                     <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 600, height: 300 }}>
-
 
                       <AreaChart data={getFaturamentoChartData()}>
                         <defs>
@@ -1226,10 +1220,10 @@ export default function Home() {
                         <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
                         <XAxis dataKey="date" stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
                         <YAxis stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} tickFormatter={value => `R$${(value as number).toLocaleString('pt-BR')}`} />
-                        <Tooltip 
+                        <Tooltip
                           contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' }}
                           itemStyle={{ color: '#F0E675', fontWeight: 'bold' }}
-                          formatter={(val: any) => [`R$ ${Number(val).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Faturamento']}
+                          formatter={(val: unknown) => [`R$ ${Number(val).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Faturamento']}
                         />
                         <Area type="monotone" dataKey="faturamento" stroke="#F0E675" strokeWidth={3} fillOpacity={1} fill="url(#colorFaturamento)" />
                       </AreaChart>
@@ -1317,9 +1311,9 @@ export default function Home() {
                             <span className="text-sm font-medium text-white">{pedido.cliente?.nome || 'Cliente não identificado'}</span>
                             <span className="text-xs text-slate-400">Pedido #{pedido.numero} • R$ {Number(pedido.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
                           </div>
-                          <Button 
-                            size="sm" 
-                            variant="outline" 
+                          <Button
+                            size="sm"
+                            variant="outline"
                             className="ml-auto text-[#BF406A] border-[#BF406A]/30 hover:bg-[#BF406A]/10"
                             onClick={() => handleEmitNfe(pedido.id || '', pedido.bling_id || '')}
                           >
@@ -1368,7 +1362,7 @@ export default function Home() {
                         key={status}
                         variant={novosPedidosTab === status ? 'default' : 'outline'}
                         size="sm"
-                        onClick={() => setNovosPedidosTab(status as any)}
+                        onClick={() => setNovosPedidosTab(status as "Novo" | "Aberto" | "Em Processamento" | "Despachado" | "Enviado")}
                         className="text-xs rounded-xl"
                       >
                         {status}
@@ -1392,7 +1386,7 @@ export default function Home() {
                       ))}
                       {novosPedidosFluxo.length === 0 && (
                         <div className="py-8 text-center text-slate-400 text-sm">
-                          Nenhum pedido com status "{novosPedidosTab}".
+                          Nenhum pedido com status &quot;{novosPedidosTab}&quot;.
                         </div>
                       )}
                     </div>
@@ -1442,10 +1436,10 @@ export default function Home() {
         {/* TAB 2: VENDAS & PEDIDOS */}
         {activeTab === 'sales' && (
           <div className="space-y-6">
-            
+
             {/* Filter Controls Bar with GradientMenu */}
             <div className="glass-panel p-4 rounded-3xl border border-white/10 flex flex-col lg:flex-row items-center justify-between gap-4 shadow-xl">
-              
+
               {/* Gradient Menu Filter for Period */}
               <GradientMenu
                 activeId={filterDays}
@@ -1522,11 +1516,11 @@ export default function Home() {
         {/* TAB 3: ESTOQUE & PRODUTOS */}
         {activeTab === 'inventory' && (
           <div className="space-y-6">
-            
+
             {/* Filtros Avançados */}
             <div className="glass-panel p-5 rounded-3xl border border-white/10 space-y-4 shadow-xl">
               <h3 className="text-sm font-bold text-white uppercase tracking-wider">Filtros de Catálogo & Inventário</h3>
-              
+
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {/* Busca */}
                 <div className="relative w-full">
@@ -1549,7 +1543,7 @@ export default function Home() {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent className="w-56">
-                    <DropdownMenuRadioGroup value={inventoryStatus} onValueChange={(val) => setInventoryStatus(val as any)}>
+                    <DropdownMenuRadioGroup value={inventoryStatus} onValueChange={(val) => setInventoryStatus(val as 'all' | 'active' | 'inactive')}>
                       <DropdownMenuRadioItem value="all">Todos os Produtos</DropdownMenuRadioItem>
                       <DropdownMenuRadioItem value="active">Ativos (Em Estoque)</DropdownMenuRadioItem>
                       <DropdownMenuRadioItem value="inactive">Inativos (Sem Estoque)</DropdownMenuRadioItem>
@@ -1627,7 +1621,7 @@ export default function Home() {
                 <div className="p-8 text-center glass-panel rounded-2xl border border-white/10 space-y-3">
                   <Package className="h-8 w-8 text-purple-400 mx-auto opacity-60" />
                   <p className="text-sm font-semibold text-slate-300">Nenhum produto sincronizado do Bling ainda.</p>
-                  <p className="text-xs text-slate-400">Clique no botão <span className="text-purple-300 font-bold">"Sincronizar Bling"</span> no topo do painel para importar o seu catálogo real.</p>
+                  <p className="text-xs text-slate-400">Clique no botão <span className="text-purple-300 font-bold">&quot;Sincronizar Bling&quot;</span> no topo do painel para importar o seu catálogo real.</p>
                 </div>
               ) : (
                 <>
@@ -1636,20 +1630,20 @@ export default function Home() {
                     const filteredProducts = (data.produtos || []).filter(p => {
                       // Filtro de Busca
                       const q = inventorySearch.toLowerCase();
-                      const matchSearch = q 
+                      const matchSearch = q
                         ? p.nome.toLowerCase().includes(q) || (p.codigo && p.codigo.toLowerCase().includes(q))
                         : true;
-                      
+
                       // Filtro de Status
-                      const matchStatus = inventoryStatus === 'all' 
-                        ? true 
-                        : inventoryStatus === 'active' 
-                          ? p.estoque > 0 
+                      const matchStatus = inventoryStatus === 'all'
+                        ? true
+                        : inventoryStatus === 'active'
+                          ? p.estoque > 0
                           : p.estoque <= 0;
 
                       // Filtro de Categoria
-                      const matchCategory = inventoryCategory === 'all' 
-                        ? true 
+                      const matchCategory = inventoryCategory === 'all'
+                        ? true
                         : p.categoria_id === inventoryCategory;
 
                       // Filtro de Preço
@@ -1731,7 +1725,7 @@ export default function Home() {
                                 </h4>
                               </div>
                               <p className="text-[11px] text-slate-500">
-                                Estes produtos existem apenas no cache local. Clique em "Sincronizar Bling" para enviá-los ao Bling ERP.
+                                Estes produtos existem apenas no cache local. Clique em &quot;Sincronizar Bling&quot; para enviá-los ao Bling ERP.
                               </p>
                             </div>
                             <div className="glass-panel rounded-2xl border border-amber-500/20 overflow-hidden">
@@ -1740,7 +1734,7 @@ export default function Home() {
                                 items={unsyncedProducts.map((produto) => {
                                   const imageUrl = getProductImage(produto);
                                   const validation = validateProdutoForBling(produto);
-                                  
+
                                   return {
                                     icon: (
                                       <div className="relative h-12 w-12 shrink-0 flex items-center justify-center rounded-xl overflow-hidden border border-amber-500/30 bg-black/40 shadow-inner">
@@ -1838,26 +1832,25 @@ export default function Home() {
                   originalCliente: cliente // to pass the full client object
                 }))
               }
-              onViewDetails={(user: any) => {
-                console.log("page.tsx: onViewDetails triggered with user:", user);
+              onViewDetails={(user: { originalCliente?: Cliente; id: string; name: string; email: string; phone?: string; cpf_cnpj?: string }) => {
                 if (user.originalCliente) {
-                  console.log("page.tsx: Setting selectedClienteModal from originalCliente", user.originalCliente);
                   setSelectedClienteModal(user.originalCliente);
                   setIsClienteModalOpen(true);
                 } else {
                   // Fallback para mock users se aplicável
-                  const fallbackUser = {
+                  const fallbackUser: Cliente = {
                     id: user.id,
                     nome: user.name,
                     email: user.email,
                     telefone: user.phone,
                     cpf_cnpj: user.cpf_cnpj,
+                    bling_id: '',
+                    user_id: '',
+                    created_at: new Date().toISOString()
                   };
-                  console.log("page.tsx: Setting selectedClienteModal from fallback", fallbackUser);
-                  setSelectedClienteModal(fallbackUser as any);
+                  setSelectedClienteModal(fallbackUser);
                   setIsClienteModalOpen(true);
                 }
-                console.log("page.tsx: isClienteModalOpen set to true");
               }}
             />
           </div>
@@ -1866,7 +1859,7 @@ export default function Home() {
         {/* TAB 5: SAC OMNICHANNEL (CHATWOOT RECREATED) */}
         {(activeTab === 'sac' || activeTab === 'chats') && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[720px]">
-            
+
             {/* Conversation List Sidebar */}
             <div className="lg:col-span-4 glass-panel rounded-3xl border border-white/10 flex flex-col overflow-hidden">
               <div className="p-4 border-b border-white/10 space-y-3">
@@ -1943,7 +1936,7 @@ export default function Home() {
                       <div className="flex items-center justify-between">
                         <p className="text-xs font-bold text-white truncate">{conversa.contact?.name || 'Cliente Whatsapp'}</p>
                         <span className="text-[10px] text-slate-400 font-mono">
-                          {new Date(conversa.updated_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          {conversa.updated_at ? new Date(conversa.updated_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''}
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-400 truncate mt-0.5">{conversa.contact?.phone_number || 'Sem número'}</p>
@@ -2004,7 +1997,7 @@ export default function Home() {
                             <p className="font-semibold text-[10px] opacity-70">{isOutgoing ? 'Você' : (msg.sender_name || 'Cliente')}</p>
                             <p className="leading-relaxed">{msg.content}</p>
                             <span className="text-[9px] opacity-60 text-right block font-mono">
-                              {new Date(msg.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                              {msg.created_at ? new Date(msg.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''}
                             </span>
                           </div>
                         </div>
@@ -2054,7 +2047,7 @@ export default function Home() {
       {selectedPedido && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fade-in">
           <div className="w-full max-w-2xl glass-panel p-6 rounded-3xl border border-white/15 space-y-5 shadow-2xl relative max-h-[90vh] overflow-y-auto">
-            
+
             {/* Header */}
             <div className="flex items-center justify-between border-b border-white/10 pb-4">
               <div>
@@ -2100,7 +2093,7 @@ export default function Home() {
                     <tbody className="divide-y divide-white/5">
                       {selectedPedidoItems.map((item, idx) => (
                         <tr key={idx}>
-                          <td className="py-2.5 px-3 font-semibold text-white">{item.produto?.nome || item.descricao || 'Item do Pedido'}</td>
+                          <td className="py-2.5 px-3 font-semibold text-white">{item.produto?.nome || 'Item do Pedido'}</td>
                           <td className="py-2.5 px-3 text-center font-mono text-cyan-300">{item.quantidade}</td>
                           <td className="py-2.5 px-3 text-right text-slate-300">R$ {Number(item.valor_unitario).toFixed(2)}</td>
                           <td className="py-2.5 px-3 text-right font-bold text-emerald-400">R$ {(item.quantidade * item.valor_unitario).toFixed(2)}</td>
@@ -2164,16 +2157,16 @@ export default function Home() {
         isOpen={isClienteModalOpen}
         onClose={() => setIsClienteModalOpen(false)}
         cliente={selectedClienteModal}
-        onOpenChatwoot={(phone, name) => {
+        onOpenChatwoot={() => {
           setActiveTab('sac');
         }}
       />
 
       {/* Modal de Configuração de APIs Reais */}
-      <SetupWizard 
-        isOpen={isWizardOpen} 
-        onClose={() => setIsWizardOpen(false)} 
-        onConfigSaved={loadDashboardData} 
+      <SetupWizard
+        isOpen={isWizardOpen}
+        onClose={() => setIsWizardOpen(false)}
+        onConfigSaved={loadDashboardData}
       />
 
       {/* Modal de Incluir Pedido Manual */}
@@ -2190,8 +2183,6 @@ export default function Home() {
         cliente={selectedClienteToEdit}
         onSave={() => loadDashboardData()}
       />
-
-
 
     </div>
   );

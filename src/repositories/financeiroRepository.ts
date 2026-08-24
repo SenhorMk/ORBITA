@@ -1,29 +1,31 @@
 import { TituloFinanceiro, CategoriaFinanceira } from '../types';
 import { supabaseServer } from '../lib/supabaseServer';
 import type { VerifiedTenant } from '../lib/auth';
+import { resolveTenantOrgId } from '../lib/organizationContext';
 
 export class FinanceiroRepository {
-
   async getCategorias(tenant: VerifiedTenant): Promise<CategoriaFinanceira[]> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
     const { data, error } = await supabaseServer
       .from('categorias_financeiras')
       .select('*')
-      .eq('user_id', tenant.id)
+      .eq('organizacao_id', orgId)
       .order('descricao', { ascending: true });
-      
+
     if (error) {
       console.error('Erro ao buscar categorias financeiras:', error);
       throw new Error(error.message);
     }
-    
+
     return data || [];
   }
 
   async getCategoriaByBlingId(tenant: VerifiedTenant, blingId: number): Promise<CategoriaFinanceira | null> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
     const { data, error } = await supabaseServer
       .from('categorias_financeiras')
       .select('*')
-      .eq('user_id', tenant.id)
+      .eq('organizacao_id', orgId)
       .eq('bling_id', blingId)
       .maybeSingle();
 
@@ -36,11 +38,12 @@ export class FinanceiroRepository {
   }
 
   async getResumo(tenant: VerifiedTenant): Promise<{ receitas: number; despesas: number; saldo: number }> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
     const { data, error } = await supabaseServer
       .from('titulos_financeiros')
       .select('tipo, valor')
-      .eq('user_id', tenant.id)
-      .eq('situacao', 'pago'); // Considerar apenas pagos para saldo líquido real
+      .eq('organizacao_id', orgId)
+      .eq('situacao', 'pago');
 
     if (error) {
       console.error('Erro ao buscar resumo financeiro:', error);
@@ -50,7 +53,7 @@ export class FinanceiroRepository {
     let receitas = 0;
     let despesas = 0;
 
-    data?.forEach(titulo => {
+    data?.forEach((titulo) => {
       if (titulo.tipo === 'receber') receitas += Number(titulo.valor);
       if (titulo.tipo === 'pagar') despesas += Number(titulo.valor);
     });
@@ -58,18 +61,22 @@ export class FinanceiroRepository {
     return {
       receitas,
       despesas,
-      saldo: receitas - despesas
+      saldo: receitas - despesas,
     };
   }
 
-  async getTitulosFiltro(tenant: VerifiedTenant, filtros?: { tipo?: 'receber' | 'pagar', situacao?: string }): Promise<TituloFinanceiro[]> {
+  async getTitulosFiltro(
+    tenant: VerifiedTenant,
+    filtros?: { tipo?: 'receber' | 'pagar'; situacao?: string },
+  ): Promise<TituloFinanceiro[]> {
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
     let query = supabaseServer
       .from('titulos_financeiros')
       .select(`
         *,
         categoria:categoria_id (*)
       `)
-      .eq('user_id', tenant.id)
+      .eq('organizacao_id', orgId)
       .order('data_vencimento', { ascending: false });
 
     if (filtros?.tipo) {
@@ -90,10 +97,15 @@ export class FinanceiroRepository {
   }
 
   async upsertTitulo(tenant: VerifiedTenant, titulo: TituloFinanceiro): Promise<TituloFinanceiro> {
-    const payload = { ...titulo, user_id: tenant.id };
+    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+    const payload = {
+      ...titulo,
+      organizacao_id: orgId,
+      user_id: tenant.id,
+    };
     const { data, error } = await supabaseServer
       .from('titulos_financeiros')
-      .upsert(payload, { onConflict: 'bling_id', ignoreDuplicates: false })
+      .upsert(payload, { onConflict: 'organizacao_id, bling_id', ignoreDuplicates: false })
       .select()
       .single();
 
@@ -104,7 +116,6 @@ export class FinanceiroRepository {
 
     return data;
   }
-
 }
 
 export const financeiroRepository = new FinanceiroRepository();

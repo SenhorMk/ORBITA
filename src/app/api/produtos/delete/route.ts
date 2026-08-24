@@ -34,8 +34,8 @@ export async function POST(request: Request) {
       try {
         await blingClient.deleteProduto(bling_id);
         logEntries.push(`[${new Date().toISOString()}] ✅ Produto deletado no Bling ERP com sucesso!`);
-      } catch (deleteErr: any) {
-        blingError = deleteErr.message || String(deleteErr);
+      } catch (deleteErr: unknown) {
+        blingError = deleteErr instanceof Error ? deleteErr.message : String(deleteErr);
         logEntries.push(`[${new Date().toISOString()}] ⚠️ Falha ao deletar no Bling (pode já ter sido excluído): ${blingError}`);
       }
     } else {
@@ -47,13 +47,14 @@ export async function POST(request: Request) {
     try {
       await produtoRepository.delete(session.tenant, id);
       logEntries.push(`[${new Date().toISOString()}] ✅ Registro excluído do Supabase!`);
-    } catch (dbErr: any) {
-      logEntries.push(`[${new Date().toISOString()}] ❌ ERRO SUPABASE: ${dbErr.message || dbErr}`);
+    } catch (dbErr: unknown) {
+      const dbErrMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);
+      logEntries.push(`[${new Date().toISOString()}] ❌ ERRO SUPABASE: ${dbErrMsg}`);
       return NextResponse.json(
         {
           success: false,
           error: 'Falha ao deletar no banco de dados Supabase.',
-          details: dbErr.message || String(dbErr),
+          details: dbErrMsg,
           logs: logEntries,
         },
         { status: 500 }
@@ -75,13 +76,14 @@ export async function POST(request: Request) {
       message: 'Produto deletado com sucesso.',
       logs: logEntries,
     });
-  } catch (err: any) {
-    logEntries.push(`[${new Date().toISOString()}] 💥 ERRO CRÍTICO NA API DE EXCLUSÃO DE PRODUTOS: ${err.message || err}`);
+  } catch (err: unknown) {
+    const errMessage = err instanceof Error ? err.message : String(err);
+    logEntries.push(`[${new Date().toISOString()}] 💥 ERRO CRÍTICO NA API DE EXCLUSÃO DE PRODUTOS: ${errMessage}`);
     return NextResponse.json(
       {
         success: false,
         error: 'Erro crítico interno ao processar a exclusão do produto.',
-        details: err.message || String(err),
+        details: errMessage,
         logs: logEntries,
       },
       { status: 500 }
