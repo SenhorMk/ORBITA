@@ -1,37 +1,38 @@
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { verifySessionAndRole } from '@/lib/auth';
+import { resolveAuthenticatedIdentity } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabaseServer';
 import {
-  ACTIVE_ORG_COOKIE_NAME,
   createOrgInputSchema,
   createOrganizationAtomic,
   listUserOrganizations,
-  resolveActiveOrganization,
 } from '@/lib/organizationContext';
+import { organizationContextStatus } from '@/lib/organizationAuthorization';
+import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizationContext';
 
 export async function GET(req: Request) {
-  const session = await verifySessionAndRole(req);
-  if (!session) {
-    return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+  const contextResult = await resolveActiveRequestOrganizationContext(req);
+  if (contextResult._tag !== 'OrganizationContextResolved') {
+    const status = organizationContextStatus(contextResult);
+    return NextResponse.json({ error: status === 503 ? 'Serviço de autorização indisponível' : 'Não autorizado' }, { status });
   }
-
-  const cookieStore = await cookies();
-  const preferredOrgId = cookieStore.get(ACTIVE_ORG_COOKIE_NAME)?.value;
-
-  const organizacoes = await listUserOrganizations(supabaseServer, session.actorId);
-  const activeOrg = await resolveActiveOrganization(supabaseServer, session.actorId, preferredOrgId);
+  const organizacoes = await listUserOrganizations(supabaseServer, contextResult.context.actorId);
+  const activeOrg = {
+    organizacao: contextResult.context.organization,
+    papel: contextResult.context.role,
+  };
 
   return NextResponse.json({
     organizacoes,
     activeOrg,
+    selectionVersion: contextResult.context.selectionVersion,
   });
 }
 
 export async function POST(req: Request) {
-  const session = await verifySessionAndRole(req);
-  if (!session) {
-    return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+  const identity = await resolveAuthenticatedIdentity(req);
+  if (identity._tag !== 'IdentityVerified') {
+    const status = identity._tag === 'IdentityProviderUnavailable' ? 503 : 401;
+    return NextResponse.json({ error: status === 503 ? 'Serviço de autenticação indisponível' : 'Não autorizado' }, { status });
   }
 
   try {
@@ -45,16 +46,6 @@ export async function POST(req: Request) {
     }
 
     const newOrg = await createOrganizationAtomic(supabaseServer, validatedInput.data);
-
-    // Set active org cookie for the newly created organization
-    const cookieStore = await cookies();
-    cookieStore.set(ACTIVE_ORG_COOKIE_NAME, newOrg.id, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/',
-      maxAge: 60 * 60 * 24 * 30, // 30 dias
-    });
 
     return NextResponse.json({ organizacao: newOrg }, { status: 201 });
   } catch (error: unknown) {

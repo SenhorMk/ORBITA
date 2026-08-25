@@ -69,8 +69,7 @@ describe('auditService', () => {
     const fromMock = vi.fn().mockReturnValue({ select: selectMock });
     const fakeClient = { from: fromMock } as unknown as SupabaseClient;
 
-    const result = await listAuditEvents(fakeClient, {
-      organizacaoId: 'org-123',
+    const result = await listAuditEvents(fakeClient, scope, {
       limit: 10,
       offset: 0,
     });

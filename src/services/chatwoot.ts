@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { supabaseServer } from '../lib/supabaseServer';
 import { credentialsVault } from '../lib/integrations/credentialsVault';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
 const CHATWOOT_TIMEOUT_MS = 10_000;
 
@@ -46,7 +47,8 @@ export class ChatwootClient {
     this.conexaoId = conexaoId;
   }
 
-  static async forOrganization(organizacaoId: string, conexaoId?: string): Promise<ChatwootClient> {
+  static async forOrganization(scope: VerifiedOrganizationScope, conexaoId?: string): Promise<ChatwootClient> {
+    const organizacaoId = scope.organizationId;
     const key = `${organizacaoId}:${conexaoId || 'primary'}`;
     const cached = orgChatwootCache.get(key);
     if (cached) return cached;

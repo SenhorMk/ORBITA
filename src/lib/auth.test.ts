@@ -27,6 +27,19 @@ function lookupReturning(user: AuthenticatedUser): AuthUserLookup {
 }
 
 describe('resolveActorContext', () => {
+  it('distinguishes identity-provider unavailability from an invalid session', async () => {
+    const result = await resolveActorContext(requestWithToken(), 'app:access', {
+      getUser: async () => { throw new Error('network unavailable'); },
+    });
+    expect(result).toEqual({
+      _tag: 'IdentityProviderUnavailable',
+      cause: 'auth_provider_unreachable',
+    });
+    if (result._tag !== 'ActorContextResolved') {
+      expect(actorContextDenialStatus(result)).toBe(503);
+    }
+  });
+
   it('derives the legacy owner tenant from a verified session', async () => {
     const result = await resolveActorContext(
       requestWithToken(),

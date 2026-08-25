@@ -200,6 +200,11 @@
       "order": 40,
       "path": "../database/37_fechar_rpcs_grants_perigosos.sql",
       "sha256": "7df9ca060a0f588504a75eaa679ada750b7a64e2ab4c492da75706ae1d360002"
+    },
+    {
+      "order": 41,
+      "path": "../database/38_contexto_organizacao_ativo_cas.sql",
+      "sha256": "9d8d2336a18f3d5305e8e4b52788e87c41085a5bef64cc861f93cbfcde03d664"
     }
   ],
   "references": [

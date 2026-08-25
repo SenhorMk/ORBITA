@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { ChatwootClient } from '../../../../services/chatwoot';
 import { supabaseServer } from '../../../../lib/supabaseServer';
-import { verifySessionAndRole } from '../../../../lib/auth';
+import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
+import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
 import { normalizeToE164 } from '../../../../lib/utils';
 import { integrationService } from '../../../../services/integrationService';
-import { resolveActiveOrganization } from '../../../../lib/organizationContext';
+import { organizationContextToScope, type VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,20 +55,36 @@ interface RawMessage {
   created_at?: string;
 }
 
+type ChatwootPersistenceTable = 'chatwoot_contacts' | 'chatwoot_conversations' | 'chatwoot_messages';
+
+async function upsertChatwootRecord(
+  scope: VerifiedOrganizationScope,
+  table: ChatwootPersistenceTable,
+  record: Readonly<Record<string, unknown>>,
+) {
+  return supabaseServer.from(table).upsert({
+    ...record,
+    user_id: scope.actorId,
+    organizacao_id: scope.organizationId,
+  });
+}
+
 export async function POST(request: Request) {
   try {
     // 0. Validação de Sessão
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
+    const contextResult = await resolveActiveRequestOrganizationContext(request);
+    if (contextResult._tag !== 'OrganizationContextResolved') {
+      const status = organizationContextStatus(contextResult);
+      return NextResponse.json(
+        { success: false, error: status === 503 ? 'Serviço de autorização indisponível' : 'Não autorizado' },
+        { status },
+      );
     }
 
-    const preferredOrgId = request.headers.get('cookie')?.match(/orbita_active_org=([^;]+)/)?.[1];
-    const activeOrg = await resolveActiveOrganization(supabaseServer, session.actorId, preferredOrgId);
-    const orgId = activeOrg?.organizacao.id ?? session.tenant.id;
+    const scope = organizationContextToScope(contextResult.context);
 
     // 1. Obter conversas da API do Chatwoot usando client da organização
-    const client = await ChatwootClient.forOrganization(orgId);
+    const client = await ChatwootClient.forOrganization(scope);
     const rawConversations = (await client.getConversationsFromApi()) as RawConversation[];
 
     let contactsCount = 0;
@@ -86,18 +103,14 @@ export async function POST(request: Request) {
       const contactAvatar = sender.avatar_url || sender.thumbnail || null;
 
       // Upsert contato com telefone normalizado e escopo do tenant/organizacao
-      const { error: contactError } = await supabaseServer
-        .from('chatwoot_contacts')
-        .upsert({
+      const { error: contactError } = await upsertChatwootRecord(scope, 'chatwoot_contacts', {
           id: contactId,
-          user_id: session.tenant.id,
-          organizacao_id: orgId,
           name: contactName,
           email: contactEmail,
           phone_number: contactPhone,
           phone_normalizado: normalizeToE164(contactPhone || undefined),
           avatar_url: contactAvatar,
-        });
+      });
 
       if (contactError) {
         console.error(`❌ Erro ao salvar contato ${contactId}:`, contactError);
@@ -112,19 +125,15 @@ export async function POST(request: Request) {
       const inboxId = rawConv.inbox_id || null;
       const channel = mapChatwootChannel(rawConv.meta?.channel || rawConv.channel_type);
 
-      const { error: convError } = await supabaseServer
-        .from('chatwoot_conversations')
-        .upsert({
+      const { error: convError } = await upsertChatwootRecord(scope, 'chatwoot_conversations', {
           id: conversationId,
-          user_id: session.tenant.id,
-          organizacao_id: orgId,
           display_id: displayId,
           contact_id: contactId,
           status: status,
           inbox_id: inboxId,
           channel: channel,
           updated_at: new Date().toISOString(),
-        });
+      });
 
       if (convError) {
         console.error(`❌ Erro ao salvar conversa ${conversationId}:`, convError);
@@ -156,12 +165,8 @@ export async function POST(request: Request) {
           senderType = null;
         }
 
-        const { error: msgError } = await supabaseServer
-          .from('chatwoot_messages')
-          .upsert({
+        const { error: msgError } = await upsertChatwootRecord(scope, 'chatwoot_messages', {
             id: rawMsg.id,
-            user_id: session.tenant.id,
-            organizacao_id: orgId,
             conversation_id: conversationId,
             content: rawMsg.content || '',
             message_type: msgType,
@@ -169,7 +174,7 @@ export async function POST(request: Request) {
             sender_id: senderId,
             sender_type: senderType,
             created_at: rawMsg.created_at || new Date().toISOString(),
-          });
+        });
 
         if (msgError) {
           console.error(`❌ Erro ao salvar mensagem ${rawMsg.id}:`, msgError);
@@ -180,7 +185,7 @@ export async function POST(request: Request) {
     }
 
     // 2. Acionar Auto-Registro e Vínculo SAC-ERP
-    await integrationService.linkSacToErp(session.tenant);
+    await integrationService.linkSacToErp(scope);
 
     return NextResponse.json({
       success: true,

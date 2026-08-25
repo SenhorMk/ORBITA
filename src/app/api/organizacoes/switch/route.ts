@@ -1,18 +1,34 @@
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { verifySessionAndRole } from '@/lib/auth';
-import { supabaseServer } from '@/lib/supabaseServer';
 import {
   ACTIVE_ORG_COOKIE_NAME,
-  resolveActiveOrganization,
   switchOrgInputSchema,
 } from '@/lib/organizationContext';
+import {
+  organizationContextStatus,
+  parseOrganizationId,
+  type OrganizationActorId,
+  type OrganizationContextResult,
+  type OrganizationId,
+  type OrganizationSwitchResult,
+  type OrganizationSelection,
+} from '@/lib/organizationAuthorization';
 
-export async function POST(req: Request) {
-  const session = await verifySessionAndRole(req);
-  if (!session) {
-    return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
-  }
+interface OrganizationSwitchDependencies {
+  readonly resolveContext: (
+    request: Request,
+    selection: OrganizationSelection,
+  ) => Promise<OrganizationContextResult>;
+  readonly switchActiveOrganization: (
+    actorId: OrganizationActorId,
+    organizationId: OrganizationId,
+    expectedVersion: number,
+  ) => Promise<OrganizationSwitchResult>;
+  readonly setActiveOrganization: (organizationId: string) => Promise<void>;
+}
+
+/** Build the organization-switch HTTP handler around explicit authorization and cookie seams. */
+export function createOrganizationSwitchHandler(dependencies: OrganizationSwitchDependencies) {
+  return async function organizationSwitchHandler(req: Request) {
 
   try {
     const rawBody = await req.json();
@@ -24,34 +40,77 @@ export async function POST(req: Request) {
       );
     }
 
-    const orgContext = await resolveActiveOrganization(
-      supabaseServer,
-      session.actorId,
-      validatedInput.data.organizacao_id
-    );
-
-    if (!orgContext || orgContext.organizacao.id !== validatedInput.data.organizacao_id) {
+    const targetOrganizationId = parseOrganizationId(validatedInput.data.organizacao_id);
+    if (!targetOrganizationId) {
+      return NextResponse.json({ error: 'ID de organização inválido' }, { status: 400 });
+    }
+    const result = await dependencies.resolveContext(req, {
+      _tag: 'ExactOrganization',
+      organizationId: targetOrganizationId,
+    });
+    if (result._tag !== 'OrganizationContextResolved') {
+      const status = organizationContextStatus(result);
       return NextResponse.json(
-        { error: 'Você não tem permissão para acessar esta organização' },
-        { status: 403 }
+        { error: status === 503 ? 'Serviço de autorização indisponível' : 'Não autorizado' },
+        { status },
       );
     }
 
-    const cookieStore = await cookies();
-    cookieStore.set(ACTIVE_ORG_COOKIE_NAME, orgContext.organizacao.id, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/',
-      maxAge: 60 * 60 * 24 * 30, // 30 dias
-    });
+    const switchResult = await dependencies.switchActiveOrganization(
+      result.context.actorId,
+      result.context.organizationId,
+      validatedInput.data.expected_version,
+    );
+    if (switchResult._tag === 'OrganizationSwitchStale') {
+      return NextResponse.json({ error: 'Contexto de organização desatualizado' }, { status: 409 });
+    }
+    if (switchResult._tag === 'OrganizationSwitchDenied') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 });
+    }
+    if (switchResult._tag === 'MembershipStoreUnavailable') {
+      return NextResponse.json({ error: 'Serviço de autorização indisponível' }, { status: 503 });
+    }
+
+    await dependencies.setActiveOrganization(result.context.organizationId);
 
     return NextResponse.json({
       success: true,
-      activeOrg: orgContext,
+      activeOrg: {
+        organizacao: result.context.organization,
+        papel: result.context.role,
+      },
+      selectionVersion: switchResult.version,
     });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Erro ao alternar organização';
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error('/api/organizacoes/switch: falha interna classificada.', error instanceof Error ? error.name : 'unknown');
+    return NextResponse.json({ error: 'Erro ao alternar organização' }, { status: 500 });
   }
+  };
+}
+
+/** Production organization-switch route. */
+export async function POST(req: Request) {
+  const { cookies } = await import('next/headers');
+  const { resolveRequestOrganizationContext } = await import('@/lib/requestOrganizationContext');
+  const { supabaseServer } = await import('@/lib/supabaseServer');
+  const { SupabaseOrganizationMemberships } = await import('@/repositories/organizationMembershipRepository');
+  const memberships = new SupabaseOrganizationMemberships(supabaseServer);
+  const handler = createOrganizationSwitchHandler({
+    resolveContext: resolveRequestOrganizationContext,
+    switchActiveOrganization: (actorId, organizationId, expectedVersion) => memberships.switchActiveOrganization(
+      actorId,
+      organizationId,
+      expectedVersion,
+    ),
+    setActiveOrganization: async (organizationId) => {
+      (await cookies()).set(ACTIVE_ORG_COOKIE_NAME, organizationId, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 60 * 60 * 24 * 30,
+      });
+    },
+  });
+  return handler(req);
 }

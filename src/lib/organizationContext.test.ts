@@ -27,6 +27,7 @@ describe('Organization Context & Schemas', () => {
   it('validates switch organization input', () => {
     const input = {
       organizacao_id: '95000000-0000-4000-8000-000000000001',
+      expected_version: 0,
     };
     const result = switchOrgInputSchema.safeParse(input);
     expect(result.success).toBe(true);

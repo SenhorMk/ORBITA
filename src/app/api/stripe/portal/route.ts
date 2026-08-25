@@ -4,38 +4,23 @@
  */
 
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
 import { z } from 'zod';
-import { verifySessionAndRole } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabaseServer';
-import {
-  ACTIVE_ORG_COOKIE_NAME,
-  resolveActiveOrganization,
-} from '@/lib/organizationContext';
+import { organizationContextStatus } from '@/lib/organizationAuthorization';
+import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizationContext';
 
 const portalInputSchema = z.object({
   return_url: z.string().url(),
 });
 
 export async function POST(req: Request) {
-  const session = await verifySessionAndRole(req);
-  if (!session) {
-    return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+  const contextResult = await resolveActiveRequestOrganizationContext(req);
+  if (contextResult._tag !== 'OrganizationContextResolved') {
+    const status = organizationContextStatus(contextResult);
+    return NextResponse.json({ error: status === 503 ? 'Serviço de autorização indisponível' : 'Não autorizado' }, { status });
   }
 
-  const cookieStore = await cookies();
-  const preferredOrgId = cookieStore.get(ACTIVE_ORG_COOKIE_NAME)?.value;
-  const activeOrgCtx = await resolveActiveOrganization(
-    supabaseServer,
-    session.actorId,
-    preferredOrgId,
-  );
-
-  if (!activeOrgCtx) {
-    return NextResponse.json({ error: 'Nenhuma organização ativa selecionada' }, { status: 400 });
-  }
-
-  if (!['owner', 'admin'].includes(activeOrgCtx.papel)) {
+  if (!contextResult.context.capabilities.has('organization:manage')) {
     return NextResponse.json(
       { error: 'Apenas administradores podem acessar o portal de faturamento' },
       { status: 403 },
@@ -58,7 +43,7 @@ export async function POST(req: Request) {
   }
 
   const { return_url } = parseResult.data;
-  const orgId = activeOrgCtx.organizacao.id;
+  const orgId = contextResult.context.organizationId;
 
   // Buscar assinatura atual
   const { data: sub } = await supabaseServer

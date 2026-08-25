@@ -1,40 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
 import { supabaseServer } from '@/lib/supabaseServer';
-import { verifySessionAndRole } from '@/lib/auth';
-import {
-  ACTIVE_ORG_COOKIE_NAME,
-  resolveActiveOrganization,
-} from '@/lib/organizationContext';
+import { organizationContextStatus } from '@/lib/organizationAuthorization';
+import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizationContext';
 import { listAuditEvents } from '@/services/auditService';
 import { getCorrelationId } from '@/lib/observability/correlation';
+import { organizationContextToScope } from '@/lib/verifiedOrganizationScope';
 
 export async function GET(req: NextRequest) {
   const correlationId = getCorrelationId(req);
 
   try {
-    const session = await verifySessionAndRole(req);
-    if (!session) {
-      return NextResponse.json({ error: 'Nao autenticado' }, { status: 401, headers: { 'x-correlation-id': correlationId } });
-    }
-
-    const cookieStore = await cookies();
-    const preferredOrgId = cookieStore.get(ACTIVE_ORG_COOKIE_NAME)?.value;
-    const activeOrgCtx = await resolveActiveOrganization(
-      supabaseServer,
-      session.actorId,
-      preferredOrgId,
-    );
-
-    if (!activeOrgCtx) {
+    const contextResult = await resolveActiveRequestOrganizationContext(req);
+    if (contextResult._tag !== 'OrganizationContextResolved') {
+      const status = organizationContextStatus(contextResult);
       return NextResponse.json(
-        { error: 'Nenhuma organizacao ativa selecionada' },
-        { status: 403, headers: { 'x-correlation-id': correlationId } },
+        { error: status === 503 ? 'Serviço de autorização indisponível' : 'Não autorizado' },
+        { status, headers: { 'x-correlation-id': correlationId } },
       );
     }
 
     // Apenas Admins e Owners têm acesso à trilha de auditoria
-    if (activeOrgCtx.papel !== 'owner' && activeOrgCtx.papel !== 'admin') {
+    if (!contextResult.context.capabilities.has('organization:manage')) {
       return NextResponse.json(
         { error: 'Acesso restrito a administradores' },
         { status: 403, headers: { 'x-correlation-id': correlationId } },
@@ -47,8 +33,7 @@ export async function GET(req: NextRequest) {
     const acao = url.searchParams.get('acao') || undefined;
     const actorId = url.searchParams.get('actorId') || undefined;
 
-    const result = await listAuditEvents(supabaseServer, {
-      organizacaoId: activeOrgCtx.organizacao.id,
+    const result = await listAuditEvents(supabaseServer, organizationContextToScope(contextResult.context), {
       limit,
       offset,
       acao,

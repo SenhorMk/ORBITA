@@ -1,6 +1,7 @@
 import { describe, expectTypeOf, it } from 'vitest';
 
 import type { VerifiedTenant } from '../lib/auth';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import type { ClienteRepository } from './clienteRepository';
 import type { FinanceiroRepository } from './financeiroRepository';
 import type { PedidoRepository } from './pedidoRepository';
@@ -23,7 +24,7 @@ describe('privileged repository tenant scope', () => {
     expectTypeOf<Parameters<typeof bling.forUser>[0]>()
       .toEqualTypeOf<VerifiedTenant>();
     expectTypeOf<Parameters<IntegrationService['linkSacToErp']>[0]>()
-      .toEqualTypeOf<VerifiedTenant>();
+      .toEqualTypeOf<VerifiedOrganizationScope>();
   });
 
   it('requires a verified tenant for all FinanceiroRepository financial-domain operations', () => {

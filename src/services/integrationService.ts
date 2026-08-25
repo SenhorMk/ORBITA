@@ -1,13 +1,13 @@
 import { supabaseServer } from '../lib/supabaseServer';
 import type { Cliente } from '../types';
-import type { VerifiedTenant } from '../lib/auth';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
 export class IntegrationService {
   /**
    * Vincula os contatos do Chatwoot aos Clientes do ERP (Bling/Supabase).
    * Caso o cliente não exista, ele será criado automaticamente para ser enviado ao Bling no próximo sync.
    */
-  async linkSacToErp(tenant: VerifiedTenant) {
+  async linkSacToErp(scope: VerifiedOrganizationScope) {
     let novosClientes = 0;
 
     try {
@@ -15,7 +15,7 @@ export class IntegrationService {
       const { data: chatwootContacts, error: cwError } = await supabaseServer
         .from('chatwoot_contacts')
         .select('*')
-        .eq('user_id', tenant.id)
+        .eq('organizacao_id', scope.organizationId)
         .not('phone_normalizado', 'is', null);
 
       if (cwError) throw cwError;
@@ -24,7 +24,7 @@ export class IntegrationService {
       const { data: clientes, error: clError } = await supabaseServer
         .from('clientes')
         .select('id, telefone_normalizado')
-        .eq('user_id', tenant.id);
+        .eq('organizacao_id', scope.organizationId);
 
       if (clError) throw clError;
 
@@ -52,7 +52,11 @@ export class IntegrationService {
 
           const { error: insertError } = await supabaseServer
             .from('clientes')
-            .insert([{ ...novoCliente, user_id: tenant.id }]);
+            .insert([{
+              ...novoCliente,
+              user_id: scope.actorId,
+              organizacao_id: scope.organizationId,
+            }]);
 
           if (insertError) {
             console.error(`❌ Erro ao criar cliente auto-registrado (${contact.name}):`, insertError);

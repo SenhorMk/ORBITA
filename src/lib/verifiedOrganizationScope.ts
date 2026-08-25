@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
+import type { OrganizationContext } from './organizationAuthorization';
 
 const verifiedOrganizationScopeBrand: unique symbol = Symbol('VerifiedOrganizationScope');
 const organizationActorSchema = z.object({
@@ -20,6 +21,16 @@ export type VerifyOrganizationScopeResult =
   | { readonly _tag: 'OrganizationScopeVerified'; readonly scope: VerifiedOrganizationScope }
   | { readonly _tag: 'OrganizationScopeDenied' }
   | { readonly _tag: 'OrganizationScopeStoreUnavailable'; readonly cause: string };
+
+/** Adapt an already verified canonical request context for privileged adapters. */
+export function organizationContextToScope(context: OrganizationContext): VerifiedOrganizationScope {
+  return {
+    organizationId: context.organizationId,
+    actorId: context.actorId,
+    role: context.role,
+    [verifiedOrganizationScopeBrand]: true,
+  };
+}
 
 /**
  * Verify the exact organization/actor pair before a service-role adapter can use it.
