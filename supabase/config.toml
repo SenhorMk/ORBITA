@@ -101,7 +101,8 @@ schema_paths = [
   "../database/34_integrar_stripe_assinaturas.sql",
   "../database/35_suspensao_retencao_encerramento.sql",
   "../database/36_auditoria_correlacao_telemetria.sql",
-  "../database/37_fechar_rpcs_grants_perigosos.sql"
+  "../database/37_fechar_rpcs_grants_perigosos.sql",
+  "../database/38_contexto_organizacao_ativo_cas.sql"
 ]
 
 [db.seed]

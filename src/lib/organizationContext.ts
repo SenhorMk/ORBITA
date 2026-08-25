@@ -31,9 +31,11 @@ export type CreateOrgInput = z.infer<typeof createOrgInputSchema>;
 
 export const switchOrgInputSchema = z.object({
   organizacao_id: z.string().uuid('ID de organização inválido'),
+  expected_version: z.number().int().nonnegative('Versão de organização ativa inválida'),
 });
 export type SwitchOrgInput = z.infer<typeof switchOrgInputSchema>;
 
+/** Outcome of comparing the observed and current active organization. */
 export const ACTIVE_ORG_COOKIE_NAME = 'orbita_active_org';
 
 export interface ActiveOrganizationContext {
@@ -72,7 +74,8 @@ export async function listUserOrganizations(
 /**
  * Resolve active organization for user.
  * If preferredOrgId is provided, validates user membership.
- * If not provided or invalid membership, falls back to the user's first available organization.
+ * If not provided, selects the user's first persisted membership.
+ * An explicit invalid/revoked preference fails closed and never falls back.
  */
 export async function resolveActiveOrganization(
   supabase: SupabaseClient,
@@ -98,6 +101,7 @@ export async function resolveActiveOrganization(
         };
       }
     }
+    return null;
   }
 
   // Fallback to first membership

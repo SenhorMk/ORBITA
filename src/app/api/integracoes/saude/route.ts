@@ -1,36 +1,41 @@
 import { NextResponse } from 'next/server';
-import { supabaseServer } from '../../../../lib/supabaseServer';
-import { verifySessionAndRole } from '../../../../lib/auth';
-import { resolveActiveOrganization } from '../../../../lib/organizationContext';
-import { outboxService } from '../../../../services/outboxService';
-import { verifyOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
+import {
+  activeOrganizationSelection,
+  organizationContextStatus,
+  type OrganizationContext,
+  type OrganizationContextResult,
+  type OrganizationSelection,
+} from '../../../../lib/organizationAuthorization';
+import type { IntegrationHealthSummary } from '../../../../services/outboxService';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request) {
+interface IntegrationHealthDependencies {
+  readonly resolveContext: (
+    request: Request,
+    selection: OrganizationSelection | null,
+  ) => Promise<OrganizationContextResult>;
+  readonly getHealth: (context: OrganizationContext) => Promise<readonly IntegrationHealthSummary[]>;
+}
+
+/** Build the integration-health HTTP handler around canonical authorization seams. */
+export function createIntegrationHealthHandler(dependencies: IntegrationHealthDependencies) {
+  return async function integrationHealthHandler(request: Request) {
   try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-    }
-
-    const preferredOrgId = request.headers.get('cookie')?.match(/orbita_active_org=([^;]+)/)?.[1];
-    const activeOrg = await resolveActiveOrganization(supabaseServer, session.actorId, preferredOrgId);
-    const orgId = activeOrg?.organizacao.id ?? session.tenant.id;
-
-    const scopeResult = await verifyOrganizationScope(supabaseServer, {
-      organizationId: orgId,
-      actorId: session.actorId,
-    });
-    if (scopeResult._tag !== 'OrganizationScopeVerified') {
-      const unavailable = scopeResult._tag === 'OrganizationScopeStoreUnavailable';
+    const contextResult = await dependencies.resolveContext(
+      request,
+      activeOrganizationSelection(),
+    );
+    if (contextResult._tag !== 'OrganizationContextResolved') {
+      const status = organizationContextStatus(contextResult);
       return NextResponse.json(
-        { success: false, error: unavailable ? 'Serviço de autorização indisponível' : 'Escopo organizacional inválido' },
-        { status: unavailable ? 503 : 403 },
+        { success: false, error: status === 503 ? 'Serviço de autorização indisponível' : 'Não autorizado' },
+        { status },
       );
     }
 
-    const healthList = await outboxService.getIntegrationsHealth(supabaseServer, scopeResult.scope);
+    const orgId = contextResult.context.organizationId;
+    const healthList = await dependencies.getHealth(contextResult.context);
 
     return NextResponse.json({
       success: true,
@@ -38,8 +43,24 @@ export async function GET(request: Request) {
       conexoes: healthList,
     });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Erro interno';
-    console.error('❌ /api/integracoes/saude GET:', message);
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    console.error('/api/integracoes/saude: falha interna classificada.', error instanceof Error ? error.name : 'unknown');
+    return NextResponse.json({ success: false, error: 'Erro interno' }, { status: 500 });
   }
+  };
+}
+
+/** Production integration-health route. */
+export async function GET(request: Request) {
+  const { supabaseServer } = await import('../../../../lib/supabaseServer');
+  const { resolveRequestOrganizationContext } = await import('../../../../lib/requestOrganizationContext');
+  const { outboxService } = await import('../../../../services/outboxService');
+  const { organizationContextToScope } = await import('../../../../lib/verifiedOrganizationScope');
+  const handler = createIntegrationHealthHandler({
+    resolveContext: resolveRequestOrganizationContext,
+    getHealth: (context) => outboxService.getIntegrationsHealth(
+      supabaseServer,
+      organizationContextToScope(context),
+    ),
+  });
+  return handler(request);
 }

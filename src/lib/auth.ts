@@ -30,9 +30,20 @@ export interface AuthenticatedUser {
 export interface AuthUserLookup {
   readonly getUser: (token: string) => Promise<{
     readonly data: { readonly user: AuthenticatedUser | null };
-    readonly error: { readonly message: string } | null;
+    readonly error: {
+      readonly message: string;
+      readonly status?: number;
+      readonly code?: string;
+    } | null;
   }>;
 }
+
+/** Result of verifying identity only; organization authorization is a separate concern. */
+export type AuthenticatedIdentityResult =
+  | { readonly _tag: 'IdentityVerified'; readonly user: AuthenticatedUser }
+  | { readonly _tag: 'SessionMissing' }
+  | { readonly _tag: 'SessionInvalid' }
+  | { readonly _tag: 'IdentityProviderUnavailable'; readonly cause: string };
 
 /** Capabilities understood by the temporary user-owned tenancy model. */
 export type ActorCapability = 'app:access' | 'tenant:manage';
@@ -60,6 +71,7 @@ export type ActorContextResult =
   | { readonly _tag: 'ActorContextResolved'; readonly context: ActorContext }
   | { readonly _tag: 'SessionMissing' }
   | { readonly _tag: 'SessionInvalid' }
+  | { readonly _tag: 'IdentityProviderUnavailable'; readonly cause: string }
   | { readonly _tag: 'MembershipMissing' }
   | { readonly _tag: 'CapabilityDenied'; readonly capability: ActorCapability };
 
@@ -83,6 +95,29 @@ const defaultAuthUserLookup: AuthUserLookup = {
     return supabaseServer.auth.getUser(token);
   },
 };
+
+/** Verify a bearer session without treating identity-provider metadata as membership authority. */
+export async function resolveAuthenticatedIdentity(
+  request: Request,
+  authUserLookup: AuthUserLookup = defaultAuthUserLookup,
+): Promise<AuthenticatedIdentityResult> {
+  const bearerResult = readBearerToken(request);
+  if (bearerResult._tag !== 'BearerTokenFound') return { _tag: 'SessionMissing' };
+
+  try {
+    const { data, error } = await authUserLookup.getUser(bearerResult.token);
+    if (error) {
+      return error.status !== undefined && error.status < 500 && error.status !== 429
+        ? { _tag: 'SessionInvalid' }
+        : { _tag: 'IdentityProviderUnavailable', cause: error.code ?? 'auth_provider_error' };
+    }
+    return data.user
+      ? { _tag: 'IdentityVerified', user: data.user }
+      : { _tag: 'SessionInvalid' };
+  } catch {
+    return { _tag: 'IdentityProviderUnavailable', cause: 'auth_provider_unreachable' };
+  }
+}
 
 function capabilitiesFor(role: ActorRole): ReadonlySet<ActorCapability> {
   return role === 'dono'
@@ -134,18 +169,11 @@ export async function resolveActorContext(
   requiredCapability: ActorCapability,
   authUserLookup: AuthUserLookup = defaultAuthUserLookup,
 ): Promise<ActorContextResult> {
-  const bearerResult = readBearerToken(request);
-  if (bearerResult._tag !== 'BearerTokenFound') {
-    return { _tag: 'SessionMissing' };
-  }
+  const identity = await resolveAuthenticatedIdentity(request, authUserLookup);
+  if (identity._tag !== 'IdentityVerified') return identity;
 
   try {
-    const { data, error } = await authUserLookup.getUser(bearerResult.token);
-    if (error || !data.user) {
-      return { _tag: 'SessionInvalid' };
-    }
-
-    const membership = resolveLegacyMembership(data.user);
+    const membership = resolveLegacyMembership(identity.user);
     if (!membership) {
       return { _tag: 'MembershipMissing' };
     }
@@ -156,7 +184,7 @@ export async function resolveActorContext(
 
     return {
       _tag: 'ActorContextResolved',
-      context: { ...membership, user: data.user },
+      context: { ...membership, user: identity.user },
     };
   } catch {
     return { _tag: 'SessionInvalid' };
@@ -164,7 +192,8 @@ export async function resolveActorContext(
 }
 
 /** Map a typed actor-context denial to its safe HTTP authorization status. */
-export function actorContextDenialStatus(denial: ActorContextDenial): 401 | 403 {
+export function actorContextDenialStatus(denial: ActorContextDenial): 401 | 403 | 503 {
+  if (denial._tag === 'IdentityProviderUnavailable') return 503;
   return denial._tag === 'SessionMissing' || denial._tag === 'SessionInvalid'
     ? 401
     : 403;

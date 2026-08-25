@@ -1,50 +1,40 @@
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '../../../../lib/supabaseServer';
-import { verifySessionAndRole } from '../../../../lib/auth';
-import { createOAuthTransaction } from '../../../../lib/oauth-transaction';
-import { resolveActiveOrganization } from '../../../../lib/organizationContext';
+import { createScopedOAuthTransaction } from '../../../../lib/oauth-transaction';
+import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
+import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
+import { organizationContextToScope, type VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request) {
-  const session = await verifySessionAndRole(request);
+async function findBlingClientId(scope: VerifiedOrganizationScope): Promise<string | null> {
+  const { data } = await supabaseServer
+    .from('conexoes_integracao')
+    .select('metadata')
+    .eq('organizacao_id', scope.organizationId)
+    .eq('provedor', 'bling')
+    .maybeSingle();
+  // SAFETY: PostgREST JSON is narrowed to an object and client_id is validated before use.
+  const parsed = typeof data?.metadata === 'object' && data.metadata !== null
+    ? data.metadata as Record<string, unknown>
+    : null;
+  return typeof parsed?.client_id === 'string' && parsed.client_id.length > 0
+    ? parsed.client_id
+    : null;
+}
 
-  if (!session) {
+export async function GET(request: Request) {
+  const contextResult = await resolveActiveRequestOrganizationContext(request);
+  if (contextResult._tag !== 'OrganizationContextResolved') {
+    const status = organizationContextStatus(contextResult);
     return NextResponse.json(
-      { success: false, error: 'Sessão inválida ou expirada.' },
-      { status: 401 },
+      { success: false, error: status === 503 ? 'Serviço de autorização indisponível.' : 'Sessão inválida ou expirada.' },
+      { status },
     );
   }
 
-  const userId = session.tenant.id;
-  const activeOrg = await resolveActiveOrganization(supabaseServer, userId);
-  const organizacaoId = activeOrg?.organizacao.id;
-
-  let clientId: string | null = null;
-
-  if (organizacaoId) {
-    const { data: connData } = await supabaseServer
-      .from('conexoes_integracao')
-      .select('metadata')
-      .eq('organizacao_id', organizacaoId)
-      .eq('provedor', 'bling')
-      .maybeSingle();
-
-    const meta = connData?.metadata as Record<string, unknown> | undefined;
-    if (meta && typeof meta.client_id === 'string' && meta.client_id.length > 0) {
-      clientId = meta.client_id;
-    }
-  }
-
-  if (!clientId) {
-    const { data: tenantData } = await supabaseServer
-      .from('integracoes_bling')
-      .select('client_id')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    clientId = tenantData?.client_id || null;
-  }
+  const scope = organizationContextToScope(contextResult.context);
+  const clientId = await findBlingClientId(scope);
 
   if (!clientId) {
     return NextResponse.json(
@@ -53,7 +43,7 @@ export async function GET(request: Request) {
     );
   }
 
-  const transaction = createOAuthTransaction(userId, organizacaoId);
+  const transaction = createScopedOAuthTransaction(scope);
   if (transaction._tag === 'OAuthTransactionCreationFailed') {
     console.error('[authorize] Configuração de criptografia indisponível.');
     return NextResponse.json(

@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { checkEncryptionConfiguration, decrypt, encrypt } from './crypto';
+import type { VerifiedOrganizationScope } from './verifiedOrganizationScope';
 
 const OAUTH_TRANSACTION_TTL_MS = 10 * 60 * 1_000;
 
@@ -104,6 +105,14 @@ export function createOAuthTransaction(
   }
 
   return { _tag: 'OAuthTransactionCreated', state, cookieValue };
+}
+
+/** Create an OAuth transaction from a nominally verified organization scope. */
+export function createScopedOAuthTransaction(
+  scope: VerifiedOrganizationScope,
+  createdAt = Date.now(),
+): OAuthTransactionCreationResult {
+  return createOAuthTransaction(scope.actorId, scope.organizationId, createdAt);
 }
 
 /** Validate and recover the initiating user and organization from an encrypted OAuth transaction. */

@@ -4,14 +4,9 @@
  */
 
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
 import { z } from 'zod';
-import { verifySessionAndRole } from '@/lib/auth';
-import { supabaseServer } from '@/lib/supabaseServer';
-import {
-  ACTIVE_ORG_COOKIE_NAME,
-  resolveActiveOrganization,
-} from '@/lib/organizationContext';
+import { organizationContextStatus } from '@/lib/organizationAuthorization';
+import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizationContext';
 
 const checkoutInputSchema = z.object({
   plano_slug: z.enum(['pro', 'enterprise']),
@@ -21,25 +16,14 @@ const checkoutInputSchema = z.object({
 });
 
 export async function POST(req: Request) {
-  const session = await verifySessionAndRole(req);
-  if (!session) {
-    return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
-  }
-
-  const cookieStore = await cookies();
-  const preferredOrgId = cookieStore.get(ACTIVE_ORG_COOKIE_NAME)?.value;
-  const activeOrgCtx = await resolveActiveOrganization(
-    supabaseServer,
-    session.actorId,
-    preferredOrgId,
-  );
-
-  if (!activeOrgCtx) {
-    return NextResponse.json({ error: 'Nenhuma organização ativa selecionada' }, { status: 400 });
+  const contextResult = await resolveActiveRequestOrganizationContext(req);
+  if (contextResult._tag !== 'OrganizationContextResolved') {
+    const status = organizationContextStatus(contextResult);
+    return NextResponse.json({ error: status === 503 ? 'Serviço de autorização indisponível' : 'Não autorizado' }, { status });
   }
 
   // Apenas donos e administradores podem gerenciar assinaturas
-  if (!['owner', 'admin'].includes(activeOrgCtx.papel)) {
+  if (!contextResult.context.capabilities.has('organization:manage')) {
     return NextResponse.json(
       { error: 'Apenas administradores podem gerenciar o plano da organização' },
       { status: 403 },
@@ -62,7 +46,7 @@ export async function POST(req: Request) {
   }
 
   const { plano_slug, intervalo, success_url } = parseResult.data;
-  const orgId = activeOrgCtx.organizacao.id;
+  const orgId = contextResult.context.organizationId;
 
   // Mock seguro / boundary para checkout URL quando Stripe API mockada em dev
   const checkoutUrl = `${success_url}?session_id=cs_mock_${orgId.slice(0, 8)}&plan=${plano_slug}&interval=${intervalo}`;

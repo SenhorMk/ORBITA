@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { ChatwootClient } from '../../../../services/chatwoot';
 import { supabaseServer } from '../../../../lib/supabaseServer';
-import { verifySessionAndRole } from '../../../../lib/auth';
-import { resolveActiveOrganization } from '../../../../lib/organizationContext';
+import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
+import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
 import { outboxService } from '../../../../services/outboxService';
-import { verifyOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
+import { organizationContextToScope } from '../../../../lib/verifiedOrganizationScope';
+import type { VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,20 +36,13 @@ interface ChatwootApiMessageResponse {
 
 async function verifyConversationBelongsToOrg(
   conversationId: string | number,
-  orgId: string,
-  userId: string,
-  isOrgActive: boolean,
+  scope: VerifiedOrganizationScope,
 ): Promise<boolean> {
-  let query = supabaseServer
+  const query = supabaseServer
     .from('chatwoot_conversations')
     .select('id')
-    .eq('id', conversationId);
-
-  if (isOrgActive) {
-    query = query.or(`organizacao_id.eq.${orgId},user_id.eq.${userId}`);
-  } else {
-    query = query.eq('user_id', userId);
-  }
+    .eq('id', conversationId)
+    .eq('organizacao_id', scope.organizationId);
 
   const { data, error } = await query.maybeSingle();
   return Boolean(!error && data);
@@ -58,15 +52,14 @@ async function saveMessageLocally(
   rawMsg: ChatwootApiMessageResponse,
   conversationId: string | number,
   content: string,
-  orgId: string,
-  userId: string,
+  scope: VerifiedOrganizationScope,
 ): Promise<void> {
   const { error: dbError } = await supabaseServer
     .from('chatwoot_messages')
     .upsert({
       id: rawMsg.id,
-      user_id: userId,
-      organizacao_id: orgId,
+      user_id: scope.actorId,
+      organizacao_id: scope.organizationId,
       conversation_id: conversationId,
       content,
       message_type: resolveMessageType(rawMsg.message_type),
@@ -86,9 +79,13 @@ async function saveMessageLocally(
 
 export async function POST(request: Request) {
   try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
+    const contextResult = await resolveActiveRequestOrganizationContext(request);
+    if (contextResult._tag !== 'OrganizationContextResolved') {
+      const status = organizationContextStatus(contextResult);
+      return NextResponse.json(
+        { success: false, error: status === 503 ? 'Serviço de autorização indisponível' : 'Não autorizado' },
+        { status },
+      );
     }
 
     const { conversationId, content } = await request.json();
@@ -99,26 +96,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const preferredOrgId = request.headers.get('cookie')?.match(/orbita_active_org=([^;]+)/)?.[1];
-    const activeOrg = await resolveActiveOrganization(supabaseServer, session.actorId, preferredOrgId);
-    const orgId = activeOrg?.organizacao.id ?? session.tenant.id;
-    const scopeResult = await verifyOrganizationScope(supabaseServer, {
-      organizationId: orgId,
-      actorId: session.actorId,
-    });
-    if (scopeResult._tag !== 'OrganizationScopeVerified') {
-      const unavailable = scopeResult._tag === 'OrganizationScopeStoreUnavailable';
-      return NextResponse.json(
-        { success: false, error: unavailable ? 'Serviço de autorização indisponível' : 'Escopo organizacional inválido' },
-        { status: unavailable ? 503 : 403 },
-      );
-    }
+    const scope = organizationContextToScope(contextResult.context);
 
     const exists = await verifyConversationBelongsToOrg(
       conversationId,
-      orgId,
-      session.tenant.id,
-      Boolean(activeOrg),
+      scope,
     );
 
     if (!exists) {
@@ -126,7 +108,7 @@ export async function POST(request: Request) {
     }
 
     const idempotencyKey = `chatwoot_msg_${conversationId}_${Date.now()}`;
-    const outboxRecord = await outboxService.enqueue(supabaseServer, scopeResult.scope, {
+    const outboxRecord = await outboxService.enqueue(supabaseServer, scope, {
       idempotencyKey,
       destination: 'chatwoot',
       eventType: 'message.send',
@@ -135,18 +117,18 @@ export async function POST(request: Request) {
 
     let rawMsg: ChatwootApiMessageResponse;
     try {
-      const client = await ChatwootClient.forOrganization(orgId);
+      const client = await ChatwootClient.forOrganization(scope);
       rawMsg = (await client.sendMessageToApi(conversationId, content)) as ChatwootApiMessageResponse;
-      await outboxService.markSent(supabaseServer, scopeResult.scope, outboxRecord.eventoId, {
+      await outboxService.markSent(supabaseServer, scope, outboxRecord.eventoId, {
         id: rawMsg.id,
         created_at: rawMsg.created_at,
       });
     } catch (sendErr: unknown) {
-      await outboxService.markFailed(supabaseServer, scopeResult.scope, outboxRecord.eventoId, sendErr, 0);
+      await outboxService.markFailed(supabaseServer, scope, outboxRecord.eventoId, sendErr, 0);
       throw sendErr;
     }
 
-    await saveMessageLocally(rawMsg, conversationId, content, orgId, session.tenant.id);
+    await saveMessageLocally(rawMsg, conversationId, content, scope);
 
     return NextResponse.json({ success: true, message: rawMsg });
   } catch (error: unknown) {

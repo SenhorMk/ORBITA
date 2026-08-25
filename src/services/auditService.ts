@@ -27,7 +27,6 @@ export interface AuditEventRecord {
 }
 
 export interface ListAuditEventsQuery {
-  organizacaoId: string;
   limit?: number;
   offset?: number;
   acao?: string;
@@ -70,6 +69,7 @@ export async function recordAuditEvent(
  */
 export async function listAuditEvents(
   supabase: SupabaseClient,
+  scope: VerifiedOrganizationScope,
   query: ListAuditEventsQuery,
 ): Promise<{ events: AuditEventRecord[]; total: number }> {
   const limit = Math.min(Math.max(query.limit ?? 20, 1), 100);
@@ -78,7 +78,7 @@ export async function listAuditEvents(
   let builder = supabase
     .from('eventos_auditoria_sistema')
     .select('id, organizacao_id, actor_id, acao, recurso, recurso_id, correlation_id, ip_address, user_agent, metadata, created_at', { count: 'exact' })
-    .eq('organizacao_id', query.organizacaoId)
+    .eq('organizacao_id', scope.organizationId)
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1);
 
