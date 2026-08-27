@@ -2,17 +2,16 @@ import { NextResponse } from 'next/server';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { produtoRepository } from '@/repositories/produtoRepository';
 import { clienteRepository } from '@/repositories/clienteRepository';
-import { verifySessionAndRole } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabaseServer';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-    }
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
 
     let stats = { faturamento30: 0, total: 0, pendentes: 0, cancelados: 0, atendidos: 0 };
     let pedidos: unknown[] = [];
@@ -21,20 +20,20 @@ export async function GET(request: Request) {
     let categorias: unknown[] = [];
 
     try {
-      produtos = await produtoRepository.getAll(session.tenant);
+      produtos = await produtoRepository.getAll(scope);
     } catch (e: unknown) {
       console.error('Erro ao carregar produtos no dashboard:', e);
     }
 
     try {
-      clientes = await clienteRepository.getAll(session.tenant);
+      clientes = await clienteRepository.getAll(scope);
     } catch (e: unknown) {
       console.error('Erro ao carregar clientes no dashboard:', e);
     }
 
     try {
-      pedidos = await pedidoRepository.getAllEnriched(session.tenant);
-      stats = await pedidoRepository.getDashboardStats(session.tenant);
+      pedidos = await pedidoRepository.getAllEnriched(scope);
+      stats = await pedidoRepository.getDashboardStats(scope);
     } catch (e: unknown) {
       console.error('Erro ao carregar pedidos no dashboard:', e);
     }
@@ -43,7 +42,7 @@ export async function GET(request: Request) {
       const { data: catData } = await supabaseServer
         .from('categorias')
         .select('*')
-        .eq('user_id', session.tenant.id);
+        .eq('organizacao_id', scope.organizationId);
       if (catData) categorias = catData;
     } catch (e: unknown) {
       console.error('Erro ao carregar categorias no dashboard:', e);

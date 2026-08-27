@@ -2,15 +2,20 @@ import { NextResponse } from 'next/server';
 import { verifySessionAndRole } from '@/lib/auth';
 import { bling } from '@/services/bling';
 import { supabaseServer } from '@/lib/supabaseServer';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
 export async function POST(request: Request) {
   const logEntries: string[] = [];
   try {
     const session = await verifySessionAndRole(request);
     const userId = session?.tenant.id;
-    if (!userId) {
+    if (!userId || !session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
 
     const blingClient = bling.forUser(session.tenant);
     const body = await request.json();
@@ -32,7 +37,7 @@ export async function POST(request: Request) {
 
     // Buscar cliente no Supabase por ID (UUID) ou por bling_id
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(contatoId));
-    let query = supabaseServer.from('clientes').select('*').eq('user_id', userId);
+    let query = supabaseServer.from('clientes').select('*').eq('organizacao_id', scope.organizationId);
 
     if (isUUID) {
       query = query.or(`id.eq.${contatoId},bling_id.eq.${contatoId}`);
@@ -106,7 +111,7 @@ export async function POST(request: Request) {
       const { data: pData } = await supabaseServer
         .from('produtos')
         .select('id, codigo, bling_id, nome, estoque, estoque_reservado')
-        .eq('user_id', userId)
+        .eq('organizacao_id', scope.organizationId)
         .eq(i.produto_id ? 'id' : 'codigo', i.produto_id || i.codigo)
         .maybeSingle();
 
@@ -226,6 +231,7 @@ export async function POST(request: Request) {
     // a) Criar Pedido
     const { data: novoPedido, error: pedErr } = await supabaseServer.from('pedidos').insert({
       user_id: userId,
+      organizacao_id: scope.organizationId,
       cliente_id: localClienteId,
       bling_id: realBlingId,
       numero: realNumero,
@@ -241,19 +247,22 @@ export async function POST(request: Request) {
 
     if (pedErr) throw new Error(`Erro ao criar pedido local: ${pedErr.message}`);
 
-    // b) Registrar Itens, dar baixa no estoque local e registrar movimentação
+    // b) Registrar Itens e dar baixa no estoque local de forma atômica,
+    // verificada pela organização (nunca aceita organizacao/actor forjados:
+    // a RPC revalida que o produto pertence a scope.organizationId e nunca
+    // permite estoque negativo).
     for (const item of itensValidados) {
       await supabaseServer.from('itens_pedido').insert({
         user_id: userId,
+        organizacao_id: scope.organizationId,
         pedido_id: novoPedido.id,
         produto_id: item.id,
         quantidade: item.quantidade_compra,
         valor_unitario: item.valor_unitario
       });
 
-      // Baixa no estoque local de forma atômica para evitar overselling (Race condition)
-      const { error: stockError } = await supabaseServer.rpc('decrement_estoque', {
-        p_user_id: userId,
+      const { error: stockError } = await supabaseServer.rpc('baixar_estoque_organizacao', {
+        p_organizacao_id: scope.organizationId,
         p_produto_id: item.id,
         p_qty: item.quantidade_compra,
       });
@@ -261,15 +270,6 @@ export async function POST(request: Request) {
       if (stockError) {
         throw new Error(`Erro ao atualizar estoque local: ${stockError.message}`);
       }
-
-      // Movimentação de estoque
-      await supabaseServer.from('movimentacao_estoque').insert({
-        user_id: userId,
-        produto_id: item.id,
-        tipo: 'SAIDA',
-        origem: `PEDIDO_MANUAL:${novoPedido.id}`,
-        quantidade: item.quantidade_compra
-      });
     }
 
     // c) Registrar Financeiro

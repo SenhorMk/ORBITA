@@ -3,6 +3,7 @@ import { bling } from '@/services/bling';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { verifySessionAndRole } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabaseServer';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +18,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Acesso negado: Somente o dono da loja pode faturar pedidos.' }, { status: 403 });
     }
 
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
+
     const { pedidoId, blingPedidoId } = await request.json();
 
     if (!pedidoId || !blingPedidoId) {
@@ -28,9 +33,10 @@ export async function POST(request: Request) {
 
     // C8: Prevenir double-faturamento no Bling checando se o pedido já tem NF-e local
     if (!(process.env.MOCK_MODE === 'true' && process.env.NODE_ENV === 'development')) {
-      // 1. Tentar obter lock exclusivo no pedido (Advisory Lock)
-      const { data: lockAcquired, error: lockError } = await supabaseServer.rpc('try_nfe_lock', {
-        p_user_id: session.tenant.id,
+      // 1. Tentar obter lock exclusivo no pedido (Advisory Lock), verificado
+      // pela organizacao ativa (nunca pelo user_id primitivo).
+      const { data: lockAcquired, error: lockError } = await supabaseServer.rpc('tentar_lock_nfe_organizacao', {
+        p_organizacao_id: scope.organizationId,
         p_pedido_id: pedidoId,
       });
 
@@ -44,7 +50,7 @@ export async function POST(request: Request) {
           .from('documentos_fiscais')
           .select('*')
           .eq('pedido_id', pedidoId)
-          .eq('user_id', session.tenant.id)
+          .eq('organizacao_id', scope.organizationId)
           .maybeSingle();
 
         if (nfeError) {
@@ -94,7 +100,7 @@ interface NfeApiResponse {
         let nfeCache;
         try {
           // 2. Persistir nota fiscal gerada no cache local associando ao ID do pedido
-          nfeCache = await pedidoRepository.upsertNfe(session!.tenant, {
+          nfeCache = await pedidoRepository.upsertNfe(scope, {
             bling_id: nfeBlingId,
             numero: String(nfeNumero),
             chave: nfeChave || '',
@@ -103,9 +109,9 @@ interface NfeApiResponse {
           });
 
           // 3. Atualizar status do pedido local para Atendido/Faturado
-          const pedidoLocal = await pedidoRepository.getById(session!.tenant, pedidoId);
+          const pedidoLocal = await pedidoRepository.getById(scope, pedidoId);
           if (pedidoLocal) {
-            await pedidoRepository.upsert(session!.tenant, {
+            await pedidoRepository.upsert(scope, {
               ...pedidoLocal,
               status: 'Atendido'
             });
@@ -137,8 +143,8 @@ interface NfeApiResponse {
           { status: 500 }
         );
       } finally {
-        await supabaseServer.rpc('unlock_nfe', {
-          p_user_id: session.tenant.id,
+        await supabaseServer.rpc('liberar_lock_nfe_organizacao', {
+          p_organizacao_id: scope.organizationId,
           p_pedido_id: pedidoId,
         });
       }

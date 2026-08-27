@@ -3,6 +3,7 @@ import { clienteRepository } from '@/repositories/clienteRepository';
 import { bling } from '@/services/bling';
 import { Cliente } from '@/types';
 import { verifySessionAndRole } from '@/lib/auth';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
 export async function POST(request: Request) {
   const logEntries: string[] = [];
@@ -16,6 +17,9 @@ export async function POST(request: Request) {
     if (session.role !== 'dono') {
       return NextResponse.json({ success: false, error: 'Acesso negado: apenas o dono pode realizar esta ação.' }, { status: 403 });
     }
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
     const blingClient = bling.forUser(session.tenant);
 
     const body = await request.json();
@@ -137,7 +141,7 @@ interface BlingContatoResponse {
     logEntries.push(`[${new Date().toISOString()}] 💾 Persistindo cliente no Supabase...`);
     let savedClient: Cliente;
     try {
-      savedClient = await clienteRepository.upsert(session.tenant, updatedClientPayload);
+      savedClient = await clienteRepository.upsert(scope, updatedClientPayload);
       logEntries.push(`[${new Date().toISOString()}] ✅ Cliente salvo no Supabase com sucesso! ID: ${savedClient.id}`);
     } catch (dbErr: unknown) {
       const dbErrMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);

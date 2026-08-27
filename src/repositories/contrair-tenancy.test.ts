@@ -1,6 +1,16 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { VerifiedTenant } from '../lib/auth';
 
+// Ticket 08 (orbita-mvp-producao-v2) migrated clienteRepository, produtoRepository
+// and pedidoRepository off resolveTenantOrgId/VerifiedTenant entirely: they now
+// require a previously verified VerifiedOrganizationScope (see
+// src/repositories/repository-tenant-scope.test.ts for the type-level contract,
+// and supabase/tests/database/catalogo_comercial_estoque_fiscal_organizacao.test.sql
+// for the real-database, no-mock cross-tenant proof). Module-mocking those
+// repositories to assert resolveTenantOrgId behavior would reintroduce the
+// primitive-tenant fallback contract this ticket removes, so their coverage was
+// moved rather than mocked here. financeiroRepository is out of this ticket's
+// vertical slice and keeps its existing VerifiedTenant-based contract.
 const {
   ORG_ID,
   USER_ID,
@@ -28,9 +38,6 @@ vi.mock('../lib/organizationContext', () => ({
   resolveTenantOrgId: (...args: unknown[]) => mockResolveTenantOrgId(...args),
 }));
 
-import { clienteRepository } from './clienteRepository';
-import { produtoRepository } from './produtoRepository';
-import { pedidoRepository } from './pedidoRepository';
 import { financeiroRepository } from './financeiroRepository';
 
 const mockTenant = {
@@ -43,169 +50,7 @@ beforeEach(() => {
   mockResolveTenantOrgId.mockResolvedValue(ORG_ID);
 });
 
-describe('Ticket 36: Contração do Tenancy por Usuário em Repositórios', () => {
-  describe('clienteRepository', () => {
-    it('filtra getAll estritamente por organizacao_id', async () => {
-      const selectMock = vi.fn().mockReturnThis();
-      const eqMock = vi.fn().mockReturnThis();
-      const orderMock = vi.fn().mockResolvedValueOnce({
-        data: [{ id: 'cli-1', nome: 'Cliente A', organizacao_id: ORG_ID }],
-        error: null,
-      });
-
-      mockFrom.mockReturnValueOnce({
-        select: selectMock,
-        eq: eqMock,
-        order: orderMock,
-      });
-
-      const result = await clienteRepository.getAll(mockTenant);
-      expect(result).toHaveLength(1);
-      expect(mockFrom).toHaveBeenCalledWith('clientes');
-      expect(eqMock).toHaveBeenCalledWith('organizacao_id', ORG_ID);
-    });
-
-    it('faz upsert usando onConflict com organizacao_id, bling_id', async () => {
-      const upsertMock = vi.fn().mockReturnThis();
-      const selectMock = vi.fn().mockReturnThis();
-      const singleMock = vi.fn().mockResolvedValueOnce({
-        data: { id: 'cli-1', nome: 'Cliente A', organizacao_id: ORG_ID, bling_id: '123' },
-        error: null,
-      });
-
-      mockFrom.mockReturnValueOnce({
-        upsert: upsertMock,
-        select: selectMock,
-        single: singleMock,
-      });
-
-      const result = await clienteRepository.upsert(mockTenant, {
-        nome: 'Cliente A',
-        bling_id: '123',
-      });
-
-      expect(result.id).toBe('cli-1');
-      expect(upsertMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          organizacao_id: ORG_ID,
-          user_id: USER_ID,
-          bling_id: '123',
-        }),
-        { onConflict: 'organizacao_id, bling_id' },
-      );
-    });
-  });
-
-  describe('produtoRepository', () => {
-    it('filtra getAll estritamente por organizacao_id', async () => {
-      const selectMock = vi.fn().mockReturnThis();
-      const eqMock = vi.fn().mockReturnThis();
-      const orderMock = vi.fn().mockResolvedValueOnce({
-        data: [{ id: 'prod-1', nome: 'Produto A', preco: 10, estoque: 5, organizacao_id: ORG_ID }],
-        error: null,
-      });
-
-      mockFrom.mockReturnValueOnce({
-        select: selectMock,
-        eq: eqMock,
-        order: orderMock,
-      });
-
-      const result = await produtoRepository.getAll(mockTenant);
-      expect(result).toHaveLength(1);
-      expect(mockFrom).toHaveBeenCalledWith('produtos');
-      expect(eqMock).toHaveBeenCalledWith('organizacao_id', ORG_ID);
-    });
-
-    it('faz upsert usando onConflict com organizacao_id, bling_id', async () => {
-      const upsertMock = vi.fn().mockReturnThis();
-      const selectMock = vi.fn().mockReturnThis();
-      const singleMock = vi.fn().mockResolvedValueOnce({
-        data: { id: 'prod-1', nome: 'Produto A', preco: 10, estoque: 5, organizacao_id: ORG_ID, bling_id: '456' },
-        error: null,
-      });
-
-      mockFrom.mockReturnValueOnce({
-        upsert: upsertMock,
-        select: selectMock,
-        single: singleMock,
-      });
-
-      const result = await produtoRepository.upsert(mockTenant, {
-        nome: 'Produto A',
-        preco: 10,
-        estoque: 5,
-        bling_id: '456',
-      });
-
-      expect(result.id).toBe('prod-1');
-      expect(upsertMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          organizacao_id: ORG_ID,
-          user_id: USER_ID,
-          bling_id: '456',
-        }),
-        { onConflict: 'organizacao_id, bling_id' },
-      );
-    });
-  });
-
-  describe('pedidoRepository', () => {
-    it('filtra getByBlingId estritamente por organizacao_id', async () => {
-      const selectMock = vi.fn().mockReturnThis();
-      const eqMock = vi.fn().mockReturnThis();
-      const maybeSingleMock = vi.fn().mockResolvedValueOnce({
-        data: { id: 'ped-1', numero: '101', total: 100, organizacao_id: ORG_ID, bling_id: '789' },
-        error: null,
-      });
-
-      mockFrom.mockReturnValueOnce({
-        select: selectMock,
-        eq: eqMock,
-        maybeSingle: maybeSingleMock,
-      });
-
-      const result = await pedidoRepository.getByBlingId(mockTenant, '789');
-      expect(result?.id).toBe('ped-1');
-      expect(eqMock).toHaveBeenCalledWith('organizacao_id', ORG_ID);
-      expect(eqMock).toHaveBeenCalledWith('bling_id', '789');
-    });
-
-    it('faz upsert usando onConflict com organizacao_id, bling_id', async () => {
-      const upsertMock = vi.fn().mockReturnThis();
-      const selectMock = vi.fn().mockReturnThis();
-      const singleMock = vi.fn().mockResolvedValueOnce({
-        data: { id: 'ped-1', numero: '101', total: 100, status: 'aprovado', cliente_id: 'cli-1', organizacao_id: ORG_ID, bling_id: '789' },
-        error: null,
-      });
-
-      mockFrom.mockReturnValueOnce({
-        upsert: upsertMock,
-        select: selectMock,
-        single: singleMock,
-      });
-
-      const result = await pedidoRepository.upsert(mockTenant, {
-        numero: '101',
-        data: '2026-08-20',
-        total: 100,
-        status: 'aprovado',
-        cliente_id: 'cli-1',
-        bling_id: '789',
-      });
-
-      expect(result.id).toBe('ped-1');
-      expect(upsertMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          organizacao_id: ORG_ID,
-          user_id: USER_ID,
-          bling_id: '789',
-        }),
-        { onConflict: 'organizacao_id, bling_id' },
-      );
-    });
-  });
-
+describe('Ticket 36: Contração do Tenancy por Usuário em Repositórios (financeiro, fora da fatia do ticket 08)', () => {
   describe('financeiroRepository', () => {
     it('filtra getCategorias estritamente por organizacao_id', async () => {
       const selectMock = vi.fn().mockReturnThis();

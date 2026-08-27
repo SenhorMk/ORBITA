@@ -103,7 +103,10 @@ schema_paths = [
   "../database/36_auditoria_correlacao_telemetria.sql",
   "../database/37_fechar_rpcs_grants_perigosos.sql",
   "../database/38_contexto_organizacao_ativo_cas.sql",
-  "../database/39_endurecer_identidade_sessao_oauth.sql"
+  "../database/39_endurecer_identidade_sessao_oauth.sql",
+  "../database/40_expand_verificar_catalogo_comercial_estoque_fiscal.sql",
+  "../database/41_backfill_catalogo_comercial_organizacao_contabilizado.sql",
+  "../database/42_contract_organizacao_obrigatoria_catalogo_comercial.sql"
 ]
 
 [db.seed]

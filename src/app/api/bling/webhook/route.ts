@@ -163,7 +163,7 @@ export async function POST(req: NextRequest) {
               telefone: tel,
               telefone_normalizado: normalizeToE164(tel) || undefined,
             };
-            await clienteRepository.upsert(tenant, cliente);
+            await clienteRepository.upsert(organizationScope, cliente);
           }
           await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, { success: true, entity: 'contato', blingId });
           continue;
@@ -177,7 +177,7 @@ export async function POST(req: NextRequest) {
           if (blingId) {
             const fullPedido = await blingClient.getPedido(blingId);
             if (fullPedido && fullPedido.contato?.id) {
-              const clienteLocal = await clienteRepository.getByBlingId(tenant, fullPedido.contato.id);
+              const clienteLocal = await clienteRepository.getByBlingId(organizationScope, fullPedido.contato.id);
               if (clienteLocal?.id) {
                 const statusCanonico = mapBlingStatus(fullPedido.situacao.valor);
                 const pedido: Pedido = {
@@ -188,12 +188,12 @@ export async function POST(req: NextRequest) {
                   status: statusCanonico,
                   cliente_id: clienteLocal.id,
                 };
-                const savedPedido = await pedidoRepository.upsert(tenant, pedido);
+                const savedPedido = await pedidoRepository.upsert(organizationScope, pedido);
 
                 const itemsParaSalvar: ItemPedido[] = [];
                 for (const item of fullPedido.itens) {
                   if (item.produto?.id) {
-                    const produtoLocal = await produtoRepository.getByBlingId(tenant, item.produto.id);
+                    const produtoLocal = await produtoRepository.getByBlingId(organizationScope, item.produto.id);
                     if (produtoLocal?.id && savedPedido.id) {
                       itemsParaSalvar.push({
                         pedido_id: savedPedido.id,
@@ -205,7 +205,7 @@ export async function POST(req: NextRequest) {
                   }
                 }
                 if (itemsParaSalvar.length > 0) {
-                  await pedidoRepository.addItems(tenant, itemsParaSalvar);
+                  await pedidoRepository.addItems(organizationScope, itemsParaSalvar);
                 }
               } else {
                 console.warn(`⚠️ Webhook Bling: Pedido ${fullPedido.numero} ignorado pois o cliente não existe localmente.`);
@@ -245,7 +245,7 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          const existingLocal = await produtoRepository.getByBlingId(tenant, blingId);
+          const existingLocal = await produtoRepository.getByBlingId(organizationScope, blingId);
           const imgUrl = extractBlingImageUrl(fullProduct) || existingLocal?.imagem_url;
 
           let saldoEstoque = 0;
@@ -269,7 +269,7 @@ export async function POST(req: NextRequest) {
             estoque: Math.max(0, saldoEstoque),
           };
 
-          await produtoRepository.upsert(tenant, produto);
+          await produtoRepository.upsert(organizationScope, produto);
           processedProducts++;
           await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, {
             success: true,
