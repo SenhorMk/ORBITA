@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
 import { financeiroRepository } from '@/repositories/financeiroRepository';
 import { verifySessionAndRole } from '@/lib/auth';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { TituloFinanceiro } from '@/types';
 
 export const dynamic = 'force-dynamic';
@@ -19,6 +20,9 @@ export async function GET(request: Request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
     }
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
 
     const { searchParams } = new URL(request.url);
     const tipo = searchParams.get('tipo') as 'receber' | 'pagar' | null;
@@ -26,9 +30,9 @@ export async function GET(request: Request) {
 
 
     const [resumo, titulos, categorias] = await Promise.all([
-      financeiroRepository.getResumo(session.tenant),
-      financeiroRepository.getTitulosFiltro(session.tenant, { tipo: tipo || undefined, situacao }),
-      financeiroRepository.getCategorias(session.tenant)
+      financeiroRepository.getResumo(scope),
+      financeiroRepository.getTitulosFiltro(scope, { tipo: tipo || undefined, situacao }),
+      financeiroRepository.getCategorias(scope)
     ]);
 
     return NextResponse.json({
@@ -56,6 +60,9 @@ export async function POST(request: Request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
     }
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
 
     const body = await request.json();
     const { descricao, valor, data_vencimento, data_pagamento, categoria_id, contato_id, modo, pago } = body;
@@ -79,7 +86,7 @@ export async function POST(request: Request) {
         categoria_id: categoria_id || undefined,
       };
 
-      const tituloSalvo = await financeiroRepository.upsertTitulo(session.tenant, novoTituloInterno);
+      const tituloSalvo = await financeiroRepository.upsertTitulo(scope, novoTituloInterno);
       return NextResponse.json({ success: true, data: tituloSalvo });
     }
 
@@ -91,7 +98,7 @@ export async function POST(request: Request) {
     // Obter a categoria no Supabase para ver se tem bling_id
     let idCategoriaBling: number | undefined = undefined;
     if (categoria_id) {
-      const categorias = await financeiroRepository.getCategorias(session.tenant);
+      const categorias = await financeiroRepository.getCategorias(scope);
       const cat = categorias.find(c => c.id === categoria_id);
       if (cat && cat.bling_id) {
         idCategoriaBling = cat.bling_id;
@@ -190,7 +197,7 @@ export async function POST(request: Request) {
       categoria_id: categoria_id || undefined,
     };
 
-    const tituloSalvo = await financeiroRepository.upsertTitulo(session.tenant, novoTitulo);
+    const tituloSalvo = await financeiroRepository.upsertTitulo(scope, novoTitulo);
 
     return NextResponse.json({ success: true, data: tituloSalvo });
 

@@ -106,7 +106,11 @@ schema_paths = [
   "../database/39_endurecer_identidade_sessao_oauth.sql",
   "../database/40_expand_verificar_catalogo_comercial_estoque_fiscal.sql",
   "../database/41_backfill_catalogo_comercial_organizacao_contabilizado.sql",
-  "../database/42_contract_organizacao_obrigatoria_catalogo_comercial.sql"
+  "../database/42_contract_organizacao_obrigatoria_catalogo_comercial.sql",
+  "../database/43_expand_financeiro_organizacao_obrigatoria.sql",
+  "../database/44_backfill_financeiro_organizacao_contabilizado.sql",
+  "../database/45_contract_organizacao_obrigatoria_financeiro.sql",
+  "../database/46_backfill_bling_conexoes_organizacao_contabilizado.sql"
 ]
 
 [db.seed]

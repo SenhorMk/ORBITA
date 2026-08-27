@@ -20,7 +20,7 @@ describe('privileged repository tenant scope', () => {
     expectTypeOf<Parameters<ClienteRepository['getAll']>[0]>()
       .toEqualTypeOf<VerifiedOrganizationScope>();
     expectTypeOf<Parameters<FinanceiroRepository['getCategorias']>[0]>()
-      .toEqualTypeOf<VerifiedTenant>();
+      .toEqualTypeOf<VerifiedOrganizationScope>();
     expectTypeOf<Parameters<PedidoRepository['getAllEnriched']>[0]>()
       .toEqualTypeOf<VerifiedOrganizationScope>();
     expectTypeOf<Parameters<PedidoRepository['deleteByBlingId']>[0]>()
@@ -33,18 +33,21 @@ describe('privileged repository tenant scope', () => {
       .toEqualTypeOf<VerifiedOrganizationScope>();
   });
 
-  it('requires a verified tenant for all FinanceiroRepository financial-domain operations', () => {
-    // getCategoriaByBlingId: (tenant, blingId) — tenant must be VerifiedTenant
+  it('requires a verified organization scope for all FinanceiroRepository financial-domain operations', () => {
+    // Ticket 09 (orbita-mvp-producao-v2): financeiroRepository moved off the
+    // primitive VerifiedTenant/resolveTenantOrgId fallback onto
+    // VerifiedOrganizationScope, same as the ticket 08 slice.
+    // getCategoriaByBlingId: (scope, blingId) — scope must be VerifiedOrganizationScope
     expectTypeOf<Parameters<FinanceiroRepository['getCategoriaByBlingId']>[0]>()
-      .toEqualTypeOf<VerifiedTenant>();
-    // getResumo: (tenant) — tenant must be VerifiedTenant
+      .toEqualTypeOf<VerifiedOrganizationScope>();
+    // getResumo: (scope) — scope must be VerifiedOrganizationScope
     expectTypeOf<Parameters<FinanceiroRepository['getResumo']>[0]>()
-      .toEqualTypeOf<VerifiedTenant>();
-    // getTitulosFiltro: (tenant, filtros?) — tenant must be VerifiedTenant
+      .toEqualTypeOf<VerifiedOrganizationScope>();
+    // getTitulosFiltro: (scope, filtros?) — scope must be VerifiedOrganizationScope
     expectTypeOf<Parameters<FinanceiroRepository['getTitulosFiltro']>[0]>()
-      .toEqualTypeOf<VerifiedTenant>();
-    // upsertTitulo: (tenant, titulo) — tenant must be VerifiedTenant
+      .toEqualTypeOf<VerifiedOrganizationScope>();
+    // upsertTitulo: (scope, titulo) — scope must be VerifiedOrganizationScope
     expectTypeOf<Parameters<FinanceiroRepository['upsertTitulo']>[0]>()
-      .toEqualTypeOf<VerifiedTenant>();
+      .toEqualTypeOf<VerifiedOrganizationScope>();
   });
 });
