@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { ChatwootClient } from '../../../../services/chatwoot';
+import { ChatwootAdapter } from '../../../../services/chatwoot/chatwootAdapter';
+import { registerChatwootInboxIfNeeded } from '../../../../services/chatwoot/chatwootInboxRegistration';
+import type { ChatwootConversation, ChatwootMessage } from '../../../../services/chatwoot/chatwootPort';
 import { supabaseServer } from '../../../../lib/supabaseServer';
 import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
@@ -23,36 +25,6 @@ function mapChatwootChannel(channelStr?: string): string {
   if (upper.includes('FACEBOOK')) return 'Channel::FacebookPage';
 
   return 'Channel::Whatsapp';
-}
-
-interface RawSender {
-  id: number;
-  name?: string;
-  email?: string;
-  phone_number?: string;
-  avatar_url?: string;
-  thumbnail?: string;
-  type?: string;
-}
-
-interface RawConversation {
-  id: number;
-  display_id: number;
-  status?: string;
-  inbox_id?: number;
-  channel_type?: string;
-  meta?: {
-    sender?: RawSender;
-    channel?: string;
-  };
-}
-
-interface RawMessage {
-  id: number;
-  content?: string;
-  message_type?: string | number;
-  sender?: RawSender;
-  created_at?: string;
 }
 
 type ChatwootPersistenceTable = 'chatwoot_contacts' | 'chatwoot_conversations' | 'chatwoot_messages';
@@ -83,15 +55,36 @@ export async function POST(request: Request) {
 
     const scope = organizationContextToScope(contextResult.context);
 
-    // 1. Obter conversas da API do Chatwoot usando client da organização
-    const client = await ChatwootClient.forOrganization(scope);
-    const rawConversations = (await client.getConversationsFromApi()) as RawConversation[];
+    // 1. Obter conversas da API do Chatwoot usando adapter vinculado ao escopo verificado
+    const adapter = await ChatwootAdapter.forScope(scope);
+    if (!adapter) {
+      return NextResponse.json({ success: false, error: 'Integração Chatwoot não configurada' }, { status: 409 });
+    }
+
+    const conversationsResult = await adapter.getConversations();
+    if (conversationsResult._tag !== 'ChatwootSuccess') {
+      return NextResponse.json(
+        { success: false, error: conversationsResult.message || `Falha ao consultar Chatwoot (${conversationsResult.reason})` },
+        { status: conversationsResult.status || 502 },
+      );
+    }
+    const rawConversations: ChatwootConversation[] = conversationsResult.data;
 
     let contactsCount = 0;
     let conversationsCount = 0;
     let messagesCount = 0;
 
     for (const rawConv of rawConversations) {
+      // Registrar/confirmar o mapeamento inbox->organização usando uma conversa obtida
+      // via chamada autenticada com as credenciais da própria organização — nunca a
+      // partir de um payload de webhook não verificado.
+      if (rawConv.inbox_id) {
+        await registerChatwootInboxIfNeeded(supabaseServer, scope, {
+          conexaoId: adapter.conexaoId,
+          inboxId: rawConv.inbox_id,
+        });
+      }
+
       // A. Processar Contato
       const sender = rawConv.meta?.sender;
       if (!sender) continue;
@@ -142,7 +135,12 @@ export async function POST(request: Request) {
       conversationsCount++;
 
       // C. Processar Mensagens desta conversa com escopo do tenant/organizacao
-      const rawMessages = (await client.getMessagesFromApi(conversationId)) as RawMessage[];
+      const messagesResult = await adapter.getMessages(conversationId);
+      if (messagesResult._tag !== 'ChatwootSuccess') {
+        console.error(`❌ Erro ao consultar mensagens da conversa ${conversationId}:`, messagesResult.reason);
+        continue;
+      }
+      const rawMessages: ChatwootMessage[] = messagesResult.data;
 
       for (const rawMsg of rawMessages) {
         let msgType: 'incoming' | 'outgoing' | 'system' | 'template' = 'incoming';

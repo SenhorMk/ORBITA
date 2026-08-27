@@ -110,7 +110,8 @@ schema_paths = [
   "../database/43_expand_financeiro_organizacao_obrigatoria.sql",
   "../database/44_backfill_financeiro_organizacao_contabilizado.sql",
   "../database/45_contract_organizacao_obrigatoria_financeiro.sql",
-  "../database/46_backfill_bling_conexoes_organizacao_contabilizado.sql"
+  "../database/46_backfill_bling_conexoes_organizacao_contabilizado.sql",
+  "../database/47_chatwoot_inbox_account_disambiguation.sql"
 ]
 
 [db.seed]
