@@ -225,6 +225,26 @@
       "order": 45,
       "path": "../database/42_contract_organizacao_obrigatoria_catalogo_comercial.sql",
       "sha256": "2d4411965b5d8846db173f802e5b6a3ac45e2a5686a8acb4d6709b8d2cd43692"
+    },
+    {
+      "order": 46,
+      "path": "../database/43_expand_financeiro_organizacao_obrigatoria.sql",
+      "sha256": "2fe00caedad2e3c87cfb9c49711698ee2a1e2f31e84985babaa8f627be24dc73"
+    },
+    {
+      "order": 47,
+      "path": "../database/44_backfill_financeiro_organizacao_contabilizado.sql",
+      "sha256": "36eee35a071385811a8a4689cabce8292329cb2c7b4be7554315f836202406c8"
+    },
+    {
+      "order": 48,
+      "path": "../database/45_contract_organizacao_obrigatoria_financeiro.sql",
+      "sha256": "8694f9b3abebc4f1968108feb7146dfbd77df5ff01a7474c441687da50915393"
+    },
+    {
+      "order": 49,
+      "path": "../database/46_backfill_bling_conexoes_organizacao_contabilizado.sql",
+      "sha256": "2150f6ea0191f82e20805ca224c0074fda3a8ddb24515651d9e84eab621331d7"
     }
   ],
   "references": [

@@ -63,33 +63,53 @@ export async function POST(req: NextRequest) {
 
     const tenant = tenantAuthorization.tenant;
 
-    // Resolução de escopo multi-tenant organizacional
-    let organizacaoId = tenant.id;
+    // Resolução de escopo multi-tenant organizacional. `tenant.id` é o
+    // user_id legado autenticado pela assinatura HMAC acima (nunca um hint
+    // de payload/query não verificado). `conexoes_integracao` não possui
+    // coluna `user_id` — o vínculo legado é rastreado em
+    // `metadata->>'migrado_de_user_id'` pelo backfill contabilizado
+    // (database/46_backfill_bling_conexoes_organizacao_contabilizado.sql).
+    // Nunca atribuímos ao "primeiro" resultado ambíguo: se a organização não
+    // puder ser resolvida de forma inequívoca, o webhook falha fechado.
+    let organizacaoId: string | null = null;
     let conexaoId: string | null = null;
 
-    const { data: conn } = await supabaseServer
+    const { data: linkedConn } = await supabaseServer
       .from('conexoes_integracao')
       .select('id, organizacao_id')
       .eq('provedor', 'bling')
-      .eq('status', 'conectado')
-      .or(`organizacao_id.eq.${tenant.id},user_id.eq.${tenant.id}`)
+      .contains('metadata', { migrado_de_user_id: tenant.id })
       .limit(1)
       .maybeSingle();
 
-    if (conn) {
-      organizacaoId = conn.organizacao_id;
-      conexaoId = conn.id;
+    if (linkedConn) {
+      organizacaoId = linkedConn.organizacao_id;
+      conexaoId = linkedConn.id;
     } else {
-      const { data: membership } = await supabaseServer
+      const { data: memberships } = await supabaseServer
         .from('membros_organizacao')
         .select('organizacao_id')
-        .eq('user_id', tenant.id)
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      if (membership) {
-        organizacaoId = membership.organizacao_id;
+        .eq('user_id', tenant.id);
+      const distinctOrgIds = Array.from(new Set((memberships || []).map((m) => m.organizacao_id)));
+
+      if (distinctOrgIds.length === 1) {
+        organizacaoId = distinctOrgIds[0];
+      } else {
+        console.warn(
+          `⚠️ Webhook Bling: não foi possível resolver organização inequívoca para o tenant legado (${distinctOrgIds.length} organizações candidatas). Payload rejeitado.`,
+        );
+        return NextResponse.json(
+          { success: false, error: 'Organização não pôde ser determinada de forma inequívoca para este evento.' },
+          { status: 403 },
+        );
       }
+    }
+
+    if (!organizacaoId) {
+      // Defesa em profundidade: nunca deveria ser alcançável (os dois ramos
+      // acima ou definem organizacaoId ou retornam antes), mas falha fechado
+      // em vez de invocar o adapter com um escopo indefinido.
+      return NextResponse.json({ success: false, error: 'Organização não pôde ser determinada.' }, { status: 403 });
     }
 
     const blingClient = bling.forOrganization(organizacaoId, conexaoId || undefined);

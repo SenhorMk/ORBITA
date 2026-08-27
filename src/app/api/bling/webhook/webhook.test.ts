@@ -20,6 +20,14 @@ let mockInboxResult = {
   cached_response: null as Record<string, unknown> | null,
 };
 
+let mockLinkedConnection: { id: string; organizacao_id: string } | null = {
+  id: 'conn-123',
+  organizacao_id: '11111111-1111-4111-8111-111111111111',
+};
+let mockMemberships: Array<{ organizacao_id: string }> = [
+  { organizacao_id: '11111111-1111-4111-8111-111111111111' },
+];
+
 const mockRpc = vi.fn().mockImplementation((fnName: string) => {
   if (fnName === 'registrar_evento_inbox_bling') {
     return Promise.resolve({ data: [mockInboxResult], error: null });
@@ -68,15 +76,13 @@ vi.mock('../../../../lib/supabaseServer', () => ({
         return {
           select: () => ({
             eq: () => ({
-              eq: () => ({
-                or: () => ({
-                  limit: () => ({
-                    maybeSingle: () =>
-                      Promise.resolve({
-                        data: { id: 'conn-123', organizacao_id: '11111111-1111-4111-8111-111111111111' },
-                        error: null,
-                      }),
-                  }),
+              contains: () => ({
+                limit: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: mockLinkedConnection,
+                      error: null,
+                    }),
                 }),
               }),
             }),
@@ -86,20 +92,17 @@ vi.mock('../../../../lib/supabaseServer', () => ({
       if (table === 'membros_organizacao') {
         return {
           select: () => ({
-            eq: () => ({
-              eq: () => ({
-                maybeSingle: () => Promise.resolve({ data: { papel: 'owner' }, error: null }),
-              }),
-              order: () => ({
-                limit: () => ({
-                  maybeSingle: () =>
-                    Promise.resolve({
-                      data: { organizacao_id: '11111111-1111-4111-8111-111111111111' },
-                      error: null,
-                    }),
-                }),
-              }),
-            }),
+            eq: (col: string) => {
+              if (col === 'organizacao_id') {
+                return {
+                  eq: () => ({
+                    maybeSingle: () => Promise.resolve({ data: { papel: 'owner' }, error: null }),
+                  }),
+                };
+              }
+              // .eq('user_id', tenant.id) — resolução de organização inequívoca do webhook
+              return Promise.resolve({ data: mockMemberships, error: null });
+            },
           }),
         };
       }
@@ -263,5 +266,60 @@ describe('Bling Webhook Endpoint Security & Idempotent Inbox', () => {
     const json = await response.json();
     expect(json.success).toBe(true);
     expect(json.processedProducts).toBe(1);
+  });
+
+  it('fails closed when the legacy tenant has no linked connection and belongs to zero organizations (never guesses)', async () => {
+    mockLinkedConnection = null;
+    mockMemberships = [];
+
+    const { POST: webhookHandler } = await import('./route');
+    const rawPayload = JSON.stringify({
+      event: 'stock.updated',
+      data: { idProduto: 'PROD-99', nome: 'Produto orfao', preco: 10, saldoFisico: 1 },
+    });
+    const signature = `sha256=${crypto.createHmac('sha256', plainSecret).update(rawPayload).digest('hex')}`;
+
+    const req = new NextRequest(`https://orbita.test/api/bling/webhook?userId=${validTenantId}`, {
+      method: 'POST',
+      headers: { 'x-bling-signature-256': signature, 'content-type': 'application/json' },
+      body: rawPayload,
+    });
+
+    const response = await webhookHandler(req);
+    expect(response.status).toBe(403);
+    const json = await response.json();
+    expect(json.success).toBe(false);
+
+    mockLinkedConnection = { id: 'conn-123', organizacao_id: '11111111-1111-4111-8111-111111111111' };
+    mockMemberships = [{ organizacao_id: '11111111-1111-4111-8111-111111111111' }];
+  });
+
+  it('fails closed when the legacy tenant belongs to more than one organization (never picks the first one)', async () => {
+    mockLinkedConnection = null;
+    mockMemberships = [
+      { organizacao_id: '11111111-1111-4111-8111-111111111111' },
+      { organizacao_id: '22222222-2222-4222-8222-222222222222' },
+    ];
+
+    const { POST: webhookHandler } = await import('./route');
+    const rawPayload = JSON.stringify({
+      event: 'stock.updated',
+      data: { idProduto: 'PROD-99', nome: 'Produto ambiguo', preco: 10, saldoFisico: 1 },
+    });
+    const signature = `sha256=${crypto.createHmac('sha256', plainSecret).update(rawPayload).digest('hex')}`;
+
+    const req = new NextRequest(`https://orbita.test/api/bling/webhook?userId=${validTenantId}`, {
+      method: 'POST',
+      headers: { 'x-bling-signature-256': signature, 'content-type': 'application/json' },
+      body: rawPayload,
+    });
+
+    const response = await webhookHandler(req);
+    expect(response.status).toBe(403);
+    const json = await response.json();
+    expect(json.success).toBe(false);
+
+    mockLinkedConnection = { id: 'conn-123', organizacao_id: '11111111-1111-4111-8111-111111111111' };
+    mockMemberships = [{ organizacao_id: '11111111-1111-4111-8111-111111111111' }];
   });
 });
