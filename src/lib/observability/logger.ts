@@ -9,7 +9,7 @@ export interface LogContext {
   [key: string]: unknown;
 }
 
-const SENSITIVE_KEY_PATTERN = /(password|secret|token|authorization|cookie|apiKey|api_key|client_secret|access_token|refresh_token|card|cvv|cpf|cnpj)/i;
+const SENSITIVE_KEY_PATTERN = /(password|secret|token|authorization|cookie|apiKey|api_key|client_secret|access_token|refresh_token|card|cvv|cpf|cnpj|^state$|^code$|oauth_state|oauth_code)/i;
 
 /**
  * Sanitiza objetos recursivamente substituindo valores de campos sensíveis por '[REDACTED]'.

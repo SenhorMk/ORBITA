@@ -1,75 +1,134 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-const originalEncryptionKey = process.env.ENCRYPTION_KEY;
+import {
+  consumeOAuthTransaction,
+  createOAuthTransaction,
+} from './oauth-transaction';
+import type { OAuthTransactionStorePort } from './oauthTransactionStore';
 
-beforeEach(() => {
-  process.env.ENCRYPTION_KEY = 'cd'.repeat(32);
-  vi.resetModules();
-});
+/**
+ * Deterministic in-memory fake implementing the real store port — not a
+ * module mock. It reproduces the same single-use, expiring, hash-checked
+ * semantics as the production Postgres-backed adapter.
+ */
+function createFakeStore(): OAuthTransactionStorePort {
+  const rows = new Map<
+    string,
+    { actorId: string; organizacaoId: string | undefined; stateHash: string; expiresAt: number; consumedAt: number | null }
+  >();
+  let nextId = 0;
 
-afterEach(() => {
-  if (originalEncryptionKey === undefined) {
-    delete process.env.ENCRYPTION_KEY;
-  } else {
-    process.env.ENCRYPTION_KEY = originalEncryptionKey;
-  }
-  vi.resetModules();
-});
+  return {
+    async create(input) {
+      nextId += 1;
+      const id = `11111111-1111-4111-8111-11111111111${nextId}`;
+      rows.set(id, {
+        actorId: input.actorId,
+        organizacaoId: input.organizacaoId,
+        stateHash: input.stateHash,
+        expiresAt: input.expiresAt,
+        consumedAt: null,
+      });
+      return { _tag: 'OAuthTransactionStored', id };
+    },
+    async consume(id, stateHash, now) {
+      const row = rows.get(id);
+      if (!row || row.consumedAt !== null || row.expiresAt <= now || row.stateHash !== stateHash) {
+        return { _tag: 'OAuthTransactionConsumeDenied' };
+      }
+      row.consumedAt = now;
+      return { _tag: 'OAuthTransactionConsumed', actorId: row.actorId, organizacaoId: row.organizacaoId };
+    },
+  };
+}
 
-describe('Bling OAuth transaction', () => {
-  it('binds a cryptographically random state to the initiating user', async () => {
-    const { createOAuthTransaction, readOAuthTransaction } = await import(
-      './oauth-transaction'
-    );
+const unavailableStore: OAuthTransactionStorePort = {
+  async create() {
+    return { _tag: 'OAuthTransactionStoreUnavailable', cause: 'connection-refused' };
+  },
+  async consume() {
+    return { _tag: 'OAuthTransactionStoreUnavailable', cause: 'connection-refused' };
+  },
+};
+
+describe('Bling OAuth transaction (server-side single-use store)', () => {
+  it('binds a cryptographically random state to the initiating actor and organization', async () => {
+    const store = createFakeStore();
     const createdAt = 1_700_000_000_000;
-    const transaction = createOAuthTransaction('user-123', createdAt);
-    if (transaction._tag !== 'OAuthTransactionCreated') {
-      throw new Error('OAuth transaction was not created.');
-    }
+    const transaction = await createOAuthTransaction('user-123', 'org-456', 'bling', store, createdAt);
+    if (transaction._tag !== 'OAuthTransactionCreated') throw new Error('OAuth transaction was not created.');
 
     expect(transaction.state).toMatch(/^[A-Za-z0-9_-]{43}$/u);
-    expect(
-      readOAuthTransaction(transaction.cookieValue, transaction.state, createdAt + 1_000),
-    ).toEqual({ _tag: 'ValidOAuthTransaction', userId: 'user-123' });
+    // The cookie value is an opaque reference (the store row id), never the raw state or payload.
+    expect(transaction.cookieValue).not.toBe(transaction.state);
+
+    const result = await consumeOAuthTransaction(transaction.cookieValue, transaction.state, store, createdAt + 1_000);
+    expect(result).toEqual({ _tag: 'ValidOAuthTransaction', userId: 'user-123', organizacaoId: 'org-456' });
   });
 
   it('rejects a state that does not match the protected transaction', async () => {
-    const { createOAuthTransaction, readOAuthTransaction } = await import(
-      './oauth-transaction'
-    );
-    const transaction = createOAuthTransaction('user-123', 1_700_000_000_000);
-    if (transaction._tag !== 'OAuthTransactionCreated') {
-      throw new Error('OAuth transaction was not created.');
-    }
+    const store = createFakeStore();
+    const transaction = await createOAuthTransaction('user-123', undefined, 'bling', store, 1_700_000_000_000);
+    if (transaction._tag !== 'OAuthTransactionCreated') throw new Error('OAuth transaction was not created.');
 
-    expect(
-      readOAuthTransaction(transaction.cookieValue, 'attacker-state', 1_700_000_001_000),
-    ).toEqual({ _tag: 'InvalidOAuthTransaction', reason: 'state-mismatch' });
+    const result = await consumeOAuthTransaction(transaction.cookieValue, 'attacker-state', store, 1_700_000_001_000);
+    expect(result).toEqual({ _tag: 'InvalidOAuthTransaction', reason: 'state-mismatch' });
   });
 
   it('rejects an expired transaction', async () => {
-    const { createOAuthTransaction, readOAuthTransaction } = await import(
-      './oauth-transaction'
-    );
+    const store = createFakeStore();
     const createdAt = 1_700_000_000_000;
-    const transaction = createOAuthTransaction('user-123', createdAt);
-    if (transaction._tag !== 'OAuthTransactionCreated') {
-      throw new Error('OAuth transaction was not created.');
-    }
+    const transaction = await createOAuthTransaction('user-123', undefined, 'bling', store, createdAt);
+    if (transaction._tag !== 'OAuthTransactionCreated') throw new Error('OAuth transaction was not created.');
 
-    expect(
-      readOAuthTransaction(transaction.cookieValue, transaction.state, createdAt + 600_001),
-    ).toEqual({ _tag: 'InvalidOAuthTransaction', reason: 'expired' });
+    const result = await consumeOAuthTransaction(transaction.cookieValue, transaction.state, store, createdAt + 600_001);
+    expect(result).toEqual({ _tag: 'InvalidOAuthTransaction', reason: 'state-mismatch' });
   });
 
-  it('returns a typed configuration failure when encryption is unavailable', async () => {
-    delete process.env.ENCRYPTION_KEY;
-    vi.resetModules();
-    const { createOAuthTransaction } = await import('./oauth-transaction');
+  it('rejects a replayed (already-consumed) transaction and performs no second effect', async () => {
+    const store = createFakeStore();
+    const createdAt = 1_700_000_000_000;
+    const transaction = await createOAuthTransaction('user-123', undefined, 'bling', store, createdAt);
+    if (transaction._tag !== 'OAuthTransactionCreated') throw new Error('OAuth transaction was not created.');
 
-    expect(createOAuthTransaction('user-123')).toEqual({
+    const first = await consumeOAuthTransaction(transaction.cookieValue, transaction.state, store, createdAt + 1_000);
+    const replay = await consumeOAuthTransaction(transaction.cookieValue, transaction.state, store, createdAt + 2_000);
+
+    expect(first._tag).toBe('ValidOAuthTransaction');
+    expect(replay).toEqual({ _tag: 'InvalidOAuthTransaction', reason: 'state-mismatch' });
+  });
+
+  it('rejects a malformed (non-UUID) cookie reference without touching the store', async () => {
+    const store = createFakeStore();
+
+    const result = await consumeOAuthTransaction('not-a-uuid', 'any-state', store, Date.now());
+    expect(result).toEqual({ _tag: 'InvalidOAuthTransaction', reason: 'malformed' });
+  });
+
+  it('rejects an empty received state', async () => {
+    const store = createFakeStore();
+    const transaction = await createOAuthTransaction('user-123', undefined, 'bling', store, 1_700_000_000_000);
+    if (transaction._tag !== 'OAuthTransactionCreated') throw new Error('OAuth transaction was not created.');
+
+    const result = await consumeOAuthTransaction(transaction.cookieValue, '', store, 1_700_000_000_000);
+    expect(result).toEqual({ _tag: 'InvalidOAuthTransaction', reason: 'malformed' });
+  });
+
+  it('returns a typed store-unavailable failure on creation when the durable store cannot be reached', async () => {
+    const result = await createOAuthTransaction('user-123', undefined, 'bling', unavailableStore);
+    expect(result).toEqual({
       _tag: 'OAuthTransactionCreationFailed',
-      reason: 'invalid-encryption-configuration',
+      reason: 'store-unavailable',
+      cause: 'connection-refused',
     });
+  });
+
+  it('fails closed on consumption when the durable store cannot be reached', async () => {
+    const result = await consumeOAuthTransaction(
+      '22222222-2222-4222-8222-222222222222',
+      'some-state',
+      unavailableStore,
+    );
+    expect(result).toEqual({ _tag: 'InvalidOAuthTransaction', reason: 'store-unavailable' });
   });
 });
