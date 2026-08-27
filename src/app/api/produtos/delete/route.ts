@@ -2,6 +2,29 @@ import { NextResponse } from 'next/server';
 import { produtoRepository } from '@/repositories/produtoRepository';
 import { bling } from '@/services/bling';
 import { verifySessionAndRole } from '@/lib/auth';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+
+/** Best-effort remote delete: local deletion must proceed even if the Bling side fails. */
+async function attemptBlingProductDelete(
+  blingClient: ReturnType<typeof bling.forUser>,
+  blingId: string | undefined,
+  logEntries: string[],
+): Promise<string | null> {
+  if (!blingId || !/^\d+$/.test(blingId)) {
+    logEntries.push(`[${new Date().toISOString()}] ℹ️ O produto não possuía um ID numérico no Bling, exclusão remota ignorada.`);
+    return null;
+  }
+  logEntries.push(`[${new Date().toISOString()}] 🔄 Deletando produto no Bling ERP v3...`);
+  try {
+    await blingClient.deleteProduto(blingId);
+    logEntries.push(`[${new Date().toISOString()}] ✅ Produto deletado no Bling ERP com sucesso!`);
+    return null;
+  } catch (deleteErr: unknown) {
+    const blingError = deleteErr instanceof Error ? deleteErr.message : String(deleteErr);
+    logEntries.push(`[${new Date().toISOString()}] ⚠️ Falha ao deletar no Bling (pode já ter sido excluído): ${blingError}`);
+    return blingError;
+  }
+}
 
 export async function POST(request: Request) {
   const logEntries: string[] = [];
@@ -15,6 +38,9 @@ export async function POST(request: Request) {
     if (session.role !== 'dono') {
       return NextResponse.json({ success: false, error: 'Acesso negado: apenas o dono pode realizar esta ação.' }, { status: 403 });
     }
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
     const blingClient = bling.forUser(session.tenant);
 
     const body = await request.json();
@@ -26,26 +52,13 @@ export async function POST(request: Request) {
 
     logEntries.push(`[${timestamp}] 🗑️ Processando exclusão do produto: "${nome || id}" (ID Bling: ${bling_id || 'N/A'})`);
 
-    let blingError: string | null = null;
-
     // 1. Tentar deletar no Bling ERP v3 (se tiver um bling_id numérico válido)
-    if (bling_id && /^\d+$/.test(bling_id)) {
-      logEntries.push(`[${new Date().toISOString()}] 🔄 Deletando produto no Bling ERP v3...`);
-      try {
-        await blingClient.deleteProduto(bling_id);
-        logEntries.push(`[${new Date().toISOString()}] ✅ Produto deletado no Bling ERP com sucesso!`);
-      } catch (deleteErr: unknown) {
-        blingError = deleteErr instanceof Error ? deleteErr.message : String(deleteErr);
-        logEntries.push(`[${new Date().toISOString()}] ⚠️ Falha ao deletar no Bling (pode já ter sido excluído): ${blingError}`);
-      }
-    } else {
-      logEntries.push(`[${new Date().toISOString()}] ℹ️ O produto não possuía um ID numérico no Bling, exclusão remota ignorada.`);
-    }
+    const blingError = await attemptBlingProductDelete(blingClient, bling_id, logEntries);
 
     // 2. Deletar do banco Supabase
     logEntries.push(`[${new Date().toISOString()}] 💾 Excluindo registro do banco Supabase...`);
     try {
-      await produtoRepository.delete(session.tenant, id);
+      await produtoRepository.delete(scope, id);
       logEntries.push(`[${new Date().toISOString()}] ✅ Registro excluído do Supabase!`);
     } catch (dbErr: unknown) {
       const dbErrMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);

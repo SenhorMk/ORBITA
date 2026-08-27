@@ -11,16 +11,22 @@ import type { IntegrationService } from '../services/integrationService';
 
 describe('privileged repository tenant scope', () => {
   it('requires a previously verified tenant for every service-role adapter', () => {
+    // Ticket 08 (orbita-mvp-producao-v2): clienteRepository, produtoRepository and
+    // pedidoRepository moved off the primitive VerifiedTenant/resolveTenantOrgId
+    // fallback onto VerifiedOrganizationScope for the produto -> pedido manual ->
+    // estoque -> fiscal vertical slice. bling.forUser still authenticates against
+    // the Bling adapter's per-user credential storage (an external-provider
+    // concern outside this ticket's DB-tenancy slice) and keeps VerifiedTenant.
     expectTypeOf<Parameters<ClienteRepository['getAll']>[0]>()
-      .toEqualTypeOf<VerifiedTenant>();
+      .toEqualTypeOf<VerifiedOrganizationScope>();
     expectTypeOf<Parameters<FinanceiroRepository['getCategorias']>[0]>()
       .toEqualTypeOf<VerifiedTenant>();
     expectTypeOf<Parameters<PedidoRepository['getAllEnriched']>[0]>()
-      .toEqualTypeOf<VerifiedTenant>();
+      .toEqualTypeOf<VerifiedOrganizationScope>();
     expectTypeOf<Parameters<PedidoRepository['deleteByBlingId']>[0]>()
-      .toEqualTypeOf<VerifiedTenant>();
+      .toEqualTypeOf<VerifiedOrganizationScope>();
     expectTypeOf<Parameters<ProdutoRepository['getAll']>[0]>()
-      .toEqualTypeOf<VerifiedTenant>();
+      .toEqualTypeOf<VerifiedOrganizationScope>();
     expectTypeOf<Parameters<typeof bling.forUser>[0]>()
       .toEqualTypeOf<VerifiedTenant>();
     expectTypeOf<Parameters<IntegrationService['linkSacToErp']>[0]>()

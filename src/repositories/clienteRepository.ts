@@ -1,15 +1,13 @@
 import { supabaseServer } from '../lib/supabaseServer';
-import type { VerifiedTenant } from '../lib/auth';
-import { resolveTenantOrgId } from '../lib/organizationContext';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { Cliente } from '../types';
 
 export class ClienteRepository {
-  async getAll(tenant: VerifiedTenant): Promise<Cliente[]> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async getAll(scope: VerifiedOrganizationScope): Promise<Cliente[]> {
     const { data, error } = await supabaseServer
       .from('clientes')
       .select('*')
-      .eq('organizacao_id', orgId)
+      .eq('organizacao_id', scope.organizationId)
       .order('nome', { ascending: true });
 
     if (error) {
@@ -19,12 +17,11 @@ export class ClienteRepository {
     return data || [];
   }
 
-  async getByBlingId(tenant: VerifiedTenant, blingId: string): Promise<Cliente | null> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async getByBlingId(scope: VerifiedOrganizationScope, blingId: string): Promise<Cliente | null> {
     const { data, error } = await supabaseServer
       .from('clientes')
       .select('*')
-      .eq('organizacao_id', orgId)
+      .eq('organizacao_id', scope.organizationId)
       .eq('bling_id', blingId)
       .maybeSingle();
 
@@ -35,12 +32,11 @@ export class ClienteRepository {
     return data || null;
   }
 
-  async upsert(tenant: VerifiedTenant, cliente: Cliente): Promise<Cliente> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async upsert(scope: VerifiedOrganizationScope, cliente: Cliente): Promise<Cliente> {
     const payload: Record<string, unknown> = {
       ...cliente,
-      organizacao_id: orgId,
-      user_id: tenant.id,
+      organizacao_id: scope.organizationId,
+      user_id: scope.actorId,
     };
     delete payload.telefone_normalizado;
 
@@ -57,13 +53,12 @@ export class ClienteRepository {
     return data;
   }
 
-  async delete(tenant: VerifiedTenant, id: string): Promise<void> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async delete(scope: VerifiedOrganizationScope, id: string): Promise<void> {
     const { error } = await supabaseServer
       .from('clientes')
       .delete()
       .eq('id', id)
-      .eq('organizacao_id', orgId);
+      .eq('organizacao_id', scope.organizationId);
 
     if (error) {
       console.error('Erro ao excluir cliente no Supabase:', error);

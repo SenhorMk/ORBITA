@@ -1,15 +1,13 @@
 import { supabaseServer } from '../lib/supabaseServer';
-import type { VerifiedTenant } from '../lib/auth';
-import { resolveTenantOrgId } from '../lib/organizationContext';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { Produto } from '../types';
 
 export class ProdutoRepository {
-  async getAll(tenant: VerifiedTenant): Promise<Produto[]> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async getAll(scope: VerifiedOrganizationScope): Promise<Produto[]> {
     const { data, error } = await supabaseServer
       .from('produtos')
       .select('*')
-      .eq('organizacao_id', orgId)
+      .eq('organizacao_id', scope.organizationId)
       .order('nome', { ascending: true });
 
     if (error) {
@@ -20,12 +18,11 @@ export class ProdutoRepository {
     return data || [];
   }
 
-  async getByBlingId(tenant: VerifiedTenant, blingId: string): Promise<Produto | null> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async getByBlingId(scope: VerifiedOrganizationScope, blingId: string): Promise<Produto | null> {
     const { data, error } = await supabaseServer
       .from('produtos')
       .select('*')
-      .eq('organizacao_id', orgId)
+      .eq('organizacao_id', scope.organizationId)
       .eq('bling_id', blingId)
       .maybeSingle();
 
@@ -36,25 +33,24 @@ export class ProdutoRepository {
     return data || null;
   }
 
-  async upsert(tenant: VerifiedTenant, produto: Produto): Promise<Produto> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async upsert(scope: VerifiedOrganizationScope, produto: Produto): Promise<Produto> {
     const payloadForUpsert = {
       ...produto,
-      organizacao_id: orgId,
-      user_id: tenant.id,
+      organizacao_id: scope.organizationId,
+      user_id: scope.actorId,
     };
 
     if (produto.bling_id && produto.id) {
       const { data: existingBling } = await supabaseServer
         .from('produtos')
         .select('id')
-        .eq('organizacao_id', orgId)
+        .eq('organizacao_id', scope.organizationId)
         .eq('bling_id', produto.bling_id)
         .maybeSingle();
 
       if (existingBling && existingBling.id !== produto.id) {
         try {
-          await this.delete(tenant, existingBling.id);
+          await this.delete(scope, existingBling.id);
         } catch (delErr: unknown) {
           const errMsg = delErr instanceof Error ? delErr.message : String(delErr);
           console.warn(`⚠️ Não foi possível deletar o duplicado: ${errMsg}`);
@@ -67,7 +63,7 @@ export class ProdutoRepository {
         .from('produtos')
         .update(payloadForUpsert)
         .eq('id', produto.id)
-        .eq('organizacao_id', orgId)
+        .eq('organizacao_id', scope.organizationId)
         .select()
         .single();
 
@@ -93,13 +89,12 @@ export class ProdutoRepository {
     return data;
   }
 
-  async delete(tenant: VerifiedTenant, id: string): Promise<void> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async delete(scope: VerifiedOrganizationScope, id: string): Promise<void> {
     const { error } = await supabaseServer
       .from('produtos')
       .delete()
       .eq('id', id)
-      .eq('organizacao_id', orgId);
+      .eq('organizacao_id', scope.organizationId);
 
     if (error) {
       console.error(`Erro ao deletar produto com id ${id} no Supabase:`, error);

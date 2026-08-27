@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { clienteRepository } from '@/repositories/clienteRepository';
 import { bling } from '@/services/bling';
 import { verifySessionAndRole } from '@/lib/auth';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
 export async function POST(request: Request) {
   const logEntries: string[] = [];
@@ -13,6 +14,9 @@ export async function POST(request: Request) {
     if (session.role !== 'dono') {
       return NextResponse.json({ success: false, error: 'Acesso negado: apenas o dono pode realizar esta ação.' }, { status: 403 });
     }
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
 
     const body = await request.json();
     const { id, bling_id } = body;
@@ -42,7 +46,7 @@ export async function POST(request: Request) {
     // Deletar no Supabase Cache
     try {
       logEntries.push(`[${new Date().toISOString()}] 💾 Removendo cliente do Supabase (ID: ${id})...`);
-      await clienteRepository.delete(session.tenant, id);
+      await clienteRepository.delete(scope, id);
       logEntries.push(`[${new Date().toISOString()}] ✅ Cliente removido do Supabase com sucesso.`);
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);

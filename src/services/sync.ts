@@ -19,6 +19,11 @@ import {
 } from '../repositories/syncJobRepository';
 
 import { resolveTenantOrgId } from '../lib/organizationContext';
+// resolveTenantOrgId is used only to resolve the ActorContext's organization
+// membership when constructing the VerifiedOrganizationScope in
+// resolveScope() below. Every DB read/write in this service uses the
+// resulting verified scope (scope.organizationId), never the primitive
+// tenant/user id as authority.
 
 async function getLastSyncedAt(orgId: string, entidade: string): Promise<string | null> {
   const { data } = await supabaseServer
@@ -230,7 +235,6 @@ export class SyncService {
     progress: SyncJobProgress,
   ): Promise<number> {
     try {
-      const orgId = await resolveTenantOrgId(supabaseServer, tenant);
       const total = await syncPaginatedEntities(
         (page) => blingClient.getClientes(page, 100),
         async (bc) => {
@@ -243,7 +247,7 @@ export class SyncService {
             telefone: tel,
             telefone_normalizado: normalizeToE164(tel) || undefined,
           };
-          await clienteRepository.upsert(tenant, cliente);
+          await clienteRepository.upsert(scope, cliente);
         },
         async (page, count) => {
           progress.pagina_atual = page;
@@ -252,7 +256,7 @@ export class SyncService {
         },
       );
 
-      await touchSyncState(orgId, tenant.id, 'clientes');
+      await touchSyncState(scope.organizationId, tenant.id, 'clientes');
       return total;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -269,8 +273,7 @@ export class SyncService {
     progress: SyncJobProgress,
   ): Promise<number> {
     try {
-      const orgId = await resolveTenantOrgId(supabaseServer, tenant);
-      const lastSynced = await getLastSyncedAt(orgId, 'produtos');
+      const lastSynced = await getLastSyncedAt(scope.organizationId, 'produtos');
       const dataAlteracao = getBlingDateTime(lastSynced);
 
       const total = await syncPaginatedEntities(
@@ -318,7 +321,7 @@ export class SyncService {
             imagem_url: imgUrl,
             estoque: saldo,
           };
-          await produtoRepository.upsert(tenant, produto);
+          await produtoRepository.upsert(scope, produto);
         },
         async (page, count) => {
           progress.pagina_atual = page;
@@ -327,7 +330,7 @@ export class SyncService {
         },
       );
 
-      await touchSyncState(orgId, tenant.id, 'produtos');
+      await touchSyncState(scope.organizationId, tenant.id, 'produtos');
       return total;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -344,14 +347,13 @@ export class SyncService {
     progress: SyncJobProgress,
   ): Promise<number> {
     try {
-      const orgId = await resolveTenantOrgId(supabaseServer, tenant);
-      const lastSynced = await getLastSyncedAt(orgId, 'pedidos');
+      const lastSynced = await getLastSyncedAt(scope.organizationId, 'pedidos');
       const dataInicial = lastSynced ? new Date(lastSynced).toISOString().split('T')[0] : undefined;
 
       const total = await syncPaginatedEntities(
         (page) => blingClient.getPedidos(page, 100, dataInicial),
         async (bp) => {
-          const clienteLocal = await clienteRepository.getByBlingId(tenant, bp.contato.id);
+          const clienteLocal = await clienteRepository.getByBlingId(scope, bp.contato.id);
           if (!clienteLocal?.id) {
             console.warn(
               `⚠️ sync pedidos: cliente Bling ID ${bp.contato.id} não encontrado, pedido ${bp.numero} ignorado.`,
@@ -369,13 +371,13 @@ export class SyncService {
             cliente_id: clienteLocal.id,
           };
 
-          const savedPedido = await pedidoRepository.upsert(tenant, pedido);
+          const savedPedido = await pedidoRepository.upsert(scope, pedido);
 
           const itemsParaSalvar: ItemPedido[] = [];
           for (const item of bp.itens) {
             if (item.produto?.id) {
               const produtoLocal = await produtoRepository.getByBlingId(
-                tenant,
+                scope,
                 item.produto.id,
               );
               if (produtoLocal?.id && savedPedido.id) {
@@ -389,7 +391,7 @@ export class SyncService {
             }
           }
           if (itemsParaSalvar.length > 0) {
-            await pedidoRepository.addItems(tenant, itemsParaSalvar);
+            await pedidoRepository.addItems(scope, itemsParaSalvar);
           }
         },
         async (page, count) => {
@@ -399,7 +401,7 @@ export class SyncService {
         },
       );
 
-      await touchSyncState(orgId, tenant.id, 'pedidos');
+      await touchSyncState(scope.organizationId, tenant.id, 'pedidos');
       return total;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

@@ -4,6 +4,7 @@ import { bling } from '@/services/bling';
 import { Produto } from '@/types';
 import { validateProdutoForBling, sanitizeProductName } from '@/lib/utils';
 import { verifySessionAndRole } from '@/lib/auth';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
 export async function POST(request: Request) {
   const logEntries: string[] = [];
@@ -17,6 +18,9 @@ export async function POST(request: Request) {
     if (session.role !== 'dono') {
       return NextResponse.json({ success: false, error: 'Acesso negado: apenas o dono pode realizar esta ação.' }, { status: 403 });
     }
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
     const blingClient = bling.forUser(session.tenant);
 
     const body = await request.json();
@@ -184,7 +188,7 @@ export async function POST(request: Request) {
     logEntries.push(`[${new Date().toISOString()}] 💾 Persistindo registro no banco Supabase...`);
     let savedProduct: Produto;
     try {
-      savedProduct = await produtoRepository.upsert(session.tenant, updatedProductPayload);
+      savedProduct = await produtoRepository.upsert(scope, updatedProductPayload);
       logEntries.push(`[${new Date().toISOString()}] ✅ Registro persistido no Supabase! ID: ${savedProduct.id}`);
     } catch (dbErr: unknown) {
       const dbErrMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);

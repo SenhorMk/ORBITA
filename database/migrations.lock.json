@@ -205,6 +205,26 @@
       "order": 41,
       "path": "../database/38_contexto_organizacao_ativo_cas.sql",
       "sha256": "9d8d2336a18f3d5305e8e4b52788e87c41085a5bef64cc861f93cbfcde03d664"
+    },
+    {
+      "order": 42,
+      "path": "../database/39_endurecer_identidade_sessao_oauth.sql",
+      "sha256": "ebd5ed360a6874f8dedd15ff16a311728979e1d51f5deb6839e17cc583f7917c"
+    },
+    {
+      "order": 43,
+      "path": "../database/40_expand_verificar_catalogo_comercial_estoque_fiscal.sql",
+      "sha256": "61139a7012358c78f3f176317f29f218afa44032b743de3f89210f32fc5b5650"
+    },
+    {
+      "order": 44,
+      "path": "../database/41_backfill_catalogo_comercial_organizacao_contabilizado.sql",
+      "sha256": "580bacd017eafff6f62fc6807142757eac0e63cb8621ed44459cf3d600db3432"
+    },
+    {
+      "order": 45,
+      "path": "../database/42_contract_organizacao_obrigatoria_catalogo_comercial.sql",
+      "sha256": "2d4411965b5d8846db173f802e5b6a3ac45e2a5686a8acb4d6709b8d2cd43692"
     }
   ],
   "references": [

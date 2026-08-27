@@ -28,6 +28,22 @@ describe('logger & redaction boundary', () => {
     expect(nested.publicField).toBe('safeValue');
   });
 
+  it('redactSensitiveData redige state e code de fluxos OAuth', () => {
+    const raw = {
+      provider: 'bling',
+      state: 'ab12cd34',
+      code: 'auth-code-xyz',
+      correlationId: 'corr_1',
+    };
+
+    const redacted = redactSensitiveData(raw) as Record<string, unknown>;
+
+    expect(redacted.provider).toBe('bling');
+    expect(redacted.state).toBe('[REDACTED]');
+    expect(redacted.code).toBe('[REDACTED]');
+    expect(redacted.correlationId).toBe('corr_1');
+  });
+
   it('redactSensitiveData lida com arrays de objetos', () => {
     const list = [
       { token: 'secret1', id: 1 },

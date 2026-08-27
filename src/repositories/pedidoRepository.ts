@@ -1,6 +1,5 @@
 import { supabaseServer } from '../lib/supabaseServer';
-import type { VerifiedTenant } from '../lib/auth';
-import { resolveTenantOrgId } from '../lib/organizationContext';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { Pedido, ItemPedido, Nfe, Cliente } from '../types';
 import { clienteRepository } from './clienteRepository';
 
@@ -44,8 +43,7 @@ function mapDocumentoToNfe(doc?: RawDocumentoFiscal | null): Nfe | undefined {
 }
 
 export class PedidoRepository {
-  async getAllEnriched(tenant: VerifiedTenant): Promise<PedidoEnriquecido[]> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async getAllEnriched(scope: VerifiedOrganizationScope): Promise<PedidoEnriquecido[]> {
     try {
       const { data, error } = await supabaseServer
         .from('pedidos')
@@ -54,7 +52,7 @@ export class PedidoRepository {
           cliente:clientes!fk_pedido_cliente(*),
           nfe:documentos_fiscais(*)
         `)
-        .eq('organizacao_id', orgId)
+        .eq('organizacao_id', scope.organizationId)
         .order('data', { ascending: false });
 
       if (!error && data) {
@@ -72,12 +70,12 @@ export class PedidoRepository {
       const { data: rawPedidos, error: pErr } = await supabaseServer
         .from('pedidos')
         .select('*, nfe:documentos_fiscais(*)')
-        .eq('organizacao_id', orgId)
+        .eq('organizacao_id', scope.organizationId)
         .order('data', { ascending: false });
 
       if (pErr) throw pErr;
 
-      const clientes = await clienteRepository.getAll(tenant);
+      const clientes = await clienteRepository.getAll(scope);
       const clienteMap = new Map(clientes.map((c) => [c.id, c]));
 
       return ((rawPedidos || []) as PedidoEnriquecido[]).map((p) => ({
@@ -91,13 +89,12 @@ export class PedidoRepository {
     }
   }
 
-  async getById(tenant: VerifiedTenant, id: string): Promise<Pedido | null> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async getById(scope: VerifiedOrganizationScope, id: string): Promise<Pedido | null> {
     const { data, error } = await supabaseServer
       .from('pedidos')
       .select('*')
       .eq('id', id)
-      .eq('organizacao_id', orgId)
+      .eq('organizacao_id', scope.organizationId)
       .maybeSingle();
 
     if (error) {
@@ -107,12 +104,11 @@ export class PedidoRepository {
     return data || null;
   }
 
-  async getByBlingId(tenant: VerifiedTenant, blingId: string): Promise<Pedido | null> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async getByBlingId(scope: VerifiedOrganizationScope, blingId: string): Promise<Pedido | null> {
     const { data, error } = await supabaseServer
       .from('pedidos')
       .select('*')
-      .eq('organizacao_id', orgId)
+      .eq('organizacao_id', scope.organizationId)
       .eq('bling_id', blingId)
       .maybeSingle();
 
@@ -123,13 +119,12 @@ export class PedidoRepository {
     return data || null;
   }
 
-  /** Delete an order only inside the previously verified tenant organization boundary. */
-  async deleteByBlingId(tenant: VerifiedTenant, blingId: string): Promise<void> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  /** Delete an order only inside the previously verified organization boundary. */
+  async deleteByBlingId(scope: VerifiedOrganizationScope, blingId: string): Promise<void> {
     const { error } = await supabaseServer
       .from('pedidos')
       .delete()
-      .eq('organizacao_id', orgId)
+      .eq('organizacao_id', scope.organizationId)
       .eq('bling_id', blingId);
 
     if (error) {
@@ -138,12 +133,11 @@ export class PedidoRepository {
     }
   }
 
-  async upsert(tenant: VerifiedTenant, pedido: Pedido): Promise<Pedido> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async upsert(scope: VerifiedOrganizationScope, pedido: Pedido): Promise<Pedido> {
     const payload = {
       ...pedido,
-      organizacao_id: orgId,
-      user_id: tenant.id,
+      organizacao_id: scope.organizationId,
+      user_id: scope.actorId,
     };
     const { data, error } = await supabaseServer
       .from('pedidos')
@@ -159,12 +153,11 @@ export class PedidoRepository {
   }
 
   // Operações para Itens de Pedido
-  async addItems(tenant: VerifiedTenant, items: ItemPedido[]): Promise<void> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async addItems(scope: VerifiedOrganizationScope, items: ItemPedido[]): Promise<void> {
     const itemsWithOrg = items.map((i) => ({
       ...i,
-      organizacao_id: orgId,
-      user_id: tenant.id,
+      organizacao_id: scope.organizationId,
+      user_id: scope.actorId,
     }));
     const { error } = await supabaseServer
       .from('itens_pedido')
@@ -177,11 +170,10 @@ export class PedidoRepository {
   }
 
   // Operações para Documentos Fiscais (Canônico)
-  async upsertNfe(tenant: VerifiedTenant, nfe: Nfe): Promise<Nfe> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async upsertNfe(scope: VerifiedOrganizationScope, nfe: Nfe): Promise<Nfe> {
     const payload = {
-      organizacao_id: orgId,
-      user_id: tenant.id,
+      organizacao_id: scope.organizationId,
+      user_id: scope.actorId,
       bling_id: nfe.bling_id,
       numero: nfe.numero,
       chave_acesso: nfe.chave || null,
@@ -217,8 +209,8 @@ export class PedidoRepository {
   }
 
   // Obter faturamento mensal total
-  async getFaturamentoMensal(tenant: VerifiedTenant): Promise<number> {
-    const pedidos = await this.getAllEnriched(tenant);
+  async getFaturamentoMensal(scope: VerifiedOrganizationScope): Promise<number> {
+    const pedidos = await this.getAllEnriched(scope);
     const trintaDiasAtras = Date.now() - 30 * 24 * 60 * 60 * 1000;
 
     return pedidos
@@ -227,14 +219,14 @@ export class PedidoRepository {
   }
 
   // Estatísticas para o Dashboard
-  async getDashboardStats(tenant: VerifiedTenant): Promise<{
+  async getDashboardStats(scope: VerifiedOrganizationScope): Promise<{
     faturamento30: number;
     total: number;
     pendentes: number;
     cancelados: number;
     atendidos: number;
   }> {
-    const pedidos = await this.getAllEnriched(tenant);
+    const pedidos = await this.getAllEnriched(scope);
     const trintaDiasAtras = Date.now() - 30 * 24 * 60 * 60 * 1000;
 
     let faturamento30 = 0;

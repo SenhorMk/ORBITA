@@ -1,73 +1,122 @@
 import { NextResponse } from 'next/server';
-import { supabaseServer } from '../../../../lib/supabaseServer';
 import { createScopedOAuthTransaction } from '../../../../lib/oauth-transaction';
-import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
-import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
+import type { OAuthTransactionStorePort } from '../../../../lib/oauthTransactionStore';
+import { organizationContextStatus, type OrganizationContextResult } from '../../../../lib/organizationAuthorization';
 import { organizationContextToScope, type VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
+import { checkRateLimit, normalizeIp, rateLimitDenialStatus, DEFAULT_RATE_LIMIT_POLICIES, type RateLimitStorePort } from '../../../../lib/rateLimit';
+import { logger } from '../../../../lib/observability/logger';
+import { getCorrelationId } from '../../../../lib/observability/correlation';
 
 export const dynamic = 'force-dynamic';
 
-async function findBlingClientId(scope: VerifiedOrganizationScope): Promise<string | null> {
-  const { data } = await supabaseServer
-    .from('conexoes_integracao')
-    .select('metadata')
-    .eq('organizacao_id', scope.organizationId)
-    .eq('provedor', 'bling')
-    .maybeSingle();
-  // SAFETY: PostgREST JSON is narrowed to an object and client_id is validated before use.
-  const parsed = typeof data?.metadata === 'object' && data.metadata !== null
-    ? data.metadata as Record<string, unknown>
-    : null;
-  return typeof parsed?.client_id === 'string' && parsed.client_id.length > 0
-    ? parsed.client_id
-    : null;
+/** Explicit dependencies for the Bling authorize handler; production wiring lives in `GET`. */
+export interface BlingAuthorizeDependencies {
+  readonly resolveOrganizationContext: (request: Request) => Promise<OrganizationContextResult>;
+  readonly findBlingClientId: (scope: VerifiedOrganizationScope) => Promise<string | null>;
+  readonly oauthTransactionStore: OAuthTransactionStorePort;
+  readonly rateLimitStore: RateLimitStorePort;
 }
 
-export async function GET(request: Request) {
-  const contextResult = await resolveActiveRequestOrganizationContext(request);
-  if (contextResult._tag !== 'OrganizationContextResolved') {
-    const status = organizationContextStatus(contextResult);
-    return NextResponse.json(
-      { success: false, error: status === 503 ? 'Serviço de autorização indisponível.' : 'Sessão inválida ou expirada.' },
-      { status },
+/** Build the Bling OAuth authorize handler around explicit rate-limit, organization and transaction seams. */
+export function createBlingAuthorizeHandler(dependencies: BlingAuthorizeDependencies) {
+  return async function blingAuthorizeHandler(request: Request): Promise<NextResponse> {
+    const correlationId = getCorrelationId(request);
+
+    const rateLimitDecision = await checkRateLimit(
+      dependencies.rateLimitStore,
+      'bling_authorize',
+      normalizeIp(request),
+      DEFAULT_RATE_LIMIT_POLICIES.bling_authorize,
     );
-  }
+    if (rateLimitDecision._tag !== 'RateLimitAllowed') {
+      logger.warn('bling_authorize.rate_limited', { subsystem: 'app', correlationId, provider: 'bling', tag: rateLimitDecision._tag });
+      return NextResponse.json(
+        { success: false, error: 'Muitas tentativas. Tente novamente mais tarde.' },
+        { status: rateLimitDenialStatus(rateLimitDecision) },
+      );
+    }
 
-  const scope = organizationContextToScope(contextResult.context);
-  const clientId = await findBlingClientId(scope);
+    const contextResult = await dependencies.resolveOrganizationContext(request);
+    if (contextResult._tag !== 'OrganizationContextResolved') {
+      const status = organizationContextStatus(contextResult);
+      return NextResponse.json(
+        { success: false, error: status === 503 ? 'Serviço de autorização indisponível.' : 'Sessão inválida ou expirada.' },
+        { status },
+      );
+    }
 
-  if (!clientId) {
-    return NextResponse.json(
-      { success: false, error: 'Nenhum Client ID configurado para esta conta.' },
-      { status: 409 },
-    );
-  }
+    const scope = organizationContextToScope(contextResult.context);
+    const clientId = await dependencies.findBlingClientId(scope);
 
-  const transaction = createScopedOAuthTransaction(scope);
-  if (transaction._tag === 'OAuthTransactionCreationFailed') {
-    console.error('[authorize] Configuração de criptografia indisponível.');
-    return NextResponse.json(
-      { success: false, error: 'Configuração segura do servidor incompleta.' },
-      { status: 503 },
-    );
-  }
+    if (!clientId) {
+      return NextResponse.json(
+        { success: false, error: 'Nenhum Client ID configurado para esta conta.' },
+        { status: 409 },
+      );
+    }
 
-  const authorizeUrl =
-    `https://www.bling.com.br/Api/v3/oauth/authorize` +
-    `?response_type=code` +
-    `&client_id=${encodeURIComponent(clientId)}` +
-    `&state=${encodeURIComponent(transaction.state)}`;
+    const transaction = await createScopedOAuthTransaction(scope, dependencies.oauthTransactionStore);
+    if (transaction._tag === 'OAuthTransactionCreationFailed') {
+      logger.error('bling_authorize.transaction_store_unavailable', {
+        subsystem: 'app',
+        correlationId,
+        provider: 'bling',
+        reason: transaction.reason,
+      });
+      return NextResponse.json(
+        { success: false, error: 'Configuração segura do servidor incompleta.' },
+        { status: 503 },
+      );
+    }
 
-  console.info('[authorize] URL de autorização do Bling emitida.');
+    const authorizeUrl =
+      `https://www.bling.com.br/Api/v3/oauth/authorize` +
+      `?response_type=code` +
+      `&client_id=${encodeURIComponent(clientId)}` +
+      `&state=${encodeURIComponent(transaction.state)}`;
 
-  const response = NextResponse.json({ success: true, authorizeUrl });
-  response.cookies.set('orbita_oauth_transaction', transaction.cookieValue, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 600,
-    path: '/api/bling/callback',
+    logger.info('bling_authorize.url_issued', { subsystem: 'app', correlationId, provider: 'bling' });
+
+    const response = NextResponse.json({ success: true, authorizeUrl });
+    response.cookies.set('orbita_oauth_transaction', transaction.cookieValue, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 600,
+      path: '/api/bling/callback',
+    });
+
+    return response;
+  };
+}
+
+/** Production Bling OAuth authorize route. */
+export async function GET(request: Request): Promise<NextResponse> {
+  const { supabaseServer } = await import('../../../../lib/supabaseServer');
+  const { createSupabaseOAuthTransactionStore } = await import('../../../../lib/oauthTransactionStore');
+  const { createSupabaseRateLimitStore } = await import('../../../../lib/rateLimitStore');
+  const { resolveActiveRequestOrganizationContext } = await import('../../../../lib/requestOrganizationContext');
+
+  const handler = createBlingAuthorizeHandler({
+    resolveOrganizationContext: resolveActiveRequestOrganizationContext,
+    findBlingClientId: async (scope) => {
+      const { data } = await supabaseServer
+        .from('conexoes_integracao')
+        .select('metadata')
+        .eq('organizacao_id', scope.organizationId)
+        .eq('provedor', 'bling')
+        .maybeSingle();
+      // SAFETY: PostgREST JSON is narrowed to an object and client_id is validated before use.
+      const parsed = typeof data?.metadata === 'object' && data.metadata !== null
+        ? data.metadata as Record<string, unknown>
+        : null;
+      return typeof parsed?.client_id === 'string' && parsed.client_id.length > 0
+        ? parsed.client_id
+        : null;
+    },
+    oauthTransactionStore: createSupabaseOAuthTransactionStore(supabaseServer),
+    rateLimitStore: createSupabaseRateLimitStore(supabaseServer),
   });
 
-  return response;
+  return handler(request);
 }

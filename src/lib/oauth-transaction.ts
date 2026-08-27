@@ -1,11 +1,13 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { z } from 'zod';
 
-import { checkEncryptionConfiguration, decrypt, encrypt } from './crypto';
+import type { OAuthProvider, OAuthTransactionStorePort } from './oauthTransactionStore';
 import type { VerifiedOrganizationScope } from './verifiedOrganizationScope';
 
 const OAUTH_TRANSACTION_TTL_MS = 10 * 60 * 1_000;
+const cookieValueSchema = z.uuid();
 
-/** Protected data stored for a pending Bling OAuth authorization. */
+/** Protected data returned to the caller after creating a pending OAuth transaction. */
 export type OAuthTransaction = {
   readonly _tag: 'OAuthTransactionCreated';
   readonly state: string;
@@ -17,11 +19,12 @@ export type OAuthTransactionCreationResult =
   | OAuthTransaction
   | {
       readonly _tag: 'OAuthTransactionCreationFailed';
-      readonly reason: 'invalid-encryption-configuration';
+      readonly reason: 'store-unavailable';
+      readonly cause: string;
     };
 
-/** Result of validating a pending Bling OAuth transaction. */
-export type OAuthTransactionReadResult =
+/** Result of validating and atomically consuming a pending Bling OAuth transaction. */
+export type OAuthTransactionConsumeResult =
   | {
       readonly _tag: 'ValidOAuthTransaction';
       readonly userId: string;
@@ -29,125 +32,82 @@ export type OAuthTransactionReadResult =
     }
   | {
       readonly _tag: 'InvalidOAuthTransaction';
-      readonly reason: 'expired' | 'malformed' | 'state-mismatch';
+      readonly reason: 'malformed' | 'expired' | 'state-mismatch' | 'store-unavailable';
     };
 
-type OAuthTransactionPayload = {
-  readonly createdAt: number;
-  readonly state: string;
-  readonly userId: string;
-  readonly organizacaoId?: string;
-};
-
-function isPayload(value: unknown): value is OAuthTransactionPayload {
-  if (
-    !value
-    || typeof value !== 'object'
-    || !('createdAt' in value)
-    || !('state' in value)
-    || !('userId' in value)
-  ) {
-    return false;
-  }
-  const obj = value as Record<string, unknown>;
-  const hasValidOrg = obj.organizacaoId === undefined || typeof obj.organizacaoId === 'string';
-  return (
-    typeof obj.createdAt === 'number'
-    && typeof obj.state === 'string'
-    && typeof obj.userId === 'string'
-    && obj.state.length > 0
-    && obj.userId.length > 0
-    && hasValidOrg
-  );
+function hashState(state: string): string {
+  return createHash('sha256').update(state, 'utf8').digest('hex');
 }
 
-function statesMatch(received: string, expected: string): boolean {
-  const receivedBuffer = Buffer.from(received, 'utf8');
-  const expectedBuffer = Buffer.from(expected, 'utf8');
-  return (
-    receivedBuffer.length === expectedBuffer.length
-    && timingSafeEqual(receivedBuffer, expectedBuffer)
-  );
-}
-
-/** Create an encrypted transaction that binds OAuth state to its initiating user and organization. */
-export function createOAuthTransaction(
-  userId: string,
-  organizacaoIdOrCreatedAt?: string | number,
-  createdAtInput?: number,
-): OAuthTransactionCreationResult {
-  const encryptionConfiguration = checkEncryptionConfiguration();
-  if (encryptionConfiguration._tag === 'InvalidEncryptionConfiguration') {
-    return {
-      _tag: 'OAuthTransactionCreationFailed',
-      reason: 'invalid-encryption-configuration',
-    };
-  }
-
-  const organizacaoId = typeof organizacaoIdOrCreatedAt === 'string' ? organizacaoIdOrCreatedAt : undefined;
-  const createdAt = typeof organizacaoIdOrCreatedAt === 'number'
-    ? organizacaoIdOrCreatedAt
-    : (createdAtInput ?? Date.now());
-
+/**
+ * Create a server-side, single-use OAuth transaction. The returned `cookieValue`
+ * is an opaque reference (the store row id) — it carries no secret, actor,
+ * organization or provider data by itself. The `state` travels through the
+ * provider redirect and must match the stored hash on the way back.
+ */
+export async function createOAuthTransaction(
+  actorId: string,
+  organizacaoId: string | undefined,
+  provider: OAuthProvider,
+  store: OAuthTransactionStorePort,
+  now: number = Date.now(),
+): Promise<OAuthTransactionCreationResult> {
   const state = randomBytes(32).toString('base64url');
-  const payload: OAuthTransactionPayload = {
-    createdAt,
-    state,
-    userId,
-    ...(organizacaoId ? { organizacaoId } : {}),
-  };
-  const cookieValue = encrypt(JSON.stringify(payload));
-  if (!cookieValue) {
-    return {
-      _tag: 'OAuthTransactionCreationFailed',
-      reason: 'invalid-encryption-configuration',
-    };
+  const result = await store.create({
+    actorId,
+    organizacaoId,
+    provider,
+    stateHash: hashState(state),
+    expiresAt: now + OAUTH_TRANSACTION_TTL_MS,
+  });
+
+  if (result._tag === 'OAuthTransactionStoreUnavailable') {
+    return { _tag: 'OAuthTransactionCreationFailed', reason: 'store-unavailable', cause: result.cause };
   }
 
-  return { _tag: 'OAuthTransactionCreated', state, cookieValue };
+  return { _tag: 'OAuthTransactionCreated', state, cookieValue: result.id };
 }
 
 /** Create an OAuth transaction from a nominally verified organization scope. */
 export function createScopedOAuthTransaction(
   scope: VerifiedOrganizationScope,
-  createdAt = Date.now(),
-): OAuthTransactionCreationResult {
-  return createOAuthTransaction(scope.actorId, scope.organizationId, createdAt);
+  store: OAuthTransactionStorePort,
+  now: number = Date.now(),
+): Promise<OAuthTransactionCreationResult> {
+  return createOAuthTransaction(scope.actorId, scope.organizationId, 'bling', store, now);
 }
 
-/** Validate and recover the initiating user and organization from an encrypted OAuth transaction. */
-export function readOAuthTransaction(
+/**
+ * Validate the received state in constant time against its stored hash and
+ * atomically consume the transaction so a replayed callback (same cookie,
+ * same state) can never succeed twice or trigger a second token exchange.
+ */
+export async function consumeOAuthTransaction(
   cookieValue: string,
   receivedState: string,
-  currentTime = Date.now(),
-): OAuthTransactionReadResult {
-  if (!cookieValue.includes(':')) {
+  store: OAuthTransactionStorePort,
+  now: number = Date.now(),
+): Promise<OAuthTransactionConsumeResult> {
+  const idResult = cookieValueSchema.safeParse(cookieValue);
+  if (!idResult.success || receivedState.length === 0) {
     return { _tag: 'InvalidOAuthTransaction', reason: 'malformed' };
   }
 
-  const plaintext = decrypt(cookieValue);
-  if (!plaintext) {
-    return { _tag: 'InvalidOAuthTransaction', reason: 'malformed' };
+  const result = await store.consume(idResult.data, hashState(receivedState), now);
+
+  if (result._tag === 'OAuthTransactionStoreUnavailable') {
+    return { _tag: 'InvalidOAuthTransaction', reason: 'store-unavailable' };
+  }
+  if (result._tag === 'OAuthTransactionConsumeDenied') {
+    // The store does not distinguish expired/mismatched/already-consumed rows in
+    // its return value (all deny consumption identically), which is itself the
+    // replay- and enumeration-resistant behavior this boundary requires.
+    return { _tag: 'InvalidOAuthTransaction', reason: 'state-mismatch' };
   }
 
-  try {
-    const parsed: unknown = JSON.parse(plaintext);
-    if (!isPayload(parsed)) {
-      return { _tag: 'InvalidOAuthTransaction', reason: 'malformed' };
-    }
-    if (currentTime < parsed.createdAt || currentTime - parsed.createdAt > OAUTH_TRANSACTION_TTL_MS) {
-      return { _tag: 'InvalidOAuthTransaction', reason: 'expired' };
-    }
-    if (!statesMatch(receivedState, parsed.state)) {
-      return { _tag: 'InvalidOAuthTransaction', reason: 'state-mismatch' };
-    }
-
-    return {
-      _tag: 'ValidOAuthTransaction',
-      userId: parsed.userId,
-      ...(parsed.organizacaoId ? { organizacaoId: parsed.organizacaoId } : {}),
-    };
-  } catch {
-    return { _tag: 'InvalidOAuthTransaction', reason: 'malformed' };
-  }
+  return {
+    _tag: 'ValidOAuthTransaction',
+    userId: result.actorId,
+    ...(result.organizacaoId ? { organizacaoId: result.organizacaoId } : {}),
+  };
 }

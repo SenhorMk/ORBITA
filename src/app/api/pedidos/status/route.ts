@@ -4,6 +4,7 @@ import { bling } from '@/services/bling';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { mapBlingStatus } from '@/lib/utils';
 import { verifySessionAndRole } from '@/lib/auth';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
 export async function POST(request: Request) {
   try {
@@ -12,7 +13,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
     }
 
-    const userId = session.tenant.id;
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
+
     const body = await request.json();
     const { pedidoId, novaSituacaoId, novaSituacaoNome } = body;
 
@@ -21,7 +25,7 @@ export async function POST(request: Request) {
     }
 
     // 1. Busca o pedido local
-    const pedidoLocal = await pedidoRepository.getById(session.tenant, pedidoId);
+    const pedidoLocal = await pedidoRepository.getById(scope, pedidoId);
     if (!pedidoLocal || !pedidoLocal.bling_id) {
       return NextResponse.json({ error: 'Pedido não encontrado ou sem ID do Bling' }, { status: 404 });
     }
@@ -33,7 +37,7 @@ export async function POST(request: Request) {
 
     // 3. Atualiza o status localmente no Supabase
     const novoStatusCanonico = mapBlingStatus(novaSituacaoNome);
-    await pedidoRepository.upsert(session.tenant, {
+    await pedidoRepository.upsert(scope, {
       ...pedidoLocal,
       status: novoStatusCanonico
     });
@@ -46,7 +50,7 @@ export async function POST(request: Request) {
       .from('itens_pedido')
       .select('produto_id')
       .eq('pedido_id', pedidoId)
-      .eq('user_id', userId);
+      .eq('organizacao_id', scope.organizationId);
 
     if (itensError) {
       console.error('Erro ao buscar itens do pedido:', itensError);
@@ -62,7 +66,7 @@ export async function POST(request: Request) {
         .from('produtos')
         .select('id, bling_id, estoque')
         .in('id', produtosIds)
-        .eq('user_id', userId);
+        .eq('organizacao_id', scope.organizationId);
 
       if (!produtosError && produtosData && produtosData.length > 0) {
         const blingIdsParaSincronizar = produtosData.filter(p => p.bling_id).map(p => p.bling_id!);
@@ -87,7 +91,7 @@ export async function POST(request: Request) {
                   .from('produtos')
                   .update({ estoque: novoEstoque })
                   .eq('id', prod.id)
-                  .eq('user_id', userId);
+                  .eq('organizacao_id', scope.organizationId);
 
                 if (updateError) {
                   console.error(`Erro ao atualizar estoque do produto ${prod.id}:`, updateError);

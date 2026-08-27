@@ -1,4 +1,8 @@
 import { resolveActorContext } from '@/lib/auth';
+import type { VerifiedTenant } from '@/lib/auth';
+import { resolveTenantOrgId } from '@/lib/organizationContext';
+import { supabaseServer } from '@/lib/supabaseServer';
+import { verifyOrganizationScope, type VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { bling } from '@/services/bling';
 import {
@@ -26,15 +30,37 @@ async function callProvider<T>(operation: () => Promise<T>): Promise<OrderProvid
   }
 }
 
+/**
+ * Re-verify the actor's organization membership server-side before any local
+ * store lookup. `resolveActorContext` still yields the temporary per-user
+ * `VerifiedTenant` consumed by the Bling provider adapter (external
+ * credential lookup, outside this ticket's slice); every local persistence
+ * call goes through this freshly verified `VerifiedOrganizationScope`
+ * instead, so the primitive tenant id is never accepted as DB authority.
+ */
+async function toVerifiedOrganizationScope(tenant: VerifiedTenant): Promise<VerifiedOrganizationScope> {
+  const organizationId = await resolveTenantOrgId(supabaseServer, tenant);
+  const result = await verifyOrganizationScope(supabaseServer, {
+    organizationId,
+    actorId: tenant.id,
+  });
+  if (result._tag !== 'OrganizationScopeVerified') {
+    throw new Error('Escopo organizacional não verificado.');
+  }
+  return result.scope;
+}
+
 const orderStore: OrderStore = {
   async findByExternalId(tenant, externalId) {
-    const pedido = await pedidoRepository.getByBlingId(tenant, externalId);
+    const scope = await toVerifiedOrganizationScope(tenant);
+    const pedido = await pedidoRepository.getByBlingId(scope, externalId);
     return pedido
       ? { externalId: pedido.bling_id, localValue: pedido }
       : null;
   },
   async deleteByExternalId(tenant, externalId) {
-    await pedidoRepository.deleteByBlingId(tenant, externalId);
+    const scope = await toVerifiedOrganizationScope(tenant);
+    await pedidoRepository.deleteByBlingId(scope, externalId);
   },
 };
 
