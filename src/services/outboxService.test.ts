@@ -142,27 +142,40 @@ describe('outboxService', () => {
   });
 
   describe('claimBatch', () => {
-    it('claims available batch of outbox events', async () => {
+    it('claims available batch of outbox events for the given worker', async () => {
       const mockBatch = [
-        { id: 'evt-1', destination: 'chatwoot', event_type: 'message.send' },
-        { id: 'evt-2', destination: 'bling', event_type: 'order.push' },
+        { evento_id: 'evt-1', destination: 'chatwoot', event_type: 'message.send', lease_owner: 'worker-1' },
+        { evento_id: 'evt-2', destination: 'bling', event_type: 'order.push', lease_owner: 'worker-1' },
       ];
       mockRpc.mockResolvedValueOnce({ data: mockBatch, error: null });
 
-      const result = await outboxService.claimBatch(mockSupabase, 10);
+      const result = await outboxService.claimBatch(mockSupabase, 'worker-1', 10, 300);
       expect(result).toHaveLength(2);
-      expect(mockRpc).toHaveBeenCalledWith('reivindicar_lote_outbox', { p_limit: 10 });
+      expect(mockRpc).toHaveBeenCalledWith('reivindicar_lote_outbox', {
+        p_worker_id: 'worker-1',
+        p_limit: 10,
+        p_lease_ttl_sec: 300,
+      });
+    });
+
+    it('rejects claiming a batch without a workerId', async () => {
+      await expect(outboxService.claimBatch(mockSupabase, '', 10)).rejects.toThrow(
+        'workerId é obrigatório',
+      );
+      expect(mockRpc).not.toHaveBeenCalled();
     });
   });
 
   describe('markSent and markFailed', () => {
-    it('calls concluir_evento_outbox with status sent on success', async () => {
-      mockRpc.mockResolvedValueOnce({ data: null, error: null });
+    it('calls concluir_evento_outbox with status sent and workerId on success', async () => {
+      mockRpc.mockResolvedValueOnce({ data: true, error: null });
 
-      await outboxService.markSent(mockSupabase, scope, 'evt-1', { messageId: 456 });
+      const result = await outboxService.markSent(mockSupabase, scope, 'worker-1', 'evt-1', { messageId: 456 });
 
+      expect(result).toBe(true);
       expect(mockRpc).toHaveBeenCalledWith('concluir_evento_outbox', {
         p_evento_id: 'evt-1',
+        p_worker_id: 'worker-1',
         p_status: 'sent',
         p_response_body: { messageId: 456 },
         p_error: null,
@@ -171,12 +184,21 @@ describe('outboxService', () => {
       });
     });
 
+    it('returns false when the RPC rejects a worker without a valid lease', async () => {
+      mockRpc.mockResolvedValueOnce({ data: false, error: null });
+
+      const result = await outboxService.markSent(mockSupabase, scope, 'worker-zombie', 'evt-1', null);
+
+      expect(result).toBe(false);
+    });
+
     it('calls concluir_evento_outbox with failed_transient for transient errors', async () => {
-      mockRpc.mockResolvedValueOnce({ data: null, error: null });
+      mockRpc.mockResolvedValueOnce({ data: true, error: null });
 
       await outboxService.markFailed(
         mockSupabase,
         scope,
+        'worker-1',
         'evt-1',
         new Error('503 Service Unavailable'),
         1,
@@ -186,6 +208,7 @@ describe('outboxService', () => {
         'concluir_evento_outbox',
         expect.objectContaining({
           p_evento_id: 'evt-1',
+          p_worker_id: 'worker-1',
           p_status: 'failed_transient',
           p_error_category: 'transient',
           p_retry_delay_sec: 20,
@@ -194,11 +217,12 @@ describe('outboxService', () => {
     });
 
     it('calls concluir_evento_outbox with dead_letter for permanent errors without loop', async () => {
-      mockRpc.mockResolvedValueOnce({ data: null, error: null });
+      mockRpc.mockResolvedValueOnce({ data: true, error: null });
 
       await outboxService.markFailed(
         mockSupabase,
         scope,
+        'worker-1',
         'evt-1',
         new Error('400 Bad Request: Invalid parameters'),
         0,
@@ -208,10 +232,33 @@ describe('outboxService', () => {
         'concluir_evento_outbox',
         expect.objectContaining({
           p_evento_id: 'evt-1',
+          p_worker_id: 'worker-1',
           p_status: 'dead_letter',
           p_error_category: 'permanent',
         }),
       );
+    });
+  });
+
+  describe('releaseExpiredLeases', () => {
+    it('maps reaper RPC rows to camelCase results', async () => {
+      mockRpc.mockResolvedValueOnce({
+        data: [{ evento_id: 'evt-9', novo_status: 'failed_transient' }],
+        error: null,
+      });
+
+      const result = await outboxService.releaseExpiredLeases(mockSupabase);
+
+      expect(mockRpc).toHaveBeenCalledWith('liberar_leases_expirados_outbox');
+      expect(result).toEqual([{ eventoId: 'evt-9', novoStatus: 'failed_transient' }]);
+    });
+
+    it('returns an empty array and warns when the RPC errors, without throwing', async () => {
+      mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'db down' } });
+
+      const result = await outboxService.releaseExpiredLeases(mockSupabase);
+
+      expect(result).toEqual([]);
     });
   });
 

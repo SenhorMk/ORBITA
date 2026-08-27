@@ -245,6 +245,16 @@
       "order": 49,
       "path": "../database/46_backfill_bling_conexoes_organizacao_contabilizado.sql",
       "sha256": "2150f6ea0191f82e20805ca224c0074fda3a8ddb24515651d9e84eab621331d7"
+    },
+    {
+      "order": 50,
+      "path": "../database/47_chatwoot_inbox_account_disambiguation.sql",
+      "sha256": "9d0d0a560f1ad78872b22be25fa3b4050528669f669086a721bd2dc6f7dfc9b1"
+    },
+    {
+      "order": 51,
+      "path": "../database/48_outbox_lease_correlacao.sql",
+      "sha256": "f66fa37cb725a132dfee0e3ed5ab0fb209f0ff5e2043d6e4149e7e96107d9404"
     }
   ],
   "references": [

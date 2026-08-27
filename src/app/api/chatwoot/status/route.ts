@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { ChatwootClient } from '../../../../services/chatwoot';
+import { ChatwootAdapter } from '../../../../services/chatwoot/chatwootAdapter';
 import { supabaseServer } from '../../../../lib/supabaseServer';
 import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
@@ -9,11 +9,13 @@ import { organizationContextToScope, type VerifiedOrganizationScope } from '../.
 export const dynamic = 'force-dynamic';
 const conversationStatusSchema = z.enum(['open', 'resolved', 'pending']);
 
+type UpdateConversationStatusResult = 'updated' | 'not-found' | 'unconfigured' | { failed: string };
+
 async function updateConversationStatus(
   scope: VerifiedOrganizationScope,
   conversationId: number,
   status: z.infer<typeof conversationStatusSchema>,
-): Promise<'updated' | 'not-found'> {
+): Promise<UpdateConversationStatusResult> {
   const { data: existingConv, error: convCheckError } = await supabaseServer
     .from('chatwoot_conversations')
     .select('id')
@@ -22,8 +24,14 @@ async function updateConversationStatus(
     .maybeSingle();
   if (convCheckError || !existingConv) return 'not-found';
 
-  const client = await ChatwootClient.forOrganization(scope);
-  await client.toggleStatusInApi(conversationId, status);
+  const adapter = await ChatwootAdapter.forScope(scope);
+  if (!adapter) return 'unconfigured';
+
+  const toggleResult = await adapter.toggleConversationStatus(conversationId, status);
+  if (toggleResult._tag !== 'ChatwootSuccess') {
+    return { failed: toggleResult.message || toggleResult.reason };
+  }
+
   const { error } = await supabaseServer
     .from('chatwoot_conversations')
     .update({ status, updated_at: new Date().toISOString() })
@@ -57,10 +65,23 @@ export async function POST(request: Request) {
     }
 
     const scope = organizationContextToScope(contextResult.context);
-    if (await updateConversationStatus(scope, parsedConversationId, parsedStatus.data) === 'not-found') {
+    const result = await updateConversationStatus(scope, parsedConversationId, parsedStatus.data);
+    if (result === 'not-found') {
       return NextResponse.json(
         { success: false, error: 'Conversa não encontrada' },
         { status: 404 }
+      );
+    }
+    if (result === 'unconfigured') {
+      return NextResponse.json(
+        { success: false, error: 'Integração Chatwoot não configurada' },
+        { status: 409 },
+      );
+    }
+    if (typeof result === 'object') {
+      return NextResponse.json(
+        { success: false, error: `Falha ao alterar status no Chatwoot: ${result.failed}` },
+        { status: 502 },
       );
     }
 
