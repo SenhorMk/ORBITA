@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { ChatwootClient } from '../../../../services/chatwoot';
+import { ChatwootAdapter } from '../../../../services/chatwoot/chatwootAdapter';
 import { supabaseServer } from '../../../../lib/supabaseServer';
 import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
@@ -115,18 +115,32 @@ export async function POST(request: Request) {
       payload: { conversationId, content },
     });
 
-    let rawMsg: ChatwootApiMessageResponse;
-    try {
-      const client = await ChatwootClient.forOrganization(scope);
-      rawMsg = (await client.sendMessageToApi(conversationId, content)) as ChatwootApiMessageResponse;
-      await outboxService.markSent(supabaseServer, scope, outboxRecord.eventoId, {
-        id: rawMsg.id,
-        created_at: rawMsg.created_at,
-      });
-    } catch (sendErr: unknown) {
-      await outboxService.markFailed(supabaseServer, scope, outboxRecord.eventoId, sendErr, 0);
-      throw sendErr;
+    // Envio síncrono inline (não passa por reivindicar_lote_outbox/lease):
+    // o identificador de worker é fixo e só serve para auditoria — o evento
+    // nunca está em `processing` neste caminho, então a checagem de posse de
+    // lease em `concluir_evento_outbox` não se aplica aqui.
+    const INLINE_SEND_WORKER_ID = 'chatwoot-http-inline-send';
+
+    const adapter = await ChatwootAdapter.forScope(scope);
+    if (!adapter) {
+      await outboxService.markFailed(supabaseServer, scope, INLINE_SEND_WORKER_ID, outboxRecord.eventoId, 'Chatwoot não configurado para esta organização', 0);
+      return NextResponse.json({ success: false, error: 'Integração Chatwoot não configurada' }, { status: 409 });
     }
+
+    const sendResult = await adapter.sendMessage(conversationId, content);
+    if (sendResult._tag !== 'ChatwootSuccess') {
+      await outboxService.markFailed(supabaseServer, scope, INLINE_SEND_WORKER_ID, outboxRecord.eventoId, sendResult.message || sendResult.reason, 0);
+      return NextResponse.json(
+        { success: false, error: sendResult.message || `Falha ao enviar mensagem no Chatwoot (${sendResult.reason})` },
+        { status: sendResult.status || 502 },
+      );
+    }
+
+    const rawMsg: ChatwootApiMessageResponse = sendResult.data;
+    await outboxService.markSent(supabaseServer, scope, INLINE_SEND_WORKER_ID, outboxRecord.eventoId, {
+      id: rawMsg.id,
+      created_at: rawMsg.created_at,
+    });
 
     await saveMessageLocally(rawMsg, conversationId, content, scope);
 
