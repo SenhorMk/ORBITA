@@ -1,52 +1,48 @@
 import { TituloFinanceiro, CategoriaFinanceira } from '../types';
 import { supabaseServer } from '../lib/supabaseServer';
-import type { VerifiedTenant } from '../lib/auth';
-import { resolveTenantOrgId } from '../lib/organizationContext';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
 export class FinanceiroRepository {
-  async getCategorias(tenant: VerifiedTenant): Promise<CategoriaFinanceira[]> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async getCategorias(scope: VerifiedOrganizationScope): Promise<CategoriaFinanceira[]> {
     const { data, error } = await supabaseServer
       .from('categorias_financeiras')
       .select('*')
-      .eq('organizacao_id', orgId)
+      .eq('organizacao_id', scope.organizationId)
       .order('descricao', { ascending: true });
 
     if (error) {
-      console.error('Erro ao buscar categorias financeiras:', error);
+      console.error('Erro ao buscar categorias financeiras:', error.message);
       throw new Error(error.message);
     }
 
     return data || [];
   }
 
-  async getCategoriaByBlingId(tenant: VerifiedTenant, blingId: number): Promise<CategoriaFinanceira | null> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async getCategoriaByBlingId(scope: VerifiedOrganizationScope, blingId: number): Promise<CategoriaFinanceira | null> {
     const { data, error } = await supabaseServer
       .from('categorias_financeiras')
       .select('*')
-      .eq('organizacao_id', orgId)
+      .eq('organizacao_id', scope.organizationId)
       .eq('bling_id', blingId)
       .maybeSingle();
 
     if (error) {
-      console.error(`Erro ao buscar categoria bling_id=${blingId}:`, error);
+      console.error(`Erro ao buscar categoria bling_id=${blingId}:`, error.message);
       return null;
     }
 
     return data;
   }
 
-  async getResumo(tenant: VerifiedTenant): Promise<{ receitas: number; despesas: number; saldo: number }> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  async getResumo(scope: VerifiedOrganizationScope): Promise<{ receitas: number; despesas: number; saldo: number }> {
     const { data, error } = await supabaseServer
       .from('titulos_financeiros')
       .select('tipo, valor')
-      .eq('organizacao_id', orgId)
+      .eq('organizacao_id', scope.organizationId)
       .eq('situacao', 'pago');
 
     if (error) {
-      console.error('Erro ao buscar resumo financeiro:', error);
+      console.error('Erro ao buscar resumo financeiro:', error.message);
       throw new Error(error.message);
     }
 
@@ -66,17 +62,16 @@ export class FinanceiroRepository {
   }
 
   async getTitulosFiltro(
-    tenant: VerifiedTenant,
+    scope: VerifiedOrganizationScope,
     filtros?: { tipo?: 'receber' | 'pagar'; situacao?: string },
   ): Promise<TituloFinanceiro[]> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
     let query = supabaseServer
       .from('titulos_financeiros')
       .select(`
         *,
         categoria:categoria_id (*)
       `)
-      .eq('organizacao_id', orgId)
+      .eq('organizacao_id', scope.organizationId)
       .order('data_vencimento', { ascending: false });
 
     if (filtros?.tipo) {
@@ -89,19 +84,41 @@ export class FinanceiroRepository {
     const { data, error } = await query;
 
     if (error) {
-      console.error('Erro ao buscar títulos:', error);
+      console.error('Erro ao buscar títulos:', error.message);
       throw new Error(error.message);
     }
 
     return data || [];
   }
 
-  async upsertTitulo(tenant: VerifiedTenant, titulo: TituloFinanceiro): Promise<TituloFinanceiro> {
-    const orgId = await resolveTenantOrgId(supabaseServer, tenant);
+  /**
+   * Upsert de título financeiro. O payload de autoridade (organizacao_id,
+   * user_id/actor) é sempre derivado do VerifiedOrganizationScope resolvido
+   * no servidor — qualquer organizacao_id/user_id vindo em `titulo` (input
+   * do caller) é ignorado e sobrescrito, nunca aceito como autoridade.
+   * Idempotente por conexão/organização: onConflict em (organizacao_id,
+   * bling_id) garante que uma reexecução do mesmo evento de sync atualiza
+   * monotonicamente o mesmo registro em vez de duplicar.
+   */
+  async upsertTitulo(scope: VerifiedOrganizationScope, titulo: TituloFinanceiro): Promise<TituloFinanceiro> {
+    // Allow-list every field accepted from the caller; organizacao_id/user_id
+    // are never taken from `titulo` even if present, only from the
+    // server-verified scope, so a client/provider-supplied authority field is
+    // silently ignored rather than trusted.
     const payload = {
-      ...titulo,
-      organizacao_id: orgId,
-      user_id: tenant.id,
+      id: titulo.id,
+      bling_id: titulo.bling_id,
+      tipo: titulo.tipo,
+      situacao: titulo.situacao,
+      valor: titulo.valor,
+      data_vencimento: titulo.data_vencimento,
+      data_pagamento: titulo.data_pagamento,
+      descricao: titulo.descricao,
+      categoria_id: titulo.categoria_id,
+      conta_financeira_id: titulo.conta_financeira_id,
+      fornecedor_id: titulo.fornecedor_id,
+      organizacao_id: scope.organizationId,
+      user_id: scope.actorId,
     };
     const { data, error } = await supabaseServer
       .from('titulos_financeiros')
@@ -110,7 +127,7 @@ export class FinanceiroRepository {
       .single();
 
     if (error) {
-      console.error('Erro no upsert do título financeiro:', error);
+      console.error('Erro no upsert do título financeiro:', error.message);
       throw new Error(error.message);
     }
 
