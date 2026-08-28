@@ -12,10 +12,23 @@ import {
   Menu,
   X,
   DollarSign,
+  Building2,
+  Plug,
+  CreditCard,
 } from "lucide-react";
 import { DockTabs, DockItem } from '@/components/ui/dock-tabs';
 
-export type TabType = 'dashboard' | 'sales' | 'inventory' | 'contacts' | 'finance' | 'sac' | 'chats';
+export type TabType =
+  | 'dashboard'
+  | 'sales'
+  | 'inventory'
+  | 'contacts'
+  | 'finance'
+  | 'sac'
+  | 'chats'
+  | 'organization'
+  | 'integrations'
+  | 'billing';
 
 interface UserSession {
   email: string;
@@ -102,6 +115,24 @@ export function Sidebar({
       label: 'SAC / Atendimento',
       icon: MessageSquare,
       color: 'bg-zinc-800 hover:bg-[#64D2FF]'
+    },
+    {
+      id: 'organization' as TabType,
+      label: 'Organização & Membros',
+      icon: Building2,
+      color: 'bg-zinc-800 hover:bg-[#0A84FF]'
+    },
+    {
+      id: 'integrations' as TabType,
+      label: 'Integrações (Bling / Chatwoot)',
+      icon: Plug,
+      color: 'bg-zinc-800 hover:bg-[#30D158]'
+    },
+    {
+      id: 'billing' as TabType,
+      label: 'Plano & Faturamento',
+      icon: CreditCard,
+      color: 'bg-zinc-800 hover:bg-[#FFD60A]'
     },
   ];
 

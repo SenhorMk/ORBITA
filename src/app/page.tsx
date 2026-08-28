@@ -49,6 +49,9 @@ import { ManualOrderModal } from '@/components/ManualOrderModal';
 import { isProdutoSynced, validateProdutoForBling } from '@/lib/utils';
 import { StartupLoader } from '@/components/StartupLoader';
 import { FinanceiroTab } from '@/components/FinanceiroTab';
+import { OrganizationPanel } from '@/components/organizacao/OrganizationPanel';
+import { IntegrationsPanel } from '@/components/integracoes/IntegrationsPanel';
+import { BillingPanel } from '@/components/billing/BillingPanel';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -215,7 +218,13 @@ export default function Home() {
   };
 
   // Navegação do Painel (Abas)
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sales' | 'inventory' | 'contacts' | 'finance' | 'sac' | 'chats'>('dashboard');
+  const [activeTab, setActiveTab] = useState<
+    'dashboard' | 'sales' | 'inventory' | 'contacts' | 'finance' | 'sac' | 'chats' | 'organization' | 'integrations' | 'billing'
+  >('dashboard');
+
+  // Organização ativa (Ticket 24b): resolvida pelo servidor via OrganizationPanel,
+  // nunca escolhida localmente. Usada apenas para escopar a leitura de plano/limites.
+  const [activeOrganizacaoId, setActiveOrganizacaoId] = useState<string | null>(null);
 
   // Estados para filtros e ordenação na aba Vendas
   const [filterDays, setFilterDays] = useState<string>('all');
@@ -1206,6 +1215,27 @@ export default function Home() {
         {/* TAB FINANCEIRO */}
         <div className={activeTab === 'finance' ? 'block' : 'hidden'}>
           <FinanceiroTab fetchWithAuth={fetchWithAuth} />
+        </div>
+
+        {/* TAB ORGANIZAÇÃO & MEMBROS (Ticket 24b) */}
+        <div className={activeTab === 'organization' ? 'block' : 'hidden'}>
+          <OrganizationPanel fetchWithAuth={fetchWithAuth} onActiveOrgChange={setActiveOrganizacaoId} />
+        </div>
+
+        {/* TAB INTEGRAÇÕES: Bling / Chatwoot (Ticket 24b) */}
+        <div className={activeTab === 'integrations' ? 'block' : 'hidden'}>
+          <IntegrationsPanel fetchWithAuth={fetchWithAuth} />
+        </div>
+
+        {/* TAB PLANO & FATURAMENTO (Ticket 24b) */}
+        <div className={activeTab === 'billing' ? 'block' : 'hidden'}>
+          {activeOrganizacaoId ? (
+            <BillingPanel fetchWithAuth={fetchWithAuth} organizacaoId={activeOrganizacaoId} />
+          ) : (
+            <div className="text-sm text-slate-400">
+              Abra a aba Organização para carregar a organização ativa antes de ver o plano.
+            </div>
+          )}
         </div>
 
         {/* TAB 1: DASHBOARD */}
