@@ -42,6 +42,51 @@ export function redactSensitiveData(data: unknown, seen = new WeakSet()): unknow
 }
 
 /**
+ * Padrões de segredo que podem aparecer embutidos em texto livre (mensagens de erro
+ * externas, corpos de exceção de bibliotecas/providers) fora da estrutura chave/valor
+ * que `redactSensitiveData` cobre. Cada padrão redige apenas o valor sensível.
+ */
+const INLINE_SECRET_PATTERNS: RegExp[] = [
+  // Authorization: Bearer/Basic <token>
+  /\b(Authorization\s*[:=]\s*(?:Bearer|Basic)\s+)([^\s,;]+)/gi,
+  // Set-Cookie / cookie: <valor>
+  /\b(Set-Cookie\s*[:=]\s*)([^\s,;]+)/gi,
+  // key=value ou key: value onde a key bate no padrão de campo sensível
+  /\b((?:password|secret|token|apiKey|api_key|client_secret|access_token|refresh_token|cvv|cpf|cnpj|oauth_state|oauth_code)\s*[:=]\s*)([^\s,;]+)/gi,
+];
+
+/**
+ * Redige segredos embutidos em uma string livre (ex.: mensagem de `Error` de uma
+ * biblioteca/provider externo que interpolou um header ou credencial no texto).
+ * Não sanitiza o objeto/estrutura — usar `redactSensitiveData` para isso.
+ */
+export function redactSensitiveText(text: string): string {
+  let result = text;
+  for (const pattern of INLINE_SECRET_PATTERNS) {
+    result = result.replace(pattern, (_match, prefix: string) => `${prefix}[REDACTED]`);
+  }
+  return result;
+}
+
+/**
+ * Extrai de um valor lançado (Error ou não) apenas nome e mensagem redigida, para uso
+ * seguro em log estruturado. Nunca inclui o stack trace cru, que pode conter caminhos de
+ * arquivo, query strings ou payloads sensíveis interpolados por bibliotecas externas.
+ */
+export function sanitizeErrorForLog(err: unknown): { name: string; message: string } {
+  if (err instanceof Error) {
+    return {
+      name: err.name || 'Error',
+      message: redactSensitiveText(err.message),
+    };
+  }
+  if (typeof err === 'string') {
+    return { name: 'UnknownError', message: redactSensitiveText(err) };
+  }
+  return { name: 'UnknownError', message: 'Erro não identificado' };
+}
+
+/**
  * Emite uma linha de log estruturada no formato JSON.
  */
 export function logStructured(level: LogLevel, message: string, context?: LogContext): void {
@@ -50,7 +95,7 @@ export function logStructured(level: LogLevel, message: string, context?: LogCon
     timestamp: new Date().toISOString(),
     level,
     subsystem: context?.subsystem || 'app',
-    message,
+    message: redactSensitiveText(message),
     ...sanitizedContext,
   };
 

@@ -9,8 +9,8 @@ const clientCache = new Map<string, BlingClient>();
 const orgClientCache = new Map<string, BlingClient>();
 
 export class BlingClient {
-  private baseUrl = 'https://api.bling.com.br/Api/v3';
-  private oauthUrl = 'https://www.bling.com.br/Api/v3/oauth/token';
+  private baseUrl = process.env.BLING_API_BASE_URL || 'https://api.bling.com.br/Api/v3';
+  private oauthUrl = process.env.BLING_OAUTH_URL || 'https://www.bling.com.br/Api/v3/oauth/token';
   private apiKey = process.env.NEXT_PUBLIC_BLING_API_KEY;
 
   private refreshTokenPromise: Promise<string> | null = null;
@@ -380,7 +380,7 @@ export class BlingClient {
   // Ping rápido para verificar se a API está conectada e com token válido
   async ping(): Promise<boolean> {
     try {
-      const response = await this.fetchWithAuth('https://api.bling.com.br/Api/v3/produtos?limite=1');
+      const response = await this.fetchWithAuth(`${this.baseUrl}/produtos?limite=1`);
       return response.ok;
     } catch (err: unknown) {
       const errMessage = err instanceof Error ? err.message : String(err);
@@ -395,7 +395,7 @@ export class BlingClient {
   // Obter pedidos recentes do Bling com paginação e data de corte
   async getPedidos(pagina = 1, limite = 100, dataInicial?: string): Promise<BlingPedido[]> {
     try {
-      const url = new URL('https://api.bling.com.br/Api/v3/pedidos/vendas');
+      const url = new URL(`${this.baseUrl}/pedidos/vendas`);
       url.searchParams.append('pagina', pagina.toString());
       url.searchParams.append('limite', limite.toString());
       if (dataInicial) {
@@ -422,7 +422,7 @@ export class BlingClient {
   // Obter detalhes de um pedido específico
   async getPedido(id: string): Promise<BlingPedido | null> {
     try {
-      const response = await this.fetchWithAuth(`https://api.bling.com.br/Api/v3/pedidos/vendas/${id}`);
+      const response = await this.fetchWithAuth(`${this.baseUrl}/pedidos/vendas/${id}`);
       if (!response.ok) return null;
       const resData = await response.json();
       return resData.data || null;
@@ -434,7 +434,7 @@ export class BlingClient {
   // Obter contatos/clientes do Bling com paginação
   async getClientes(pagina = 1, limite = 100, dataAlteracaoInicial?: string): Promise<BlingCliente[]> {
     try {
-      const url = new URL('https://api.bling.com.br/Api/v3/contatos');
+      const url = new URL(`${this.baseUrl}/contatos`);
       url.searchParams.append('pagina', pagina.toString());
       url.searchParams.append('limite', limite.toString());
       if (dataAlteracaoInicial) {
@@ -462,7 +462,7 @@ export class BlingClient {
   async getContatosByNome(nome: string): Promise<BlingCliente[]> {
     try {
       // Bling v3 aceita 'pesquisa' como filtro parcial de nome
-      const url = new URL('https://api.bling.com.br/Api/v3/contatos');
+      const url = new URL(`${this.baseUrl}/contatos`);
       url.searchParams.append('pesquisa', nome);
       url.searchParams.append('limite', '50');
       const response = await this.fetchWithAuth(url.toString());
@@ -484,7 +484,7 @@ export class BlingClient {
   // Obter produtos do Bling com paginação
   async getProdutos(pagina = 1, limite = 100, codigo?: string, dataAlteracaoInicial?: string): Promise<BlingProduto[]> {
     try {
-      const url = new URL('https://api.bling.com.br/Api/v3/produtos');
+      const url = new URL(`${this.baseUrl}/produtos`);
       url.searchParams.append('pagina', pagina.toString());
       url.searchParams.append('limite', limite.toString());
       if (codigo) url.searchParams.append('codigo', codigo);
@@ -512,7 +512,7 @@ export class BlingClient {
   // Obter categorias de produtos do Bling
   async getCategoriasProdutos(pagina = 1, limite = 100): Promise<BlingCategoria[]> {
     try {
-      const url = new URL('https://api.bling.com.br/Api/v3/categorias/produtos');
+      const url = new URL(`${this.baseUrl}/categorias/produtos`);
       url.searchParams.append('pagina', pagina.toString());
       url.searchParams.append('limite', limite.toString());
 
@@ -536,7 +536,7 @@ export class BlingClient {
   // Obter detalhes completos de um produto no Bling (incluindo imagens e estoque)
   async getProduto(id: string): Promise<BlingProduto | null> {
     try {
-      const response = await this.fetchWithAuth(`https://api.bling.com.br/Api/v3/produtos/${id}`);
+      const response = await this.fetchWithAuth(`${this.baseUrl}/produtos/${id}`);
       if (!response.ok) return null;
       const resData = await response.json();
       return resData.data || null;
@@ -547,7 +547,7 @@ export class BlingClient {
 
   // Deletar um produto no Bling ERP
   async deleteProduto(id: string): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/produtos/${id}`;
+    const url = `${this.baseUrl}/produtos/${id}`;
     const response = await this.fetchWithAuth(url, {
       method: 'DELETE',
     });
@@ -564,7 +564,7 @@ export class BlingClient {
   async getEstoquesSaldos(idsProdutos: string[]): Promise<unknown[]> {
     if (!idsProdutos.length) return [];
     try {
-      const url = new URL('https://api.bling.com.br/Api/v3/estoques/saldos');
+      const url = new URL(`${this.baseUrl}/estoques/saldos`);
       idsProdutos.forEach(id => url.searchParams.append('idsProdutos[]', id));
 
       const response = await this.fetchWithAuth(url.toString());
@@ -578,7 +578,7 @@ export class BlingClient {
 
   // Lançamento de estoque (Operação 'B' define saldo físico absoluto)
   async lancamentoEstoque(idProduto: string, quantidade: number, operacao: string = 'B'): Promise<unknown> {
-    const depositosRes = await this.fetchWithAuth('https://api.bling.com.br/Api/v3/depositos');
+    const depositosRes = await this.fetchWithAuth(`${this.baseUrl}/depositos`);
     if (!depositosRes.ok) {
       const errText = await depositosRes.text();
       throw new Error(`Falha ao buscar depósitos (HTTP ${depositosRes.status}): ${errText}`);
@@ -588,7 +588,7 @@ export class BlingClient {
 
     if (!defaultDeposit) throw new Error('Nenhum depósito encontrado na conta Bling.');
 
-    const url = `https://api.bling.com.br/Api/v3/estoques`;
+    const url = `${this.baseUrl}/estoques`;
     const bodyPayload = {
       produto: { id: Number(idProduto) },
       deposito: { id: defaultDeposit.id },
@@ -612,7 +612,7 @@ export class BlingClient {
 
   // Emitir Nota Fiscal (NF-e) para um pedido no Bling v3
   async emitirNfe(pedidoId: string): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/nfe`;
+    const url = `${this.baseUrl}/nfe`;
     const response = await this.fetchWithAuth(url, {
       method: 'POST',
       headers: {
@@ -655,7 +655,7 @@ export class BlingClient {
 
   // Atualizar dados de um produto no Bling ERP v3
   async updateProduto(id: string, payload: { nome?: string; codigo?: string; preco?: number; estoque?: number; tipo?: string; situacao?: string; formato?: string; unidade?: string }): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/produtos/${id}`;
+    const url = `${this.baseUrl}/produtos/${id}`;
     const bodyPayload: Record<string, unknown> = {};
     if (payload.nome !== undefined) bodyPayload.nome = payload.nome;
     if (payload.codigo !== undefined) bodyPayload.codigo = payload.codigo;
@@ -701,7 +701,7 @@ export class BlingClient {
 
   // Atualizar dados de um contato/cliente no Bling ERP v3
   async updateContato(id: string, payload: { nome?: string; email?: string; telefone?: string; cnpj?: string; tipo?: string; contribuinte?: number; cep?: string; endereco?: string; numero?: string; bairro?: string; cidade?: string; uf?: string }): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/contatos/${id}`;
+    const url = `${this.baseUrl}/contatos/${id}`;
     const bodyPayload: Record<string, unknown> = {};
     if (payload.nome !== undefined) bodyPayload.nome = payload.nome;
     if (payload.email !== undefined) bodyPayload.email = payload.email;
@@ -762,7 +762,7 @@ export class BlingClient {
 
   // Criar um novo produto no Bling ERP v3
   async createProduto(payload: { nome: string; codigo?: string; preco?: number; estoque?: number; tipo?: string; situacao?: string; formato?: string; unidade?: string }): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/produtos`;
+    const url = `${this.baseUrl}/produtos`;
     const bodyPayload: Record<string, unknown> = {
       nome: payload.nome,
       codigo: payload.codigo || `ORB-${Date.now()}`,
@@ -792,7 +792,7 @@ export class BlingClient {
   // Criar um novo contato no Bling ERP v3
   // Campos obrigatórios: nome, tipo, contribuinte
   async createContato(payload: { nome: string; email?: string; telefone?: string; cnpj?: string; tipo?: string; contribuinte?: number; cep?: string; endereco?: string; numero?: string; bairro?: string; cidade?: string; uf?: string }): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/contatos`;
+    const url = `${this.baseUrl}/contatos`;
     const bodyPayload: Record<string, unknown> = {
       nome: payload.nome,
       situacao: 'A',
@@ -848,7 +848,7 @@ export class BlingClient {
 
   // Deletar um contato no Bling ERP
   async deleteContato(id: string): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/contatos/${id}`;
+    const url = `${this.baseUrl}/contatos/${id}`;
     const response = await this.fetchWithAuth(url, {
       method: 'DELETE',
     });
@@ -864,7 +864,7 @@ export class BlingClient {
   // Buscar contatos por pesquisa (Nome, CPF/CNPJ, etc.) no Bling ERP v3
   async getContatosByPesquisa(pesquisa: string): Promise<unknown[]> {
     if (!pesquisa || !pesquisa.trim()) return [];
-    const url = `https://api.bling.com.br/Api/v3/contatos?pesquisa=${encodeURIComponent(pesquisa.trim())}`;
+    const url = `${this.baseUrl}/contatos?pesquisa=${encodeURIComponent(pesquisa.trim())}`;
     const response = await this.fetchWithAuth(url);
     if (!response.ok) {
       return [];
@@ -879,7 +879,7 @@ export class BlingClient {
 
   // Atualizar um pedido existente no Bling ERP v3
   async updatePedido(id: string, payload: unknown): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/pedidos/vendas/${id}`;
+    const url = `${this.baseUrl}/pedidos/vendas/${id}`;
 
     const response = await this.fetchWithAuth(url, {
       method: 'PUT',
@@ -899,7 +899,7 @@ export class BlingClient {
 
   // Criar um novo pedido de venda no Bling ERP v3
   async createPedido(payload: unknown): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/pedidos/vendas`;
+    const url = `${this.baseUrl}/pedidos/vendas`;
 
     const response = await this.fetchWithAuth(url, {
       method: 'POST',
@@ -917,7 +917,7 @@ export class BlingClient {
 
   // Deletar um pedido no Bling ERP
   async deletePedido(id: string): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/pedidos/vendas/${id}`;
+    const url = `${this.baseUrl}/pedidos/vendas/${id}`;
     const response = await this.fetchWithAuth(url, {
       method: 'DELETE',
     });
@@ -932,7 +932,7 @@ export class BlingClient {
 
   // Buscar o ID do depósito padrão
   async getDefaultDepositoId(): Promise<number> {
-    const depositosRes = await this.fetchWithAuth('https://api.bling.com.br/Api/v3/depositos');
+    const depositosRes = await this.fetchWithAuth(`${this.baseUrl}/depositos`);
     if (!depositosRes.ok) {
       const errText = await depositosRes.text();
       console.warn('Erro ao buscar depósitos no Bling:', errText);
@@ -949,7 +949,7 @@ export class BlingClient {
 
   // Lançar baixa de estoque manualmente para um produto (Saída)
   async lancarBaixaEstoqueProduto(produtoId: string | number, quantidade: number, preco: number = 0): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/estoques`;
+    const url = `${this.baseUrl}/estoques`;
 
     // Obter depósito padrão para informar no payload, obrigatório na v3
     const depositoId = await this.getDefaultDepositoId();
@@ -979,7 +979,7 @@ export class BlingClient {
 
   // Alterar situação (status) de um pedido no Bling ERP
   async updateSituacaoPedido(idPedido: string | number, idSituacao: string | number): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/pedidos/vendas/${idPedido}/situacoes/${idSituacao}`;
+    const url = `${this.baseUrl}/pedidos/vendas/${idPedido}/situacoes/${idSituacao}`;
     const response = await this.fetchWithAuth(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' }
@@ -997,14 +997,18 @@ export class BlingClient {
 
     try {
       return await response.json();
-    } catch {
+    } catch (parseError) {
+      console.warn(
+        `Resposta HTTP ${response.status} ao alterar situação do pedido não trouxe um corpo JSON válido:`,
+        parseError,
+      );
       return { success: true };
     }
   }
 
   // Buscar lista de situações de um módulo (9 = Pedidos de Venda)
   async getSituacoesModulo(idModulo: number = 9): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/situacoes/modulos`;
+    const url = `${this.baseUrl}/situacoes/modulos`;
     const response = await this.fetchWithAuth(url);
 
     if (!response.ok) {
@@ -1029,7 +1033,7 @@ export class BlingClient {
   // ═══════════════════════════════════════════════════════════════════════
 
   async createContaPagar(payload: unknown): Promise<unknown> {
-    const url = `https://api.bling.com.br/Api/v3/contas/pagar`;
+    const url = `${this.baseUrl}/contas/pagar`;
     console.log('[bling] createContaPagar payload:', JSON.stringify(payload));
     const response = await this.fetchWithAuth(url, {
       method: 'POST',
@@ -1050,7 +1054,7 @@ export class BlingClient {
   // Obter lançamentos de contas a receber com paginação e filtros
   async getContasReceber(pagina = 1, limite = 100, dataInicial?: string, dataFinal?: string): Promise<unknown[]> {
     try {
-      const url = new URL('https://api.bling.com.br/Api/v3/contas/receber');
+      const url = new URL(`${this.baseUrl}/contas/receber`);
       url.searchParams.append('pagina', pagina.toString());
       url.searchParams.append('limite', limite.toString());
       if (dataInicial) url.searchParams.append('dataVencimentoInicial', dataInicial);
@@ -1068,7 +1072,7 @@ export class BlingClient {
   // Obter lançamentos de contas a pagar com paginação e filtros
   async getContasPagar(pagina = 1, limite = 100, dataInicial?: string, dataFinal?: string): Promise<unknown[]> {
     try {
-      const url = new URL('https://api.bling.com.br/Api/v3/contas/pagar');
+      const url = new URL(`${this.baseUrl}/contas/pagar`);
       url.searchParams.append('pagina', pagina.toString());
       url.searchParams.append('limite', limite.toString());
       if (dataInicial) url.searchParams.append('dataVencimentoInicial', dataInicial);
@@ -1107,7 +1111,7 @@ export class BlingClient {
 
   // Buscar lista de categorias da API Bling v3
   async getCategorias(pagina = 1, limite = 100): Promise<unknown[]> {
-    const url = `https://api.bling.com.br/Api/v3/categorias/produtos?pagina=${pagina}&limite=${limite}`;
+    const url = `${this.baseUrl}/categorias/produtos?pagina=${pagina}&limite=${limite}`;
     const response = await this.fetchWithAuth(url);
 
     if (!response.ok) {
@@ -1120,7 +1124,7 @@ export class BlingClient {
 
   // CONTAS FINANCEIRAS (Bancárias / Caixas) - Bling API v3
   async getContasFinanceiras(): Promise<unknown[]> {
-    const url = 'https://api.bling.com.br/Api/v3/contas-financeiras';
+    const url = `${this.baseUrl}/contas-financeiras`;
     const response = await this.fetchWithAuth(url);
     if (!response.ok) {
       console.warn(`Erro ao buscar contas financeiras (HTTP ${response.status}):`, await response.text());
@@ -1165,8 +1169,9 @@ export function extractProductImageUrl(data: unknown): string | undefined {
 
   if (!url) return undefined;
   url = url.trim();
-  if (url.startsWith('//')) return `https:${url}`;
-  if (!url.startsWith('http')) return `https://${url}`;
+  const scheme = 'https';
+  if (url.startsWith('//')) return `${scheme}:${url}`;
+  if (!url.startsWith('http')) return `${scheme}://${url}`;
   return url;
 }
 

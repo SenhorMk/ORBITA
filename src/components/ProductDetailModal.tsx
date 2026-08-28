@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Image from 'next/image';
 import {
   Package,
   DollarSign,
@@ -31,6 +32,46 @@ interface ProductDetailModalProps {
   cliente?: Cliente | null;
   onSave?: (updatedProduto: Produto) => void;
   onOpenChatwoot?: (phone?: string, name?: string) => void;
+}
+
+type ProdutoUpdatePayload = Partial<Produto> & { tipo?: string; situacao?: string; formato?: string; unidade?: string };
+
+/** Resultado do submit de `/api/produtos/update`, já com os campos que a UI precisa para reagir. */
+type SubmitProdutoResult =
+  | { readonly ok: true; readonly product: unknown }
+  | {
+      readonly ok: false;
+      readonly errorMessage: string;
+      readonly details: string;
+      readonly logs: string[];
+    };
+
+/** Envia o payload de produto para a API de sincronização, autenticado com o JWT da sessão atual. */
+async function submitProdutoUpdate(payload: ProdutoUpdatePayload): Promise<SubmitProdutoResult> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+
+  const res = await fetch('/api/produtos/update', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const resData = await res.json();
+
+  if (!res.ok || !resData.success) {
+    return {
+      ok: false,
+      errorMessage: resData.error || 'Erro ao processar sincronização.',
+      details: resData.details || 'Verifique as credenciais OAuth do Bling v3 no botão "Conectar APIs".',
+      logs: resData.logs || [`[${new Date().toISOString()}] HTTP Status: ${res.status}`],
+    };
+  }
+
+  return { ok: true, product: resData.product || payload };
 }
 
 export function ProductDetailModal({
@@ -169,7 +210,7 @@ export function ProductDetailModal({
     setSavedSuccess(false);
 
     try {
-      const payload: Partial<Produto> & { tipo?: string; situacao?: string; formato?: string; unidade?: string } = {
+      const payload: ProdutoUpdatePayload = {
         id: produto?.id,
         bling_id: produto?.bling_id,
         nome: nomeSanitizado,
@@ -183,35 +224,23 @@ export function ProductDetailModal({
         categoria_id: categoriaId || undefined,
       };
 
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
+      const result = await submitProdutoUpdate(payload);
 
-      const res = await fetch('/api/produtos/update', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const resData = await res.json();
-
-      if (!res.ok || !resData.success) {
+      if (!result.ok) {
         // Exibir Modal com LOG Completo de Erro!
         setErrorLogData({
           isOpen: true,
           title: isNew ? 'Falha ao Cadastrar Produto (Bling / Supabase)' : 'Falha ao Atualizar Produto',
-          errorMessage: resData.error || 'Erro ao processar sincronização.',
-          details: resData.details || 'Verifique as credenciais OAuth do Bling v3 no botão "Conectar APIs".',
-          logs: resData.logs || [`[${new Date().toISOString()}] HTTP Status: ${res.status}`],
+          errorMessage: result.errorMessage,
+          details: result.details,
+          logs: result.logs,
         });
         setIsSaving(false);
         return;
       }
 
       if (onSave) {
-        onSave(resData.product || payload);
+        onSave((result.product as Produto | undefined) || payload as Produto);
       }
 
       setIsSaving(false);
@@ -301,9 +330,12 @@ export function ProductDetailModal({
         }
         icon={
           produto?.imagem_url ? (
-            <img
+            <Image
               src={produto.imagem_url}
               alt={nome || 'Novo Produto'}
+              width={56}
+              height={56}
+              unoptimized
               className="h-full w-full object-cover rounded-2xl"
               onError={(e) => {
                 e.currentTarget.style.display = 'none';
@@ -385,11 +417,12 @@ export function ProductDetailModal({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Nome do Produto */}
                   <div className="space-y-1.5 md:col-span-2">
-                    <label className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <label htmlFor="product-detail-nome" className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
                       <Package className="w-3.5 h-3.5 text-cyan-400" />
                       <span>Nome do Produto</span>
                     </label>
                     <input
+                      id="product-detail-nome"
                       type="text"
                       value={nome}
                       onChange={(e) => setNome(e.target.value)}
@@ -400,12 +433,13 @@ export function ProductDetailModal({
 
                   {/* Código SKU */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <label htmlFor="product-detail-codigo" className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
                       <Tag className="w-3.5 h-3.5 text-purple-400" />
                       <span>Código SKU / Ref. Bling</span>
                     </label>
                     <div className="relative">
                       <input
+                        id="product-detail-codigo"
                         type="text"
                         value={codigo}
                         onChange={(e) => setCodigo(e.target.value)}
@@ -424,11 +458,12 @@ export function ProductDetailModal({
 
                   {/* Categoria / Tag */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <label htmlFor="product-detail-categoria" className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
                       <Layers className="w-3.5 h-3.5 text-amber-400" />
                       <span>Categoria do Produto</span>
                     </label>
                     <select
+                      id="product-detail-categoria"
                       value={categoriaId}
                       onChange={(e) => setCategoriaId(e.target.value)}
                       className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium bg-slate-900 text-slate-100 cursor-pointer"
@@ -442,11 +477,12 @@ export function ProductDetailModal({
 
                   {/* Preço de Venda */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <label htmlFor="product-detail-preco" className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
                       <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
                       <span>Preço de Venda (R$)</span>
                     </label>
                     <input
+                      id="product-detail-preco"
                       type="number"
                       step="0.01"
                       value={preco}
@@ -457,11 +493,12 @@ export function ProductDetailModal({
 
                   {/* Saldo de Estoque */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <label htmlFor="product-detail-estoque" className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
                       <Box className="w-3.5 h-3.5 text-indigo-400" />
                       <span>Estoque Atual (unidades)</span>
                     </label>
                     <input
+                      id="product-detail-estoque"
                       type="number"
                       value={estoque}
                       onChange={(e) => setEstoque(e.target.value)}
@@ -473,40 +510,41 @@ export function ProductDetailModal({
                 {/* Campos Obrigatórios Bling */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-5 rounded-2xl glass-card border border-white/10 bg-white/[0.02]">
                   <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Tipo *</label>
-                    <select value={tipo} onChange={(e) => setTipo(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
+                    <label htmlFor="product-detail-tipo" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Tipo *</label>
+                    <select id="product-detail-tipo" value={tipo} onChange={(e) => setTipo(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
                       <option value="P">Produto (P)</option>
                       <option value="S">Serviço (S)</option>
                     </select>
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Situação *</label>
-                    <select value={situacao} onChange={(e) => setSituacao(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
+                    <label htmlFor="product-detail-situacao" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Situação *</label>
+                    <select id="product-detail-situacao" value={situacao} onChange={(e) => setSituacao(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
                       <option value="A">Ativo (A)</option>
                       <option value="I">Inativo (I)</option>
                     </select>
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Formato *</label>
-                    <select value={formato} onChange={(e) => setFormato(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
+                    <label htmlFor="product-detail-formato" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Formato *</label>
+                    <select id="product-detail-formato" value={formato} onChange={(e) => setFormato(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
                       <option value="S">Simples (S)</option>
                       <option value="V">Variações (V)</option>
                       <option value="E">Composição (E)</option>
                     </select>
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Unidade (Ex: UN) *</label>
-                    <input type="text" value={unidade} onChange={(e) => setUnidade(e.target.value.toUpperCase())} maxLength={6} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50 font-mono" placeholder="UN, CX, KG" />
+                    <label htmlFor="product-detail-unidade" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Unidade (Ex: UN) *</label>
+                    <input id="product-detail-unidade" type="text" value={unidade} onChange={(e) => setUnidade(e.target.value.toUpperCase())} maxLength={6} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50 font-mono" placeholder="UN, CX, KG" />
                   </div>
                 </div>
 
                 {/* Observações / Descrição TextArea */}
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <label htmlFor="product-detail-observacao" className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
                     <FileText className="w-3.5 h-3.5 text-cyan-400" />
                     <span>Observações & Detalhes Adicionais</span>
                   </label>
                   <textarea
+                    id="product-detail-observacao"
                     rows={3}
                     value={observacao}
                     onChange={(e) => setObservacao(e.target.value)}

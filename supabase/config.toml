@@ -115,7 +115,8 @@ schema_paths = [
   "../database/48_outbox_lease_correlacao.sql",
   "../database/49_entitlement_reserva_atomica_ordering.sql",
   "../database/50_titular_direitos.sql",
-  "../database/51_retencao_anonimizacao_eliminacao.sql"
+  "../database/51_retencao_anonimizacao_eliminacao.sql",
+  "../database/52_auditoria_anti_forjamento_catalogo.sql"
 ]
 
 [db.seed]

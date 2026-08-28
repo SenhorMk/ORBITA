@@ -1,14 +1,19 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import {
-  collectAislopDiagnosticCounts,
-  findAislopRegressions,
-} from './aislop-ratchet.mjs';
+import { collectAislopDiagnosticCounts } from './aislop-ratchet.mjs';
 
+// Zero-tolerance AI-slop gate (ticket 20): there is no anonymous
+// baseline/ratchet snapshot and no global ceiling. Every diagnostic must
+// either be fixed for real, or be listed individually in
+// quality/aislop-allowlist.json with an owner, a follow-up ticket, and a
+// date (see that file's `description`). Any diagnostic not in the allowlist
+// fails the build. `severity: "info"` diagnostics never fail the build —
+// they are advisory (e.g. environment limitations), not code defects.
 const repositoryRoot = process.cwd();
-const baselinePath = join(repositoryRoot, 'quality/aislop-baseline.json');
+const allowlistPath = join(repositoryRoot, 'quality/aislop-allowlist.json');
+
 const scan = spawnSync(
   process.execPath,
   [join(repositoryRoot, 'node_modules/aislop/dist/cli.js'), 'scan', '.', '--json'],
@@ -16,44 +21,36 @@ const scan = spawnSync(
 );
 
 if (!scan.stdout) {
-  console.error('AI slop ratchet could not read scan results.');
+  console.error('AI slop check could not read scan results.');
+  console.error(scan.stderr || '(no stderr captured)');
   process.exitCode = 2;
 } else {
   const report = JSON.parse(scan.stdout);
-  const diagnostics = collectAislopDiagnosticCounts(report.diagnostics ?? []);
+  const allDiagnostics = report.diagnostics ?? [];
+  const blockingDiagnostics = allDiagnostics.filter((d) => d.severity !== 'info');
+  const diagnostics = collectAislopDiagnosticCounts(blockingDiagnostics);
   const summary = report.summary ?? { errors: 0, warnings: 0 };
 
-  if (process.argv.includes('--write-baseline')) {
-    const baseline = {
-      version: 1,
-      totals: { errors: summary.errors, warnings: summary.warnings },
-      diagnostics,
-    };
-    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`, 'utf8');
-    console.log(
-      `AI slop baseline written: ${summary.errors} errors, ${summary.warnings} warnings.`,
-    );
-  } else {
-    const baseline = JSON.parse(readFileSync(baselinePath, 'utf8'));
-    const regressions = findAislopRegressions(
-      diagnostics,
-      baseline.diagnostics ?? {},
-    );
+  const allowlist = JSON.parse(readFileSync(allowlistPath, 'utf8'));
+  const allowedFingerprints = new Set((allowlist.exceptions ?? []).map((entry) => entry.fingerprint));
 
-    console.log(
-      `AI slop ratchet: ${summary.errors}/${baseline.totals.errors} errors, `
-        + `${summary.warnings}/${baseline.totals.warnings} warnings.`,
-    );
+  console.log(
+    `AI slop check: ${summary.errors} errors, ${summary.warnings} warnings `
+      + `(zero-tolerance; ${allowedFingerprints.size} documented exceptions in ${allowlistPath}).`,
+  );
 
-    if (regressions.length > 0) {
-      console.error('New AI slop diagnostics detected:');
-      for (const fingerprint of regressions.slice(0, 20)) {
-        console.error(`- ${fingerprint}`);
-      }
-      if (regressions.length > 20) {
-        console.error(`- and ${regressions.length - 20} more`);
-      }
-      process.exitCode = 1;
+  const unlisted = Object.keys(diagnostics)
+    .filter((fingerprint) => !allowedFingerprints.has(fingerprint))
+    .sort();
+
+  if (unlisted.length > 0) {
+    console.error('New AI slop diagnostics detected (not in quality/aislop-allowlist.json):');
+    for (const fingerprint of unlisted.slice(0, 20)) {
+      console.error(`- ${fingerprint}`);
     }
+    if (unlisted.length > 20) {
+      console.error(`- and ${unlisted.length - 20} more`);
+    }
+    process.exitCode = 1;
   }
 }

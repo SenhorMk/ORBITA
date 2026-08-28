@@ -41,9 +41,18 @@ export function DropdownMenu({ trigger, sections, align = 'right' }: DropdownMen
     };
   }, [isOpen]);
 
+  const triggerElement = React.isValidElement<{ onClick?: (event: React.MouseEvent) => void }>(trigger)
+    ? React.cloneElement(trigger, {
+        onClick: (event: React.MouseEvent) => {
+          trigger.props.onClick?.(event);
+          setIsOpen((open) => !open);
+        },
+      })
+    : trigger;
+
   return (
     <div className="relative inline-block text-left select-none" ref={menuRef}>
-      <div onClick={() => setIsOpen(!isOpen)}>{trigger}</div>
+      {triggerElement}
 
       {isOpen && (
         <div

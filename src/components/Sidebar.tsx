@@ -210,8 +210,10 @@ export function Sidebar({
       {/* Mobile Drawer Overlay */}
       {mobileOpen && (
         <div className="md:hidden fixed inset-0 z-40 flex">
-          <div
-            className="fixed inset-0 bg-black/80 backdrop-blur-md transition-opacity"
+          <button
+            type="button"
+            aria-label="Fechar menu"
+            className="fixed inset-0 bg-black/80 backdrop-blur-md transition-opacity cursor-default"
             onClick={() => setMobileOpen(false)}
           />
           <div className="relative w-20 h-full glass-panel border-r border-white/15 z-50 p-2 overflow-visible">

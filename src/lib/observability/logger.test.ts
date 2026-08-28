@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { redactSensitiveData, logger } from './logger';
+import { redactSensitiveData, redactSensitiveText, logger, sanitizeErrorForLog } from './logger';
 
 describe('logger & redaction boundary', () => {
   it('redactSensitiveData redige campos sensíveis como token, password, apiKey, secret', () => {
@@ -76,5 +76,60 @@ describe('logger & redaction boundary', () => {
     expect(logged.token).toBe('[REDACTED]');
 
     spyInfo.mockRestore();
+  });
+
+  it('redactSensitiveText redige um header Authorization embutido em texto livre', () => {
+    const text = 'Falha upstream: Authorization: Bearer synthetic-opaque-token-abcdef1234567890 rejeitado pelo provider';
+    const redacted = redactSensitiveText(text);
+    expect(redacted).not.toContain('synthetic-opaque-token-abcdef1234567890');
+    expect(redacted).toContain('[REDACTED]');
+  });
+
+  it('redactSensitiveText redige cookie e password embutidos em mensagem de erro externa', () => {
+    const text = 'Set-Cookie: session=abc123xyz; password=hunter2plus rejected';
+    const redacted = redactSensitiveText(text);
+    expect(redacted).not.toContain('abc123xyz');
+    expect(redacted).not.toContain('hunter2plus');
+  });
+
+  it('redactSensitiveText preserva texto sem segredos inalterado', () => {
+    const text = 'Timeout ao conectar ao provider Bling após 3 tentativas';
+    expect(redactSensitiveText(text)).toBe(text);
+  });
+
+  it('logStructured sanitiza a mensagem quando ela contém um segredo vazado de um erro externo', () => {
+    const spyError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const externalError = new Error('upstream rejected token=synthetic-opaque-zzz999888777 during handshake');
+    logger.error(externalError.message, { subsystem: 'provider', correlationId: 'corr_err_1' });
+
+    const logged = JSON.parse(spyError.mock.calls[0][0]);
+    expect(logged.message).not.toContain('synthetic-opaque-zzz999888777');
+    expect(logged.message).toContain('[REDACTED]');
+
+    spyError.mockRestore();
+  });
+
+  it('sanitizeErrorForLog extrai apenas nome e mensagem redigida, descartando stack cru', () => {
+    const err = new Error('failed with password=supersecret123 in payload');
+    err.name = 'UpstreamError';
+
+    const safe = sanitizeErrorForLog(err);
+
+    expect(safe.name).toBe('UpstreamError');
+    expect(safe.message).not.toContain('supersecret123');
+    expect(safe.message).toContain('[REDACTED]');
+    expect(safe).not.toHaveProperty('stack');
+  });
+
+  it('sanitizeErrorForLog lida com valores não-Error (string/objeto lançado) sem lançar', () => {
+    expect(sanitizeErrorForLog('plain string error with token=abc123deadbeef')).toEqual({
+      name: 'UnknownError',
+      message: expect.stringContaining('[REDACTED]'),
+    });
+    expect(sanitizeErrorForLog({ weird: true })).toEqual({
+      name: 'UnknownError',
+      message: 'Erro não identificado',
+    });
   });
 });

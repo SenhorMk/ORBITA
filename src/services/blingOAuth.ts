@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
-const BLING_OAUTH_TOKEN_URL = 'https://api.bling.com.br/Api/v3/oauth/token';
+const BLING_OAUTH_TOKEN_URL =
+  process.env.BLING_OAUTH_TOKEN_URL || 'https://api.bling.com.br/Api/v3/oauth/token';
 const BLING_OAUTH_TIMEOUT_MS = 10_000;
 
 const BlingTokenResponseSchema = z.object({

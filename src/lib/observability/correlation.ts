@@ -3,6 +3,25 @@ import crypto from 'crypto';
 export const CORRELATION_HEADER = 'x-correlation-id';
 export const REQUEST_ID_HEADER = 'x-request-id';
 
+/** Tamanho máximo aceito para um correlation id vindo de um header não confiável. */
+const MAX_SAFE_CORRELATION_ID_LENGTH = 128;
+
+/** Alfabeto seguro para correlation id: alfanumérico, hífen, underscore e ponto. */
+const SAFE_CORRELATION_ID_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * Verifica se um valor de header é seguro para ser reutilizado como correlation id:
+ * tamanho limitado e apenas caracteres do alfabeto seguro (sem espaços, controle,
+ * HTML ou separadores que possibilitem injeção de log/header).
+ */
+export function isSafeCorrelationId(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= MAX_SAFE_CORRELATION_ID_LENGTH &&
+    SAFE_CORRELATION_ID_PATTERN.test(value)
+  );
+}
+
 /**
  * Gera um novo Correlation ID único e seguro.
  */
@@ -33,7 +52,8 @@ export function getCorrelationId(input?: Request | Headers | HeadersInit): strin
     headers.get(REQUEST_ID_HEADER) ||
     headers.get('traceparent');
 
-  return existing && existing.trim().length > 0 ? existing.trim() : generateCorrelationId();
+  const trimmed = existing ? existing.trim() : '';
+  return trimmed.length > 0 && isSafeCorrelationId(trimmed) ? trimmed : generateCorrelationId();
 }
 
 /**

@@ -41,6 +41,127 @@ async function upsertChatwootRecord(
   });
 }
 
+/** Sincroniza o contato remetente de uma conversa. Retorna `true` quando persistido com sucesso. */
+async function syncChatwootContact(
+  scope: VerifiedOrganizationScope,
+  sender: NonNullable<NonNullable<ChatwootConversation['meta']>['sender']>,
+): Promise<boolean> {
+  const contactId = sender.id;
+  const { error: contactError } = await upsertChatwootRecord(scope, 'chatwoot_contacts', {
+    id: contactId,
+    name: sender.name || 'Cliente Sem Nome',
+    email: sender.email || null,
+    phone_number: sender.phone_number || null,
+    phone_normalizado: normalizeToE164(sender.phone_number || undefined),
+    avatar_url: sender.avatar_url || sender.thumbnail || null,
+  });
+
+  if (contactError) {
+    console.error(`❌ Erro ao salvar contato ${contactId}:`, contactError);
+    return false;
+  }
+  return true;
+}
+
+/** Sincroniza a conversa (com canal mapeado) associada a um contato já persistido. */
+async function syncChatwootConversation(
+  scope: VerifiedOrganizationScope,
+  rawConv: ChatwootConversation,
+  contactId: number,
+): Promise<boolean> {
+  const { error: convError } = await upsertChatwootRecord(scope, 'chatwoot_conversations', {
+    id: rawConv.id,
+    display_id: rawConv.display_id,
+    contact_id: contactId,
+    status: rawConv.status || 'open',
+    inbox_id: rawConv.inbox_id || null,
+    channel: mapChatwootChannel(rawConv.meta?.channel || rawConv.channel_type),
+    updated_at: new Date().toISOString(),
+  });
+
+  if (convError) {
+    console.error(`❌ Erro ao salvar conversa ${rawConv.id}:`, convError);
+    return false;
+  }
+  return true;
+}
+
+/** Normaliza o `message_type` bruto do Chatwoot para o enum local. */
+function mapChatwootMessageType(rawType: ChatwootMessage['message_type']): 'incoming' | 'outgoing' | 'system' | 'template' {
+  if (rawType === 1 || rawType === 'outgoing' || rawType === '1') return 'outgoing';
+  if (rawType === 2 || rawType === 'system' || rawType === '2') return 'system';
+  if (rawType === 3 || rawType === 'template' || rawType === '3') return 'template';
+  return 'incoming';
+}
+
+/** Sincroniza todas as mensagens de uma conversa. Retorna a contagem de mensagens persistidas. */
+async function syncChatwootMessages(
+  adapter: ChatwootAdapter,
+  scope: VerifiedOrganizationScope,
+  conversationId: number,
+): Promise<number> {
+  const messagesResult = await adapter.getMessages(conversationId);
+  if (messagesResult._tag !== 'ChatwootSuccess') {
+    console.error(`❌ Erro ao consultar mensagens da conversa ${conversationId}:`, messagesResult.reason);
+    return 0;
+  }
+
+  let messagesCount = 0;
+  for (const rawMsg of messagesResult.data) {
+    let senderType = rawMsg.sender?.type || null;
+    if (senderType && !['contact', 'user', 'agent'].includes(senderType)) {
+      senderType = null;
+    }
+
+    const { error: msgError } = await upsertChatwootRecord(scope, 'chatwoot_messages', {
+      id: rawMsg.id,
+      conversation_id: conversationId,
+      content: rawMsg.content || '',
+      message_type: mapChatwootMessageType(rawMsg.message_type),
+      sender_name: rawMsg.sender?.name || null,
+      sender_id: rawMsg.sender?.id || null,
+      sender_type: senderType,
+      created_at: rawMsg.created_at || new Date().toISOString(),
+    });
+
+    if (msgError) {
+      console.error(`❌ Erro ao salvar mensagem ${rawMsg.id}:`, msgError);
+      continue;
+    }
+    messagesCount++;
+  }
+  return messagesCount;
+}
+
+/** Sincroniza uma única conversa (registro de inbox, contato, conversa e mensagens). */
+async function syncChatwootConversationTree(
+  adapter: ChatwootAdapter,
+  scope: VerifiedOrganizationScope,
+  rawConv: ChatwootConversation,
+): Promise<{ contacts: number; conversations: number; messages: number }> {
+  // Registrar/confirmar o mapeamento inbox->organização usando uma conversa obtida
+  // via chamada autenticada com as credenciais da própria organização — nunca a
+  // partir de um payload de webhook não verificado.
+  if (rawConv.inbox_id) {
+    await registerChatwootInboxIfNeeded(supabaseServer, scope, {
+      conexaoId: adapter.conexaoId,
+      inboxId: rawConv.inbox_id,
+    });
+  }
+
+  const sender = rawConv.meta?.sender;
+  if (!sender) return { contacts: 0, conversations: 0, messages: 0 };
+
+  const contactSynced = await syncChatwootContact(scope, sender);
+  if (!contactSynced) return { contacts: 0, conversations: 0, messages: 0 };
+
+  const conversationSynced = await syncChatwootConversation(scope, rawConv, sender.id);
+  if (!conversationSynced) return { contacts: 1, conversations: 0, messages: 0 };
+
+  const messages = await syncChatwootMessages(adapter, scope, rawConv.id);
+  return { contacts: 1, conversations: 1, messages };
+}
+
 export async function POST(request: Request) {
   try {
     // 0. Validação de Sessão
@@ -75,111 +196,10 @@ export async function POST(request: Request) {
     let messagesCount = 0;
 
     for (const rawConv of rawConversations) {
-      // Registrar/confirmar o mapeamento inbox->organização usando uma conversa obtida
-      // via chamada autenticada com as credenciais da própria organização — nunca a
-      // partir de um payload de webhook não verificado.
-      if (rawConv.inbox_id) {
-        await registerChatwootInboxIfNeeded(supabaseServer, scope, {
-          conexaoId: adapter.conexaoId,
-          inboxId: rawConv.inbox_id,
-        });
-      }
-
-      // A. Processar Contato
-      const sender = rawConv.meta?.sender;
-      if (!sender) continue;
-
-      const contactId = sender.id;
-      const contactName = sender.name || 'Cliente Sem Nome';
-      const contactEmail = sender.email || null;
-      const contactPhone = sender.phone_number || null;
-      const contactAvatar = sender.avatar_url || sender.thumbnail || null;
-
-      // Upsert contato com telefone normalizado e escopo do tenant/organizacao
-      const { error: contactError } = await upsertChatwootRecord(scope, 'chatwoot_contacts', {
-          id: contactId,
-          name: contactName,
-          email: contactEmail,
-          phone_number: contactPhone,
-          phone_normalizado: normalizeToE164(contactPhone || undefined),
-          avatar_url: contactAvatar,
-      });
-
-      if (contactError) {
-        console.error(`❌ Erro ao salvar contato ${contactId}:`, contactError);
-        continue;
-      }
-      contactsCount++;
-
-      // B. Processar Conversa com canal mapeado e escopo do tenant/organizacao
-      const conversationId = rawConv.id;
-      const displayId = rawConv.display_id;
-      const status = rawConv.status || 'open';
-      const inboxId = rawConv.inbox_id || null;
-      const channel = mapChatwootChannel(rawConv.meta?.channel || rawConv.channel_type);
-
-      const { error: convError } = await upsertChatwootRecord(scope, 'chatwoot_conversations', {
-          id: conversationId,
-          display_id: displayId,
-          contact_id: contactId,
-          status: status,
-          inbox_id: inboxId,
-          channel: channel,
-          updated_at: new Date().toISOString(),
-      });
-
-      if (convError) {
-        console.error(`❌ Erro ao salvar conversa ${conversationId}:`, convError);
-        continue;
-      }
-      conversationsCount++;
-
-      // C. Processar Mensagens desta conversa com escopo do tenant/organizacao
-      const messagesResult = await adapter.getMessages(conversationId);
-      if (messagesResult._tag !== 'ChatwootSuccess') {
-        console.error(`❌ Erro ao consultar mensagens da conversa ${conversationId}:`, messagesResult.reason);
-        continue;
-      }
-      const rawMessages: ChatwootMessage[] = messagesResult.data;
-
-      for (const rawMsg of rawMessages) {
-        let msgType: 'incoming' | 'outgoing' | 'system' | 'template' = 'incoming';
-
-        const rawType = rawMsg.message_type;
-        if (rawType === 1 || rawType === 'outgoing' || rawType === '1') {
-          msgType = 'outgoing';
-        } else if (rawType === 2 || rawType === 'system' || rawType === '2') {
-          msgType = 'system';
-        } else if (rawType === 3 || rawType === 'template' || rawType === '3') {
-          msgType = 'template';
-        }
-
-        const senderName = rawMsg.sender?.name || null;
-        const senderId = rawMsg.sender?.id || null;
-        let senderType = rawMsg.sender?.type || null;
-
-        // Validação de sender_type contra enums
-        if (senderType && !['contact', 'user', 'agent'].includes(senderType)) {
-          senderType = null;
-        }
-
-        const { error: msgError } = await upsertChatwootRecord(scope, 'chatwoot_messages', {
-            id: rawMsg.id,
-            conversation_id: conversationId,
-            content: rawMsg.content || '',
-            message_type: msgType,
-            sender_name: senderName,
-            sender_id: senderId,
-            sender_type: senderType,
-            created_at: rawMsg.created_at || new Date().toISOString(),
-        });
-
-        if (msgError) {
-          console.error(`❌ Erro ao salvar mensagem ${rawMsg.id}:`, msgError);
-          continue;
-        }
-        messagesCount++;
-      }
+      const result = await syncChatwootConversationTree(adapter, scope, rawConv);
+      contactsCount += result.contacts;
+      conversationsCount += result.conversations;
+      messagesCount += result.messages;
     }
 
     // 2. Acionar Auto-Registro e Vínculo SAC-ERP
@@ -202,9 +222,4 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
-}
-
-// Permitir também requisição GET para testes simples via navegador
-export async function GET(request: Request) {
-  return POST(request);
 }

@@ -16,6 +16,7 @@
     "db:catalog:write": "node scripts/database-catalog.mjs --write-reference",
     "db:ledger:write": "node scripts/database-ledger.mjs --write",
     "boundaries:check": "node scripts/check-module-boundaries.mjs",
+    "build:artifact:check": "node scripts/check-build-artifact.mjs .next",
     "deploy:readiness": "node scripts/check-deploy-readiness.mjs",
     "test:backup": "node scripts/test-backup-restore.mjs",
     "test": "vitest run",
