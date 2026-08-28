@@ -87,7 +87,19 @@ export const List2 = ({
           {items.map((item, index) => (
             <React.Fragment key={index}>
               <div
-                onClick={() => item.onClick && item.onClick()}
+                {...(item.onClick
+                  ? {
+                      role: "button" as const,
+                      tabIndex: 0,
+                      onClick: () => item.onClick!(),
+                      onKeyDown: (e: React.KeyboardEvent) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          item.onClick!();
+                        }
+                      },
+                    }
+                  : {})}
                 className={`grid items-center gap-4 px-4 py-5 md:grid-cols-4 transition-colors rounded-xl ${
                   item.onClick ? "cursor-pointer hover:bg-white/[0.04]" : ""
                 }`}
@@ -107,7 +119,7 @@ export const List2 = ({
                   {item.description}
                 </div>
                 {item.action ? (
-                  <div className="order-3 ml-auto w-fit md:order-none" onClick={(e) => e.stopPropagation()}>
+                  <div className="order-3 ml-auto w-fit md:order-none">
                     {item.action}
                   </div>
                 ) : item.onClick ? (

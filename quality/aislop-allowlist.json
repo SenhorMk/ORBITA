@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "policy": "zero-tolerance-with-documented-exceptions",
+  "description": "Ticket 20 eliminated the anonymous AI-slop baseline/ratchet. There is no global warning ceiling: every entry below is an individually justified residual with an owner, a follow-up ticket, and a date. Any diagnostic not listed here fails the gate. `severity: info` entries are advisory only (they never fail the gate) and are listed here purely for traceability.",
+  "exceptions": [
+    {
+      "fingerprint": "src/app/page.tsx|code-quality|complexity/file-too-large|warning|File too large (max: 600)",
+      "owner": "needs-owner",
+      "ticket": "follow-up (post ticket-20): split src/app/page.tsx dashboard tabs (Vendas, Estoque, Clientes, SAC) into per-tab modules, mirroring the existing src/components/FinanceiroTab.tsx extraction",
+      "date": "2026-08-28",
+      "reason": "src/app/page.tsx composes every dashboard tab (Dashboard, Vendas, Estoque, Clientes, SAC) in one file (2218 lines vs. the 600-line component budget). Splitting it into per-tab components is a real, deliberate modularization effort — not a mechanical extraction — and touches the app's primary authenticated screen. Doing it inside a CI/quality-gate ticket risks destabilizing the main UI without a focused review. Every other complexity finding in this codebase (26 of 28) was fixed in ticket 20; this is the one deliberately deferred."
+    },
+    {
+      "fingerprint": "src/services/bling.ts|code-quality|complexity/file-too-large|warning|File too large (max: 400)",
+      "owner": "needs-owner",
+      "ticket": "follow-up (post ticket-20): split src/services/bling.ts into per-domain modules (contatos/produtos/pedidos/financeiro/nfe) behind the existing BlingClient facade, using a reviewed TypeScript mixin or delegation pattern",
+      "date": "2026-08-28",
+      "reason": "BlingClient centralizes OAuth token refresh, rate limiting, and multi-tenant scoping (private fields/methods) used by every Bling API method (1183 lines vs. the 400-line budget for a non-component .ts file). Splitting the class requires either exposing formerly-private auth internals to sibling modules or a TypeScript mixin refactor — both need dedicated review focused on tenant-isolation and auth correctness, per AGENTS.md's requirement that every Bling OAuth/API change go through $orbita-bling and $orbita-security. Deferred rather than mechanically refactored under time pressure in a CI-cleanup ticket."
+    },
+    {
+      "fingerprint": "package.json|security|security/dependency-audit-skipped|info|Dependency audit did not complete (npm audit)",
+      "owner": "needs-owner",
+      "ticket": "n/a — environment limitation, not a code defect",
+      "date": "2026-08-28",
+      "reason": "aislop's internal npm-audit invocation fails on this Windows environment with `spawn npm ENOENT` (it spawns `npm` without shell:true, so Windows' npm.cmd shim is not resolved). The actual gate — `npm run audit:check` (`npm audit --omit=dev --audit-level=high`) — runs directly via npm and passes cleanly (0 vulnerabilities), confirmed in docs/quality/ticket-20-gate-ledger.md. Severity is `info`, so it never fails this gate regardless."
+    }
+  ]
+}

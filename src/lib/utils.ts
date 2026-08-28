@@ -91,7 +91,7 @@ export interface ProdutoValidationResult {
  */
 export function sanitizeProductName(name: string): string {
   // Remove caracteres não permitidos, mantém letras acentuadas, números, espaços, hífens, barras, pontos, &, ç, aspas
-  return name.replace(/[^a-zA-ZÀ-ÿçÇ0-9\s\-/\.,\()\&'\"]/g, '').trim();
+  return name.replace(/[^a-zA-ZÀ-ÿçÇ0-9\s\-/.,()&'"]/g, '').trim();
 }
 
 import { BlingProductSchema } from '../schemas/bling';

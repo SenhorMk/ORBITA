@@ -133,9 +133,13 @@ export const TransactionList = React.memo(function TransactionList({
         return (
           <div
             key={pedido.id || pedido.bling_id}
-            onClick={() => setSelectedPedidoId(pedido.bling_id)}
-            className="group relative rounded-2xl glass-card p-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3 border border-white/10 hover:border-white/20 transition-all duration-200 cursor-pointer"
+            className="group relative rounded-2xl glass-card p-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3 border border-white/10 hover:border-white/20 transition-all duration-200"
           >
+            <button
+              type="button"
+              onClick={() => setSelectedPedidoId(pedido.bling_id)}
+              className="flex flex-col md:flex-row md:items-center gap-3 min-w-0 flex-1 text-left cursor-pointer"
+            >
             {/* Left Side: Avatar + Details */}
             <div className="flex items-center gap-3 min-w-0">
               {/* iOS Neutral Avatar */}
@@ -174,7 +178,7 @@ export const TransactionList = React.memo(function TransactionList({
               </div>
             </div>
 
-            {/* Right Side: Status Badges + Price + Actions */}
+            {/* Right Side: Status Badges + Price */}
             <div className="flex items-center justify-between md:justify-end gap-4 border-t border-white/5 md:border-t-0 pt-2.5 md:pt-0">
               {/* NF-e Status Badge */}
               <div className="flex flex-col items-start md:items-end gap-0.5">
@@ -214,6 +218,8 @@ export const TransactionList = React.memo(function TransactionList({
                   })}
                 </span>
               </div>
+            </div>
+            </button>
 
               {/* Quick Actions & Dropdown */}
               <div className="flex items-center gap-1.5 pl-2 border-l border-white/10">
@@ -301,7 +307,6 @@ export const TransactionList = React.memo(function TransactionList({
                   ]}
                 />
               </div>
-            </div>
           </div>
         );
       })}

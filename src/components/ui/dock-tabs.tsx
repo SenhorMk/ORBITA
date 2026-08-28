@@ -37,7 +37,9 @@ function DockIcon({
   const [isClicked, setIsClicked] = useState(false);
 
   return (
-    <div
+    <button
+      type="button"
+      aria-label={item.name}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       onMouseDown={() => setIsClicked(true)}
@@ -84,7 +86,7 @@ function DockIcon({
           } ${isClicked ? 'scale-125' : 'scale-100'}`}
         />
       )}
-    </div>
+    </button>
   );
 }
 
@@ -97,39 +99,31 @@ export function DockTabs({
   orientation?: 'horizontal' | 'vertical';
   activeId?: string;
 }) {
-  if (orientation === 'vertical') {
-    return (
-      <div className="flex flex-col items-center justify-center w-full select-none py-1">
-        <div
-          className="flex flex-col items-center gap-2.5 py-2 px-1.5 rounded-3xl bg-zinc-900/40 backdrop-blur-xl border border-white/10 shadow-xl overflow-visible animate-in fade-in duration-300"
-        >
-          {items.map((item) => (
-            <DockIcon
-              key={item.id}
-              item={item}
-              orientation="vertical"
-              isActive={activeId === item.id}
-            />
-          ))}
-        </div>
-      </div>
-    );
-  }
+  const dockIcons = (dockOrientation: 'horizontal' | 'vertical') =>
+    items.map((item) => (
+      <DockIcon
+        key={item.id}
+        item={item}
+        orientation={dockOrientation}
+        isActive={activeId === item.id}
+      />
+    ));
+
+  const variants = {
+    vertical: {
+      outer: 'flex flex-col items-center justify-center w-full select-none py-1',
+      pill: 'flex flex-col items-center gap-2.5 py-2 px-1.5 rounded-3xl bg-zinc-900/40 backdrop-blur-xl border border-white/10 shadow-xl overflow-visible animate-in fade-in duration-300',
+    },
+    horizontal: {
+      outer: 'flex items-center justify-center p-4 select-none',
+      pill: 'mx-auto flex h-16 items-center gap-3 rounded-3xl bg-zinc-900/40 backdrop-blur-xl px-4 py-2 border border-white/10 shadow-xl overflow-visible animate-in fade-in slide-in-from-bottom-4 duration-300',
+    },
+  } as const;
+  const { outer, pill } = variants[orientation];
 
   return (
-    <div className="flex items-center justify-center p-4 select-none">
-      <div
-        className="mx-auto flex h-16 items-center gap-3 rounded-3xl bg-zinc-900/40 backdrop-blur-xl px-4 py-2 border border-white/10 shadow-xl overflow-visible animate-in fade-in slide-in-from-bottom-4 duration-300"
-      >
-        {items.map((item) => (
-          <DockIcon
-            key={item.id}
-            item={item}
-            orientation="horizontal"
-            isActive={activeId === item.id}
-          />
-        ))}
-      </div>
+    <div className={outer}>
+      <div className={pill}>{dockIcons(orientation)}</div>
     </div>
   );
 }

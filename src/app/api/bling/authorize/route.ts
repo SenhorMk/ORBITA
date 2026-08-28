@@ -9,6 +9,9 @@ import { getCorrelationId } from '../../../../lib/observability/correlation';
 
 export const dynamic = 'force-dynamic';
 
+const BLING_OAUTH_AUTHORIZE_URL =
+  process.env.BLING_OAUTH_AUTHORIZE_URL || 'https://www.bling.com.br/Api/v3/oauth/authorize';
+
 /** Explicit dependencies for the Bling authorize handler; production wiring lives in `GET`. */
 export interface BlingAuthorizeDependencies {
   readonly resolveOrganizationContext: (request: Request) => Promise<OrganizationContextResult>;
@@ -70,7 +73,7 @@ export function createBlingAuthorizeHandler(dependencies: BlingAuthorizeDependen
     }
 
     const authorizeUrl =
-      `https://www.bling.com.br/Api/v3/oauth/authorize` +
+      `${BLING_OAUTH_AUTHORIZE_URL}` +
       `?response_type=code` +
       `&client_id=${encodeURIComponent(clientId)}` +
       `&state=${encodeURIComponent(transaction.state)}`;

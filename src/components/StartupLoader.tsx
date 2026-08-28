@@ -10,53 +10,73 @@ interface StartupLoaderProps {
   isVisible: boolean;
 }
 
+type StartupStatus = 'verifying' | 'syncing' | 'success' | 'error' | 'auth_needed';
+
+interface StartupSyncCallbacks {
+  isMounted: () => boolean;
+  setStatus: (status: StartupStatus) => void;
+  setProgressText: (text: string) => void;
+  setErrorMessage: (message: string) => void;
+  onComplete: () => void;
+}
+
+/** Executa a checagem de saúde/sincronização inicial contra `/api/startup`, reagindo via callbacks de estado. */
+async function runStartupSync(
+  fetchWithAuth: StartupLoaderProps['fetchWithAuth'],
+  callbacks: StartupSyncCallbacks,
+): Promise<void> {
+  const { isMounted, setStatus, setProgressText, setErrorMessage, onComplete } = callbacks;
+  try {
+    setStatus('verifying');
+    setProgressText('Testando conexão com o servidor Bling...');
+
+    const response = await fetchWithAuth('/api/startup', { method: 'POST' });
+    const data = await response.json();
+
+    if (!isMounted()) return;
+
+    if (data.needsAuth || response.status === 401) {
+      setStatus('auth_needed');
+      setProgressText('Token expirado. É necessário reautorizar o aplicativo.');
+      return;
+    }
+
+    if (data.success) {
+      setStatus('success');
+      setProgressText('Sincronização concluída com sucesso!');
+      setTimeout(() => {
+        if (isMounted()) onComplete();
+      }, 1500);
+    } else {
+      setStatus('error');
+      setErrorMessage(data.error || 'Falha ao sincronizar com o Bling.');
+    }
+  } catch (err: unknown) {
+    if (!isMounted()) return;
+    setStatus('error');
+    setErrorMessage(err instanceof Error ? err.message : 'Erro de rede ou servidor.');
+  }
+}
+
 export function StartupLoader({ onComplete, onNeedsAuth, fetchWithAuth, isVisible }: StartupLoaderProps) {
-  const [status, setStatus] = useState<'verifying' | 'syncing' | 'success' | 'error' | 'auth_needed'>('verifying');
+  const [status, setStatus] = useState<StartupStatus>('verifying');
   const [progressText, setProgressText] = useState('Verificando integridade do Token...');
   const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
     if (!isVisible) return;
 
-    let isMounted = true;
-
-    const runStartupSync = async () => {
-      try {
-        setStatus('verifying');
-        setProgressText('Testando conexão com o servidor Bling...');
-
-        const response = await fetchWithAuth('/api/startup', { method: 'POST' });
-        const data = await response.json();
-
-        if (!isMounted) return;
-
-        if (data.needsAuth || response.status === 401) {
-          setStatus('auth_needed');
-          setProgressText('Token expirado. É necessário reautorizar o aplicativo.');
-          return;
-        }
-
-        if (data.success) {
-          setStatus('success');
-          setProgressText('Sincronização concluída com sucesso!');
-          setTimeout(() => {
-            if (isMounted) onComplete();
-          }, 1500);
-        } else {
-          setStatus('error');
-          setErrorMessage(data.error || 'Falha ao sincronizar com o Bling.');
-        }
-      } catch (err: unknown) {
-        if (!isMounted) return;
-        setStatus('error');
-        setErrorMessage(err instanceof Error ? err.message : 'Erro de rede ou servidor.');
-      }
-    };
-
-    runStartupSync();
+    let mounted = true;
+    void runStartupSync(fetchWithAuth, {
+      isMounted: () => mounted,
+      setStatus,
+      setProgressText,
+      setErrorMessage,
+      onComplete,
+    });
 
     return () => {
-      isMounted = false;
+      mounted = false;
     };
   }, [isVisible, fetchWithAuth, onComplete]);
 

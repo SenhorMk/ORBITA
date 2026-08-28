@@ -10,9 +10,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-test-public-key-not-a-secret
       NEXT_PUBLIC_SUPABASE_URL: https://ci-test.supabase.co
@@ -55,14 +60,20 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Enforce lint ratchet
+      - name: Enforce lint gate (zero-tolerance)
         run: npm run lint:ratchet
 
-      - name: Enforce AI slop ratchet
+      - name: Enforce AI slop gate
         run: npm run aislop
+
+      - name: Enforce module boundaries
+        run: npm run boundaries:check
 
       - name: Build production bundle
         run: npm run build
+
+      - name: Check build artifact allowlist
+        run: npm run build:artifact:check
 
   database-lab:
     name: Disposable Supabase database lab

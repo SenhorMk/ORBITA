@@ -244,10 +244,11 @@ export function ClienteEditModal({
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-1.5 md:col-span-2">
-                        <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                        <label htmlFor="cliente-edit-nome" className="text-xs font-bold text-slate-300 uppercase tracking-wider">
                           Nome / Razão Social *
                         </label>
                         <input
+                          id="cliente-edit-nome"
                           type="text"
                           value={nome}
                           onChange={(e) => {
@@ -260,12 +261,13 @@ export function ClienteEditModal({
                         {errors.nome && <span className="text-xs text-rose-400 font-semibold">{errors.nome}</span>}
                       </div>
                       <div className="space-y-1.5">
-                        <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                        <label htmlFor="cliente-edit-email" className="text-xs font-bold text-slate-300 uppercase tracking-wider">
                           Email
                         </label>
                         <div className="relative">
                           <Mail className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
                           <input
+                            id="cliente-edit-email"
                             type="email"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
@@ -275,12 +277,13 @@ export function ClienteEditModal({
                         </div>
                       </div>
                       <div className="space-y-1.5">
-                        <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                        <label htmlFor="cliente-edit-telefone" className="text-xs font-bold text-slate-300 uppercase tracking-wider">
                           Telefone / Celular
                         </label>
                         <div className="relative">
                           <Phone className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
                           <input
+                            id="cliente-edit-telefone"
                             type="text"
                             value={telefone}
                             onChange={(e) => setTelefone(e.target.value)}
@@ -299,10 +302,11 @@ export function ClienteEditModal({
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                        <label htmlFor="cliente-edit-cpf-cnpj" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
                           CPF / CNPJ
                         </label>
                         <input
+                          id="cliente-edit-cpf-cnpj"
                           type="text"
                           value={cpfCnpj}
                           onChange={(e) => handleDocChange(e.target.value)}
@@ -311,10 +315,11 @@ export function ClienteEditModal({
                         />
                       </div>
                       <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                        <label htmlFor="cliente-edit-tipo" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
                           Tipo de Pessoa *
                         </label>
                         <select
+                          id="cliente-edit-tipo"
                           value={tipo}
                           onChange={(e) => setTipo(e.target.value)}
                           className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50"
@@ -325,10 +330,11 @@ export function ClienteEditModal({
                         </select>
                       </div>
                       <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                        <label htmlFor="cliente-edit-contribuinte" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
                           Tipo de Contribuinte *
                         </label>
                         <select
+                          id="cliente-edit-contribuinte"
                           value={contribuinte}
                           onChange={(e) => setContribuinte(e.target.value)}
                           className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50"
@@ -348,28 +354,28 @@ export function ClienteEditModal({
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                       <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">CEP</label>
-                        <input type="text" value={cep} onChange={e => setCep(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="00000-000" />
+                        <label htmlFor="cliente-edit-cep" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">CEP</label>
+                        <input id="cliente-edit-cep" type="text" value={cep} onChange={e => setCep(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="00000-000" />
                       </div>
                       <div className="space-y-1.5 md:col-span-2">
-                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Endereço / Rua</label>
-                        <input type="text" value={endereco} onChange={e => setEndereco(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="Rua Exemplo" />
+                        <label htmlFor="cliente-edit-endereco" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Endereço / Rua</label>
+                        <input id="cliente-edit-endereco" type="text" value={endereco} onChange={e => setEndereco(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="Rua Exemplo" />
                       </div>
                       <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Número</label>
-                        <input type="text" value={numero} onChange={e => setNumero(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="123" />
+                        <label htmlFor="cliente-edit-numero" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Número</label>
+                        <input id="cliente-edit-numero" type="text" value={numero} onChange={e => setNumero(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="123" />
                       </div>
                       <div className="space-y-1.5 md:col-span-2">
-                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Bairro</label>
-                        <input type="text" value={bairro} onChange={e => setBairro(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="Centro" />
+                        <label htmlFor="cliente-edit-bairro" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Bairro</label>
+                        <input id="cliente-edit-bairro" type="text" value={bairro} onChange={e => setBairro(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="Centro" />
                       </div>
                       <div className="space-y-1.5 md:col-span-1">
-                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Cidade</label>
-                        <input type="text" value={cidade} onChange={e => setCidade(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="São Paulo" />
+                        <label htmlFor="cliente-edit-cidade" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Cidade</label>
+                        <input id="cliente-edit-cidade" type="text" value={cidade} onChange={e => setCidade(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="São Paulo" />
                       </div>
                       <div className="space-y-1.5 md:col-span-1">
-                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">UF</label>
-                        <input type="text" value={uf} onChange={e => setUf(e.target.value)} maxLength={2} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 uppercase" placeholder="SP" />
+                        <label htmlFor="cliente-edit-uf" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">UF</label>
+                        <input id="cliente-edit-uf" type="text" value={uf} onChange={e => setUf(e.target.value)} maxLength={2} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 uppercase" placeholder="SP" />
                       </div>
                     </div>
                   </div>

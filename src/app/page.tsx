@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import Image from 'next/image';
 import {
   DollarSign,
   TrendingUp,
@@ -31,6 +32,7 @@ import {
 } from "lucide-react";
 import type { Produto, Cliente, Categoria, ChatwootConversation, ChatwootMessage, ItemPedido } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
+import type { User as SupabaseUser } from '@supabase/supabase-js';
 import { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { SetupWizard } from '@/components/SetupWizard';
 import { Sidebar } from '@/components/Sidebar';
@@ -72,6 +74,87 @@ interface UserSession {
   email: string;
   role: 'dono' | 'colaborador';
   name: string;
+}
+
+/** Deriva a sessão de usuário Orbita a partir de um usuário autenticado do Supabase. */
+function deriveUserSession(user: SupabaseUser): UserSession {
+  const isOwner = user.app_metadata?.role === 'dono' ||
+    user.email?.includes('dono') ||
+    user.email === 'admin@haux.com.br';
+  return {
+    email: user.email || '',
+    name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'Usuário',
+    role: isOwner ? 'dono' : 'colaborador',
+  };
+}
+
+/** Search box bound to the shared `searchQuery` state, reused across the top nav and the sales tab. */
+function SearchQueryInput({
+  containerClassName,
+  iconClassName,
+  inputClassName,
+  placeholder,
+  value,
+  onChange,
+}: {
+  containerClassName: string;
+  iconClassName: string;
+  inputClassName: string;
+  placeholder: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className={containerClassName}>
+      <Search className={iconClassName} />
+      <input
+        type="text"
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={inputClassName}
+      />
+    </div>
+  );
+}
+
+/** Rounded product thumbnail used in both the synced and unsynced product lists. */
+function ProductThumbnail({
+  produto,
+  imageUrl,
+  variant,
+}: {
+  produto: Produto;
+  imageUrl: string | undefined;
+  variant: 'synced' | 'unsynced';
+}) {
+  const isSynced = variant === 'synced';
+  return (
+    <div
+      className={`relative h-12 w-12 shrink-0 flex items-center justify-center rounded-xl overflow-hidden border bg-black/40 shadow-inner ${
+        isSynced ? 'border-white/15' : 'border-amber-500/30'
+      }`}
+    >
+      <ImageIcon
+        className={`absolute h-5 w-5 z-0 ${
+          isSynced ? 'text-purple-400 opacity-60' : 'text-amber-500 opacity-50'
+        }`}
+      />
+      {imageUrl && (
+        <Image
+          src={imageUrl}
+          alt={produto.nome}
+          width={48}
+          height={48}
+          unoptimized
+          className={`h-full w-full object-cover relative z-10 ${isSynced ? '' : 'opacity-70'}`}
+          onError={(e) => {
+            e.currentTarget.style.display = 'none';
+          }}
+        />
+      )}
+    </div>
+  );
 }
 
 function OrbitaLogo({ className = "h-6 w-6" }: { className?: string }) {
@@ -181,7 +264,7 @@ export default function Home() {
 
   // Relógio Dinâmico de Sincronização Real do Supabase Cache
   const [lastSyncDate, setLastSyncDate] = useState<Date | null>(null);
-  const [_syncAgoText, setSyncAgoText] = useState('Não sincronizado');
+  const [syncAgoText, setSyncAgoText] = useState('Não sincronizado');
 
   // Estados do Chatwoot Recreated UI
   const [conversas, setConversas] = useState<ChatwootConversation[]>([]);
@@ -192,18 +275,18 @@ export default function Home() {
   const [conversaFilter, setConversaFilter] = useState<'all' | 'open' | 'resolved'>('open');
   const [conversaSearch, setConversaSearch] = useState('');
   const [isSyncingChatwoot, setIsSyncingChatwoot] = useState(false);
-  const [_chatwootFeedback, setChatwootFeedback] = useState<string | null>(null);
+  const [chatwootFeedback, setChatwootFeedback] = useState<string | null>(null);
   const [isChangingStatus, setIsChangingStatus] = useState(false);
 
   // Helper para fetch autenticado com Supabase JWT
-  const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
+  const fetchWithAuth = useCallback(async (url: string, options: RequestInit = {}) => {
     let token = '';
 
     try {
       const { data } = await supabase.auth.getSession();
       token = data.session?.access_token || '';
-    } catch {
-      console.error('Erro ao buscar token do supabase no fetchWithAuth');
+    } catch (error) {
+      console.error('Erro ao buscar token do supabase no fetchWithAuth:', error);
     }
 
     const headers: Record<string, string> = {
@@ -218,26 +301,7 @@ export default function Home() {
       ...options,
       headers,
     });
-  };
-
-  // Mapeador de status para badges na UI Antigravity
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'Atendido':
-        return { label: 'Atendido', classes: 'bg-[#F0E675]/15 text-[#F0E675] border-[#F0E675]/40 glow-manz' };
-      case 'Enviado':
-        return { label: 'Enviado', classes: 'bg-[#ED8F60]/15 text-[#ED8F60] border-[#ED8F60]/40 glow-apricot' };
-      case 'A Emitir':
-        return { label: 'A Emitir', classes: 'bg-[#BF406A]/15 text-[#BF406A] border-[#BF406A]/40 glow-blush' };
-      case 'Cancelado':
-        return { label: 'Cancelado', classes: 'bg-rose-500/15 text-rose-300 border-rose-500/40' };
-      case 'Aberto':
-        return { label: 'Aberto', classes: 'bg-[#692A6F]/20 text-purple-200 border-[#692A6F]/50 glow-eminence' };
-      case 'Pendente':
-      default:
-        return { label: 'Pendente', classes: 'bg-[#ED8F60]/20 text-[#ED8F60] border-[#ED8F60]/40' };
-    }
-  };
+  }, []);
 
   // Resolver de imagem do produto
   const getProductImage = (produto: Produto): string | undefined => {
@@ -302,7 +366,8 @@ export default function Home() {
       } else {
         setChatwootFeedback(`Erro: ${result.error}`);
       }
-    } catch (_error) {
+    } catch (error) {
+      console.error('Erro ao sincronizar Chatwoot:', error);
       setChatwootFeedback('Erro ao comunicar com o servidor.');
     } finally {
       setIsSyncingChatwoot(false);
@@ -514,14 +579,7 @@ export default function Home() {
         setSession(null);
         localStorage.removeItem('haux_session');
       } else {
-        const isOwner = supabaseSession.user.app_metadata?.role === 'dono' ||
-                        supabaseSession.user.email?.includes('dono') ||
-                        supabaseSession.user.email === 'admin@haux.com.br';
-        const userDetails: UserSession = {
-          email: supabaseSession.user.email || '',
-          name: supabaseSession.user.user_metadata?.full_name || supabaseSession.user.email?.split('@')[0] || 'Usuário',
-          role: isOwner ? 'dono' : 'colaborador'
-        };
+        const userDetails = deriveUserSession(supabaseSession.user);
         setSession(userDetails);
         localStorage.setItem('haux_session', JSON.stringify(userDetails));
       }
@@ -529,14 +587,7 @@ export default function Home() {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, supabaseSession) => {
       if (supabaseSession?.user) {
-        const isOwner = supabaseSession.user.app_metadata?.role === 'dono' ||
-                        supabaseSession.user.email?.includes('dono') ||
-                        supabaseSession.user.email === 'admin@haux.com.br';
-        const userDetails: UserSession = {
-          email: supabaseSession.user.email || '',
-          name: supabaseSession.user.user_metadata?.full_name || supabaseSession.user.email?.split('@')[0] || 'Usuário',
-          role: isOwner ? 'dono' : 'colaborador'
-        };
+        const userDetails = deriveUserSession(supabaseSession.user);
         setSession(userDetails);
         localStorage.setItem('haux_session', JSON.stringify(userDetails));
       } else if (event === 'SIGNED_OUT') {
@@ -576,7 +627,7 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [lastSyncDate]);
 
-  const loadDashboardData = async () => {
+  const loadDashboardData = useCallback(async () => {
     try {
       // Verificar se as APIs estão conectadas
       const configRes = await fetchWithAuth('/api/config');
@@ -595,7 +646,7 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [fetchWithAuth]);
 
   useEffect(() => {
     let isMounted = true;
@@ -613,7 +664,7 @@ export default function Home() {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [session]);
+  }, [session, loadDashboardData]);
 
   useEffect(() => {
     if (session?.role === 'dono' && !hasStartedUp) {
@@ -1000,16 +1051,14 @@ export default function Home() {
                 onRefresh={loadDashboardData}
               />
 
-              <div className="relative w-64 hidden sm:block">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Pesquisar no sistema..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-3 py-1.5 rounded-full glass-input text-xs outline-none"
-                />
-              </div>
+              <SearchQueryInput
+                containerClassName="relative w-64 hidden sm:block"
+                iconClassName="absolute left-3 top-2.5 h-4 w-4 text-slate-400"
+                inputClassName="w-full pl-9 pr-3 py-1.5 rounded-full glass-input text-xs outline-none"
+                placeholder="Pesquisar no sistema..."
+                value={searchQuery}
+                onChange={setSearchQuery}
+              />
             </div>
 
             {/* Sync Status Badge & Actions */}
@@ -1031,7 +1080,7 @@ export default function Home() {
                     onClick={handleSync}
                     disabled={isSyncing}
                     className="px-3.5 py-2 rounded-xl glass-button-primary text-xs font-bold flex items-center gap-2 cursor-pointer active:scale-95 transition"
-                    title="Sincronizar pedidos e clientes do Bling ERP"
+                    title={`Sincronizar pedidos e clientes do Bling ERP · ${syncAgoText}`}
                   >
                     <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
                     <span className="hidden sm:inline">{isSyncing ? 'Sincronizando...' : 'Sincronizar Bling'}</span>
@@ -1169,7 +1218,7 @@ export default function Home() {
               {/* Card 1: Faturamento Mês Atual */}
               <Dialog>
                 <DialogTrigger asChild>
-                  <button className="text-left w-full glass-card glass-card-hover p-5 rounded-3xl border border-white/10 relative overflow-hidden group">
+                  <button aria-label="Ver detalhes de Faturamento dos últimos 30 dias" className="text-left w-full glass-card glass-card-hover p-5 rounded-3xl border border-white/10 relative overflow-hidden group">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Faturamento (30d)</span>
                       <div className="h-10 w-10 rounded-2xl glass-panel flex items-center justify-center text-[#F0E675] border border-[#692A6F]/40 glow-eminence">
@@ -1235,7 +1284,7 @@ export default function Home() {
               {/* Card 2: Lucro Estimado */}
               <Dialog>
                 <DialogTrigger asChild>
-                  <button className="text-left w-full glass-card glass-card-hover p-5 rounded-3xl border border-white/10 relative overflow-hidden group">
+                  <button aria-label="Ver detalhes de Lucro Estimado" className="text-left w-full glass-card glass-card-hover p-5 rounded-3xl border border-white/10 relative overflow-hidden group">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Lucro Estimado</span>
                       <div className="h-10 w-10 rounded-2xl glass-panel flex items-center justify-center text-[#ED8F60] border border-[#ED8F60]/40 glow-apricot">
@@ -1281,7 +1330,7 @@ export default function Home() {
               {/* Card 3: Pedidos A Emitir NF-e */}
               <Dialog>
                 <DialogTrigger asChild>
-                  <button className="text-left w-full glass-card glass-card-hover p-5 rounded-3xl border border-white/10 relative overflow-hidden group">
+                  <button aria-label="Ver detalhes de Pedidos A Emitir NF-e" className="text-left w-full glass-card glass-card-hover p-5 rounded-3xl border border-white/10 relative overflow-hidden group">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">A Emitir NF-e</span>
                       <div className="h-10 w-10 rounded-2xl glass-panel flex items-center justify-center text-[#BF406A] border border-[#BF406A]/40 glow-blush">
@@ -1334,7 +1383,7 @@ export default function Home() {
               {/* Card 4: Novos Pedidos */}
               <Dialog>
                 <DialogTrigger asChild>
-                  <button className="text-left w-full glass-card glass-card-hover p-5 rounded-3xl border border-white/10 relative overflow-hidden group">
+                  <button aria-label="Ver detalhes de Novos Pedidos" className="text-left w-full glass-card glass-card-hover p-5 rounded-3xl border border-white/10 relative overflow-hidden group">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Novos Pedidos</span>
                       <div className="h-10 w-10 rounded-2xl glass-panel flex items-center justify-center text-[#0A84FF] border border-[#0A84FF]/40 glow-blue">
@@ -1471,16 +1520,14 @@ export default function Home() {
                 </DropdownMenu>
 
                 {/* Search Box */}
-                <div className="relative w-full sm:w-64">
-                  <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Buscar pedido, cliente..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 rounded-xl glass-input text-xs outline-none"
-                  />
-                </div>
+                <SearchQueryInput
+                  containerClassName="relative w-full sm:w-64"
+                  iconClassName="absolute left-3.5 top-2.5 h-4 w-4 text-slate-400"
+                  inputClassName="w-full pl-10 pr-4 py-2 rounded-xl glass-input text-xs outline-none"
+                  placeholder="Buscar pedido, cliente..."
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                />
 
                 {/* Botão Incluir Pedido Manual */}
                 <Button
@@ -1667,19 +1714,7 @@ export default function Home() {
                               const imageUrl = getProductImage(produto);
                               return {
                                 icon: (
-                                  <div className="relative h-12 w-12 shrink-0 flex items-center justify-center rounded-xl overflow-hidden border border-white/15 bg-black/40 shadow-inner">
-                                    <ImageIcon className="absolute h-5 w-5 text-purple-400 opacity-60 z-0" />
-                                    {imageUrl && (
-                                      <img
-                                        src={imageUrl}
-                                        alt={produto.nome}
-                                        className="h-full w-full object-cover relative z-10"
-                                        onError={(e) => {
-                                          e.currentTarget.style.display = 'none';
-                                        }}
-                                      />
-                                    )}
-                                  </div>
+                                  <ProductThumbnail produto={produto} imageUrl={imageUrl} variant="synced" />
                                 ),
                                 title: produto.nome,
                                 category: `SKU: ${produto.codigo || `BLING-${produto.bling_id}`} • Saldo: ${produto.estoque} un.`,
@@ -1737,19 +1772,7 @@ export default function Home() {
 
                                   return {
                                     icon: (
-                                      <div className="relative h-12 w-12 shrink-0 flex items-center justify-center rounded-xl overflow-hidden border border-amber-500/30 bg-black/40 shadow-inner">
-                                        <ImageIcon className="absolute h-5 w-5 text-amber-500 opacity-50 z-0" />
-                                        {imageUrl && (
-                                          <img
-                                            src={imageUrl}
-                                            alt={produto.nome}
-                                            className="h-full w-full object-cover opacity-70 relative z-10"
-                                            onError={(e) => {
-                                              e.currentTarget.style.display = 'none';
-                                            }}
-                                          />
-                                        )}
-                                      </div>
+                                      <ProductThumbnail produto={produto} imageUrl={imageUrl} variant="unsynced" />
                                     ),
                                     title: produto.nome || 'Produto sem nome',
                                     category: `ID Local: ${produto.bling_id} • Saldo: ${produto.estoque} un.`,
@@ -1872,11 +1895,15 @@ export default function Home() {
                     onClick={handleSyncChatwoot}
                     disabled={isSyncingChatwoot}
                     className="p-2 rounded-xl glass-button-secondary text-cyan-300 hover:text-white"
-                    title="Sincronizar conversas"
+                    title={chatwootFeedback ?? 'Sincronizar conversas'}
                   >
                     <RefreshCw className={`h-4 w-4 ${isSyncingChatwoot ? 'animate-spin' : ''}`} />
                   </button>
                 </div>
+
+                {chatwootFeedback && (
+                  <p className="text-[11px] text-cyan-300/80 px-1">{chatwootFeedback}</p>
+                )}
 
                 {/* Search Box */}
                 <div className="relative">
@@ -1923,10 +1950,11 @@ export default function Home() {
                   }
                   return true;
                 }).map((conversa) => (
-                  <div
+                  <button
+                    type="button"
                     key={conversa.id}
                     onClick={() => setSelectedConversa(conversa)}
-                    className={`p-3.5 hover:bg-white/5 cursor-pointer transition flex items-center gap-3 ${selectedConversa?.id === conversa.id ? 'bg-cyan-500/10 border-l-4 border-cyan-400' : ''}`}
+                    className={`w-full p-3.5 hover:bg-white/5 cursor-pointer transition flex items-center gap-3 text-left ${selectedConversa?.id === conversa.id ? 'bg-cyan-500/10 border-l-4 border-cyan-400' : ''}`}
                   >
                     <div className="h-10 w-10 rounded-2xl glass-panel flex items-center justify-center font-bold text-cyan-300 border border-cyan-500/30 shrink-0">
                       {conversa.contact?.name ? conversa.contact.name.substring(0, 2).toUpperCase() : 'SAC'}
@@ -1941,7 +1969,7 @@ export default function Home() {
                       </div>
                       <p className="text-[11px] text-slate-400 truncate mt-0.5">{conversa.contact?.phone_number || 'Sem número'}</p>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
