@@ -11,6 +11,10 @@ export default defineConfig({
     // depend on lives under `src/lib/e2e/` instead, and stays covered by
     // Vitest as normal.
     exclude: [...configDefaults.exclude, 'e2e/**'],
+    // Component tests (RTL) opt into `jsdom` per-file via the
+    // `@vitest-environment jsdom` pragma; API/service/domain tests keep the
+    // default `node` environment untouched.
+    setupFiles: ['./vitest.setup.ts'],
   },
   resolve: {
     alias: {
