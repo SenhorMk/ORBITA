@@ -260,6 +260,16 @@
       "order": 52,
       "path": "../database/49_entitlement_reserva_atomica_ordering.sql",
       "sha256": "ebc5c739c0d0c62ec0f66c33d0a182d3cfb56a2fa218e03d31e5a70dd4764f49"
+    },
+    {
+      "order": 53,
+      "path": "../database/50_titular_direitos.sql",
+      "sha256": "a1f4c43e9cd7c1f7937a4a2326100423da048162431f4be35036ef9ae5dda58e"
+    },
+    {
+      "order": 54,
+      "path": "../database/51_retencao_anonimizacao_eliminacao.sql",
+      "sha256": "5382aad6aea9adc5663206acd5e2e4013e6a6b2bb373b085d3c967451dc79602"
     }
   ],
   "references": [
