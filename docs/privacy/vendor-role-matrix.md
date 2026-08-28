@@ -29,3 +29,14 @@
 
 Nenhum item desta matriz recebeu `verified` porque **nenhum DPA, termo de subprocessamento ou confirmação de região de dados está presente no repositório** — isso é evidência de ausência de documentação contratual no código-fonte, não prova de ausência do contrato em si (o contrato pode existir fora do repositório, ex. assinado pelo proprietário diretamente com o fornecedor). O item de ação para o proprietário é reunir essas confirmações e atualizar esta matriz, não o codificador presumir a existência ou o conteúdo de qualquer contrato.
 
+## Atualização — Ticket 16 (Publicar privacidade, cookies e governança de fornecedores)
+
+**Commit analisado:** `36f1b231df1f50da2cd0a9e926e7a222dff81688` (branch `fix/ticket-16-privacidade-cookies-fornecedores`).
+**Data:** 2026-08-27.
+
+Esta seção só adiciona o que o ticket 16 confirmou de novo; nenhuma linha da tabela acima (produzida pelo ticket 15) foi reescrita.
+
+- **Confirmação independente da ausência de fornecedor de analytics/marketing**: buscas `rg` reproduzidas nesta etapa (`rg -i "analytics|gtag|posthog|mixpanel|segment|amplitude|hotjar|clarity|pixel|fbq\(" src/` e `grep -iE "sentry|datadog|posthog|logrocket|analytics|amplitude|mixpanel|segment|gtag|ga4|hotjar|clarity|facebook-pixel|tiktok" package.json`) confirmam, sem novo achado, o que as linhas "Observabilidade (APM/erro)" e "Analytics de produto" já registravam como `not-applicable`. Ver `docs/privacy/cookie-registry.md` para o detalhamento completo de cookies/storage/scripts.
+- **Nenhum link/versão de DPA novo foi localizado** para Supabase, Stripe, Bling, Chatwoot ou GitHub — as cinco linhas seguem `missing` pelos mesmos motivos já registrados pelo ticket 15 (nenhum contrato de processamento de dados está presente no repositório). Nenhum status foi alterado para `verified` porque nenhuma confirmação nova de proprietário chegou nesta etapa.
+- **Canal de privacidade real (contato do encarregado/DPO ou equivalente)**: busca `rg -i "privacidade@|dpo@|encarregado|privacy@|contato@|suporte@"` sobre `src/`, `docs/`, `.env.example` e `README.md` não encontrou nenhum canal real — o único resultado é um placeholder de formulário de UI (`contato@exemplo.com`, `src/components/ClienteEditModal.tsx`, campo de cadastro de cliente do lojista, não um canal do ORBITA). **Status: `needs-owner`** — nenhum contato foi inventado; o proprietário deve publicar um canal real (e-mail dedicado, formulário, ou ponto de contato do encarregado) antes que o aviso de privacidade possa referenciá-lo.
+- **Nenhum fornecedor novo foi introduzido pelo ticket 16** (não há migration, não há nova integração) — esta seção é só uma confirmação e uma marcação `needs-owner` explícita para o canal de privacidade, que a tabela original não cobria.
