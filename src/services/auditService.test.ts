@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { recordAuditEvent, listAuditEvents } from './auditService';
+import { recordAuditEvent, listAuditEvents, recordSystemAuditEvent } from './auditService';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
@@ -41,6 +41,73 @@ describe('auditService', () => {
         name: 'Production Key',
       },
     });
+  });
+
+  it('recordAuditEvent rejeita acao fora do catálogo versionado sem chamar a RPC', async () => {
+    const rpcMock = vi.fn().mockResolvedValue({ data: 'should-not-be-called', error: null });
+    const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
+
+    await expect(
+      recordAuditEvent(fakeClient, scope, {
+        acao: 'evento.forjado.nao.catalogado',
+        recurso: 'x',
+      }),
+    ).rejects.toThrow(/catálogo/i);
+
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it('recordAuditEvent rejeita metadata com campo explicitamente proibido do evento', async () => {
+    const rpcMock = vi.fn().mockResolvedValue({ data: 'id', error: null });
+    const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
+
+    await expect(
+      recordAuditEvent(fakeClient, scope, {
+        acao: 'billing.owner_changed',
+        recurso: 'organization',
+        metadata: { cardNumber: '4111111111111111' },
+      }),
+    ).rejects.toThrow(/proibido/i);
+
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it('recordSystemAuditEvent registra evento de sistema sem ator humano via identidade verificada', async () => {
+    const rpcMock = vi.fn().mockResolvedValue({ data: 'sys-event-1', error: null });
+    const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
+
+    const eventId = await recordSystemAuditEvent(fakeClient, {
+      source: 'webhook_processor',
+      organizationId: 'org-abc',
+      acao: 'webhook.signature_invalid',
+      recurso: 'bling_webhook',
+      metadata: {},
+    });
+
+    expect(eventId).toBe('sys-event-1');
+    expect(rpcMock).toHaveBeenCalledWith(
+      'registrar_evento_auditoria',
+      expect.objectContaining({
+        p_org_id: 'org-abc',
+        p_actor_id: null,
+        p_acao: 'webhook.signature_invalid',
+      }),
+    );
+  });
+
+  it('recordSystemAuditEvent rejeita acao fora do catálogo', async () => {
+    const rpcMock = vi.fn();
+    const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
+
+    await expect(
+      recordSystemAuditEvent(fakeClient, {
+        source: 'worker',
+        organizationId: 'org-abc',
+        acao: 'evento.inexistente',
+        recurso: 'x',
+      }),
+    ).rejects.toThrow(/catálogo/i);
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 
   it('listAuditEvents busca eventos com range de paginacao', async () => {

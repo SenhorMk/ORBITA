@@ -270,6 +270,11 @@
       "order": 54,
       "path": "../database/51_retencao_anonimizacao_eliminacao.sql",
       "sha256": "5382aad6aea9adc5663206acd5e2e4013e6a6b2bb373b085d3c967451dc79602"
+    },
+    {
+      "order": 55,
+      "path": "../database/52_auditoria_anti_forjamento_catalogo.sql",
+      "sha256": "4281002a861755ad58dc46039acf01251d730e41795d17d258e54667ba38cc0a"
     }
   ],
   "references": [
