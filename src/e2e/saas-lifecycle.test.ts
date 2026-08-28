@@ -165,17 +165,38 @@ describe('ORBITA End-to-End SaaS Lifecycle & Production Rehearsal (Ticket 44)', 
         return Promise.resolve({ data: null, error: null });
       });
 
-      const countMock = vi.fn().mockResolvedValue({ count: 2, error: null });
       const fakeClient = {
         rpc: rpcMock,
-        from: vi.fn().mockReturnValue({
-          select: vi.fn().mockReturnValue({
-            eq: countMock,
-          }),
+        from: vi.fn((table: string) => {
+          if (table === 'organizacoes') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  single: async () => ({
+                    data: {
+                      status: 'active',
+                      suspenso_em: null,
+                      motivo_suspensao: null,
+                      exclusao_agendada_para: null,
+                      updated_at: '2026-01-01T00:00:00.000Z',
+                    },
+                    error: null,
+                  }),
+                }),
+              }),
+            };
+          }
+          if (table === 'membros_organizacao') {
+            return { select: () => ({ eq: async () => ({ count: 2, error: null }) }) };
+          }
+          if (table === 'conexoes_integracao') {
+            return { select: () => ({ eq: () => ({ eq: () => ({ eq: async () => ({ count: 0, error: null }) }) }) }) };
+          }
+          throw new Error(`tabela inesperada no teste e2e: ${table}`);
         }),
       } as unknown as SupabaseClient;
 
-      const result = await createOrgInvite(fakeClient, testOrgId, {
+      const result = await createOrgInvite(fakeClient, testScope, {
         email: 'collaborator@empresa.test',
         papel: 'member',
       });

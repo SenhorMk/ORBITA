@@ -112,7 +112,8 @@ schema_paths = [
   "../database/45_contract_organizacao_obrigatoria_financeiro.sql",
   "../database/46_backfill_bling_conexoes_organizacao_contabilizado.sql",
   "../database/47_chatwoot_inbox_account_disambiguation.sql",
-  "../database/48_outbox_lease_correlacao.sql"
+  "../database/48_outbox_lease_correlacao.sql",
+  "../database/49_entitlement_reserva_atomica_ordering.sql"
 ]
 
 [db.seed]
