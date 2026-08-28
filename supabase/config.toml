@@ -114,7 +114,8 @@ schema_paths = [
   "../database/47_chatwoot_inbox_account_disambiguation.sql",
   "../database/48_outbox_lease_correlacao.sql",
   "../database/49_entitlement_reserva_atomica_ordering.sql",
-  "../database/50_titular_direitos.sql"
+  "../database/50_titular_direitos.sql",
+  "../database/51_retencao_anonimizacao_eliminacao.sql"
 ]
 
 [db.seed]
