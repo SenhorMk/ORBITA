@@ -19,9 +19,15 @@
     "build:artifact:check": "node scripts/check-build-artifact.mjs .next",
     "deploy:readiness": "node scripts/check-deploy-readiness.mjs",
     "test:backup": "node scripts/test-backup-restore.mjs",
+    "supabase:sync:rehearsal": "node scripts/supabase-sync-rehearsal.mjs",
     "test": "vitest run",
     "test:db": "node scripts/test-database-lab.mjs",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "e2e": "playwright test",
+    "e2e:report": "playwright show-report playwright-report",
+    "e2e:list": "playwright test --list",
+    "e2e:seed": "ts-node --transpile-only --compiler-options {\"module\":\"commonjs\",\"moduleResolution\":\"node\"} e2e/seed/run-seed.ts",
+    "e2e:cleanup": "ts-node --transpile-only --compiler-options {\"module\":\"commonjs\",\"moduleResolution\":\"node\"} e2e/seed/run-cleanup.ts --"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.7.1",
@@ -47,6 +53,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

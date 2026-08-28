@@ -74,3 +74,9 @@ auditoria.txt
 # Scripts bat e powershell
 *.bat
 *.ps1
+
+# Playwright E2E (ticket 24) — reports/traces/manifests are run artifacts,
+# never committed; manifests may reference synthetic-but-real staging ids.
+/playwright-report/
+/test-results/
+/e2e/.manifests/
