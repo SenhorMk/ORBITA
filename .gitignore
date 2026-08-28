@@ -42,6 +42,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# generated, unreviewed Supabase sync bundles/snapshots (ticket 22) — never committed
+/artifacts/
+
 # agent tools/logs
 .fcc/
 graphify-out/
