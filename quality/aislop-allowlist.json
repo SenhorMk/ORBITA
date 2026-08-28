@@ -23,6 +23,13 @@
       "ticket": "n/a — environment limitation, not a code defect",
       "date": "2026-08-28",
       "reason": "aislop's internal npm-audit invocation fails on this Windows environment with `spawn npm ENOENT` (it spawns `npm` without shell:true, so Windows' npm.cmd shim is not resolved). The actual gate — `npm run audit:check` (`npm audit --omit=dev --audit-level=high`) — runs directly via npm and passes cleanly (0 vulnerabilities), confirmed in docs/quality/ticket-20-gate-ledger.md. Severity is `info`, so it never fails this gate regardless."
+    },
+    {
+      "fingerprint": "scripts/backup-restore-lab.mjs|security|security/sql-injection|error|Possible SQL injection — template literal in query",
+      "owner": "needs-owner",
+      "ticket": "n/a — structural SQL limitation, not a code defect",
+      "date": "2026-08-28",
+      "reason": "Ticket 21's real backup/restore lab (`captureSchemaFingerprint`) must build per-table `SELECT count(*) FROM \"<table>\"` and checksum queries dynamically, because Postgres has no parameterized-identifier syntax ($1 placeholders only bind values, never identifiers). The interpolated `tableName` is never user or network input: it comes exclusively from this same function's own prior query against `information_schema.tables` on a disposable local Postgres lab this script itself created seconds earlier (see `scripts/test-backup-restore.mjs`). Defense in depth is still applied: `assertSafeIdentifier` rejects any table name that is not a plain lowercase Postgres identifier before it is interpolated, and the identifier is double-quoted. The static scanner cannot distinguish a validated, catalog-sourced identifier from untrusted input, so this is a genuine tool limitation rather than a fixable defect."
     }
   ]
 }
