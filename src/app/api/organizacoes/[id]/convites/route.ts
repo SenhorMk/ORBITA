@@ -6,6 +6,15 @@ import {
   createOrgInvite,
   listOrgInvites,
 } from '@/lib/invitationService';
+import { verifyOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { EntitlementDeniedError } from '@/services/authorizeEntitlement';
+
+function organizationScopeFailureResponse(unavailable: boolean) {
+  return NextResponse.json(
+    { error: unavailable ? 'Servico de autorizacao indisponivel' : 'Acesso nao autorizado a organizacao' },
+    { status: unavailable ? 503 : 403 },
+  );
+}
 
 export async function GET(
   req: Request,
@@ -46,9 +55,23 @@ export async function POST(
       );
     }
 
-    const inviteResult = await createOrgInvite(supabaseServer, orgId, validatedInput.data);
+    const scopeResult = await verifyOrganizationScope(supabaseServer, {
+      organizationId: orgId,
+      actorId: session.actorId,
+    });
+    if (scopeResult._tag !== 'OrganizationScopeVerified') {
+      return organizationScopeFailureResponse(scopeResult._tag === 'OrganizationScopeStoreUnavailable');
+    }
+
+    const inviteResult = await createOrgInvite(supabaseServer, scopeResult.scope, validatedInput.data);
     return NextResponse.json({ convite: inviteResult }, { status: 201 });
   } catch (error: unknown) {
+    if (error instanceof EntitlementDeniedError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: 403 },
+      );
+    }
     const message = error instanceof Error ? error.message : 'Erro ao criar convite';
     return NextResponse.json({ error: message }, { status: 500 });
   }

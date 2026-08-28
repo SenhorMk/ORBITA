@@ -255,6 +255,11 @@
       "order": 51,
       "path": "../database/48_outbox_lease_correlacao.sql",
       "sha256": "f66fa37cb725a132dfee0e3ed5ab0fb209f0ff5e2043d6e4149e7e96107d9404"
+    },
+    {
+      "order": 52,
+      "path": "../database/49_entitlement_reserva_atomica_ordering.sql",
+      "sha256": "ebc5c739c0d0c62ec0f66c33d0a182d3cfb56a2fa218e03d31e5a70dd4764f49"
     }
   ],
   "references": [

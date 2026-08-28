@@ -1,74 +1,24 @@
 /**
  * stripeWebhook.test.ts
- * Ticket 38: Testes de integração e validação de webhooks Stripe.
+ * Ticket 14: testes da máquina de estados idempotente
+ * `processStripeWebhookEvent` (ticket 13, preservada intacta). A verificação
+ * de assinatura oficial (`constructEvent` do SDK real) é coberta por
+ * `src/services/stripe/stripeSdkAdapter.contract.test.ts` — a verificação
+ * HMAC caseira que existia aqui foi removida junto com `stripeClient.ts`.
  */
 
-import { createHmac } from 'node:crypto';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { verifyStripeWebhookSignature } from './stripeClient';
 import {
   processStripeWebhookEvent,
   type StripeEvent,
 } from './stripeWebhookHandler';
 
-const TEST_SECRET = 'whsec_test_secret_for_orbita_testing_123';
 const ORG_ID = '97700000-0000-4000-8000-000000000001';
 
-function generateValidSignature(payload: string, secret: string, timestamp?: number): string {
-  const t = timestamp ?? Math.floor(Date.now() / 1000);
-  const payloadToSign = `${t}.${payload}`;
-  const hmac = createHmac('sha256', secret).update(payloadToSign).digest('hex');
-  return `t=${t},v1=${hmac}`;
-}
-
-describe('Ticket 38: Stripe Webhook & Signature Verification', () => {
+describe('Ticket 38/14: Stripe Webhook Processing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  describe('verifyStripeWebhookSignature', () => {
-    it('rejeita payload quando header stripe-signature é ausente', () => {
-      const result = verifyStripeWebhookSignature('{"id":"evt_1"}', null, TEST_SECRET);
-      expect(result.valid).toBe(false);
-      expect(result.error).toContain('ausente');
-    });
-
-    it('rejeita quando segredo do webhook é placeholder ou não configurado', () => {
-      const result = verifyStripeWebhookSignature(
-        '{"id":"evt_1"}',
-        't=123,v1=abc',
-        'STRIPE_WEBHOOK_SECRET_placeholder',
-      );
-      expect(result.valid).toBe(false);
-      expect(result.error).toContain('não configurado');
-    });
-
-    it('rejeita quando timestamp está expirado além da tolerância', () => {
-      const oldTime = Math.floor(Date.now() / 1000) - 1000;
-      const signature = generateValidSignature('{"id":"evt_1"}', TEST_SECRET, oldTime);
-      const result = verifyStripeWebhookSignature('{"id":"evt_1"}', signature, TEST_SECRET);
-      expect(result.valid).toBe(false);
-      expect(result.error).toContain('Timestamp da assinatura expirado');
-    });
-
-    it('rejeita quando payload foi adulterado (HMAC inválido)', () => {
-      const signature = generateValidSignature('{"id":"evt_1"}', TEST_SECRET);
-      const result = verifyStripeWebhookSignature(
-        '{"id":"evt_1_tampered"}',
-        signature,
-        TEST_SECRET,
-      );
-      expect(result.valid).toBe(false);
-      expect(result.error).toContain('Assinatura HMAC inválida');
-    });
-
-    it('aprova payload com timestamp e HMAC válidos', () => {
-      const payload = JSON.stringify({ id: 'evt_valid_123', type: 'checkout.session.completed' });
-      const signature = generateValidSignature(payload, TEST_SECRET);
-      const result = verifyStripeWebhookSignature(payload, signature, TEST_SECRET);
-      expect(result.valid).toBe(true);
-    });
   });
 
   describe('processStripeWebhookEvent (Idempotent Inbox)', () => {
@@ -89,6 +39,7 @@ describe('Ticket 38: Stripe Webhook & Signature Verification', () => {
       const event: StripeEvent = {
         id: 'evt_dup_123',
         type: 'checkout.session.completed',
+        created: 1_700_000_000,
         data: { object: {} },
       };
 
@@ -96,8 +47,8 @@ describe('Ticket 38: Stripe Webhook & Signature Verification', () => {
       expect(result.status).toBe('already_processed');
     });
 
-    it('processa checkout.session.completed e chama RPC atualizar_assinatura_stripe_atomica', async () => {
-      const rpcMock = vi.fn().mockResolvedValueOnce({ error: null });
+    it('processa checkout.session.completed e chama RPC atualizar_assinatura_stripe_atomica com ordering do evento', async () => {
+      const rpcMock = vi.fn().mockResolvedValueOnce({ data: { outcome: 'applied' }, error: null });
       const insertMock = vi.fn().mockResolvedValueOnce({ error: null });
       const updateMock = vi.fn().mockReturnValue({
         eq: vi.fn().mockResolvedValueOnce({ error: null }),
@@ -124,6 +75,7 @@ describe('Ticket 38: Stripe Webhook & Signature Verification', () => {
       const event: StripeEvent = {
         id: 'evt_checkout_1',
         type: 'checkout.session.completed',
+        created: 1_700_000_100,
         data: {
           object: {
             client_reference_id: ORG_ID,
@@ -145,11 +97,62 @@ describe('Ticket 38: Stripe Webhook & Signature Verification', () => {
         p_subscription_id: 'sub_test_1',
         p_motivo: 'Checkout Stripe concluído com sucesso',
         p_metadata: { event_id: 'evt_checkout_1' },
+        p_event_versao: 1_700_000_100,
+        p_event_ocorrido_em: new Date(1_700_000_100 * 1000).toISOString(),
       });
     });
 
+    it('marca evento como stale_ignored (sem regredir estado) quando o RPC reporta outcome rejected_stale', async () => {
+      const rpcMock = vi.fn().mockResolvedValueOnce({
+        data: { outcome: 'rejected_stale', motivo: 'evento antigo' },
+        error: null,
+      });
+      const updateMock = vi.fn().mockReturnValue({
+        eq: vi.fn().mockResolvedValueOnce({ error: null }),
+      });
+
+      const mockSupabase = {
+        from: vi.fn((table: string) => {
+          if (table === 'stripe_webhook_events') {
+            return {
+              select: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  maybeSingle: vi.fn().mockResolvedValueOnce({ data: null, error: null }),
+                }),
+              }),
+              insert: vi.fn().mockResolvedValueOnce({ error: null }),
+              update: updateMock,
+            };
+          }
+          return {};
+        }),
+        rpc: rpcMock,
+      } as unknown as SupabaseClient;
+
+      const event: StripeEvent = {
+        id: 'evt_replay_antigo',
+        type: 'checkout.session.completed',
+        created: 1_600_000_000, // muito anterior a um estado ja aplicado no banco
+        data: {
+          object: {
+            client_reference_id: ORG_ID,
+            customer: 'cus_test_1',
+            subscription: 'sub_test_1',
+            metadata: { plano_slug: 'pro' },
+          },
+        },
+      };
+
+      const result = await processStripeWebhookEvent(mockSupabase, event);
+
+      expect(result.status).toBe('stale_ignored');
+      expect(updateMock).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'processed' }),
+      );
+    });
+
     it('processa customer.subscription.deleted revertendo status para canceled', async () => {
-      const rpcMock = vi.fn().mockResolvedValueOnce({ error: null });
+      const rpcMock = vi.fn().mockResolvedValueOnce({ data: { outcome: 'applied' }, error: null });
       const updateMock = vi.fn().mockReturnValue({
         eq: vi.fn().mockResolvedValueOnce({ error: null }),
       });
@@ -187,6 +190,7 @@ describe('Ticket 38: Stripe Webhook & Signature Verification', () => {
       const event: StripeEvent = {
         id: 'evt_sub_del_1',
         type: 'customer.subscription.deleted',
+        created: 1_700_000_200,
         data: {
           object: {
             id: 'sub_test_1',

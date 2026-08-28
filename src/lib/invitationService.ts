@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { enforceMemberLimit } from '../services/entitlementsService';
+import type { VerifiedOrganizationScope } from './verifiedOrganizationScope';
+import { authorizeEntitlement } from '../services/authorizeEntitlement';
 
 export const invitePapelSchema = z.enum(['admin', 'member']);
 export type InvitePapel = z.infer<typeof invitePapelSchema>;
@@ -40,21 +41,29 @@ export function generateInviteToken(): string {
 
 /**
  * Create an organization invite for a collaborator.
+ *
+ * Ticket 13: a única porta de entrada para autorização é `authorizeEntitlement`
+ * — decide, a partir do escopo já verificado (nunca do `orgId` cru), se a
+ * organização está num estado que permite a mutação e se há capacidade no
+ * plano. Nenhuma checagem de plano/status é reimplementada aqui.
  */
 export async function createOrgInvite(
   supabase: SupabaseClient,
-  orgId: string,
+  scope: VerifiedOrganizationScope,
   input: CreateInviteInput,
 ): Promise<{ id: string; token: string }> {
   const validated = createInviteInputSchema.parse(input);
 
-  // Validar limite de membros da organização server-side (Ticket 37)
-  await enforceMemberLimit(supabase, orgId);
+  await authorizeEntitlement(supabase, scope, {
+    category: 'resource_mutation',
+    name: 'convidar_membro',
+    limitedResource: 'membros',
+  });
 
   const token = generateInviteToken();
 
   const { data, error } = await supabase.rpc('criar_convite_organizacao', {
-    p_org_id: orgId,
+    p_org_id: scope.organizationId,
     p_email: validated.email,
     p_papel: validated.papel,
     p_token: token,
