@@ -1,95 +1,99 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseServer } from '@/lib/supabaseServer';
+import { evaluateDependencies, type DependencyCheck } from '@/lib/health/dependencyCheck';
 import { getCorrelationId } from '@/lib/observability/correlation';
 import { logger } from '@/lib/observability/logger';
+
+/** Short, fail-closed timeout for each indispensable dependency (ms). */
+const READINESS_TIMEOUT_MS = 2000;
 
 export interface ReadinessCheckResult {
   status: 'ready' | 'not_ready';
   timestamp: string;
-  version: string;
-  checks: {
-    database: 'ok' | 'error';
-    schema: 'ok' | 'error';
-  };
+  checks: Record<string, 'ok' | 'error' | 'timeout'>;
   durationMs: number;
 }
 
-export async function GET(req: NextRequest) {
+/**
+ * Build the readiness response from an injected list of indispensable dependencies.
+ * Exported for testing so unit tests can inject fake dependencies instead of mocking
+ * `@/lib/supabaseServer` (forbidden by the ticket 21 execution contract).
+ *
+ * The response body never includes a URL, key, stack trace, or raw provider payload —
+ * only the stable dependency name and a coarse status tag.
+ */
+export async function readinessResponse(
+  req: NextRequest,
+  dependencies: readonly DependencyCheck[],
+): Promise<NextResponse> {
   const startTime = Date.now();
   const correlationId = getCorrelationId(req);
 
-  try {
-    // 1. Validar conectividade básica com o banco de dados
-    const { error: dbErr } = await supabaseServer
-      .from('organizacoes')
-      .select('id')
-      .limit(1);
-
-    if (dbErr) {
-      logger.error('Readiness probe falhou na conexao com o banco', {
-        subsystem: 'database',
+  const result = await evaluateDependencies(dependencies, {
+    timeoutMs: READINESS_TIMEOUT_MS,
+    onError: (name, outcome) => {
+      logger.error('Readiness probe: dependência indisponível', {
+        subsystem: 'app',
         correlationId,
-        error: dbErr.message,
+        dependency: name,
+        outcome,
       });
+    },
+  });
 
-      const responsePayload: ReadinessCheckResult = {
-        status: 'not_ready',
-        timestamp: new Date().toISOString(),
-        version: '0.1.0',
-        checks: {
-          database: 'error',
-          schema: 'error',
-        },
-        durationMs: Date.now() - startTime,
-      };
+  const checks: Record<string, 'ok' | 'error' | 'timeout'> = {};
+  for (const check of result.checks) checks[check.name] = check.status;
 
-      return NextResponse.json(responsePayload, {
-        status: 503,
-        headers: { 'x-correlation-id': correlationId },
-      });
-    }
+  const payload: ReadinessCheckResult = {
+    status: result.status,
+    timestamp: new Date().toISOString(),
+    checks,
+    durationMs: Date.now() - startTime,
+  };
 
+  return NextResponse.json(payload, {
+    status: result.status === 'ready' ? 200 : 503,
+    headers: {
+      'x-correlation-id': correlationId,
+      'cache-control': 'no-store, no-cache, must-revalidate',
+    },
+  });
+}
+
+/**
+ * Resolves the production dependency list via a lazy dynamic import so that importing
+ * this route module (as `readinessResponse` unit tests do) never constructs the real
+ * `supabaseServer` client, which throws synchronously on invalid/placeholder configuration.
+ * That throw is exactly the "missing indispensable dependency" case readiness must report
+ * as 503, not crash on.
+ */
+async function resolveProductionDependencies(): Promise<readonly DependencyCheck[]> {
+  const { databaseDependency } = await import('@/lib/health/databaseDependency');
+  return [databaseDependency];
+}
+
+export async function GET(req: NextRequest) {
+  const correlationId = getCorrelationId(req);
+  try {
+    const dependencies = await resolveProductionDependencies();
+    return await readinessResponse(req, dependencies);
+  } catch (cause) {
+    logger.error('Readiness probe: configuração de dependência indisponível', {
+      subsystem: 'app',
+      correlationId,
+    });
     const payload: ReadinessCheckResult = {
-      status: 'ready',
+      status: 'not_ready',
       timestamp: new Date().toISOString(),
-      version: '0.1.0',
-      checks: {
-        database: 'ok',
-        schema: 'ok',
-      },
-      durationMs: Date.now() - startTime,
+      checks: { database: 'error' },
+      durationMs: 0,
     };
-
+    void cause;
     return NextResponse.json(payload, {
-      status: 200,
+      status: 503,
       headers: {
         'x-correlation-id': correlationId,
         'cache-control': 'no-store, no-cache, must-revalidate',
       },
     });
-  } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : 'Erro interno';
-    logger.error('Erro inesperado no probe de readiness', {
-      subsystem: 'app',
-      correlationId,
-      error: errorMsg,
-    });
-
-    return NextResponse.json(
-      {
-        status: 'not_ready',
-        timestamp: new Date().toISOString(),
-        version: '0.1.0',
-        checks: {
-          database: 'error',
-          schema: 'error',
-        },
-        durationMs: Date.now() - startTime,
-      },
-      {
-        status: 503,
-        headers: { 'x-correlation-id': correlationId },
-      },
-    );
   }
 }
