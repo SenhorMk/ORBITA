@@ -4,6 +4,7 @@ import { useState, useEffect, useDeferredValue } from "react";
 import { GlassModal } from '@/components/ui/glass-modal';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/lib/supabaseClient';
+import { buildManualOrderRequest, type ManualOrderRequest } from '@/lib/config/manualOrderContract';
 import { Search, Plus, Trash2, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 
 interface ManualOrderModalProps {
@@ -38,17 +39,20 @@ interface ItemPedidoManual {
   valor_unitario: number;
 }
 
-/** Carrega os clientes e produtos do usuário autenticado (fonte: cache local Supabase). */
+/**
+ * Carrega os clientes e produtos visíveis para a organização ativa.
+ *
+ * Não filtra por `user_id`: as políticas RLS de `clientes` e `produtos`
+ * (`*_org_select`) já restringem as linhas à organização do usuário, e o filtro
+ * antigo escondia de cada membro tudo o que outro membro tivesse cadastrado.
+ */
 async function loadManualOrderFormData(
   setClientes: (clientes: ClienteOption[]) => void,
   setProdutos: (produtos: ProdutoOption[]) => void,
 ): Promise<void> {
-  const { data: userRes } = await supabase.auth.getUser();
-  if (!userRes.user) return;
-
   const [clientesRes, produtosRes] = await Promise.all([
-    supabase.from('clientes').select('id, nome, bling_id').eq('user_id', userRes.user.id).order('nome'),
-    supabase.from('produtos').select('id, nome, codigo, preco, estoque, estoque_reservado, bling_id').eq('user_id', userRes.user.id).order('nome'),
+    supabase.from('clientes').select('id, nome, bling_id').order('nome'),
+    supabase.from('produtos').select('id, nome, codigo, preco, estoque, estoque_reservado, bling_id').order('nome'),
   ]);
 
   if (clientesRes.data) setClientes(clientesRes.data as ClienteOption[]);
@@ -124,39 +128,31 @@ function useManualOrderItems(
 
 interface BuildManualOrderPayloadInput {
   syncBling: boolean;
-  cliente: ClienteOption | undefined;
   selectedCliente: string;
   formaPagamento: string;
   desconto: number | '';
   frete: number | '';
   observacoes: string;
   itens: ItemPedidoManual[];
-  total: number;
 }
 
-/** Monta o payload POST `/api/pedidos/manual` a partir do estado do formulário. */
-function buildManualOrderPayload(input: BuildManualOrderPayloadInput) {
-  return {
+/**
+ * Monta o corpo de `POST /api/pedidos/manual` pelo contrato compartilhado com a
+ * rota. Nem `total` nem `parcelas` são montados aqui: o valor da venda é
+ * derivado no servidor pelos preços do cadastro, e as parcelas são construídas
+ * lá com a forma de pagamento real da conta Bling. A versão anterior montava
+ * `parcelas` que a rota simplesmente não lia.
+ */
+function buildManualOrderPayload(input: BuildManualOrderPayloadInput): ManualOrderRequest {
+  return buildManualOrderRequest({
     syncBling: input.syncBling,
-    contatoId: input.cliente?.bling_id || input.cliente?.id || input.selectedCliente,
-    formaPagamento: input.formaPagamento,
-    total: input.total,
+    clienteId: input.selectedCliente,
+    itens: input.itens.map((item) => ({ produtoId: item.produto_id, quantidade: item.quantidade })),
     desconto: Number(input.desconto) || 0,
     frete: Number(input.frete) || 0,
-    observacoes: input.observacoes,
-    itens: input.itens.map(i => ({
-      produto_id: i.produto_id,
-      codigo: i.codigo || i.bling_id, // Fallback if no SKU
-      quantidade: i.quantidade,
-      valor_unitario: i.valor_unitario
-    })),
-    parcelas: [
-      {
-        formaPagamento: { id: input.formaPagamento === 'Dinheiro' ? 1 : 2 }, // Exemplo simples
-        valor: input.total
-      }
-    ]
-  };
+    observacoes: input.observacoes.trim() ? input.observacoes.trim() : undefined,
+    formaPagamentoRotulo: input.formaPagamento,
+  });
 }
 
 interface ManualOrderFormFieldsProps {
@@ -437,10 +433,8 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
     setLoading(true);
 
     try {
-      const cliente = clientes.find(c => c.id === selectedCliente);
       const payload = buildManualOrderPayload({
-        syncBling, cliente, selectedCliente, formaPagamento,
-        desconto, frete, observacoes, itens, total: calculateTotal(),
+        syncBling, selectedCliente, formaPagamento, desconto, frete, observacoes, itens,
       });
 
       const { data: { session } } = await supabase.auth.getSession();
@@ -455,9 +449,32 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
         body: JSON.stringify(payload)
       });
 
-      const data = await res.json();
+      const data = (await res.json()) as {
+        error?: string;
+        avisos?: string[];
+        vendaDuplicada?: boolean;
+      };
+
       if (!res.ok) {
-        throw new Error(data.error || 'Falha ao processar pedido manual');
+        // O Bling sinaliza venda idêntica à anterior por código estruturado; a
+        // rota o traduz em `vendaDuplicada`. Antes isso era detectado
+        // comparando a mensagem por substring, com os escapes gravados
+        // literalmente no fonte — comparação que nunca casava.
+        setError(
+          data.vendaDuplicada
+            ? 'Venda duplicada: o Bling recusou um pedido idêntico ao anterior (mesmo cliente, produtos e valores). Altere alguma informação antes de reenviar.'
+            : data.error || 'Falha ao processar pedido manual',
+        );
+        return;
+      }
+
+      // Sucesso confirmado pelo servidor. Avisos são falhas parciais reais
+      // (por exemplo, a baixa de estoque no Bling) e o modal fica aberto para
+      // que o usuário as leia em vez de vê-las desaparecer.
+      if (data.avisos && data.avisos.length > 0) {
+        setError(`Venda registrada, mas com pendências: ${data.avisos.join(' ')}`);
+        onSuccess?.();
+        return;
       }
 
       onSuccess?.();
@@ -468,12 +485,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
       setFrete('');
       setObservacoes('');
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes('Informa\\u00e7\\u00f5es id\\u00eanticas a \\u00faltima venda salva') || errMsg.includes('code":3')) {
-        setError('Erro: Venda Duplicada. Não é permitido enviar um pedido idêntico ao anterior (mesmo cliente, produtos e valores). Altere alguma informação ou aguarde se for intencional.');
-      } else {
-        setError(errMsg);
-      }
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
