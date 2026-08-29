@@ -77,6 +77,26 @@ export interface IntegrationHealthSummary {
   health_status: 'healthy' | 'degraded' | 'disconnected' | 'error';
   last_health_check_at: string | null;
   last_health_error: string | null;
+  /**
+   * Se as credenciais do aplicativo (passo 1) já estao gravadas para esta
+   * conexao. Booleano de proposito: a tela precisa saber que o passo 1
+   * aconteceu, e nem o `client_id` nem o `client_secret` podem sair daqui.
+   *
+   * Antes o painel dependia de estado local do React, que morria no reload —
+   * entao ninguem, nem o usuario nem o suporte, conseguia dizer se o passo 1
+   * tinha funcionado.
+   */
+  credenciais_configuradas: boolean;
+}
+
+/**
+ * Deriva, sem revelar nada, se `metadata` ja carrega o `client_id` do
+ * aplicativo do provedor. Só o booleano cruza a fronteira HTTP.
+ */
+export function hasConfiguredCredentials(metadata: unknown): boolean {
+  if (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata)) return false;
+  const clientId = (metadata as Record<string, unknown>).client_id;
+  return typeof clientId === 'string' && clientId.trim().length > 0;
 }
 
 export function sanitizeErrorMessage(msg: string): string {
@@ -374,7 +394,7 @@ export class OutboxService {
   ): Promise<IntegrationHealthSummary[]> {
     const { data, error } = await supabase
       .from('conexoes_integracao')
-      .select('id, provedor, nome, status, health_status, last_health_check_at, last_health_error')
+      .select('id, provedor, nome, status, health_status, last_health_check_at, last_health_error, metadata')
       .eq('organizacao_id', scope.organizationId)
       .order('created_at', { ascending: true });
 
@@ -390,6 +410,7 @@ export class OutboxService {
       health_status: row.health_status,
       last_health_check_at: row.last_health_check_at,
       last_health_error: row.last_health_error ? sanitizeErrorMessage(row.last_health_error) : null,
+      credenciais_configuradas: hasConfiguredCredentials(row.metadata),
     }));
   }
 

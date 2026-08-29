@@ -38,21 +38,29 @@ describe('GET /api/integracoes/saude', () => {
       getHealth: async () => [{
         id: 'conn-1', provedor: 'bling', nome: 'Principal', status: 'conectado',
         health_status: 'healthy', last_health_check_at: null, last_health_error: null,
+        credenciais_configuradas: true,
       }],
+      blingCallbackUrl: () => 'https://orbita.mkautobots.site/api/bling/callback',
     });
     const response = await handler(new Request('http://localhost/api/integracoes/saude'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ success: true, organizacao_id: ORG_ID });
+    expect(await response.json()).toMatchObject({
+      success: true,
+      organizacao_id: ORG_ID,
+      bling_callback_url: 'https://orbita.mkautobots.site/api/bling/callback',
+    });
   });
 
   it('maps missing sessions and authorization-store outages safely', async () => {
     const unauthorized = createIntegrationHealthHandler({
       resolveContext: async () => ({ _tag: 'SessionMissing' }),
       getHealth: async () => [],
+      blingCallbackUrl: () => 'https://orbita.mkautobots.site/api/bling/callback',
     });
     const unavailable = createIntegrationHealthHandler({
       resolveContext: async () => ({ _tag: 'OrganizationStoreUnavailable', cause: 'private-detail' }),
       getHealth: async () => [],
+      blingCallbackUrl: () => 'https://orbita.mkautobots.site/api/bling/callback',
     });
     await expect(unauthorized(new Request('http://localhost'))).resolves.toMatchObject({ status: 401 });
     await expect(unavailable(new Request('http://localhost'))).resolves.toMatchObject({ status: 503 });

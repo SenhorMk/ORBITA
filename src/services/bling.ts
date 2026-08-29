@@ -18,7 +18,6 @@ const orgClientCache = new Map<string, BlingClient>();
 export class BlingClient {
   private baseUrl = process.env.BLING_API_BASE_URL || 'https://api.bling.com.br/Api/v3';
   private oauthUrl = process.env.BLING_OAUTH_URL || 'https://www.bling.com.br/Api/v3/oauth/token';
-  private apiKey = process.env.NEXT_PUBLIC_BLING_API_KEY;
 
   private refreshTokenPromise: Promise<string> | null = null;
   private lastRequestTime: number = 0;
@@ -30,7 +29,6 @@ export class BlingClient {
   private conexaoId?: string;
 
   private constructor(tenant?: VerifiedTenant, organizacaoId?: string, conexaoId?: string) {
-    this.apiKey = process.env.BLING_API_KEY || '';
     this.tenant = tenant;
     this.userId = tenant?.id;
     this.organizacaoId = organizacaoId;
@@ -295,8 +293,12 @@ export class BlingClient {
     const error = res.error;
 
     if (error || !data || !data.access_token) {
-      if (this.apiKey) return this.apiKey;
-      throw new Error('Nenhum token de acesso do Bling configurado no Supabase para este usuário.');
+      // Falha fechada. Antes existia aqui um fallback para uma chave estatica
+      // global (`BLING_API_KEY`), devolvida como se fosse um access token: uma
+      // organizacao sem OAuth concluido parecia conectada e as chamadas
+      // falhavam depois, com erro do provedor em vez de "nao conectado". Uma
+      // chave global tambem contradiz a conexao por organizacao do Ticket 28.
+      throw new Error('Bling nao conectado para esta conta. Conclua os passos 1 e 2 em Integracoes.');
     }
 
     // Verificar se o token está expirado
