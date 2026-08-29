@@ -66,7 +66,13 @@ describe('ORBITA End-to-End SaaS Lifecycle & Production Rehearsal (Ticket 44)', 
       expect(res.status).toBe(400);
     });
 
-    it('cria organização atomicamente via RPC', async () => {
+    // Este caso cobre apenas o mapeamento de parâmetros da RPC. Ele NÃO cobre
+    // qual cliente Supabase executa a chamada — foi exatamente essa lacuna que
+    // deixou o defeito do Ticket 26 (`auth.uid()` NULL sob service_role) chegar
+    // à produção com a suíte verde. A identidade do chamador é coberta em
+    // `src/app/api/organizacoes/route.test.ts`; não trate este teste como
+    // substituto dele.
+    it('cria organização atomicamente via RPC (apenas parâmetros; identidade do chamador é coberta na rota)', async () => {
       const rpcMock = vi.fn().mockResolvedValue({ data: testOrgId, error: null });
       const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
@@ -196,7 +202,7 @@ describe('ORBITA End-to-End SaaS Lifecycle & Production Rehearsal (Ticket 44)', 
         }),
       } as unknown as SupabaseClient;
 
-      const result = await createOrgInvite(fakeClient, testScope, {
+      const result = await createOrgInvite({ privileged: fakeClient, actor: fakeClient }, testScope, {
         email: 'collaborator@empresa.test',
         papel: 'member',
       });

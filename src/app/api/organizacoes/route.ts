@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { resolveAuthenticatedIdentity } from '@/lib/auth';
+import { readBearerToken } from '@/lib/bearer-token';
 import { supabaseServer } from '@/lib/supabaseServer';
+import { createActorScopedSupabaseClient } from '@/lib/supabaseActorClient';
+import { logger } from '@/lib/observability/logger';
 import {
   createOrgInputSchema,
   createOrganizationAtomic,
@@ -29,10 +32,24 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const bearerResult = readBearerToken(req);
   const identity = await resolveAuthenticatedIdentity(req);
-  if (identity._tag !== 'IdentityVerified') {
+  if (identity._tag !== 'IdentityVerified' || bearerResult._tag !== 'BearerTokenFound') {
     const status = identity._tag === 'IdentityProviderUnavailable' ? 503 : 401;
     return NextResponse.json({ error: status === 503 ? 'Serviço de autenticação indisponível' : 'Não autorizado' }, { status });
+  }
+
+  // `criar_organizacao_atomica` é `security definer` e resolve o dono por
+  // `auth.uid()`. A service_role key não carrega sujeito de usuário, então
+  // `auth.uid()` seria NULL e a função abortaria (defeito do Ticket 26). A RPC
+  // precisa viajar com o JWT já verificado do próprio usuário.
+  const actorClientResult = createActorScopedSupabaseClient(bearerResult.token);
+  if (actorClientResult._tag !== 'ActorScopedClientCreated') {
+    logger.error('organizacoes.actor_client_unavailable', {
+      subsystem: 'app',
+      variable: actorClientResult.variable,
+    });
+    return NextResponse.json({ error: 'Serviço de autenticação indisponível' }, { status: 503 });
   }
 
   try {
@@ -45,7 +62,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const newOrg = await createOrganizationAtomic(supabaseServer, validatedInput.data);
+    const newOrg = await createOrganizationAtomic(actorClientResult.client, validatedInput.data);
 
     return NextResponse.json({ organizacao: newOrg }, { status: 201 });
   } catch (error: unknown) {
