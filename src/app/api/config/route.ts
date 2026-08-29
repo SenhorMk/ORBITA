@@ -6,6 +6,7 @@ import {
   verifySessionAndRole,
 } from '@/lib/auth';
 import { encrypt } from '@/lib/crypto';
+import { blingCredentialsPayloadSchema } from '@/lib/config/blingCredentialsContract';
 
 export const dynamic = 'force-dynamic';
 
@@ -70,12 +71,24 @@ export async function POST(request: Request) {
     }
     const session = actorContextResult.context;
 
-    const body = await request.json();
-    const { clientId, clientSecret } = body;
+    const body: unknown = await request.json();
+    const parsedBody = blingCredentialsPayloadSchema.safeParse(body);
 
-    if (!clientId || !clientSecret) {
-      return NextResponse.json({ success: false, error: 'Client ID e Client Secret são obrigatórios.' }, { status: 400 });
+    if (!parsedBody.success) {
+      // Mensagem por campo em vez do genérico anterior: um corpo com a forma
+      // errada agora diz o que faltou, em vez de alegar que o usuário não
+      // preencheu campos que ele de fato preencheu.
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Client ID e Client Secret são obrigatórios.',
+          details: parsedBody.error.issues.map((issue) => issue.message),
+        },
+        { status: 400 },
+      );
     }
+
+    const { clientId, clientSecret } = parsedBody.data;
 
     const userId = session.tenant.id;
 

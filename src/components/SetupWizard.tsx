@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from "react";
+import { buildBlingCredentialsPayload } from "@/lib/config/blingCredentialsContract";
 import {
   Key,
   CheckCircle2,
@@ -78,12 +79,7 @@ async function saveBlingCredentialsRequest(
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
     },
-    body: JSON.stringify({
-      bling: {
-        clientId: clientId.trim(),
-        clientSecret: clientSecret.trim()
-      }
-    })
+    body: JSON.stringify(buildBlingCredentialsPayload(clientId, clientSecret))
   });
 
   const text = await res.text();
