@@ -49,6 +49,7 @@ import { ManualOrderModal } from '@/components/ManualOrderModal';
 import { isProdutoSynced, validateProdutoForBling } from '@/lib/utils';
 import { StartupLoader } from '@/components/StartupLoader';
 import { FinanceiroTab } from '@/components/FinanceiroTab';
+import { RegisterForm } from '@/components/auth/RegisterForm';
 import { OrganizationPanel } from '@/components/organizacao/OrganizationPanel';
 import { IntegrationsPanel } from '@/components/integracoes/IntegrationsPanel';
 import { BillingPanel } from '@/components/billing/BillingPanel';
@@ -204,6 +205,7 @@ export default function Home() {
   const [loginPassword, setLoginPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [selectedProdutoModal, setSelectedProdutoModal] = useState<Produto | null>(null);
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -946,17 +948,24 @@ export default function Home() {
 
           <div className="glass-panel p-8 rounded-3xl space-y-6 border border-white/10 shadow-2xl relative">
             <div className="space-y-1">
-              <h2 className="text-xl font-bold text-slate-100">Acesso Autenticado</h2>
-              <p className="text-xs text-slate-400">Entre com sua conta Supabase ou credenciais rápidas de dev.</p>
+              <h2 className="text-xl font-bold text-slate-100">
+                {authMode === 'signin' ? 'Acesso Autenticado' : 'Criar conta na Órbita'}
+              </h2>
+              <p className="text-xs text-slate-400">
+                {authMode === 'signin'
+                  ? 'Entre com sua conta Supabase ou credenciais rápidas de dev.'
+                  : 'Cadastre-se para começar. Você receberá um e-mail de confirmação.'}
+              </p>
             </div>
 
-            {authError && (
+            {authError && authMode === 'signin' && (
               <div className="p-3 bg-rose-500/15 border border-rose-500/30 text-rose-300 rounded-xl text-xs font-semibold flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
                 <span>{authError}</span>
               </div>
             )}
 
+            {authMode === 'signup' ? <RegisterForm /> : (
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-1.5">
                 <label className="text-xs text-slate-300 font-semibold" htmlFor="email-input">E-mail / Usuário Dev</label>
@@ -1010,6 +1019,22 @@ export default function Home() {
                 )}
               </button>
             </form>
+            )}
+
+            <div className="pt-1 text-center text-xs text-slate-400">
+              {authMode === 'signin' ? 'Ainda não tem conta?' : 'Já tem uma conta?'}{' '}
+              <button
+                id="btn-auth-mode-toggle"
+                type="button"
+                onClick={() => {
+                  setAuthError(null);
+                  setAuthMode((mode) => (mode === 'signin' ? 'signup' : 'signin'));
+                }}
+                className="font-semibold text-cyan-300 underline underline-offset-4 hover:text-cyan-200 active:scale-[0.97] transition cursor-pointer"
+              >
+                {authMode === 'signin' ? 'Criar conta' : 'Entrar'}
+              </button>
+            </div>
           </div>
         </div>
       </div>

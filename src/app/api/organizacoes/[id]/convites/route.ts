@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { verifySessionAndRole } from '@/lib/auth';
+import { readBearerToken } from '@/lib/bearer-token';
 import { supabaseServer } from '@/lib/supabaseServer';
+import { createActorScopedSupabaseClient } from '@/lib/supabaseActorClient';
+import { logger } from '@/lib/observability/logger';
 import {
   createInviteInputSchema,
   createOrgInvite,
@@ -39,9 +42,22 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const bearerResult = readBearerToken(req);
   const session = await verifySessionAndRole(req);
-  if (!session) {
+  if (!session || bearerResult._tag !== 'BearerTokenFound') {
     return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+  }
+
+  // `criar_convite_organizacao` autoriza o autor por `auth.uid()`, então a RPC
+  // viaja no cliente do usuário. O snapshot de entitlement continua privilegiado
+  // para que a contagem de uso não dependa da visibilidade por RLS (Ticket 26).
+  const actorClientResult = createActorScopedSupabaseClient(bearerResult.token);
+  if (actorClientResult._tag !== 'ActorScopedClientCreated') {
+    logger.error('organizacoes.convites.actor_client_unavailable', {
+      subsystem: 'app',
+      variable: actorClientResult.variable,
+    });
+    return NextResponse.json({ error: 'Serviço de autenticação indisponível' }, { status: 503 });
   }
 
   const { id: orgId } = await params;
@@ -63,7 +79,11 @@ export async function POST(
       return organizationScopeFailureResponse(scopeResult._tag === 'OrganizationScopeStoreUnavailable');
     }
 
-    const inviteResult = await createOrgInvite(supabaseServer, scopeResult.scope, validatedInput.data);
+    const inviteResult = await createOrgInvite(
+      { privileged: supabaseServer, actor: actorClientResult.client },
+      scopeResult.scope,
+      validatedInput.data,
+    );
     return NextResponse.json({ convite: inviteResult }, { status: 201 });
   } catch (error: unknown) {
     if (error instanceof EntitlementDeniedError) {

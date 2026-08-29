@@ -71,6 +71,12 @@ function buildFakeSupabase(opts: {
   } as unknown as SupabaseClient;
 }
 
+/** RPC names a fake client built by `buildFakeSupabase` was asked to execute. */
+function rpcNames(client: SupabaseClient): readonly string[] {
+  const rpc = client.rpc as unknown as { mock: { calls: readonly (readonly unknown[])[] } };
+  return rpc.mock.calls.map((call) => String(call[0]));
+}
+
 const scope: VerifiedOrganizationScope = {
   organizationId: 'org-convite-1',
   actorId: 'user-owner-1',
@@ -133,7 +139,7 @@ describe('Invitation Service & Schemas', () => {
     it('cria convite quando a organização está ativa e abaixo do limite', async () => {
       const supabase = buildFakeSupabase({ orgStatus: 'active', limiteMembros: 3, membrosCount: 1 });
 
-      const result = await createOrgInvite(supabase, scope, { email: 'novo@empresa.com', papel: 'member' });
+      const result = await createOrgInvite({ privileged: supabase, actor: supabase }, scope, { email: 'novo@empresa.com', papel: 'member' });
 
       expect(result.id).toBe('convite-id-123');
       expect(typeof result.token).toBe('string');
@@ -142,7 +148,7 @@ describe('Invitation Service & Schemas', () => {
     it('nega a criação de convite (EntitlementDeniedError/LIFECYCLE_BLOCKED) quando a organização está suspensa', async () => {
       const supabase = buildFakeSupabase({ orgStatus: 'suspended', limiteMembros: 3, membrosCount: 1 });
 
-      const error = await createOrgInvite(supabase, scope, { email: 'novo@empresa.com', papel: 'member' }).catch(
+      const error = await createOrgInvite({ privileged: supabase, actor: supabase }, scope, { email: 'novo@empresa.com', papel: 'member' }).catch(
         (e) => e,
       );
 
@@ -153,12 +159,25 @@ describe('Invitation Service & Schemas', () => {
     it('nega a criação de convite (LIMIT_EXCEEDED) quando o limite de membros do plano já foi atingido', async () => {
       const supabase = buildFakeSupabase({ orgStatus: 'active', limiteMembros: 3, membrosCount: 3 });
 
-      const error = await createOrgInvite(supabase, scope, { email: 'novo@empresa.com', papel: 'member' }).catch(
+      const error = await createOrgInvite({ privileged: supabase, actor: supabase }, scope, { email: 'novo@empresa.com', papel: 'member' }).catch(
         (e) => e,
       );
 
       expect(error).toBeInstanceOf(EntitlementDeniedError);
       expect((error as EntitlementDeniedError).code).toBe('LIMIT_EXCEEDED');
+    });
+
+    it('executa criar_convite_organizacao no cliente do usuário, nunca no privilegiado (Ticket 26)', async () => {
+      // `criar_convite_organizacao` autoriza o autor por `auth.uid()`, que só
+      // existe no cliente que carrega o JWT do usuário. Executá-la no cliente
+      // service_role deixa `auth.uid()` NULL e a RPC aborta em produção.
+      const privileged = buildFakeSupabase({ orgStatus: 'active', limiteMembros: 3, membrosCount: 1 });
+      const actor = buildFakeSupabase({ orgStatus: 'active', limiteMembros: 3, membrosCount: 1 });
+
+      await createOrgInvite({ privileged, actor }, scope, { email: 'novo@empresa.com', papel: 'member' });
+
+      expect(rpcNames(actor)).toContain('criar_convite_organizacao');
+      expect(rpcNames(privileged)).not.toContain('criar_convite_organizacao');
     });
   });
 });
