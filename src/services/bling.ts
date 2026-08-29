@@ -4,6 +4,13 @@ import { encrypt, decrypt } from '../lib/crypto';
 import { credentialsVault } from '../lib/integrations/credentialsVault';
 import { refreshBlingToken } from './blingOAuth';
 import type { VerifiedTenant } from '../lib/auth';
+import {
+  blingFailure,
+  parseBlingFailure,
+  pedidoVendaCreatedSchema,
+  type BlingCallResult,
+  type PedidoVendaPayload,
+} from '../lib/integrations/bling/pedidoVendaContract';
 
 const clientCache = new Map<string, BlingClient>();
 const orgClientCache = new Map<string, BlingClient>();
@@ -896,23 +903,118 @@ export class BlingClient {
     const data = await response.json();
     return data.data;
   }
+  // `createPedido(payload: unknown)` foi removido no Ticket 30: era o caminho
+  // não tipado que deixou o payload divergir do schema oficial em quatro
+  // campos obrigatórios. Use `criarPedidoVenda`, que só aceita um
+  // `PedidoVendaPayload` já validado.
 
-  // Criar um novo pedido de venda no Bling ERP v3
-  async createPedido(payload: unknown): Promise<unknown> {
-    const url = `${this.baseUrl}/pedidos/vendas`;
 
-    const response = await this.fetchWithAuth(url, {
+  // ── Pedido de venda com contrato oficial e falha tipada ────────────────
+  // As três operações abaixo substituem, na jornada de venda manual, o par
+  // `createPedido` + `lancarBaixaEstoqueProduto`. Elas devolvem
+  // `BlingCallResult` em vez de lançar string concatenada, porque o corpo de
+  // erro da v3 é estruturado (`error.type`, `error.description`,
+  // `error.fields[]`) e a UI precisa dele legível.
+
+  /**
+   * Cria o pedido de venda com o payload já validado contra o OpenAPI oficial.
+   * A resposta `201` traz apenas `data.id` — não existe `data.numero` na
+   * criação, ao contrário do que o código anterior supunha.
+   */
+  async criarPedidoVenda(payload: PedidoVendaPayload): Promise<BlingCallResult<{ id: string; alertas: readonly string[] }>> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/pedidos/vendas`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Erro na API Bling ao criar pedido (HTTP ${response.status}): ${errText}`);
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
     }
 
-    return await response.json();
+    const parsed = pedidoVendaCreatedSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      return blingFailure('INVALID_RESPONSE', response.status, 'O Bling respondeu sucesso sem informar o ID do pedido criado.');
+    }
+
+    return {
+      _tag: 'BlingOk',
+      value: { id: parsed.data.data.id, alertas: (parsed.data.data.alertas ?? []).map((alerta) => alerta.msg) },
+    };
+  }
+
+  /**
+   * Lança o estoque do pedido no depósito padrão.
+   *
+   * Substitui o `POST /estoques` com `operacao: 'S'` que a venda manual usava:
+   * aquele endpoint cria um **ajuste manual desvinculado do pedido**, que se
+   * soma à baixa que o próprio Bling faz quando a situação do pedido a
+   * dispara. Este é o endpoint que o Bling documenta para a operação.
+   */
+  async lancarEstoquePedidoVenda(idPedido: string): Promise<BlingCallResult<void>> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/pedidos/vendas/${encodeURIComponent(idPedido)}/lancar-estoque`, {
+      method: 'POST',
+    });
+
+    if (!response.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+    }
+
+    return { _tag: 'BlingOk', value: undefined };
+  }
+
+  /**
+   * Id da forma de pagamento marcada como padrão (`padrao = 1`) e ativa
+   * (`situacao = 1`) na conta. Os ids são por conta, então fixá-los no código
+   * — como o `1`/`2` "Exemplo simples" que o modal enviava — inventa um valor.
+   */
+  async obterFormaPagamentoPadraoId(): Promise<BlingCallResult<number>> {
+    const url = new URL(`${this.baseUrl}/formas-pagamentos`);
+    url.searchParams.set('situacao', '1');
+
+    const response = await this.fetchWithAuth(url.toString());
+    if (!response.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+    }
+
+    const body = (await response.json()) as { data?: Array<{ id?: number; padrao?: number; situacao?: number }> };
+    const formas = Array.isArray(body.data) ? body.data : [];
+    const ativa = formas.filter((forma) => typeof forma.id === 'number' && forma.situacao !== 0);
+    // `padrao`: 0 Não, 1 Padrão, 2 Padrão devolução — só o 1 serve para venda.
+    const escolhida = ativa.find((forma) => forma.padrao === 1) ?? ativa[0];
+
+    if (!escolhida?.id) {
+      return blingFailure('RESOURCE_NOT_FOUND', response.status, 'Nenhuma forma de pagamento ativa foi encontrada na conta do Bling.');
+    }
+
+    return { _tag: 'BlingOk', value: escolhida.id };
+  }
+
+  /** Cadastra o contato e devolve o id, com falha tipada em vez de exceção. */
+  async criarContatoParaVenda(input: {
+    nome: string;
+    email: string | null;
+    telefone: string | null;
+    documento: string | null;
+  }): Promise<BlingCallResult<{ id: number }>> {
+    try {
+      const criado = (await this.createContato({
+        nome: input.nome,
+        email: input.email ?? undefined,
+        telefone: input.telefone ?? undefined,
+        cnpj: input.documento ?? undefined,
+      })) as { data?: { id?: number | string } };
+
+      const id = Number(criado?.data?.id);
+      if (!Number.isSafeInteger(id) || id <= 0) {
+        return blingFailure('INVALID_RESPONSE', 200, 'O Bling confirmou a criação do contato mas não devolveu um ID numérico.');
+      }
+
+      return { _tag: 'BlingOk', value: { id } };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return blingFailure('UNKNOWN_ERROR', 0, message);
+    }
   }
 
   // Deletar um pedido no Bling ERP
@@ -929,57 +1031,14 @@ export class BlingClient {
 
     return { success: true };
   }
+  // `getDefaultDepositoId` e `lancarBaixaEstoqueProduto` foram removidos no
+  // Ticket 30 junto com o último chamador: davam baixa por ajuste manual
+  // desvinculado do pedido. Ver `lancarEstoquePedidoVenda`.
 
-  // Buscar o ID do depósito padrão
-  async getDefaultDepositoId(): Promise<number> {
-    const depositosRes = await this.fetchWithAuth(`${this.baseUrl}/depositos`);
-    if (!depositosRes.ok) {
-      const errText = await depositosRes.text();
-      console.warn('Erro ao buscar depósitos no Bling:', errText);
-      throw new Error('Não foi possível obter a lista de depósitos do Bling para lançar estoque.');
-    }
-    const depositos = await depositosRes.json();
-    const defaultDeposit = (depositos.data as Array<{ id: number; padrao?: boolean }>)?.find(d => d.padrao) || (depositos.data as Array<{ id: number; padrao?: boolean }>)?.[0];
-
-    if (!defaultDeposit?.id) {
-      throw new Error('Nenhum depósito configurado no Bling. Crie um depósito para habilitar a baixa de estoque.');
-    }
-    return defaultDeposit.id;
-  }
-
-  // Lançar baixa de estoque manualmente para um produto (Saída)
-  async lancarBaixaEstoqueProduto(produtoId: string | number, quantidade: number, preco: number = 0): Promise<unknown> {
-    const url = `${this.baseUrl}/estoques`;
-
-    // Obter depósito padrão para informar no payload, obrigatório na v3
-    const depositoId = await this.getDefaultDepositoId();
-
-    const response = await this.fetchWithAuth(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        produto: { id: typeof produtoId === 'string' ? parseInt(produtoId, 10) : produtoId },
-        deposito: depositoId ? { id: depositoId } : undefined,
-        operacao: 'S', // S = Saída
-        quantidade: quantidade,
-        preco: preco,
-        custo: 0,
-        observacoes: 'Venda via App Órbita'
-      })
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.warn(`Erro ao baixar estoque do produto ${produtoId} no Bling:`, errText);
-      throw new Error(`Erro na API Bling ao lançar estoque (HTTP ${response.status}): ${errText}`);
-    }
-
-    return await response.json();
-  }
 
   // Alterar situação (status) de um pedido no Bling ERP
   async updateSituacaoPedido(idPedido: string | number, idSituacao: string | number): Promise<unknown> {
-    const url = `${this.baseUrl}/pedidos/vendas/${idPedido}/situacoes/${idSituacao}`;
+    const url = `${this.baseUrl}/pedidos/vendas/${encodeURIComponent(String(idPedido))}/situacoes/${encodeURIComponent(String(idSituacao))}`;
     const response = await this.fetchWithAuth(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' }

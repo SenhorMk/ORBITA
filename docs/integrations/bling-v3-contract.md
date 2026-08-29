@@ -2,10 +2,28 @@
 
 Este documento descreve o contrato Bling v3 realmente consumido pelo ORBITA:
 endpoints, OAuth, paginação, schemas de payload usados, códigos/erros,
-rate-limit/retry, timeout e idempotência. Consolidado a partir da
-documentação oficial (`developer.bling.com.br`, consultada em 2026-08-27 via
-WebFetch) e do código já existente em `src/services/bling.ts`,
-`src/services/blingOAuth.ts`, `src/app/api/bling/*`.
+rate-limit/retry, timeout e idempotência.
+
+## Fonte de verdade: o OpenAPI oficial e público
+
+```
+https://developer.bling.com.br/build/assets/openapi-BvBfsn8J.json
+```
+
+OpenAPI 3.0.0, "Bling API" v3.0, 162 paths. Responde `200 application/json`
+**sem autenticação**. O portal `developer.bling.com.br/referencia` é uma SPA
+Swagger UI; o módulo `build/assets/reference-*.js` instancia o Swagger
+apontando para essa URL. O nome do arquivo carrega um hash de build, então
+confirme-o em `reference-*.js` antes de assumir que continua válido.
+
+> **Correção (Ticket 30).** A versão anterior deste documento registrava como
+> limitação conhecida que o portal "exige sessão autenticada para exploração
+> completa de schemas por endpoint", e por isso conferia os payloads apenas
+> contra os comentários do próprio `src/services/bling.ts`. Isso é falso, e a
+> consequência foi concreta: o payload de `POST /pedidos/vendas` divergia do
+> schema oficial em quatro campos obrigatórios e nunca poderia ter funcionado
+> contra a API real. Conferir código contra código não é conferir contra a
+> documentação.
 
 ## 1. OAuth 2.0
 
@@ -121,13 +139,48 @@ conexão avança apenas após persistir a página corrente; recursos são
 upsertados por `bling_id` escopado à organização/conexão (nunca por
 "primeiro usuário" ou tenant global).
 
-## Limitação conhecida desta consulta
+## Schema de `POST /pedidos/vendas` (Ticket 30)
 
-A consulta à documentação oficial foi feita via WebFetch (HTML convertido e
-resumido por um modelo auxiliar) em vez de acesso direto ao portal
-interativo de referência (`developer.bling.com.br/referencia`), que exige
-sessão autenticada para exploração completa de schemas por endpoint. Os
-schemas de payload específicos de cada recurso (produtos, contatos,
-pedidos) já em uso no ORBITA foram conferidos contra o código existente
-(comentários em `src/services/bling.ts`), não recolhidos novamente nesta
-passagem — sem mudança de escopo de recursos neste ticket.
+Transcrito do OpenAPI oficial e codificado em
+`src/lib/integrations/bling/pedidoVendaContract.ts`, que é o único lugar onde
+o payload é montado e validado antes do envio.
+
+**Obrigatórios:** `contato`, `data`, `dataPrevista`, `dataSaida`, `itens`,
+`parcelas`.
+
+| Campo | Forma | Observação |
+|---|---|---|
+| `contato` | `{ id: integer }` | `nome` é `readOnly` |
+| `data`, `dataPrevista`, `dataSaida` | `format: date` | `AAAA-MM-DD`, não ISO com hora |
+| `itens[]` | obrigatórios `quantidade`, `valor`, `valorLista`, `descricao` | `id` é ignorado no POST |
+| `itens[].produto` | `{ id: integer }` obrigatório quando presente | a v3 valida o produto por ID; só `codigo` não basta |
+| `parcelas[]` | obrigatórios `dataVencimento`, `valor`, `formaPagamento.id` | `formaPagamento.id` vem de `GET /formas-pagamentos`, é **por conta** |
+| `desconto` | `{ valor, unidade: REAL \| PERCENTUAL }` | |
+| `transporte.fretePorConta` | `0,1,2,3,4,9` | |
+| `total`, `totalProdutos` | `readOnly` | o Bling calcula; o valor do cliente não é aceito |
+| `situacao` | `{ id, valor }` | ids são **por conta** (`GET /situacoes/modulos/{id}`). O ORBITA **não envia** `situacao`, para não fixar um número que pode não existir na conta |
+
+**Resposta `201`:** apenas `data.id` (mais `alertas[]` e `rastreamento`
+opcionais). **Não existe `data.numero`** na criação.
+
+**Resposta de erro:** envelope estruturado
+`{ error: { type, message, description, fields: [{ code, msg, element, namespace }] } }`,
+com `type` enumerado (`VALIDATION_ERROR`, `MISSING_REQUIRED_FIELD_ERROR`,
+`TOO_MANY_REQUESTS`, ...). `parseBlingFailure` o traduz em falha tipada; o
+código `3` em `fields[]` é a recusa de venda idêntica à anterior.
+
+## Baixa de estoque de um pedido de venda
+
+Use `POST /pedidos/vendas/{id}/lancar-estoque` — "lança o estoque de um
+pedido de venda no depósito padrão", vinculado ao pedido.
+
+`POST /estoques` com `operacao: 'S'` cria um **ajuste manual desvinculado**
+do pedido. A venda manual usava esse endpoint *além* de marcar o pedido como
+atendido, o que deduz o estoque duas vezes em qualquer conta cuja situação
+dispare a baixa. Corrigido no Ticket 30.
+
+## Verificação pendente do proprietário
+
+Se a situação padrão da conta Bling do proprietário já dispara baixa de
+estoque automática, a chamada a `lancar-estoque` passa a ser redundante. Isso
+só é verificável com acesso à conta real — ver `OWNER_CHECKLIST.md`.

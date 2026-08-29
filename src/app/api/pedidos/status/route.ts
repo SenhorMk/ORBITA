@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { bling } from '@/services/bling';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
@@ -8,6 +9,18 @@ import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationConte
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 type BlingClient = ReturnType<typeof bling.forUser>;
+
+/**
+ * Corpo de `POST /api/pedidos/status`. Os ids de situação são por conta
+ * (`GET /situacoes/modulos/{idModuloSistema}`), então o valor vem do cliente —
+ * mas precisa ser um inteiro positivo, porque compõe o caminho da chamada ao
+ * Bling.
+ */
+const statusRequestSchema = z.object({
+  pedidoId: z.string().uuid('pedidoId deve ser um UUID'),
+  novaSituacaoId: z.coerce.number().int().positive('novaSituacaoId deve ser um inteiro positivo'),
+  novaSituacaoNome: z.string().trim().min(1, 'novaSituacaoNome é obrigatório').max(60),
+});
 
 /**
  * Sincroniza o saldo local de estoque dos produtos vinculados a um pedido a
@@ -82,12 +95,21 @@ export async function POST(request: Request) {
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
 
-    const body = await request.json();
-    const { pedidoId, novaSituacaoId, novaSituacaoNome } = body;
-
-    if (!pedidoId || !novaSituacaoId || !novaSituacaoNome) {
-      return NextResponse.json({ error: 'Dados incompletos (pedidoId, novaSituacaoId, novaSituacaoNome são obrigatórios)' }, { status: 400 });
+    let rawBody: unknown;
+    try {
+      rawBody = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Corpo da requisição não é um JSON válido.' }, { status: 400 });
     }
+
+    // `novaSituacaoId` entra no caminho de `PATCH /pedidos/vendas/{id}/situacoes/{id}`,
+    // então precisa ser um inteiro provado aqui e não uma string qualquer do cliente.
+    const parsedBody = statusRequestSchema.safeParse(rawBody);
+    if (!parsedBody.success) {
+      const detalhes = parsedBody.error.issues.map((issue) => `${issue.path.join('.') || 'corpo'}: ${issue.message}`).join('; ');
+      return NextResponse.json({ error: `Dados inválidos: ${detalhes}` }, { status: 400 });
+    }
+    const { pedidoId, novaSituacaoId, novaSituacaoNome } = parsedBody.data;
 
     // 1. Busca o pedido local
     const pedidoLocal = await pedidoRepository.getById(scope, pedidoId);
