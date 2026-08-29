@@ -35,7 +35,7 @@ Snapshot do Ticket 06. Os números de linha são verificáveis pelos comandos ab
 | Local | Fonte problemática | Disposição |
 | --- | --- | --- |
 | `src/lib/auth.ts:136-147` | `app_metadata.role/tenant_id` | compatibilidade residual; proibido no contexto canônico |
-| `src/app/api/config/route.ts:15-20,73-80` | `verifySessionAndRole` + `session.tenant.id` + body | migrar por fatia |
+| `src/app/api/config/route.ts` (`GET`) | `verifySessionAndRole` + `session.tenant.id` | migrar por fatia; o `POST` que gravava credenciais foi removido no Ticket 28 e substituído por `POST /api/bling/connect`, que usa contexto de organização verificado |
 | `src/app/api/dashboard/route.ts:12,46` | tenant pessoal | migrar por fatia |
 | `src/app/api/nfe/route.ts:12,20,33,47,141` | tenant pessoal + body | migrar por fatia fiscal |
 | `src/app/api/pedidos/status/route.ts:10,15-16` | tenant pessoal + body | migrar por fatia comercial |

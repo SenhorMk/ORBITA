@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createBlingCallbackHandler, type BlingCallbackDependencies, type PersistBlingTokensInput, type ResolvedBlingCredentials } from './handler';
+import { blingVaultCredentialsSchema } from '@/lib/config/blingCredentialsContract';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,11 +34,15 @@ async function resolveProductionCredentials(
 
     if (conn?.id) {
       const creds = await credentialsVault.getDecryptedCredentials(organizacaoId, conn.id);
-      if (creds?.client_id && creds?.client_secret) {
+      // Mesma forma que `POST /api/bling/connect` grava, validada aqui pelo
+      // schema compartilhado em vez de casts — a fronteira escrita/leitura do
+      // cofre é fechada por um único módulo.
+      const parsedCreds = blingVaultCredentialsSchema.safeParse(creds);
+      if (parsedCreds.success) {
         return {
-          clientId: creds.client_id as string,
-          clientSecret: creds.client_secret as string,
-          organizationConnectionId: conn.id as string,
+          clientId: parsedCreds.data.client_id,
+          clientSecret: parsedCreds.data.client_secret,
+          organizationConnectionId: String(conn.id),
           legacyRecordId: null,
         };
       }

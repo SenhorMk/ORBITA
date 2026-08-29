@@ -20,7 +20,7 @@ rg "getSession\(" src/
 ```
 
 Resultado: todas as ocorrências (`src/app/page.tsx`, `ClienteEditModal.tsx`, `EditOrderModal.tsx`,
-`ManualOrderModal.tsx`, `OrderDetailModal.tsx`, `ProductDetailModal.tsx`, `SetupWizard.tsx`) são chamadas
+`ManualOrderModal.tsx`, `OrderDetailModal.tsx`, `ProductDetailModal.tsx`) são chamadas
 **client-side** ao SDK do Supabase apenas para anexar o token `Authorization` em requisições HTTP; nenhuma
 delas decide autorização localmente. Nenhuma ocorrência em `src/app/api/**` ou `src/lib/**`. A única
 verificação server-side de sessão é `supabaseServer.auth.getUser(token)`, dentro de `resolveAuthenticatedIdentity`.

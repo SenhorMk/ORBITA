@@ -17,7 +17,6 @@ import {
   Lock,
   Mail,
   User,
-  Key,
   LogOut,
   ChevronRight,
   Search,
@@ -34,7 +33,6 @@ import type { Produto, Cliente, Categoria, ChatwootConversation, ChatwootMessage
 import { supabase } from '@/lib/supabaseClient';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 import { PedidoEnriquecido } from '@/repositories/pedidoRepository';
-import { SetupWizard } from '@/components/SetupWizard';
 import { Sidebar } from '@/components/Sidebar';
 import { GradientMenu } from '@/components/GradientMenu';
 import { TransactionList } from '@/components/TransactionList';
@@ -206,7 +204,6 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
-  const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [selectedProdutoModal, setSelectedProdutoModal] = useState<Produto | null>(null);
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [selectedClienteModal, setSelectedClienteModal] = useState<Cliente | null>(null);
@@ -640,13 +637,6 @@ export default function Home() {
 
   const loadDashboardData = useCallback(async () => {
     try {
-      // Verificar se as APIs estão conectadas
-      const configRes = await fetchWithAuth('/api/config');
-      const configData = await configRes.json();
-      if (configData.success && configData.config && !configData.config.bling.isConnected) {
-        setIsWizardOpen(true);
-      }
-
       const response = await fetchWithAuth('/api/dashboard');
       const result = await response.json();
       if (result.success) {
@@ -1052,7 +1042,7 @@ export default function Home() {
         }}
         onNeedsAuth={() => {
           setShowStartupLoader(false);
-          setIsWizardOpen(true);
+          setActiveTab('integrations');
         }}
         fetchWithAuth={fetchWithAuth}
       />
@@ -1062,7 +1052,6 @@ export default function Home() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         session={session}
-        onOpenSetup={() => setIsWizardOpen(true)}
         onLogout={handleLogout}
         badges={{
           sales: data?.pedidos?.length,
@@ -1100,15 +1089,6 @@ export default function Home() {
 
               {isOwner && (
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsWizardOpen(true)}
-                    className="px-3 py-2 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-200 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
-                    title="Configurar credenciais reais do Bling ERP e Chatwoot"
-                  >
-                    <Key className="h-3.5 w-3.5 text-purple-400" />
-                    <span className="hidden md:inline">Configurar APIs</span>
-                  </button>
                   <button
                     type="button"
                     onClick={handleSync}
@@ -2243,13 +2223,6 @@ export default function Home() {
         onOpenChatwoot={() => {
           setActiveTab('sac');
         }}
-      />
-
-      {/* Modal de Configuração de APIs Reais */}
-      <SetupWizard
-        isOpen={isWizardOpen}
-        onClose={() => setIsWizardOpen(false)}
-        onConfigSaved={loadDashboardData}
       />
 
       {/* Modal de Incluir Pedido Manual */}

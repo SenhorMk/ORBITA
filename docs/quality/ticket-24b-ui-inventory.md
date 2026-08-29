@@ -24,7 +24,7 @@ Levantado por `grep`/leitura real de `src/app/api/**/route.ts` e `src/app/page.t
 ## Achados fora do escopo executável deste ticket (não alterados)
 
 - `HealthMonitor` (`src/components/HealthMonitor.tsx`) continua recebendo `blingConnected`/`chatwootConnected` fixos como `true` em `src/app/page.tsx` (linhas ~1049-1050, pré-existentes). Corrigir isso duplicaria a nova fonte de verdade (`/api/integracoes/saude`, já consumida por `IntegrationsPanel`) num componente de topo que não fazia parte do escopo executável do ticket 24b (organização/membros, integrações, billing). Registrado como `needs-owner` — ver evidência final.
-- `SetupWizard.tsx` não foi tocado: cobre outro fluxo (configuração inicial local), não o OAuth Bling real nem Chatwoot; o ticket pediu para reusar HealthMonitor/SetupWizard "se cobrirem parte disso" — confirmado por leitura que não cobrem, então não foram reaproveitados nem duplicados.
+- `SetupWizard.tsx` não foi tocado: cobre outro fluxo (configuração inicial local), não o OAuth Bling real nem Chatwoot; o ticket pediu para reusar HealthMonitor/SetupWizard "se cobrirem parte disso" — confirmado por leitura que não cobrem, então não foram reaproveitados nem duplicados. **Atualização (Ticket 28):** o `SetupWizard` foi removido — sua única aba funcional (Bling) escrevia em `integracoes_bling`, tabela sem grants de `service_role`, e o registro de credenciais passou a viver em `POST /api/bling/connect` + formulário no `IntegrationsPanel`.
 - Painéis administrativos/internos (LGPD Ticket 17, auditoria/incidentes Ticket 19, retenção Ticket 18) permanecem sem tela dedicada, conforme decisão explícita do ticket ("ficam fora deste ticket").
 
 ## Rotas de API que já existiam e foram apenas consumidas (não recriadas)

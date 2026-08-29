@@ -8,7 +8,6 @@ import {
   Users,
   MessageSquare,
   MessageCircle,
-  Sliders,
   Menu,
   X,
   DollarSign,
@@ -40,7 +39,6 @@ interface SidebarProps {
   activeTab: TabType;
   setActiveTab: (tab: TabType) => void;
   session: UserSession | null;
-  onOpenSetup: () => void;
   onLogout: () => void;
   badges?: {
     sales?: number;
@@ -65,13 +63,11 @@ export function Sidebar({
   activeTab,
   setActiveTab,
   session,
-  onOpenSetup,
   onLogout
 }: SidebarProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [hoveredFooterItem, setHoveredFooterItem] = useState<string | null>(null);
 
-  const isOwner = session?.role === 'dono';
 
   const menuItems = [
     {
@@ -172,29 +168,6 @@ export function Sidebar({
 
       {/* Footer / User Profile & Setup Actions */}
       <div className="flex flex-col items-center gap-3 pt-2 border-t border-white/10 w-full relative overflow-visible">
-        {/* Setup Wizard Button (Dono Only) */}
-        {isOwner && (
-          <div className="relative group flex items-center justify-center">
-            <button
-              onClick={() => {
-                onOpenSetup();
-                setMobileOpen(false);
-              }}
-              onMouseEnter={() => setHoveredFooterItem('config')}
-              onMouseLeave={() => setHoveredFooterItem(null)}
-              className="p-2.5 rounded-2xl bg-white/5 hover:bg-[#0A84FF] border border-white/10 text-slate-300 hover:text-white transition-all shadow-md group-hover:scale-105"
-            >
-              <Sliders className="w-4 h-4 shrink-0" />
-            </button>
-
-            {hoveredFooterItem === 'config' && (
-              <div className="absolute z-50 left-full ml-3 top-1/2 -translate-y-1/2 bg-zinc-900/95 border border-white/20 text-white text-xs px-3 py-1.5 rounded-xl whitespace-nowrap backdrop-blur-2xl shadow-2xl font-semibold tracking-wide animate-in fade-in duration-150">
-                Configurações API (Bling / Chatwoot)
-              </div>
-            )}
-          </div>
-        )}
-
         {/* User Profile Avatar & Logout */}
         {session && (
           <div className="relative group flex items-center justify-center">
