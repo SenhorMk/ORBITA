@@ -1,16 +1,18 @@
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabaseServer';
-import {
-  actorContextDenialStatus,
-  resolveActorContext,
-  verifySessionAndRole,
-} from '@/lib/auth';
-import { encrypt } from '@/lib/crypto';
-import { blingCredentialsPayloadSchema } from '@/lib/config/blingCredentialsContract';
+import { verifySessionAndRole } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
-// GET: Retorna o status atual de configuração das APIs (Bling e Chatwoot)
+/**
+ * Status legado de configuração das APIs (Bling e Chatwoot) por usuário.
+ *
+ * O handler `POST` que gravava credenciais do Bling em `integracoes_bling` foi
+ * removido no Ticket 28: aquela tabela perdeu os grants de `service_role` nas
+ * migrations de endurecimento, então toda escrita falhava. O caminho vivo de
+ * registro de credenciais é `POST /api/bling/connect`, que persiste em
+ * `conexoes_integracao` + cofre cifrado por organização.
+ */
 export async function GET(request: Request) {
   try {
     const session = await verifySessionAndRole(request);
@@ -52,83 +54,6 @@ export async function GET(request: Request) {
     });
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : 'Erro ao carregar configurações';
-    return NextResponse.json(
-      { success: false, error: errMsg },
-      { status: 500 }
-    );
-  }
-}
-
-// POST: Atualiza credenciais do Bling no Supabase
-export async function POST(request: Request) {
-  try {
-    const actorContextResult = await resolveActorContext(request, 'tenant:manage');
-    if (actorContextResult._tag !== 'ActorContextResolved') {
-      return NextResponse.json(
-        { success: false, error: 'Não autorizado' },
-        { status: actorContextDenialStatus(actorContextResult) },
-      );
-    }
-    const session = actorContextResult.context;
-
-    const body: unknown = await request.json();
-    const parsedBody = blingCredentialsPayloadSchema.safeParse(body);
-
-    if (!parsedBody.success) {
-      // Mensagem por campo em vez do genérico anterior: um corpo com a forma
-      // errada agora diz o que faltou, em vez de alegar que o usuário não
-      // preencheu campos que ele de fato preencheu.
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'Client ID e Client Secret são obrigatórios.',
-          details: parsedBody.error.issues.map((issue) => issue.message),
-        },
-        { status: 400 },
-      );
-    }
-
-    const { clientId, clientSecret } = parsedBody.data;
-
-    const userId = session.tenant.id;
-
-    const { data: existing } = await supabaseServer
-      .from('integracoes_bling')
-      .select('id')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    let error;
-    if (existing?.id) {
-      const res = await supabaseServer
-        .from('integracoes_bling')
-        .update({
-          client_id: clientId,
-          client_secret: encrypt(clientSecret)
-        })
-        .eq('id', existing.id);
-      error = res.error;
-    } else {
-      const res = await supabaseServer
-        .from('integracoes_bling')
-        .insert({
-          user_id: userId,
-          client_id: clientId,
-          client_secret: encrypt(clientSecret)
-        });
-      error = res.error;
-    }
-
-    if (error) {
-      throw new Error(`Erro ao salvar no banco de dados: ${error.message}`);
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: 'Configurações do Bling salvas com sucesso!'
-    });
-  } catch (error: unknown) {
-    const errMsg = error instanceof Error ? error.message : 'Erro ao salvar configurações';
     return NextResponse.json(
       { success: false, error: errMsg },
       { status: 500 }
