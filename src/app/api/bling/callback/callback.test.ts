@@ -246,4 +246,14 @@ describe('GET /api/bling/callback', () => {
     expect(html).not.toContain('onclick="window.close()"');
   });
 
+
+  it('explica que forbidden e sobre escopos do usuario Bling, nao sobre as credenciais', async () => {
+    const html = await (await callbackWithQuery('error=forbidden')).text();
+
+    expect(html).toContain('forbidden');
+    expect(html).toContain('escopos');
+    // Precisa apontar a acao concreta, senao repete o beco sem saida anterior.
+    expect(html).toContain('proprietário da conta');
+  });
+
 });
