@@ -200,4 +200,50 @@ describe('GET /api/bling/callback', () => {
     expect(html).toContain('Conexão Realizada');
     expect(persisted).toMatchObject({ userId: 'user-tenant-1', accessToken: 'access-token-value' });
   });
+
+
+  /** Executa o callback com uma transacao valida e a query informada. */
+  async function callbackWithQuery(query: string): Promise<Response> {
+    const store = inMemoryOAuthTransactionStore();
+    const transaction = await createValidTransaction(store);
+    const handler = createBlingCallbackHandler(baseDeps({ oauthTransactionStore: store }));
+    return handler(new Request(`https://orbita.test/api/bling/callback?${query}&state=${transaction.state}`, {
+      headers: { cookie: `orbita_oauth_transaction=${transaction.cookieValue}` },
+    }));
+  }
+
+  it('mostra o motivo que o Bling devolveu, em vez de apenas "recusou a autorizacao"', async () => {
+    const html = await (await callbackWithQuery('error=invalid_client')).text();
+
+    expect(html).toContain('O Bling recusou a autorização');
+    expect(html).toContain('invalid_client');
+    // A dica precisa dizer o que fazer, não só nomear o código.
+    expect(html).toContain('Client ID');
+  });
+
+  it('traduz access_denied para algo acionável', async () => {
+    const html = await (await callbackWithQuery('error=access_denied')).text();
+
+    expect(html).toContain('access_denied');
+    expect(html).toContain('negada');
+  });
+
+  it('não ecoa conteúdo arbitrário da query string para dentro da página', async () => {
+    const html = await (await callbackWithQuery(
+      'error=%3Cscript%3Ealert(1)%3C%2Fscript%3E&error_description=%3Cimg%20onerror%3D1%3E',
+    )).text();
+
+    expect(html).not.toContain('<script>alert(1)');
+    expect(html).not.toContain('<img onerror');
+    expect(html).toContain('unknown_error');
+  });
+
+  it('oferece um link de volta ao ORBITA e nunca fecha a aba sem opener', async () => {
+    const html = await (await callbackWithQuery('error=server_error')).text();
+
+    expect(html).toContain('Voltar para o ORBITA');
+    // O fechamento só existe dentro do guard `if (window.opener)`.
+    expect(html).not.toContain('onclick="window.close()"');
+  });
+
 });

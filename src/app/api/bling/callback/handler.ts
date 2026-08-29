@@ -5,6 +5,7 @@ import type { BlingOAuthTokenExchangeResult } from '../../../../services/blingOA
 import { checkRateLimit, normalizeIp, rateLimitDenialStatus, DEFAULT_RATE_LIMIT_POLICIES, type RateLimitStorePort } from '../../../../lib/rateLimit';
 import { logger } from '../../../../lib/observability/logger';
 import { getCorrelationId } from '../../../../lib/observability/correlation';
+import { resolveAppBaseUrl } from '../../../../lib/config/appBaseUrl';
 
 /** Credentials resolved for the token exchange, plus where to persist the resulting tokens. */
 export interface ResolvedBlingCredentials {
@@ -177,8 +178,17 @@ export function createBlingCallbackHandler(dependencies: BlingCallbackDependenci
     if (actorDenial) return actorDenial;
 
     if (errorParam) {
-      logger.warn('bling_callback.provider_denied', { subsystem: 'app', correlationId, provider: 'bling' });
-      return clearOAuthTransaction(htmlPage('error', 'O Bling recusou a autorização.'));
+      // O Bling diz por que recusou (`error` e `error_description` da RFC 6749).
+      // A versão anterior descartava os dois e mostrava só "recusou a
+      // autorização", deixando o proprietário sem nada para agir.
+      const motivo = describeProviderDenial(errorParam, searchParams.get('error_description'));
+      logger.warn('bling_callback.provider_denied', {
+        subsystem: 'app',
+        correlationId,
+        provider: 'bling',
+        tag: sanitizeOAuthErrorCode(errorParam),
+      });
+      return clearOAuthTransaction(htmlPage('error', `O Bling recusou a autorização. ${motivo}`));
     }
     if (!code) {
       return clearOAuthTransaction(
@@ -197,6 +207,43 @@ export function createBlingCallbackHandler(dependencies: BlingCallbackDependenci
   };
 }
 
+
+/** Códigos de erro OAuth 2.0 (RFC 6749 §4.1.2.1) devolvidos pelo Bling. */
+const OAUTH_DENIAL_HINTS: Readonly<Record<string, string>> = {
+  invalid_request: 'A requisição de autorização estava malformada.',
+  unauthorized_client: 'Este aplicativo não está autorizado a usar o fluxo authorization_code. Verifique o cadastro do aplicativo no Bling.',
+  access_denied: 'A autorização foi negada na tela do Bling — provavelmente o botão de recusar, ou o usuário logado não tem permissão sobre a conta.',
+  unsupported_response_type: 'O Bling não aceitou response_type=code para este aplicativo.',
+  invalid_scope: 'Os escopos cadastrados no aplicativo não são válidos.',
+  server_error: 'O Bling teve uma falha interna. Tente novamente em alguns minutos.',
+  temporarily_unavailable: 'O Bling está temporariamente indisponível. Tente novamente em alguns minutos.',
+  invalid_client: 'O Client ID não corresponde a nenhum aplicativo ativo no Bling. Confira o Client ID salvo no Passo 1 e se o aplicativo está publicado.',
+};
+
+/**
+ * Reduz o código do provedor a um token curto e seguro para log e exibição.
+ * Nunca ecoa conteúdo arbitrário da query string de volta para a página.
+ */
+export function sanitizeOAuthErrorCode(value: string): string {
+  const normalized = value.trim().toLowerCase().slice(0, 40);
+  return /^[a-z0-9_-]+$/u.test(normalized) ? normalized : 'unknown_error';
+}
+
+/** Mensagem acionável a partir do erro do provedor, sem ecoar texto arbitrário. */
+export function describeProviderDenial(errorParam: string, errorDescription: string | null): string {
+  const code = sanitizeOAuthErrorCode(errorParam);
+  const hint = OAUTH_DENIAL_HINTS[code];
+  if (hint) return `(${code}) ${hint}`;
+
+  // Sem correspondência conhecida: mostra o código, e a descrição só quando
+  // ela é curta e imprimível — o valor vem da URL e não é confiável.
+  const description = (errorDescription ?? '').trim();
+  const safeDescription = description.length > 0 && description.length <= 200 && !/[<>]/u.test(description)
+    ? ` ${description}`
+    : '';
+  return `(${code})${safeDescription}`;
+}
+
 export function clearOAuthTransaction(response: NextResponse): NextResponse {
   response.cookies.set('orbita_oauth_transaction', '', {
     httpOnly: true,
@@ -212,10 +259,20 @@ export function htmlPage(status: 'success' | 'error', message: string, statusCod
   const isSuccess = status === 'success';
   const icon = isSuccess ? '✅' : '❌';
   const title = isSuccess ? 'Conexão Realizada!' : 'Erro na Conexão';
+  const base = resolveAppBaseUrl({
+    APP_BASE_URL: process.env.APP_BASE_URL,
+    STRIPE_APP_BASE_URL: process.env.STRIPE_APP_BASE_URL,
+  });
+  const appOrigin = base._tag === 'AppBaseUrlResolved' ? base.origin : null;
   const desc = isSuccess
-    ? 'Sua conta do Bling foi vinculada com sucesso. Você já pode fechar esta janela.'
+    ? 'Sua conta do Bling foi vinculada com sucesso.'
     : message;
   const color = isSuccess ? '#10b981' : '#ef4444';
+  // Um link de volta ao app, e não `window.close()`: a autorização acontece na
+  // própria aba do usuário, então fechá-la fecha o aplicativo.
+  const returnLink = appOrigin
+    ? `<a class="btn" href="${appOrigin}/?aba=integracoes">Voltar para o ORBITA</a>`
+    : '<a class="btn" href="/">Voltar para o ORBITA</a>';
 
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -269,11 +326,17 @@ export function htmlPage(status: 'success' | 'error', message: string, statusCod
     <div class="icon">${icon}</div>
     <h1>${title}</h1>
     <p>${desc}</p>
-    <button class="btn" onclick="window.close()">Fechar Janela</button>
+    ${returnLink}
   </div>
   <script>
+    // Esta pagina so se fecha quando ela mesma foi aberta por script. O fluxo
+    // do ORBITA navega a propria aba, entao nao existe opener: chamar
+    // window.close() aqui fechava a aba do aplicativo do usuario.
     if (window.opener) {
-      window.opener.postMessage({ type: 'BLING_AUTH_COMPLETE', status: '${status}' }, '*');
+      window.opener.postMessage(
+        { type: 'BLING_AUTH_COMPLETE', status: '${status}' },
+        ${JSON.stringify(appOrigin ?? '/')}
+      );
       setTimeout(() => window.close(), 2500);
     }
   </script>
