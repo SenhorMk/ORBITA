@@ -9,6 +9,22 @@ function jsonResponse(body: unknown, status = 200): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
 }
 
+const CALLBACK_URL = 'https://orbita.mkautobots.site/api/bling/callback';
+
+/** Resposta de `/api/integracoes/saude` com o Bling já no passo 1 concluído. */
+function saudeComCredenciaisBling(overrides: Record<string, unknown> = {}) {
+  return {
+    success: true,
+    bling_callback_url: CALLBACK_URL,
+    conexoes: [{
+      id: '1', provedor: 'bling', nome: 'Principal', status: 'pendente',
+      health_status: 'disconnected', last_health_check_at: null, last_health_error: null,
+      credenciais_configuradas: true,
+    }],
+    ...overrides,
+  };
+}
+
 describe('IntegrationsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -46,7 +62,7 @@ describe('IntegrationsPanel', () => {
     const user = userEvent.setup();
     const redirect = vi.fn();
     const fetchWithAuth = vi.fn(async (url: string) => {
-      if (url === '/api/integracoes/saude') return jsonResponse({ success: true, conexoes: [] });
+      if (url === '/api/integracoes/saude') return jsonResponse(saudeComCredenciaisBling());
       if (url === '/api/bling/authorize') {
         return jsonResponse({ success: true, authorizeUrl: 'https://www.bling.com.br/Api/v3/oauth/authorize?state=abc' });
       }
@@ -54,7 +70,7 @@ describe('IntegrationsPanel', () => {
     });
 
     render(<IntegrationsPanel fetchWithAuth={fetchWithAuth} onRedirect={redirect} />);
-    await screen.findAllByText(/não conectado/i);
+    await screen.findByText(/salvo/i);
 
     await user.click(screen.getByRole('button', { name: /conectar bling/i }));
 
@@ -65,7 +81,7 @@ describe('IntegrationsPanel', () => {
     const user = userEvent.setup();
     const redirect = vi.fn();
     const fetchWithAuth = vi.fn(async (url: string) => {
-      if (url === '/api/integracoes/saude') return jsonResponse({ success: true, conexoes: [] });
+      if (url === '/api/integracoes/saude') return jsonResponse(saudeComCredenciaisBling());
       if (url === '/api/bling/authorize') {
         return jsonResponse({ success: false, error: 'Nenhum Client ID configurado para esta conta.' }, 409);
       }
@@ -73,7 +89,7 @@ describe('IntegrationsPanel', () => {
     });
 
     render(<IntegrationsPanel fetchWithAuth={fetchWithAuth} onRedirect={redirect} />);
-    await screen.findAllByText(/não conectado/i);
+    await screen.findByText(/salvo/i);
 
     await user.click(screen.getByRole('button', { name: /conectar bling/i }));
 
@@ -156,17 +172,127 @@ describe('IntegrationsPanel', () => {
     const user = userEvent.setup();
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(window.navigator, 'clipboard', { value: { writeText }, configurable: true });
-    const fetchWithAuth = vi.fn(async () => jsonResponse({ success: true, conexoes: [] }));
+    const fetchWithAuth = vi.fn(async () => jsonResponse({
+      success: true,
+      conexoes: [],
+      bling_callback_url: CALLBACK_URL,
+    }));
 
     render(<IntegrationsPanel fetchWithAuth={fetchWithAuth} />);
     await screen.findAllByText(/não conectado/i);
 
-    const expectedCallback = `${window.location.origin}/api/bling/callback`;
-    expect(screen.getByText(expectedCallback)).toBeInTheDocument();
+    // A URL exibida é a do servidor, não `window.location.origin` — que num
+    // deploy de preview é um host efêmero.
+    expect(screen.getByText(CALLBACK_URL)).toBeInTheDocument();
+    expect(screen.queryByText(`${window.location.origin}/api/bling/callback`)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /copiar url de callback/i }));
 
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith(expectedCallback));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(CALLBACK_URL));
+  });
+
+  it('mostra o passo 1 como salvo a partir do servidor, sobrevivendo ao reload', async () => {
+    // Antes o "salvo" era estado local do React: recarregar a página apagava a
+    // única pista de que o passo 1 tinha funcionado.
+    const fetchWithAuth = vi.fn(async () => jsonResponse(saudeComCredenciaisBling()));
+
+    render(<IntegrationsPanel fetchWithAuth={fetchWithAuth} />);
+
+    expect(await screen.findByText(/salvo/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /conectar bling/i })).toBeEnabled();
+  });
+
+  it('bloqueia o passo 2 enquanto o passo 1 não estiver gravado, dizendo o motivo', async () => {
+    const fetchWithAuth = vi.fn(async () => jsonResponse({
+      success: true,
+      conexoes: [],
+      bling_callback_url: CALLBACK_URL,
+    }));
+
+    render(<IntegrationsPanel fetchWithAuth={fetchWithAuth} />);
+    await screen.findAllByText(/não conectado/i);
+
+    expect(screen.getByRole('button', { name: /conectar bling/i })).toBeDisabled();
+    expect(screen.getByText(/depois que o passo 1 for salvo/i)).toBeInTheDocument();
+  });
+
+  it('mostra o status HTTP junto da mensagem, para 401, 403 e 500 não ficarem indistinguíveis', async () => {
+    const user = userEvent.setup();
+    const fetchWithAuth = vi.fn(async (url: string) => {
+      if (url === '/api/integracoes/saude') return jsonResponse({ success: true, conexoes: [], bling_callback_url: CALLBACK_URL });
+      if (url === '/api/bling/connect') {
+        return jsonResponse({ success: false, error: 'Capacidade insuficiente para gerenciar integrações' }, 403);
+      }
+      throw new Error(`Unhandled request: ${url}`);
+    });
+
+    render(<IntegrationsPanel fetchWithAuth={fetchWithAuth} />);
+    await screen.findAllByText(/não conectado/i);
+
+    await user.type(screen.getByLabelText(/client id do bling/i), 'bling-client-id');
+    await user.type(screen.getByLabelText(/client secret do bling/i), 'bling-client-secret');
+    await user.click(screen.getByRole('button', { name: /salvar credenciais do bling/i }));
+
+    expect(await screen.findByText(/HTTP 403/)).toBeInTheDocument();
+    expect(screen.getByText(/capacidade insuficiente/i)).toBeInTheDocument();
+  });
+
+  it('o erro do passo 2 não apaga o erro do passo 1', async () => {
+    // Este era o defeito que impedia diagnosticar: os dois passos dividiam um
+    // único `setError`, então clicar em "Conectar" destruía a mensagem que
+    // dizia por que o "Salvar" tinha falhado.
+    const user = userEvent.setup();
+    const fetchWithAuth = vi.fn(async (url: string) => {
+      if (url === '/api/integracoes/saude') return jsonResponse(saudeComCredenciaisBling());
+      if (url === '/api/bling/connect') return jsonResponse({ success: false, error: 'Falha ao salvar credenciais do Bling' }, 500);
+      if (url === '/api/bling/authorize') return jsonResponse({ success: false, error: 'Nenhum Client ID configurado para esta conta.' }, 409);
+      throw new Error(`Unhandled request: ${url}`);
+    });
+
+    render(<IntegrationsPanel fetchWithAuth={fetchWithAuth} />);
+    await screen.findByText(/salvo/i);
+
+    await user.type(screen.getByLabelText(/client id do bling/i), 'bling-client-id');
+    await user.type(screen.getByLabelText(/client secret do bling/i), 'bling-client-secret');
+    await user.click(screen.getByRole('button', { name: /salvar credenciais do bling/i }));
+    expect(await screen.findByText(/HTTP 500/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /conectar bling/i }));
+
+    expect(await screen.findByText(/HTTP 409/)).toBeInTheDocument();
+    // A mensagem do passo 1 continua na tela.
+    expect(screen.getByText(/HTTP 500/)).toBeInTheDocument();
+  });
+
+  it('diz que falta configurar a origem estável em vez de exibir uma URL que vai quebrar', async () => {
+    const fetchWithAuth = vi.fn(async () => jsonResponse({
+      success: true,
+      conexoes: [],
+      bling_callback_url: null,
+    }));
+
+    render(<IntegrationsPanel fetchWithAuth={fetchWithAuth} />);
+    await screen.findAllByText(/não conectado/i);
+
+    expect(screen.getByText(/origem pública do ORBITA ainda não está configurada/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /copiar url de callback/i })).not.toBeInTheDocument();
+  });
+
+  it('reporta falha de rede sem status, em vez de silenciar o clique', async () => {
+    const user = userEvent.setup();
+    const fetchWithAuth = vi.fn(async (url: string) => {
+      if (url === '/api/integracoes/saude') return jsonResponse({ success: true, conexoes: [], bling_callback_url: CALLBACK_URL });
+      throw new Error('Failed to fetch');
+    });
+
+    render(<IntegrationsPanel fetchWithAuth={fetchWithAuth} />);
+    await screen.findAllByText(/não conectado/i);
+
+    await user.type(screen.getByLabelText(/client id do bling/i), 'bling-client-id');
+    await user.type(screen.getByLabelText(/client secret do bling/i), 'bling-client-secret');
+    await user.click(screen.getByRole('button', { name: /salvar credenciais do bling/i }));
+
+    expect(await screen.findByText(/Failed to fetch/i)).toBeInTheDocument();
   });
 
   it('connects Chatwoot through the real API with only the credential fields the server requires', async () => {
