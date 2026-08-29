@@ -218,6 +218,13 @@ const OAUTH_DENIAL_HINTS: Readonly<Record<string, string>> = {
   server_error: 'O Bling teve uma falha interna. Tente novamente em alguns minutos.',
   temporarily_unavailable: 'O Bling está temporariamente indisponível. Tente novamente em alguns minutos.',
   invalid_client: 'O Client ID não corresponde a nenhum aplicativo ativo no Bling. Confira o Client ID salvo no Passo 1 e se o aplicativo está publicado.',
+  // `forbidden` e `insufficient_scope` sao recusas do Bling sobre ESCOPOS, nao
+  // sobre as credenciais: a documentacao define escopo como "a representacao da
+  // permissao para operar sobre os recursos do usuario". Chegar aqui significa
+  // que o usuario Bling que autorizou nao tem permissao sobre algum modulo que
+  // o aplicativo declarou — nada no ORBITA muda esse resultado.
+  forbidden: 'O usuário do Bling que autorizou não tem permissão sobre algum dos escopos declarados no aplicativo. Autorize com o usuário proprietário da conta, ou remova do cadastro do aplicativo os escopos que esse usuário não acessa. Trocar escopos revoga as autorizações existentes, então refaça o Passo 2 depois.',
+  insufficient_scope: 'O aplicativo não declarou no Bling todos os escopos que o ORBITA precisa. Revise a lista de escopos no cadastro do aplicativo e refaça o Passo 2.',
 };
 
 /**

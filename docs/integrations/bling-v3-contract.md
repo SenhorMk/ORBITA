@@ -184,3 +184,33 @@ dispare a baixa. Corrigido no Ticket 30.
 Se a situação padrão da conta Bling do proprietário já dispara baixa de
 estoque automática, a chamada a `lancar-estoque` passa a ser redundante. Isso
 só é verificável com acesso à conta real — ver `OWNER_CHECKLIST.md`.
+
+## Escopos exigidos no cadastro do aplicativo (Ticket 30d)
+
+O ORBITA **não envia** `scope` no authorize — a documentação oficial diz que
+`redirect_uri` e `scope` "não serão exigidos na requisição" e que "sempre serão
+usados os valores inseridos previamente no cadastro de aplicativos". Portanto os
+escopos vêm inteiramente do cadastro do aplicativo dentro do Bling.
+
+A documentação define escopo como "a representação da permissão para operar
+sobre os recursos do usuário", e avisa que "o aplicativo só terá acesso aos
+dados referentes aos escopos selecionados". Trocar escopos **revoga todos os
+usuários do aplicativo**, exigindo nova autorização.
+
+Endpoints que o ORBITA realmente chama, extraídos de `src/services/bling.ts`:
+
+| Módulo | Endpoints |
+|---|---|
+| Produtos | `/produtos`, `/produtos/{id}`, `/categorias/produtos` |
+| Contatos | `/contatos`, `/contatos/{id}` |
+| Pedidos de venda | `/pedidos/vendas`, `/pedidos/vendas/{id}`, `/pedidos/vendas/{id}/situacoes/{id}`, `/pedidos/vendas/{id}/lancar-estoque` |
+| Estoque | `/estoques`, `/estoques/saldos`, `/depositos` |
+| Financeiro | `/contas/pagar`, `/contas/receber`, `/contas-financeiras`, `/formas-pagamentos` |
+| Fiscal | `/nfe` |
+| Configuração | `/situacoes/modulos` |
+
+O cadastro do aplicativo precisa declarar escopos que cubram essa lista, **e** o
+usuário do Bling que autoriza precisa ter permissão sobre todos eles. Faltando
+qualquer um dos dois lados, o authorize devolve
+`error=forbidden` com "O usuário não possui autorização para acessar os recursos
+requisitados" — recusa do Bling sobre permissão, não sobre as credenciais.
