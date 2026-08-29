@@ -7,7 +7,6 @@ import {
   Package,
   Users,
   MessageSquare,
-  MessageCircle,
   Menu,
   X,
   DollarSign,
@@ -24,7 +23,6 @@ export type TabType =
   | 'contacts'
   | 'finance'
   | 'sac'
-  | 'chats'
   | 'organization'
   | 'integrations'
   | 'billing';
@@ -99,12 +97,6 @@ export function Sidebar({
       label: 'Controle Financeiro',
       icon: DollarSign,
       color: 'bg-zinc-800 hover:bg-[#FFD60A]'
-    },
-    {
-      id: 'chats' as TabType,
-      label: 'Conversas WhatsApp',
-      icon: MessageCircle,
-      color: 'bg-zinc-800 hover:bg-[#30D158]'
     },
     {
       id: 'sac' as TabType,

@@ -28,6 +28,7 @@ import {
   Package,
   Image as ImageIcon,
   Plus,
+  Plug,
 } from "lucide-react";
 import type { Produto, Cliente, Categoria, ChatwootConversation, ChatwootMessage, ItemPedido } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
@@ -218,7 +219,7 @@ export default function Home() {
 
   // Navegação do Painel (Abas)
   const [activeTab, setActiveTab] = useState<
-    'dashboard' | 'sales' | 'inventory' | 'contacts' | 'finance' | 'sac' | 'chats' | 'organization' | 'integrations' | 'billing'
+    'dashboard' | 'sales' | 'inventory' | 'contacts' | 'finance' | 'sac' | 'organization' | 'integrations' | 'billing'
   >('dashboard');
 
   // Organização ativa (Ticket 24b): resolvida pelo servidor via OrganizationPanel,
@@ -482,7 +483,7 @@ export default function Home() {
 
   useEffect(() => {
     let isMounted = true;
-    if (activeTab === 'chats' || activeTab === 'sac') {
+    if (activeTab === 'sac') {
       void (async () => {
         try {
           const { data: convs, error } = await supabase
@@ -906,7 +907,7 @@ export default function Home() {
   const filteredPedidosList = getFilteredAndSortedPedidos();
 
   const handleOpenChatwootForPhone = (phone?: string) => {
-    setActiveTab('chats');
+    setActiveTab('sac');
     if (!phone) return;
     const cleanP = phone.replace(/\D/g, '').slice(-8);
     const targetConv = conversas.find((c) => {
@@ -1089,6 +1090,19 @@ export default function Home() {
 
               {isOwner && (
                 <div className="flex items-center gap-2">
+                  {/* Ponto de entrada para credenciais/conexão das integrações. O
+                      SetupWizard foi removido no Ticket 28 e o formulário vive no
+                      painel de Integrações; este botão navega até lá em vez de
+                      abrir uma segunda UI para a mesma função. */}
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('integrations')}
+                    className="px-3.5 py-2 rounded-xl glass-button text-xs font-bold flex items-center gap-2 cursor-pointer active:scale-95 transition"
+                    title="Configurar credenciais e conexões de Bling e Chatwoot"
+                  >
+                    <Plug className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Configurar APIs</span>
+                  </button>
                   <button
                     type="button"
                     onClick={handleSync}
@@ -1190,7 +1204,7 @@ export default function Home() {
           <button
             onClick={() => setActiveTab('sac')}
             className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-              activeTab === 'sac' || activeTab === 'chats'
+              activeTab === 'sac'
                 ? 'glass-button-primary text-white shadow-lg'
                 : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
             }`}
@@ -1915,7 +1929,7 @@ export default function Home() {
         )}
 
         {/* TAB 5: SAC OMNICHANNEL (CHATWOOT RECREATED) */}
-        {(activeTab === 'sac' || activeTab === 'chats') && (
+        {activeTab === 'sac' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[720px]">
 
             {/* Conversation List Sidebar */}
