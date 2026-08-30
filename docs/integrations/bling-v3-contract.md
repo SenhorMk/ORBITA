@@ -240,3 +240,31 @@ O código tratava o primeiro item como "este produto já existe" e disparava um
 seguido de um lançamento de saldo absoluto nele. Corrigido no Ticket 31, com
 `buscarProdutoPorCodigo` conferindo o `codigo` do resultado antes de confiar —
 um filtro ignorado pelo provedor nunca mais pode virar escrita destrutiva.
+
+## Schema de `POST`/`PUT /contatos` (Ticket 32)
+
+Codificado em `src/lib/config/clienteContract.ts` e no builder
+`corpoContatoBling` de `src/services/bling.ts`.
+
+**Obrigatórios:** `nome`, `situacao`, `tipo`.
+
+| Campo | Valores | Observação |
+|---|---|---|
+| `tipo` | `J` Jurídica, `F` Física, `E` Estrangeira | |
+| `situacao` | `A` Ativo, `E` Excluído, `I` Inativo, `S` Sem movimentação | |
+| `numeroDocumento` | string | CPF (11 dígitos) ou CNPJ (14) |
+| `telefone` | string | **Não é `fone`** — ver abaixo |
+| `indicadorIe` | `1` Contribuinte ICMS, `2` Isento, `9` Não contribuinte | **Não é `contribuinte`** — ver abaixo |
+| `endereco` | `{ geral: { endereco, cep, bairro, municipio, uf, numero, complemento }, cobranca: {...} }` | aninhado sob `geral`; já estava correto |
+
+### Dois campos que não existem no schema
+
+O código anterior enviava:
+
+- **`fone`** para o telefone. O campo é **`telefone`**. Um comentário no fonte
+  chegava a afirmar "Campo correto: `fone`".
+- **`contribuinte`** para o indicador de ICMS. O campo é **`indicadorIe`**.
+
+Nenhum dos dois existe em `POST /contatos`. O Bling descartava os valores em
+silêncio: o contato era criado sem telefone e sem indicador de inscrição
+estadual, e nada no ORBITA acusava. Corrigido no Ticket 32.

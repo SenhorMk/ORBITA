@@ -44,6 +44,22 @@ function corpoProdutoBling(payload: ProdutoBlingEntrada): Record<string, unknown
   return corpo;
 }
 
+/** Entrada comum de criacao e atualizacao de contato no Bling v3. */
+interface ContatoBlingEntrada {
+  nome: string;
+  email?: string;
+  telefone?: string;
+  numeroDocumento?: string;
+  tipo: string;
+  indicadorIe: number;
+  cep?: string;
+  endereco?: string;
+  numero?: string;
+  bairro?: string;
+  cidade?: string;
+  uf?: string;
+}
+
 export class BlingClient {
   private baseUrl = process.env.BLING_API_BASE_URL || 'https://api.bling.com.br/Api/v3';
   private oauthUrl = process.env.BLING_OAUTH_URL || 'https://www.bling.com.br/Api/v3/oauth/token';
@@ -796,6 +812,80 @@ export class BlingClient {
     }
 
     return await response.json();
+  }
+
+  // ── Contatos com contrato oficial e falha tipada (Ticket 32) ───────────
+
+  /**
+   * Corpo de `POST`/`PUT /contatos` conforme o OpenAPI oficial.
+   *
+   * Duas correcoes do Ticket 32, ambas de campo que **nao existe** no schema e
+   * por isso era descartado em silencio pelo provedor:
+   *
+   * - o telefone ia como `fone`; o campo e `telefone`;
+   * - o indicador de ICMS ia como `contribuinte`; o campo e `indicadorIe`
+   *   (`1` contribuinte, `2` isento, `9` nao contribuinte).
+   *
+   * O endereco fica sob `endereco.geral`, que ja estava correto.
+   */
+  private corpoContatoBling(payload: ContatoBlingEntrada): Record<string, unknown> {
+    const corpo: Record<string, unknown> = {
+      nome: payload.nome,
+      situacao: 'A',
+      tipo: payload.tipo,
+      indicadorIe: payload.indicadorIe,
+    };
+
+    if (payload.email) corpo.email = payload.email;
+    if (payload.telefone) corpo.telefone = payload.telefone;
+    if (payload.numeroDocumento) corpo.numeroDocumento = payload.numeroDocumento;
+
+    const geral: Record<string, unknown> = {};
+    if (payload.cep) geral.cep = payload.cep;
+    if (payload.endereco) geral.endereco = payload.endereco;
+    if (payload.numero) geral.numero = payload.numero;
+    if (payload.bairro) geral.bairro = payload.bairro;
+    if (payload.cidade) geral.municipio = payload.cidade;
+    if (payload.uf) geral.uf = payload.uf;
+    if (Object.keys(geral).length > 0) corpo.endereco = { geral };
+
+    return corpo;
+  }
+
+  /** Cria o contato e devolve o id real, com falha tipada. */
+  async criarContato(payload: ContatoBlingEntrada): Promise<BlingCallResult<{ id: string }>> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/contatos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(this.corpoContatoBling(payload)),
+    });
+
+    if (!response.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+    }
+
+    const body = (await response.json()) as { data?: { id?: number | string } };
+    const id = body?.data?.id;
+    if (id === undefined || id === null || String(id).trim() === '') {
+      return blingFailure('INVALID_RESPONSE', response.status, 'O Bling respondeu sucesso sem informar o ID do contato criado.');
+    }
+
+    return { _tag: 'BlingOk', value: { id: String(id) } };
+  }
+
+  /** Atualiza o contato existente, com falha tipada. */
+  async atualizarContato(id: string, payload: ContatoBlingEntrada): Promise<BlingCallResult<void>> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/contatos/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(this.corpoContatoBling(payload)),
+    });
+
+    if (!response.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+    }
+
+    return { _tag: 'BlingOk', value: undefined };
   }
 
   // Deletar um contato no Bling ERP
