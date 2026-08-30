@@ -363,15 +363,28 @@ export class BlingClient implements BlingPort {
     }
   }
 
-  // Obter detalhes de um pedido específico
+  /**
+   * Detalhes de um pedido específico — a única fonte de `itens`, que a
+   * listagem não devolve.
+   *
+   * `null` significa **não existe** (404), e só isso. Antes, qualquer falha
+   * — rede caída, token expirado, 500 do Bling — também virava `null`, e a
+   * sincronização lia isso como "pedido sem itens" e seguia em frente
+   * gravando um pedido vazio. Um erro de leitura não pode ser indistinguível
+   * de um pedido inexistente.
+   */
   async getPedido(id: string): Promise<BlingPedido | null> {
     try {
       const response = await this.fetchWithAuth(`${this.baseUrl}/pedidos/vendas/${id}`);
-      if (!response.ok) return null;
+      if (response.status === 404) return null;
+      if (!response.ok) {
+        throw new BlingLeituraError('pedido', response.status, await response.text());
+      }
       const resData = await response.json();
       return resData.data || null;
-    } catch {
-      return null;
+    } catch (error: unknown) {
+      if (error instanceof BlingLeituraError) throw error;
+      throw new BlingLeituraError('pedido', 0, error instanceof Error ? error.message : String(error));
     }
   }
 
