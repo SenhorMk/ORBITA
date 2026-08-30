@@ -5,6 +5,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Plus, ArrowDown, ArrowUp, RefreshCw } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { buildDespesaRequest } from '@/lib/config/despesaContract';
 import { NovaDespesaModal, type Fornecedor } from './NovaDespesaModal';
 import { NovoFornecedorModal, type DadosCNPJ } from './NovoFornecedorModal';
 
@@ -327,13 +328,25 @@ async function submitNovaDespesa(
 ): Promise<void> {
   e.preventDefault();
   const formData = new FormData(e.currentTarget);
-  const payload: Record<string, unknown> = {
-    descricao: formData.get('descricao'),
-    valor: formData.get('valor'),
-    data_vencimento: formData.get('data_vencimento'),
-    modo: input.modoLancamento,
-    contato_id: input.fornecedorSelecionado?.id !== FORNECEDOR_GENERICO_ID ? input.fornecedorSelecionado?.id : undefined,
-  };
+  const fornecedorId = input.fornecedorSelecionado?.id !== FORNECEDOR_GENERICO_ID
+    ? Number(input.fornecedorSelecionado?.id)
+    : undefined;
+
+  // Montado pelo contrato compartilhado com a rota. `valor` vira número aqui:
+  // o `FormData` devolve string, e o schema oficial do Bling exige `float`.
+  let payload;
+  try {
+    payload = buildDespesaRequest({
+      descricao: String(formData.get('descricao') ?? ''),
+      valor: Number(formData.get('valor')),
+      dataVencimento: String(formData.get('data_vencimento') ?? ''),
+      modo: input.modoLancamento === 'interno' ? 'interno' : 'contabil',
+      contatoBlingId: Number.isSafeInteger(fornecedorId) && (fornecedorId ?? 0) > 0 ? fornecedorId : undefined,
+    });
+  } catch (erro: unknown) {
+    alert(erro instanceof Error ? erro.message : 'Dados da despesa inválidos.');
+    return;
+  }
 
   try {
     const res = await input.fetchWithAuth('/api/financeiro', {
@@ -345,6 +358,12 @@ async function submitNovaDespesa(
       const err = await res.json();
       alert('Erro: ' + (err.error || 'Falha ao salvar despesa'));
       return;
+    }
+    // Avisos são falhas parciais reais — por exemplo, a despesa foi lançada
+    // no Bling mas continua em aberto lá porque a quitação falhou.
+    const corpo = (await res.json()) as { avisos?: string[] };
+    if (corpo.avisos && corpo.avisos.length > 0) {
+      alert(corpo.avisos.join('\n'));
     }
     input.onSaved();
   } catch (err: unknown) {

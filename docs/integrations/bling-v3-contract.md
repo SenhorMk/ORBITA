@@ -268,3 +268,32 @@ O código anterior enviava:
 Nenhum dos dois existe em `POST /contatos`. O Bling descartava os valores em
 silêncio: o contato era criado sem telefone e sem indicador de inscrição
 estadual, e nada no ORBITA acusava. Corrigido no Ticket 32.
+
+## Schema de `POST /contas/pagar` (Ticket 33)
+
+Codificado em `criarContaPagar` de `src/services/bling.ts`.
+
+**Obrigatórios:** `contato.id`, `vencimento` (`format: date`), `valor` (`float`).
+
+| Campo | Forma | Observação |
+|---|---|---|
+| `contato` | `{ id: integer }` | |
+| `vencimento`, `dataEmissao`, `competencia` | `format: date` | `AAAA-MM-DD` |
+| `valor` | `number/float` | |
+| `categoria`, `portador`, `formaPagamento` | `{ id: integer }` | ids **por conta** |
+| `situacao` | `1` Aberto … `7` Confirmado | **`readOnly`** — ver abaixo |
+
+### `situacao` é readOnly: quitar exige endpoint próprio
+
+O ORBITA enviava `situacao: 2` para marcar a despesa como paga na criação. O
+campo é `readOnly` no schema oficial, então o Bling **descartava o valor**: a
+conta era criada em aberto no ERP enquanto o ORBITA gravava `'pago'`.
+
+Quitar é `POST /contas/pagar/{id}/baixar`, que exige `categoria.id`, `data`,
+`historico`, `portador.id` e `usarDataVencimento`. `portador` é a conta
+financeira da conta Bling (`GET /contas-financeiras`), então a quitação só é
+possível se o proprietário tiver uma cadastrada.
+
+Desde o Ticket 33 a situação gravada localmente é a **real do ERP**: se a
+quitação não acontece, o título fica aberto nos dois lados e a UI recebe um
+aviso dizendo por quê.
