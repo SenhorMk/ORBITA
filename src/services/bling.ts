@@ -1194,7 +1194,8 @@ export class BlingClient {
 
   async createContaPagar(payload: unknown): Promise<unknown> {
     const url = `${this.baseUrl}/contas/pagar`;
-    console.log('[bling] createContaPagar payload:', JSON.stringify(payload));
+    // O payload nao vai para o log: carrega valores e contraparte financeira,
+    // e `AGENTS.md` proibe registrar payload sensivel cru.
     const response = await this.fetchWithAuth(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1206,9 +1207,108 @@ export class BlingClient {
       throw new Error(`Erro na API Bling ao criar Conta a Pagar (HTTP ${response.status}): ${errorText}`);
     }
 
-    const json = await response.json();
-    console.log('[bling] createContaPagar resposta completa:', JSON.stringify(json));
-    return json;
+    return await response.json();
+  }
+
+  // ── Contas a pagar com contrato oficial e falha tipada (Ticket 33) ─────
+
+  /**
+   * Cria a conta a pagar. Obrigatorios no OpenAPI oficial: `contato.id`,
+   * `vencimento` (`format: date`) e `valor`.
+   *
+   * **Nao envia `situacao`**: no schema oficial ela e `readOnly`, entao o
+   * valor era descartado pelo Bling. A versao anterior mandava `2` para
+   * "pago" e gravava `situacao: 'pago'` localmente — a conta ficava aberta no
+   * ERP e quitada no ORBITA. Quitar exige `POST /contas/pagar/{id}/baixar`.
+   */
+  async criarContaPagar(payload: {
+    contatoId: number;
+    vencimento: string;
+    valor: number;
+    historico: string;
+    dataEmissao: string;
+    competencia: string;
+    categoriaId?: number;
+  }): Promise<BlingCallResult<{ id: string }>> {
+    const corpo: Record<string, unknown> = {
+      contato: { id: payload.contatoId },
+      vencimento: payload.vencimento,
+      valor: payload.valor,
+      historico: payload.historico,
+      dataEmissao: payload.dataEmissao,
+      competencia: payload.competencia,
+    };
+    if (payload.categoriaId) corpo.categoria = { id: payload.categoriaId };
+
+    const response = await this.fetchWithAuth(`${this.baseUrl}/contas/pagar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    });
+
+    if (!response.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+    }
+
+    const body = (await response.json()) as { data?: { id?: number | string }; id?: number | string };
+    const id = body?.data?.id ?? body?.id;
+    if (id === undefined || id === null || String(id).trim() === '') {
+      return blingFailure('INVALID_RESPONSE', response.status, 'O Bling respondeu sucesso sem informar o ID da conta a pagar.');
+    }
+
+    return { _tag: 'BlingOk', value: { id: String(id) } };
+  }
+
+  /**
+   * Quita a conta a pagar. Obrigatorios: `categoria.id`, `data`, `historico`,
+   * `portador.id` e `usarDataVencimento` — `portador` e a conta financeira da
+   * conta Bling, que so existe se o proprietario tiver uma cadastrada.
+   */
+  async baixarContaPagar(idConta: string, payload: {
+    data: string;
+    historico: string;
+    portadorId: number;
+    categoriaId: number;
+  }): Promise<BlingCallResult<void>> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/contas/pagar/${encodeURIComponent(idConta)}/baixar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        data: payload.data,
+        historico: payload.historico,
+        portador: { id: payload.portadorId },
+        categoria: { id: payload.categoriaId },
+        usarDataVencimento: false,
+      }),
+    });
+
+    if (!response.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+    }
+
+    return { _tag: 'BlingOk', value: undefined };
+  }
+
+  /** Primeira conta financeira (portador) da conta Bling, necessaria para quitar. */
+  async obterContaFinanceiraPadraoId(): Promise<BlingCallResult<number>> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/contas-financeiras`);
+    if (!response.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+    }
+
+    const body = (await response.json()) as { data?: Array<{ id?: number; situacao?: number }> };
+    const contas = Array.isArray(body.data) ? body.data : [];
+    const escolhida = contas.find((conta) => typeof conta.id === 'number' && conta.situacao !== 0) ?? contas[0];
+
+    if (!escolhida?.id) {
+      return blingFailure(
+        'RESOURCE_NOT_FOUND',
+        response.status,
+        'Nenhuma conta financeira cadastrada no Bling. Cadastre uma para poder quitar despesas.',
+      );
+    }
+
+    return { _tag: 'BlingOk', value: escolhida.id };
   }
 
   // Obter lançamentos de contas a receber com paginação e filtros
