@@ -8,7 +8,12 @@ import { err, failureMessage, ok } from './script-result.mjs';
 /** Committed fingerprint and object counts for the expected final database catalog. */
 export const CATALOG_REFERENCE_PATH = path.resolve(process.cwd(), 'database', 'catalog-reference.json');
 
-const CATALOG_QUERIES = Object.freeze({
+/**
+ * Consultas de catálogo que compõem o snapshot. Exportadas para que o
+ * diagnóstico `diff-database-catalog.mjs` compare exatamente as mesmas
+ * dimensões — duas listas separadas divergiriam em silêncio.
+ */
+export const CATALOG_QUERIES = Object.freeze({
   relations: `
     select c.relname as name, c.relkind as kind, r.rolname as owner,
            c.relrowsecurity as rls, c.relforcerowsecurity as force_rls,

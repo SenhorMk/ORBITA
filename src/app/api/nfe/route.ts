@@ -20,7 +20,7 @@ interface NfeApiResponse {
   data?: NfeApiResponse;
 }
 
-type BlingClient = ReturnType<typeof bling.forUser>;
+type BlingClient = ReturnType<typeof bling.forVerifiedOrganization>;
 
 /** Emite a NF-e no Bling e persiste o resultado local. Assume que o advisory lock do pedido já foi adquirido pelo chamador. */
 async function emitNfeWithLock(
@@ -141,7 +141,7 @@ export async function POST(request: Request) {
       }
 
       try {
-        const blingClient = bling.forUser(session.tenant);
+        const blingClient = bling.forVerifiedOrganization(scope);
         return await emitNfeWithLock(scope, pedidoId, blingPedidoId, blingClient);
       } catch (error: unknown) {
         console.error('Erro na emissão de NF-e:', error);

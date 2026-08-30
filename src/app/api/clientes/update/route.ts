@@ -12,7 +12,7 @@ interface BlingContatoResponse {
   };
 }
 
-type BlingClient = ReturnType<typeof bling.forUser>;
+type BlingClient = ReturnType<typeof bling.forVerifiedOrganization>;
 type BlingContatoPayload = Parameters<BlingClient['createContato']>[0];
 
 /** Resultado da sincronização (PUT/POST com fallback) do contato no Bling ERP. */
@@ -130,7 +130,7 @@ export async function POST(request: Request) {
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
-    const blingClient = bling.forUser(session.tenant);
+    const blingClient = bling.forVerifiedOrganization(scope);
 
     const body = await request.json();
     const { id, bling_id, nome, email, telefone, cpf_cnpj, tipo, contribuinte, cep, endereco, numero, bairro, cidade, uf } = body as Partial<Cliente>;

@@ -1,6 +1,5 @@
 import { describe, expectTypeOf, it } from 'vitest';
 
-import type { VerifiedTenant } from '../lib/auth';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import type { ClienteRepository } from './clienteRepository';
 import type { FinanceiroRepository } from './financeiroRepository';
@@ -27,8 +26,11 @@ describe('privileged repository tenant scope', () => {
       .toEqualTypeOf<VerifiedOrganizationScope>();
     expectTypeOf<Parameters<ProdutoRepository['getAll']>[0]>()
       .toEqualTypeOf<VerifiedOrganizationScope>();
-    expectTypeOf<Parameters<typeof bling.forUser>[0]>()
-      .toEqualTypeOf<VerifiedTenant>();
+    // Ticket 10b: o cliente do Bling passou a exigir a organizacao verificada.
+    // Nao existe mais entrada por `VerifiedTenant` — a credencial vive no cofre
+    // por organizacao, e `integracoes_bling` nao e legivel pelo `service_role`.
+    expectTypeOf<Parameters<typeof bling.forVerifiedOrganization>[0]>()
+      .toEqualTypeOf<VerifiedOrganizationScope>();
     expectTypeOf<Parameters<IntegrationService['linkSacToErp']>[0]>()
       .toEqualTypeOf<VerifiedOrganizationScope>();
   });

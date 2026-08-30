@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
 import { verifySessionAndRole } from '@/lib/auth';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,7 +37,9 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
     }
 
-    const blingClient = bling.forUser(session.tenant);
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const blingClient = bling.forVerifiedOrganization(scopeResult.scope);
 
     // Buscamos os primeiros 200 contatos
     const contatos: BlingContato[] = await blingClient.getClientes(1, 200);
@@ -72,7 +75,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
     }
 
-    const blingClient = bling.forUser(session.tenant);
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const blingClient = bling.forVerifiedOrganization(scopeResult.scope);
 
     const body = (await request.json()) as FornecedorRequestBody;
     const { cnpj, nome, logradouro, numero, bairro, municipio, uf, cep, telefone, email } = body;

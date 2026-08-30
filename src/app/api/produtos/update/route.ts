@@ -6,7 +6,7 @@ import { validateProdutoForBling, sanitizeProductName } from '@/lib/utils';
 import { verifySessionAndRole } from '@/lib/auth';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
-type BlingClient = ReturnType<typeof bling.forUser>;
+type BlingClient = ReturnType<typeof bling.forVerifiedOrganization>;
 
 interface ProdutoBlingFields {
   nomeSanitizado: string;
@@ -240,7 +240,7 @@ export async function POST(request: Request) {
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
-    const blingClient = bling.forUser(session.tenant);
+    const blingClient = bling.forVerifiedOrganization(scope);
 
     const inputResult = await parseAndValidateProdutoInput(request, logEntries, timestamp);
     if (inputResult._tag === 'Failed') return inputResult.response;

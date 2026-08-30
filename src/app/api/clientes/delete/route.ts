@@ -32,7 +32,7 @@ export async function POST(request: Request) {
 
     // Deletar no Bling v3
     if (/^\d+$/.test(bling_id)) {
-      const blingClient = bling.forUser(session.tenant);
+      const blingClient = bling.forVerifiedOrganization(scope);
       try {
         logEntries.push(`[${new Date().toISOString()}] 🌐 Chamando DELETE na API do Bling para o contato ${bling_id}...`);
         await blingClient.deleteContato(bling_id);

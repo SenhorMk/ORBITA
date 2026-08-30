@@ -160,7 +160,7 @@ export class SyncService {
     };
 
     try {
-      const blingClient = bling.forUser(tenant);
+      const blingClient = bling.forVerifiedOrganization(scope);
 
       const steps: Array<{
         etapa: 'clientes' | 'produtos' | 'pedidos';
@@ -231,7 +231,7 @@ export class SyncService {
     scope: VerifiedOrganizationScope,
     jobId: string,
     tenant: VerifiedTenant,
-    blingClient: ReturnType<typeof bling.forUser>,
+    blingClient: ReturnType<typeof bling.forVerifiedOrganization>,
     progress: SyncJobProgress,
   ): Promise<number> {
     try {
@@ -269,7 +269,7 @@ export class SyncService {
     scope: VerifiedOrganizationScope,
     jobId: string,
     tenant: VerifiedTenant,
-    blingClient: ReturnType<typeof bling.forUser>,
+    blingClient: ReturnType<typeof bling.forVerifiedOrganization>,
     progress: SyncJobProgress,
   ): Promise<number> {
     try {
@@ -343,7 +343,7 @@ export class SyncService {
     scope: VerifiedOrganizationScope,
     jobId: string,
     tenant: VerifiedTenant,
-    blingClient: ReturnType<typeof bling.forUser>,
+    blingClient: ReturnType<typeof bling.forVerifiedOrganization>,
     progress: SyncJobProgress,
   ): Promise<number> {
     try {

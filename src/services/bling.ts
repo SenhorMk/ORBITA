@@ -1,9 +1,8 @@
 import { BlingPedido, BlingCliente, BlingProduto, BlingCategoria } from '../types';
 import { supabaseServer } from '../lib/supabaseServer';
-import { encrypt, decrypt } from '../lib/crypto';
 import { credentialsVault } from '../lib/integrations/credentialsVault';
 import { refreshBlingToken } from './blingOAuth';
-import type { VerifiedTenant } from '../lib/auth';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import {
   blingFailure,
   parseBlingFailure,
@@ -12,7 +11,6 @@ import {
   type PedidoVendaPayload,
 } from '../lib/integrations/bling/pedidoVendaContract';
 
-const clientCache = new Map<string, BlingClient>();
 const orgClientCache = new Map<string, BlingClient>();
 
 export class BlingClient {
@@ -23,92 +21,52 @@ export class BlingClient {
   private lastRequestTime: number = 0;
   private requestQueuePromise: Promise<void> = Promise.resolve();
 
-  private readonly tenant?: VerifiedTenant;
-  private readonly userId?: string;
   private readonly organizacaoId?: string;
   private conexaoId?: string;
 
-  private constructor(tenant?: VerifiedTenant, organizacaoId?: string, conexaoId?: string) {
-    this.tenant = tenant;
-    this.userId = tenant?.id;
+  private constructor(organizacaoId?: string, conexaoId?: string) {
     this.organizacaoId = organizacaoId;
     this.conexaoId = conexaoId;
   }
 
-  static forUser(tenant: VerifiedTenant): BlingClient {
-    let c = clientCache.get(tenant.id);
-    if (!c) {
-      c = new BlingClient(tenant);
-      clientCache.set(tenant.id, c);
-    }
-    return c;
+  /**
+   * Cliente Bling da organizacao ja provada contra a associacao persistida.
+   *
+   * Substitui `forUser(tenant)`, removido no Ticket 10b. Exigir o escopo
+   * verificado no tipo torna impossivel chamar o Bling sem uma organizacao
+   * autorizada — antes bastava um `user_id` de sessao, e a credencial vinha de
+   * uma tabela que o `service_role` nem consegue ler.
+   */
+  static forVerifiedOrganization(scope: VerifiedOrganizationScope, conexaoId?: string): BlingClient {
+    return BlingClient.forOrganization(scope.organizationId, conexaoId);
   }
 
   static forOrganization(organizacaoId: string, conexaoId?: string): BlingClient {
     const key = `${organizacaoId}:${conexaoId || 'primary'}`;
     let c = orgClientCache.get(key);
     if (!c) {
-      c = new BlingClient(undefined, organizacaoId, conexaoId);
+      c = new BlingClient(organizacaoId, conexaoId);
       orgClientCache.set(key, c);
     }
     return c;
   }
 
   // Renovação forçada de token OAuth v3 junto ao Bling
+  /**
+   * Renova o token OAuth da conexao Bling da organizacao.
+   *
+   * O caminho por `user_id` sobre `integracoes_bling` foi removido no Ticket
+   * 10b: `service_role` nao tem privilegio nenhum naquela tabela (comprovado
+   * com `set local role service_role` no laboratorio e no staging), entao toda
+   * chamada interativa do Bling falhava com `42501 permission denied` antes de
+   * chegar ao provedor. A credencial agora vem sempre do cofre por
+   * organizacao criado no Ticket 28.
+   */
   async forceRefreshToken(): Promise<string> {
-    if (this.organizacaoId) {
-      return await this._forceRefreshTokenForOrg();
+    if (!this.organizacaoId) {
+      throw new Error('Organizacao verificada e obrigatoria para operacoes com o Bling.');
     }
-
-    if (!this.userId) {
-      throw new Error('UserId ou OrganizacaoId é obrigatório para operações com o Bling (Multi-tenant).');
-    }
-
-    // Tentar pegar o lock atômico distribuído no banco (PostgreSQL row-level lock)
-    const { data: lockAcquired, error: lockError } = await supabaseServer
-      .rpc('acquire_bling_token_lock', {
-        p_user_id: this.userId,
-        p_timeout_seconds: 30
-      });
-
-    if (lockError) {
-      console.error('Erro ao tentar adquirir lock distribuído do bling:', lockError);
-    }
-
-    // Se NÃO conseguimos o lock, significa que OUTRA requisição/lambda já está renovando o token neste momento.
-    if (!lockAcquired) {
-      console.warn('🔒 Lock distribuído ativo! Outra instância está renovando o token. Aguardando...');
-
-      // Polling: vamos aguardar até que o lock seja liberado pelo outro processo e pegar o novo token.
-      for (let i = 0; i < 15; i++) {
-        await new Promise(r => setTimeout(r, 2000)); // Espera 2 segundos (máx 30s)
-
-        const res = await supabaseServer
-          .from('integracoes_bling')
-          .select('access_token, token_expires_at, refresh_locked_at')
-          .eq('user_id', this.userId)
-          .maybeSingle();
-
-        const tokenCheck = res.data;
-        // Se a coluna refresh_locked_at voltou pra nulo e o token ainda não expirou, a renovação do outro processo concluiu com sucesso!
-        if (tokenCheck && !tokenCheck.refresh_locked_at && new Date() < new Date(tokenCheck.token_expires_at)) {
-          const dec = decrypt(tokenCheck.access_token);
-          if (dec) return dec;
-        }
-      }
-      throw new Error('Timeout esperando outro processo renovar o token do Bling.');
-    }
-
-    // Se chegamos aqui, NÓS adquirimos o lock. Somos a instância responsável por bater no Bling!
-    try {
-      return await this._doForceRefreshToken();
-    } finally {
-      // Liberar o lock no banco, independentemente de sucesso ou falha
-      await supabaseServer
-        .from('integracoes_bling')
-        .update({ refresh_locked_at: null })
-        .eq('user_id', this.userId);
-    }
+    return await this._forceRefreshTokenForOrg();
   }
 
   private async _forceRefreshTokenForOrg(): Promise<string> {
@@ -192,125 +150,56 @@ export class BlingClient {
     }
   }
 
-  private async _doForceRefreshToken(): Promise<string> {
-      if (!this.userId) {
-        throw new Error('UserId é obrigatório para operações com o Bling (Multi-tenant).');
-      }
+  // `_doForceRefreshToken` (renovacao por `user_id` em `integracoes_bling`) foi
+  // removido no Ticket 10b junto com o ultimo chamador.
 
-      const res = await supabaseServer
-        .from('integracoes_bling')
-        .select('*')
-        .eq('user_id', this.userId)
+  /**
+   * Access token valido da conexao Bling **da organizacao**.
+   *
+   * O caminho legado lia `integracoes_bling` por `user_id`. Ele foi removido no
+   * Ticket 10b por dois motivos independentes, cada um suficiente:
+   *
+   * 1. `service_role` nao tem privilegio algum naquela tabela — comprovado com
+   *    `set local role service_role; select 1 from public.integracoes_bling`,
+   *    que devolve `42501 permission denied` tanto no laboratorio quanto no
+   *    staging. Toda rota interativa do Bling morria ali.
+   * 2. O Ticket 28 tornou a conexao do Bling **por organizacao**. Manter uma
+   *    segunda fonte de credencial, por usuario, e a mesma configuracao que
+   *    produziu os bugs dos tickets 26, 27 e 28: dois lados coerentes consigo
+   *    mesmos e divergentes entre si.
+   */
+  private async getAccessToken(): Promise<string> {
+    if (!this.organizacaoId) {
+      throw new Error('Organizacao verificada e obrigatoria para operacoes com o Bling.');
+    }
+
+    if (!this.conexaoId) {
+      const { data: conn } = await supabaseServer
+        .from('conexoes_integracao')
+        .select('id')
+        .eq('organizacao_id', this.organizacaoId)
+        .eq('provedor', 'bling')
         .maybeSingle();
 
-      const data = res.data;
-      if (!data?.refresh_token || !data?.client_id || !data?.client_secret) {
-        throw new Error('Credenciais OAuth incompletas no banco.');
-      }
-
-      const clientSecret = decrypt(data.client_secret);
-      const refreshToken = decrypt(data.refresh_token);
-
-      const response = await fetch(this.oauthUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': 'Basic ' + Buffer.from(`${data.client_id}:${clientSecret}`).toString('base64'),
-          'Accept': 'application/json',
-          'enable-jwt': '1',
-        },
-        body: new URLSearchParams({
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken || '',
-        }),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        if (errText.includes('invalid_grant')) {
-          throw new Error('BLING_INVALID_GRANT');
-        }
-        throw new Error(`Falha ao renovar token no Bling (${response.status}): ${errText}`);
-      }
-
-      const tokenData = await response.json();
-      const newAccessToken = tokenData.access_token;
-      const newRefreshToken = tokenData.refresh_token || refreshToken;
-      const newExpiresAt = new Date(Date.now() + (tokenData.expires_in || 21600) * 1000).toISOString();
-
-      // Atualizar no banco Supabase
-      await supabaseServer
-        .from('integracoes_bling')
-        .update({
-          access_token: encrypt(newAccessToken),
-          refresh_token: encrypt(newRefreshToken),
-          token_expires_at: newExpiresAt,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', data.id);
-
-      return newAccessToken;
-  }
-
-  // Buscar Access Token válido do banco Supabase
-  private async getAccessToken(): Promise<string> {
-    if (this.organizacaoId) {
-      if (!this.conexaoId) {
-        const { data: conn } = await supabaseServer
-          .from('conexoes_integracao')
-          .select('id')
-          .eq('organizacao_id', this.organizacaoId)
-          .eq('provedor', 'bling')
-          .maybeSingle();
-
-        if (conn?.id) {
-          this.conexaoId = conn.id;
-        }
-      }
-
-      if (this.conexaoId) {
-        const creds = await credentialsVault.getDecryptedCredentials(this.organizacaoId, this.conexaoId);
-        if (creds?.access_token) {
-          if (creds.token_expires_at && new Date() >= new Date(creds.token_expires_at as string)) {
-            return await this.forceRefreshToken();
-          }
-          return creds.access_token as string;
-        }
+      if (conn?.id) {
+        this.conexaoId = conn.id;
       }
     }
 
-    if (!this.userId) {
-      throw new Error('UserId é obrigatório para operações com o Bling (Multi-tenant).');
+    if (!this.conexaoId) {
+      throw new Error('Bling nao conectado para esta organizacao. Conclua os passos 1 e 2 em Integracoes.');
     }
 
-    const res = await supabaseServer
-      .from('integracoes_bling')
-      .select('*')
-      .eq('user_id', this.userId)
-      .maybeSingle();
-
-    const data = res.data;
-    const error = res.error;
-
-    if (error || !data || !data.access_token) {
-      // Falha fechada. Antes existia aqui um fallback para uma chave estatica
-      // global (`BLING_API_KEY`), devolvida como se fosse um access token: uma
-      // organizacao sem OAuth concluido parecia conectada e as chamadas
-      // falhavam depois, com erro do provedor em vez de "nao conectado". Uma
-      // chave global tambem contradiz a conexao por organizacao do Ticket 28.
-      throw new Error('Bling nao conectado para esta conta. Conclua os passos 1 e 2 em Integracoes.');
+    const creds = await credentialsVault.getDecryptedCredentials(this.organizacaoId, this.conexaoId);
+    if (!creds?.access_token) {
+      throw new Error('Bling nao conectado para esta organizacao. Conclua os passos 1 e 2 em Integracoes.');
     }
 
-    // Verificar se o token está expirado
-    if (data.token_expires_at) {
-      if (new Date() >= new Date(data.token_expires_at)) {
-        return await this.forceRefreshToken();
-      }
+    if (creds.token_expires_at && new Date() >= new Date(creds.token_expires_at as string)) {
+      return await this.forceRefreshToken();
     }
 
-    const token = decrypt(data.access_token);
-    if (!token) throw new Error('Token decriptado é nulo');
-    return token;
+    return creds.access_token as string;
   }
 
   // Fila para garantir no mínimo 2 segundos entre requisições
@@ -1237,7 +1126,8 @@ export function extractProductImageUrl(data: unknown): string | undefined {
 }
 
 export const bling = {
-  forUser: (tenant: VerifiedTenant) => BlingClient.forUser(tenant),
+  forVerifiedOrganization: (scope: VerifiedOrganizationScope, conexaoId?: string) =>
+    BlingClient.forVerifiedOrganization(scope, conexaoId),
   forOrganization: (organizacaoId: string, conexaoId?: string) => BlingClient.forOrganization(organizacaoId, conexaoId),
 };
 export const extractBlingImageUrl = extractProductImageUrl;
