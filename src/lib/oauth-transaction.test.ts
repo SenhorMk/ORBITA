@@ -58,7 +58,9 @@ describe('Bling OAuth transaction (server-side single-use store)', () => {
     const transaction = await createOAuthTransaction('user-123', 'org-456', 'bling', store, createdAt);
     if (transaction._tag !== 'OAuthTransactionCreated') throw new Error('OAuth transaction was not created.');
 
-    expect(transaction.state).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    // Hexadecimal (Ticket 30e): o `state` atravessa o redirect do provedor, e
+    // a documentacao do Bling o exemplifica assim. 32 caracteres = 128 bits.
+    expect(transaction.state).toMatch(/^[0-9a-f]{32}$/u);
     // The cookie value is an opaque reference (the store row id), never the raw state or payload.
     expect(transaction.cookieValue).not.toBe(transaction.state);
 
@@ -81,7 +83,9 @@ describe('Bling OAuth transaction (server-side single-use store)', () => {
     const transaction = await createOAuthTransaction('user-123', undefined, 'bling', store, createdAt);
     if (transaction._tag !== 'OAuthTransactionCreated') throw new Error('OAuth transaction was not created.');
 
-    const result = await consumeOAuthTransaction(transaction.cookieValue, transaction.state, store, createdAt + 600_001);
+    // A janela passou de 10 para 30 minutos no Ticket 30e: uma primeira
+    // autorizacao real (login, 2FA, escolha de conta) nao cabia em 10.
+    const result = await consumeOAuthTransaction(transaction.cookieValue, transaction.state, store, createdAt + 1_800_001);
     expect(result).toEqual({ _tag: 'InvalidOAuthTransaction', reason: 'state-mismatch' });
   });
 

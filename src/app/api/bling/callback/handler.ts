@@ -75,9 +75,31 @@ async function resolveCallbackTransaction(
   const transactionCookie = transactionMatch ? decodeURIComponent(transactionMatch[1]) : null;
 
   if (!stateParam || !transactionCookie) {
+    // As duas metades falham por motivos completamente diferentes, e juntá-las
+    // numa mensagem só apagava o diagnóstico — o mesmo defeito que o Ticket
+    // 30b corrigiu na tela de Integrações.
+    const semState = !stateParam;
+    const semCookie = !transactionCookie;
+    logger.warn('bling_callback.transaction_missing', {
+      subsystem: 'app',
+      correlationId,
+      provider: 'bling',
+      tag: semState && semCookie ? 'sem-state-e-sem-cookie' : semState ? 'sem-state' : 'sem-cookie',
+    });
+
+    const mensagem = semState && semCookie
+      ? 'O Bling não devolveu o parâmetro state e o cookie da sessão de conexão também não chegou. '
+        + 'Comece de novo pelo botão Conectar Bling, na mesma aba e no mesmo endereço.'
+      : semState
+        ? 'O Bling não devolveu o parâmetro state no retorno. Confira, no cadastro do aplicativo, '
+          + 'se a URL de retorno é exatamente https://orbita.mkautobots.site/api/bling/callback, sem barra no final.'
+        : 'O cookie da sessão de conexão não chegou até aqui. Isso acontece quando a autorização demora '
+          + 'demais, quando ela é concluída em outra aba, ou quando o navegador bloqueia cookies deste site. '
+          + 'Clique em Conectar Bling e conclua a autorização na mesma aba.';
+
     return {
       _tag: 'Denied',
-      response: clearOAuthTransaction(htmlPage('error', 'Transação OAuth ausente ou inválida. Tente conectar novamente.')),
+      response: clearOAuthTransaction(htmlPage('error', mensagem)),
     };
   }
 
