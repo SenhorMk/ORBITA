@@ -38,6 +38,19 @@ export interface ClienteStorePort {
     readonly email: string;
     readonly telefone: string;
     readonly cpfCnpj: string;
+    /**
+     * Endereço e classificação fiscal, persistidos desde a migration 54.
+     * Antes eram enviados ao Bling e descartados aqui: o formulário de edição
+     * abria sempre vazio e um PUT sem endereço podia apagar o do ERP.
+     */
+    readonly tipo: string;
+    readonly indicadorIe: number;
+    readonly cep: string;
+    readonly endereco: string;
+    readonly numero: string;
+    readonly bairro: string;
+    readonly cidade: string;
+    readonly uf: string;
   }): Promise<ClientePersistido>;
 }
 
@@ -143,6 +156,14 @@ export function createClienteUpdateHandler(deps: ClienteDependencies) {
         email: body.email ?? '',
         telefone: body.telefone ?? '',
         cpfCnpj: body.cpfCnpj ?? '',
+        tipo: body.tipo,
+        indicadorIe: body.indicadorIe,
+        cep: body.cep ?? '',
+        endereco: body.endereco ?? '',
+        numero: body.numero ?? '',
+        bairro: body.bairro ?? '',
+        cidade: body.cidade ?? '',
+        uf: body.uf ?? '',
       });
 
       return NextResponse.json({ success: true, client } satisfies ClienteResponseBody, { status: 200 });
