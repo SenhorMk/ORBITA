@@ -1,3 +1,4 @@
+import { descreverErro } from '../lib/erroLegivel';
 import { supabaseServer } from '../lib/supabaseServer';
 
 /**
@@ -74,7 +75,10 @@ export async function syncPaginatedEntities<T>(
       } catch (itemErr: unknown) {
         falhasNaPagina += 1;
         falhas += 1;
-        primeiraFalha ??= itemErr instanceof Error ? itemErr.message : String(itemErr);
+        // `descreverErro` e nao `String(err)`: o que o supabase-js lanca num
+        // upsert recusado e um PostgrestError, objeto simples cujo `String()`
+        // e `[object Object]` — perdendo justamente o codigo SQL da falha.
+        primeiraFalha ??= descreverErro(itemErr);
       }
     }
 

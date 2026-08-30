@@ -284,7 +284,12 @@
     {
       "order": 57,
       "path": "../database/54_produtos_unidade_categoria.sql",
-      "sha256": "735a7720eff317fb28c8e1e2f0c18f279a52c16f1368aef1678bfe362dc8333d"
+      "sha256": "91750feef3df7fcbfb0c216356271743be2b202fcfdee52784f9d28e129b873b"
+    },
+    {
+      "order": 58,
+      "path": "../database/55_upsert_conflito_inferivel.sql",
+      "sha256": "5ca56321aaa0b9add671428cd44de0745bb3974145496f0319785bf62d7e23f2"
     }
   ],
   "references": [

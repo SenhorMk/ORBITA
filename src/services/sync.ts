@@ -4,6 +4,7 @@ import { clienteRepository } from '../repositories/clienteRepository';
 import { produtoRepository } from '../repositories/produtoRepository';
 import { pedidoRepository } from '../repositories/pedidoRepository';
 import { Cliente, Produto, Pedido, ItemPedido } from '../types';
+import { descreverErro } from '../lib/erroLegivel';
 import { supabaseServer } from '../lib/supabaseServer';
 import { mapBlingStatus, normalizeToE164 } from '../lib/utils';
 import type { ActorContext, VerifiedTenant } from '../lib/auth';
@@ -145,7 +146,7 @@ export class SyncService {
 
       await completeJob(scope, jobId, 'completed');
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = descreverErro(err);
       const redacted = msg
         .replace(/Bearer\s+\S+/gi, '[REDACTED]')
         .replace(/key=[^&\s]*/gi, 'key=[REDACTED]');
@@ -215,7 +216,7 @@ export class SyncService {
       // concluir como sucesso, e — pior — o checkpoint ja tinha avancado,
       // entao as execucoes seguintes filtravam por `dataAlteracaoInicial`
       // a partir do momento da falha e nunca mais viam nada.
-      throw new Error(`Etapa clientes falhou: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(`Etapa clientes falhou: ${descreverErro(err)}`);
     }
   }
 
@@ -292,7 +293,7 @@ export class SyncService {
       // concluir como sucesso, e — pior — o checkpoint ja tinha avancado,
       // entao as execucoes seguintes filtravam por `dataAlteracaoInicial`
       // a partir do momento da falha e nunca mais viam nada.
-      throw new Error(`Etapa produtos falhou: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(`Etapa produtos falhou: ${descreverErro(err)}`);
     }
   }
 
@@ -366,7 +367,7 @@ export class SyncService {
       // concluir como sucesso, e — pior — o checkpoint ja tinha avancado,
       // entao as execucoes seguintes filtravam por `dataAlteracaoInicial`
       // a partir do momento da falha e nunca mais viam nada.
-      throw new Error(`Etapa pedidos falhou: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(`Etapa pedidos falhou: ${descreverErro(err)}`);
     }
   }
 }
