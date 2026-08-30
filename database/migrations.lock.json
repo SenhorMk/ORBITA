@@ -275,6 +275,11 @@
       "order": 55,
       "path": "../database/52_auditoria_anti_forjamento_catalogo.sql",
       "sha256": "4281002a861755ad58dc46039acf01251d730e41795d17d258e54667ba38cc0a"
+    },
+    {
+      "order": 56,
+      "path": "../database/53_venda_manual_transacional.sql",
+      "sha256": "04229f55566ee2ccca80f43cc70102ae0179a78dfda6305c7dd106e7992e8e90"
     }
   ],
   "references": [
