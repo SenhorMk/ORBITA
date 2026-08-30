@@ -240,3 +240,78 @@ O código tratava o primeiro item como "este produto já existe" e disparava um
 seguido de um lançamento de saldo absoluto nele. Corrigido no Ticket 31, com
 `buscarProdutoPorCodigo` conferindo o `codigo` do resultado antes de confiar —
 um filtro ignorado pelo provedor nunca mais pode virar escrita destrutiva.
+
+## Schema de `POST`/`PUT /contatos` (Ticket 32)
+
+Codificado em `src/lib/config/clienteContract.ts` e no builder
+`corpoContatoBling` de `src/services/bling.ts`.
+
+**Obrigatórios:** `nome`, `situacao`, `tipo`.
+
+| Campo | Valores | Observação |
+|---|---|---|
+| `tipo` | `J` Jurídica, `F` Física, `E` Estrangeira | |
+| `situacao` | `A` Ativo, `E` Excluído, `I` Inativo, `S` Sem movimentação | |
+| `numeroDocumento` | string | CPF (11 dígitos) ou CNPJ (14) |
+| `telefone` | string | **Não é `fone`** — ver abaixo |
+| `indicadorIe` | `1` Contribuinte ICMS, `2` Isento, `9` Não contribuinte | **Não é `contribuinte`** — ver abaixo |
+| `endereco` | `{ geral: { endereco, cep, bairro, municipio, uf, numero, complemento }, cobranca: {...} }` | aninhado sob `geral`; já estava correto |
+
+### Dois campos que não existem no schema
+
+O código anterior enviava:
+
+- **`fone`** para o telefone. O campo é **`telefone`**. Um comentário no fonte
+  chegava a afirmar "Campo correto: `fone`".
+- **`contribuinte`** para o indicador de ICMS. O campo é **`indicadorIe`**.
+
+Nenhum dos dois existe em `POST /contatos`. O Bling descartava os valores em
+silêncio: o contato era criado sem telefone e sem indicador de inscrição
+estadual, e nada no ORBITA acusava. Corrigido no Ticket 32.
+
+## Schema de `POST /contas/pagar` (Ticket 33)
+
+Codificado em `criarContaPagar` de `src/services/bling.ts`.
+
+**Obrigatórios:** `contato.id`, `vencimento` (`format: date`), `valor` (`float`).
+
+| Campo | Forma | Observação |
+|---|---|---|
+| `contato` | `{ id: integer }` | |
+| `vencimento`, `dataEmissao`, `competencia` | `format: date` | `AAAA-MM-DD` |
+| `valor` | `number/float` | |
+| `categoria`, `portador`, `formaPagamento` | `{ id: integer }` | ids **por conta** |
+| `situacao` | `1` Aberto … `7` Confirmado | **`readOnly`** — ver abaixo |
+
+### `situacao` é readOnly: quitar exige endpoint próprio
+
+O ORBITA enviava `situacao: 2` para marcar a despesa como paga na criação. O
+campo é `readOnly` no schema oficial, então o Bling **descartava o valor**: a
+conta era criada em aberto no ERP enquanto o ORBITA gravava `'pago'`.
+
+Quitar é `POST /contas/pagar/{id}/baixar`, que exige `categoria.id`, `data`,
+`historico`, `portador.id` e `usarDataVencimento`.
+
+### O portador vem de `GET /contas-contabeis`
+
+O endpoint que lista contas financeiras chama-se **`/contas-contabeis`** — seu
+próprio título no OpenAPI é *"Obtém contas financeiras"*. **`/contas-financeiras`
+não existe na API**; chamá-lo devolvia 404, que o código transformava em lista
+vazia e fazia parecer que a conta do proprietário não tinha portador nenhum.
+
+Cada item traz `{ id, descricao, tipo }`, e `tipo: 'caixa'` é o "portador caixa
+sem integração" que toda conta Bling tem por padrão. O ORBITA prefere esse —
+por isso a quitação funciona **sem o proprietário precisar configurar nada
+dentro do Bling**.
+
+### Guarda contra caminho inexistente
+
+`docs/integrations/bling-v3-paths.json` guarda os 162 caminhos do OpenAPI
+oficial, e `src/services/bling-endpoints.test.ts` recusa qualquer caminho que
+`src/services/bling.ts` monte e que não esteja lá. O Bling responde sem
+reclamar do que não conhece, então um caminho inventado só apareceria em
+produção, sem mensagem.
+
+Desde o Ticket 33 a situação gravada localmente é a **real do ERP**: se a
+quitação não acontece, o título fica aberto nos dois lados e a UI recebe um
+aviso dizendo por quê.
