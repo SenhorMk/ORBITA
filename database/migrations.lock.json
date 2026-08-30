@@ -290,6 +290,11 @@
       "order": 58,
       "path": "../database/55_upsert_conflito_inferivel.sql",
       "sha256": "5ca56321aaa0b9add671428cd44de0745bb3974145496f0319785bf62d7e23f2"
+    },
+    {
+      "order": 59,
+      "path": "../database/56_baixa_estoque_com_ator.sql",
+      "sha256": "ebf80da5afc22f8672e2534156ce30c2932763ac1f5647e37d2b68eb968787da"
     }
   ],
   "references": [
