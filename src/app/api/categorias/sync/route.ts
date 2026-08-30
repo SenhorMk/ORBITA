@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { resolveActorContext } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { bling } from '@/services/bling';
+import { toVerifiedOrganizationScope } from '@/lib/verifiedScopeFromTenant';
 import {
   CategoryCatalog,
   type CategorySource,
@@ -20,7 +21,8 @@ const categoryRowsSchema = z.array(z.object({
 
 const categorySource: CategorySource = {
   async fetchPage(tenant, page, pageSize) {
-    const categories = await bling.forUser(tenant).getCategoriasProdutos(page, pageSize);
+    const scope = await toVerifiedOrganizationScope(tenant);
+    const categories = await bling.forVerifiedOrganization(scope).getCategoriasProdutos(page, pageSize);
     return categories.map((category) => ({
       blingId: String(category.id),
       description: category.descricao,

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
 import { verifySessionAndRole } from '@/lib/auth';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
 export async function GET(request: Request) {
   try {
@@ -9,7 +10,11 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
     }
 
-    const blingClient = bling.forUser(session.tenant);
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
+
+    const blingClient = bling.forVerifiedOrganization(scope);
 
     const situacoes = await blingClient.getSituacoesModulo(9);
 

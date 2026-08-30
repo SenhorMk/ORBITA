@@ -1,8 +1,5 @@
 import { resolveActorContext } from '@/lib/auth';
-import type { VerifiedTenant } from '@/lib/auth';
-import { resolveTenantOrgId } from '@/lib/organizationContext';
-import { supabaseServer } from '@/lib/supabaseServer';
-import { verifyOrganizationScope, type VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { toVerifiedOrganizationScope } from '@/lib/verifiedScopeFromTenant';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { bling } from '@/services/bling';
 import {
@@ -30,25 +27,6 @@ async function callProvider<T>(operation: () => Promise<T>): Promise<OrderProvid
   }
 }
 
-/**
- * Re-verify the actor's organization membership server-side before any local
- * store lookup. `resolveActorContext` still yields the temporary per-user
- * `VerifiedTenant` consumed by the Bling provider adapter (external
- * credential lookup, outside this ticket's slice); every local persistence
- * call goes through this freshly verified `VerifiedOrganizationScope`
- * instead, so the primitive tenant id is never accepted as DB authority.
- */
-async function toVerifiedOrganizationScope(tenant: VerifiedTenant): Promise<VerifiedOrganizationScope> {
-  const organizationId = await resolveTenantOrgId(supabaseServer, tenant);
-  const result = await verifyOrganizationScope(supabaseServer, {
-    organizationId,
-    actorId: tenant.id,
-  });
-  if (result._tag !== 'OrganizationScopeVerified') {
-    throw new Error('Escopo organizacional não verificado.');
-  }
-  return result.scope;
-}
 
 const orderStore: OrderStore = {
   async findByExternalId(tenant, externalId) {
@@ -66,16 +44,19 @@ const orderStore: OrderStore = {
 
 const orderProvider: OrderProvider = {
   async read(tenant, externalId) {
-    const result = await callProvider(() => bling.forUser(tenant).getPedido(externalId));
+    const scope = await toVerifiedOrganizationScope(tenant);
+    const result = await callProvider(() => bling.forVerifiedOrganization(scope).getPedido(externalId));
     return result._tag === 'OrderProviderSucceeded' && result.value === null
       ? { _tag: 'OrderProviderNotFound' }
       : result;
   },
   async update(tenant, externalId, changes) {
-    return callProvider(() => bling.forUser(tenant).updatePedido(externalId, changes));
+    const scope = await toVerifiedOrganizationScope(tenant);
+    return callProvider(() => bling.forVerifiedOrganization(scope).updatePedido(externalId, changes));
   },
   async remove(tenant, externalId) {
-    const result = await callProvider(() => bling.forUser(tenant).deletePedido(externalId));
+    const scope = await toVerifiedOrganizationScope(tenant);
+    const result = await callProvider(() => bling.forVerifiedOrganization(scope).deletePedido(externalId));
     return result._tag === 'OrderProviderSucceeded'
       ? { _tag: 'OrderProviderSucceeded', value: undefined }
       : result;

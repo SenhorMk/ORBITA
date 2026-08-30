@@ -6,7 +6,7 @@ import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationConte
 
 /** Best-effort remote delete: local deletion must proceed even if the Bling side fails. */
 async function attemptBlingProductDelete(
-  blingClient: ReturnType<typeof bling.forUser>,
+  blingClient: ReturnType<typeof bling.forVerifiedOrganization>,
   blingId: string | undefined,
   logEntries: string[],
 ): Promise<string | null> {
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
-    const blingClient = bling.forUser(session.tenant);
+    const blingClient = bling.forVerifiedOrganization(scope);
 
     const body = await request.json();
     const { id, bling_id, nome } = body;

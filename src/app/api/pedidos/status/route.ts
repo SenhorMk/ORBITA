@@ -8,7 +8,7 @@ import { verifySessionAndRole } from '@/lib/auth';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
-type BlingClient = ReturnType<typeof bling.forUser>;
+type BlingClient = ReturnType<typeof bling.forVerifiedOrganization>;
 
 /**
  * Corpo de `POST /api/pedidos/status`. Os ids de situação são por conta
@@ -117,7 +117,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Pedido não encontrado ou sem ID do Bling' }, { status: 404 });
     }
 
-    const blingClient = bling.forUser(session.tenant);
+    const blingClient = bling.forVerifiedOrganization(scope);
 
     // 2. Atualiza a situação no Bling
     await blingClient.updateSituacaoPedido(pedidoLocal.bling_id, novaSituacaoId);

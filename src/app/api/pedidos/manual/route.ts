@@ -180,7 +180,7 @@ async function persistVenda(input: PersistManualOrderInput): Promise<{ pedidoId:
   return { pedidoId: pedido.id };
 }
 
-function blingManualOrderAdapter(client: ReturnType<typeof bling.forUser>): ManualOrderBlingPort {
+function blingManualOrderAdapter(client: ReturnType<typeof bling.forVerifiedOrganization>): ManualOrderBlingPort {
   return {
     getDefaultFormaPagamentoId: () => client.obterFormaPagamentoPadraoId(),
     createContato: (input) => client.criarContatoParaVenda(input),
@@ -189,17 +189,14 @@ function blingManualOrderAdapter(client: ReturnType<typeof bling.forUser>): Manu
   };
 }
 
-/** Sessão já verificada uma única vez por requisição, reapresentada ao handler. */
-function authFor(actorId: string): ManualOrderAuthPort {
+/** Sessão e escopo já verificados uma única vez por requisição, reapresentados ao handler. */
+function authFor(actorId: string, scope: VerifiedOrganizationScope): ManualOrderAuthPort {
   return {
     async authenticate() {
       return { actorId };
     },
-    async resolveScope(request: Request) {
-      const result = await resolveVerifiedOrganizationScope(request);
-      return result._tag === 'RequestScopeResolved'
-        ? { _tag: 'Resolved' as const, scope: result.scope }
-        : { _tag: 'Denied' as const, response: result.response };
+    async resolveScope() {
+      return { _tag: 'Resolved' as const, scope };
     },
   };
 }
@@ -210,10 +207,17 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
   }
 
+  // O escopo é resolvido aqui, uma vez, porque desde o Ticket 10b o cliente do
+  // Bling exige a organização verificada. O handler recebe o mesmo escopo já
+  // provado, em vez de resolvê-lo de novo.
+  const scopeResult = await resolveVerifiedOrganizationScope(request);
+  if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+  const { scope } = scopeResult;
+
   const handler = createManualOrderHandler({
-    auth: authFor(session.tenant.id),
+    auth: authFor(session.tenant.id, scope),
     store: supabaseManualOrderStore(),
-    bling: blingManualOrderAdapter(bling.forUser(session.tenant)),
+    bling: blingManualOrderAdapter(bling.forVerifiedOrganization(scope)),
     now: () => new Date(),
     newLocalReference,
   });

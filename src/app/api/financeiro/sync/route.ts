@@ -132,7 +132,7 @@ export async function POST(request: Request) {
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
 
-    const blingClient = bling.forUser(session.tenant);
+    const blingClient = bling.forVerifiedOrganization(scope);
 
     const contasPagar = await syncTitulosFinanceiros(
       scope,

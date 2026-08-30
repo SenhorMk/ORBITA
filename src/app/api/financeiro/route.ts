@@ -55,7 +55,7 @@ export async function GET(request: Request) {
   }
 }
 
-type BlingClient = ReturnType<typeof bling.forUser>;
+type BlingClient = ReturnType<typeof bling.forVerifiedOrganization>;
 
 /**
  * Resolve o contato "Fornecedor Diverso" genérico no Bling: busca por nome e,
@@ -148,7 +148,7 @@ interface CreateDespesaContabilInput {
  */
 async function createDespesaContabil(
   scope: VerifiedOrganizationScope,
-  blingClient: ReturnType<typeof bling.forUser>,
+  blingClient: ReturnType<typeof bling.forVerifiedOrganization>,
   input: CreateDespesaContabilInput,
 ): Promise<NextResponse> {
   // Obter a categoria no Supabase para ver se tem bling_id
@@ -245,7 +245,7 @@ export async function POST(request: Request) {
     // ═══════════════════════════════════════════════════
     // MODO CONTÁBIL: Integrado com o Bling ERP
     // ═══════════════════════════════════════════════════
-    const blingClient = bling.forUser(session.tenant);
+    const blingClient = bling.forVerifiedOrganization(scope);
     return await createDespesaContabil(scope, blingClient, {
       descricao,
       valor: Number(valor),

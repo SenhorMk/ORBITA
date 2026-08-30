@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
 import { syncService, SyncAuthorizationStoreUnavailableError, SyncScopeDeniedError } from '@/services/sync';
 import { verifySessionAndRole } from '@/lib/auth';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { checkEncryptionConfiguration } from '@/lib/crypto';
 
 export const dynamic = 'force-dynamic';
@@ -12,6 +13,10 @@ export async function POST(request: Request) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
     }
+
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
 
     const encryptionConfiguration = checkEncryptionConfiguration();
     if (encryptionConfiguration._tag === 'InvalidEncryptionConfiguration') {
@@ -25,7 +30,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const blingClient = bling.forUser(session.tenant);
+    const blingClient = bling.forVerifiedOrganization(scope);
 
     // 1. Verificar se o token do Bling é válido (isso já tenta renovar o refresh_token se estiver expirado)
     let isBlingAlive = false;

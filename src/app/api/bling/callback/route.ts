@@ -49,23 +49,11 @@ async function resolveProductionCredentials(
     }
   }
 
-  const { data, error } = await supabaseServer
-    .from('integracoes_bling')
-    .select('id, client_id, client_secret')
-    .eq('user_id', userId)
-    .maybeSingle();
-
-  if (error) {
-    productionLogger.error('bling_callback.legacy_lookup_failed', { subsystem: 'app', provider: 'bling' });
-  }
-
-  if (data?.client_id && data?.client_secret) {
-    const clientSecret = decrypt(data.client_secret);
-    if (clientSecret) {
-      return { clientId: data.client_id, clientSecret, organizationConnectionId: null, legacyRecordId: data.id };
-    }
-  }
-
+  // O fallback por `user_id` sobre `integracoes_bling` foi removido no Ticket
+  // 10b. Ele nunca poderia ter funcionado: `service_role` nao tem privilegio
+  // naquela tabela (`42501 permission denied`, comprovado no laboratorio e no
+  // staging), entao a consulta so produzia um log de erro e `null`. A
+  // credencial do aplicativo vive no cofre por organizacao desde o Ticket 28.
   return null;
 }
 
@@ -108,7 +96,12 @@ async function persistOrganizationTokens(
   productionLogger.info('bling_callback.credentials_saved', { subsystem: 'app', provider: 'bling' });
 }
 
-/** 4. Keep the legacy per-user `integracoes_bling` row in sync during migration. */
+/**
+ * Espelho legado em `integracoes_bling`, mantido apenas enquanto a coluna
+ * existir. Nenhum caminho de runtime le essa tabela desde o Ticket 10b, e o
+ * `service_role` nem tem privilegio para isso — a escrita e best-effort e o
+ * seu resultado nunca decide o sucesso da conexao.
+ */
 async function persistLegacyTokens(
   supabaseServer: ProductionSupabaseClient,
   encrypt: ProductionEncrypt,
