@@ -26,6 +26,47 @@ forward migrations remain under `database/` unchanged.
 Never edit a potentially applied migration to make the checksum pass. Add a new
 forward-only migration and regenerate the ledger after review.
 
+## Applying migrations to a remote database
+
+Merging a pull request publishes code, not SQL. Nothing in this repository
+pushes migrations to a hosted Supabase project, and the Supabase GitHub
+integration does not cover it either: that integration deploys
+`supabase/migrations/`, and these migrations live in `database/`, ordered by
+`database/migrations.lock.json`. The directory it looks for does not exist here.
+
+On 2026-08-30 the production database was three migrations behind and a fix was
+reported as delivered without existing there. `scripts/migracoes-remotas.mjs`
+closes that gap.
+
+```bash
+npm run db:remoto:status  -- --url "<connection>"   # read-only, lists what is missing
+npm run db:remoto:aplicar -- --url "<connection>" --confirmar
+```
+
+The target is never defaulted: without `--url` or `SUPABASE_DB_URL` the script
+refuses to run. `--aplicar` without `--confirmar` also refuses. Each migration
+runs in its own transaction, so a failure halfway leaves the earlier ones
+applied and recorded, and the next run resumes exactly where it stopped.
+
+What has already been applied is recorded in `public.migracoes_aplicadas`,
+created by the script itself. It is tool metadata and deliberately outside the
+application schema, for the same reason `schema_migrations` is not a migration
+in any framework: it has to exist before the first one runs. Because it is not
+part of the application schema, it does not affect the catalog fingerprint.
+
+A database that already had migrations applied by hand adopts its state once:
+
+```bash
+npm run db:remoto:status -- --url "<connection>" --adotar --confirmar
+```
+
+`--adotar` records the whole ledger as applied **without executing anything**.
+Using it in any other situation makes the record lie.
+
+If a migration that is already recorded no longer matches its checksum, the
+script refuses everything and names the file. Editing an applied migration is
+what the ledger exists to forbid; the fix is a new forward-only migration.
+
 ## Disposable laboratory
 
 `npm run test:db` is local-only and performs:
