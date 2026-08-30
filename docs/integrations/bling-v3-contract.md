@@ -290,9 +290,27 @@ campo é `readOnly` no schema oficial, então o Bling **descartava o valor**: a
 conta era criada em aberto no ERP enquanto o ORBITA gravava `'pago'`.
 
 Quitar é `POST /contas/pagar/{id}/baixar`, que exige `categoria.id`, `data`,
-`historico`, `portador.id` e `usarDataVencimento`. `portador` é a conta
-financeira da conta Bling (`GET /contas-financeiras`), então a quitação só é
-possível se o proprietário tiver uma cadastrada.
+`historico`, `portador.id` e `usarDataVencimento`.
+
+### O portador vem de `GET /contas-contabeis`
+
+O endpoint que lista contas financeiras chama-se **`/contas-contabeis`** — seu
+próprio título no OpenAPI é *"Obtém contas financeiras"*. **`/contas-financeiras`
+não existe na API**; chamá-lo devolvia 404, que o código transformava em lista
+vazia e fazia parecer que a conta do proprietário não tinha portador nenhum.
+
+Cada item traz `{ id, descricao, tipo }`, e `tipo: 'caixa'` é o "portador caixa
+sem integração" que toda conta Bling tem por padrão. O ORBITA prefere esse —
+por isso a quitação funciona **sem o proprietário precisar configurar nada
+dentro do Bling**.
+
+### Guarda contra caminho inexistente
+
+`docs/integrations/bling-v3-paths.json` guarda os 162 caminhos do OpenAPI
+oficial, e `src/services/bling-endpoints.test.ts` recusa qualquer caminho que
+`src/services/bling.ts` monte e que não esteja lá. O Bling responde sem
+reclamar do que não conhece, então um caminho inventado só apareceria em
+produção, sem mensagem.
 
 Desde o Ticket 33 a situação gravada localmente é a **real do ERP**: se a
 quitação não acontece, o título fica aberto nos dois lados e a UI recebe um

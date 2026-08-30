@@ -1289,22 +1289,33 @@ export class BlingClient {
     return { _tag: 'BlingOk', value: undefined };
   }
 
-  /** Primeira conta financeira (portador) da conta Bling, necessaria para quitar. */
+  /**
+   * Conta financeira (portador) da conta Bling, necessaria para quitar.
+   *
+   * O endpoint e `GET /contas-contabeis` — cujo proprio titulo no OpenAPI
+   * oficial e "Obtem contas financeiras". **Nao existe `/contas-financeiras`**
+   * na API; chamar aquele caminho devolvia 404 e fazia parecer que a conta do
+   * proprietario nao tinha portador nenhum.
+   *
+   * Prefere `tipo: 'caixa'` ("Portador caixa sem integracao"), que toda conta
+   * Bling tem por padrao — e o que permite quitar a despesa sem o usuario
+   * precisar configurar nada dentro do Bling.
+   */
   async obterContaFinanceiraPadraoId(): Promise<BlingCallResult<number>> {
-    const response = await this.fetchWithAuth(`${this.baseUrl}/contas-financeiras`);
+    const response = await this.fetchWithAuth(`${this.baseUrl}/contas-contabeis`);
     if (!response.ok) {
       return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
     }
 
-    const body = (await response.json()) as { data?: Array<{ id?: number; situacao?: number }> };
-    const contas = Array.isArray(body.data) ? body.data : [];
-    const escolhida = contas.find((conta) => typeof conta.id === 'number' && conta.situacao !== 0) ?? contas[0];
+    const body = (await response.json()) as { data?: Array<{ id?: number; tipo?: string }> };
+    const contas = (Array.isArray(body.data) ? body.data : []).filter((conta) => typeof conta.id === 'number');
+    const escolhida = contas.find((conta) => conta.tipo === 'caixa') ?? contas[0];
 
     if (!escolhida?.id) {
       return blingFailure(
         'RESOURCE_NOT_FOUND',
         response.status,
-        'Nenhuma conta financeira cadastrada no Bling. Cadastre uma para poder quitar despesas.',
+        'Nenhuma conta financeira encontrada no Bling para registrar o pagamento.',
       );
     }
 
@@ -1382,9 +1393,11 @@ export class BlingClient {
     return (data.data && Array.isArray(data.data)) ? data.data : [];
   }
 
-  // CONTAS FINANCEIRAS (Bancárias / Caixas) - Bling API v3
+  // CONTAS FINANCEIRAS (Bancárias / Caixas) — Bling API v3.
+  // O caminho e `/contas-contabeis`; `/contas-financeiras` nao existe na API e
+  // devolvia 404 silencioso (o metodo caia no `return []`).
   async getContasFinanceiras(): Promise<unknown[]> {
-    const url = `${this.baseUrl}/contas-financeiras`;
+    const url = `${this.baseUrl}/contas-contabeis`;
     const response = await this.fetchWithAuth(url);
     if (!response.ok) {
       console.warn(`Erro ao buscar contas financeiras (HTTP ${response.status}):`, await response.text());
