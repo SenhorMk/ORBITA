@@ -13,6 +13,37 @@ import {
 
 const orgClientCache = new Map<string, BlingClient>();
 
+/** Entrada comum de criacao e atualizacao de produto no Bling v3. */
+interface ProdutoBlingEntrada {
+  nome: string;
+  codigo?: string;
+  preco: number;
+  tipo: string;
+  situacao: string;
+  formato: string;
+  unidade: string;
+}
+
+/**
+ * Corpo de `POST`/`PUT /produtos`, com os quatro obrigatorios do OpenAPI
+ * oficial (`nome`, `tipo`, `situacao`, `formato`). `codigo` so entra quando
+ * informado — o SKU nunca e inventado — e `estoque` nunca entra: no schema
+ * oficial ele e um objeto cujo saldo e `readOnly`.
+ */
+function corpoProdutoBling(payload: ProdutoBlingEntrada): Record<string, unknown> {
+  const corpo: Record<string, unknown> = {
+    nome: payload.nome,
+    preco: payload.preco,
+    tipo: payload.tipo,
+    situacao: payload.situacao,
+    formato: payload.formato,
+    unidade: payload.unidade,
+  };
+  if (payload.codigo) corpo.codigo = payload.codigo;
+  if (payload.formato === 'S') corpo.variacoes = [];
+  return corpo;
+}
+
 export class BlingClient {
   private baseUrl = process.env.BLING_API_BASE_URL || 'https://api.bling.com.br/Api/v3';
   private oauthUrl = process.env.BLING_OAUTH_URL || 'https://www.bling.com.br/Api/v3/oauth/token';
@@ -385,7 +416,12 @@ export class BlingClient {
       const url = new URL(`${this.baseUrl}/produtos`);
       url.searchParams.append('pagina', pagina.toString());
       url.searchParams.append('limite', limite.toString());
-      if (codigo) url.searchParams.append('codigo', codigo);
+      // `codigos[]` e o filtro documentado por SKU no OpenAPI oficial. Antes o
+      // codigo ia como `codigo`, parametro que NAO existe em `GET /produtos`:
+      // o Bling o ignorava e devolvia o primeiro produto da conta, que o
+      // chamador entao tratava como "ja existe" e sobrescrevia com PUT. Ver
+      // `buscarProdutoPorCodigo`, que confere o resultado antes de confiar.
+      if (codigo) url.searchParams.append('codigos[]', codigo);
       if (dataAlteracaoInicial) {
         url.searchParams.append('dataAlteracaoInicial', dataAlteracaoInicial);
       }
@@ -405,6 +441,24 @@ export class BlingClient {
       console.warn('⚠️ BlingClient: Erro ao buscar produtos do Bling:', errorMsg);
       return [];
     }
+  }
+
+  /**
+   * Busca um produto pelo SKU exato, conferindo o `codigo` do resultado.
+   *
+   * A conferencia existe porque um filtro ignorado pelo provedor devolve uma
+   * lista qualquer, e confiar nela ja causou o pior tipo de bug: cadastrar um
+   * produto novo disparava um PUT sobrescrevendo nome, codigo e preco de um
+   * produto nao relacionado, seguido de um lancamento de saldo absoluto nele.
+   * Um filtro que nao filtra nunca mais pode virar escrita destrutiva.
+   */
+  async buscarProdutoPorCodigo(codigo: string): Promise<BlingProduto | null> {
+    const alvo = codigo.trim();
+    if (!alvo) return null;
+
+    const encontrados = await this.getProdutos(1, 50, alvo);
+    const exato = encontrados.find((produto) => String(produto.codigo ?? '').trim() === alvo);
+    return exato ?? null;
   }
 
   // Obter categorias de produtos do Bling
@@ -905,6 +959,72 @@ export class BlingClient {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       return blingFailure('UNKNOWN_ERROR', 0, message);
+    }
+  }
+
+  // ── Produtos com contrato oficial e falha tipada (Ticket 31) ───────────
+
+  /**
+   * Cria o produto no Bling e devolve o id real.
+   *
+   * Nao inventa SKU: `codigo` e opcional no OpenAPI oficial, e a versao
+   * anterior preenchia `ORB-<timestamp>` quando o usuario nao informava —
+   * gravando no ERP um codigo que ninguem escolheu e que o registro local nao
+   * guardava, o que fazia a busca seguinte falhar e duplicar o produto.
+   */
+  async criarProduto(payload: ProdutoBlingEntrada): Promise<BlingCallResult<{ id: string }>> {
+    const corpo = corpoProdutoBling(payload);
+
+    const response = await this.fetchWithAuth(`${this.baseUrl}/produtos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    });
+
+    if (!response.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+    }
+
+    const body = (await response.json()) as { data?: { id?: number | string } };
+    const id = body?.data?.id;
+    if (id === undefined || id === null || String(id).trim() === '') {
+      return blingFailure('INVALID_RESPONSE', response.status, 'O Bling respondeu sucesso sem informar o ID do produto criado.');
+    }
+
+    return { _tag: 'BlingOk', value: { id: String(id) } };
+  }
+
+  /** Atualiza o produto existente, com falha tipada em vez de string concatenada. */
+  async atualizarProduto(id: string, payload: ProdutoBlingEntrada): Promise<BlingCallResult<void>> {
+    const corpo = corpoProdutoBling(payload);
+
+    const response = await this.fetchWithAuth(`${this.baseUrl}/produtos/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    });
+
+    if (!response.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+    }
+
+    return { _tag: 'BlingOk', value: undefined };
+  }
+
+  /**
+   * Define o saldo absoluto do produto (`operacao: 'B'`, balanco).
+   *
+   * O saldo nao pode ir no payload do produto: em `POST /produtos` o campo
+   * `estoque` e um objeto (`minimo`, `maximo`, `localizacao`) e o saldo e
+   * `readOnly`. So `POST /estoques` move saldo.
+   */
+  async definirSaldoProduto(idProduto: string, quantidade: number): Promise<BlingCallResult<void>> {
+    try {
+      await this.lancamentoEstoque(idProduto, quantidade, 'B');
+      return { _tag: 'BlingOk', value: undefined };
+    } catch (error: unknown) {
+      const mensagem = error instanceof Error ? error.message : String(error);
+      return blingFailure('UNKNOWN_ERROR', 0, mensagem);
     }
   }
 

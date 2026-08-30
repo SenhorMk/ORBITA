@@ -24,6 +24,16 @@ import { ErrorLogModal } from './ErrorLogModal';
 import { Button } from '@/components/ui/button';
 import { validateProdutoForBling, sanitizeProductName } from '@/lib/utils';
 import { supabase } from '@/lib/supabaseClient';
+import {
+  buildProdutoRequest,
+  produtoFormatoSchema,
+  produtoSituacaoSchema,
+  produtoTipoSchema,
+  type ProdutoFormato,
+  type ProdutoRequest,
+  type ProdutoSituacao,
+  type ProdutoTipo,
+} from '@/lib/config/produtoContract';
 
 interface ProductDetailModalProps {
   isOpen: boolean;
@@ -34,7 +44,7 @@ interface ProductDetailModalProps {
   onOpenChatwoot?: (phone?: string, name?: string) => void;
 }
 
-type ProdutoUpdatePayload = Partial<Produto> & { tipo?: string; situacao?: string; formato?: string; unidade?: string };
+type ProdutoUpdatePayload = ProdutoRequest;
 
 /** Resultado do submit de `/api/produtos/update`, já com os campos que a UI precisa para reagir. */
 type SubmitProdutoResult =
@@ -89,9 +99,12 @@ export function ProductDetailModal({
   const [categorias, setCategorias] = useState<Categoria[]>([]);
 
   // Bling mandatory fields
-  const [tipo, setTipo] = useState('P');
-  const [situacao, setSituacao] = useState('A');
-  const [formato, setFormato] = useState('S');
+  // Tipados pelos enums do contrato: os valores aceitos por `POST /produtos`
+  // são `tipo` S|P|N, `situacao` A|I e `formato` S|V|E. Como string livre, um
+  // valor inválido só apareceria como recusa do Bling em produção.
+  const [tipo, setTipo] = useState<ProdutoTipo>('P');
+  const [situacao, setSituacao] = useState<ProdutoSituacao>('A');
+  const [formato, setFormato] = useState<ProdutoFormato>('S');
   const [unidade, setUnidade] = useState('UN');
 
   const [observacao, setObservacao] = useState('');
@@ -179,27 +192,23 @@ export function ProductDetailModal({
     }
   };
 
-  const handleSave = async () => {
-    // Validação completa antes de enviar ao Bling v3
-    const validation = validateProdutoForBling({
-      nome: nome,
-      preco: preco,
-      estoque: estoque,
-      codigo: codigo,
-      tipo: tipo,
-      situacao: situacao,
-      formato: formato,
-      unidade: unidade,
-    });
+  /** Erros de validação local, já no formato do modal de log. */
+  const validarAntesDeEnviar = () => {
+    const validation = validateProdutoForBling({ nome, preco, estoque, codigo, tipo, situacao, formato, unidade });
+    if (validation.valid) return null;
+    return {
+      isOpen: true,
+      title: 'Validação de Dados para o Bling ERP',
+      errorMessage: `${validation.errors.length} erro(s) encontrado(s). Corrija antes de sincronizar.`,
+      details: validation.errors.join('\n'),
+      logs: validation.errors.map((e, i) => `[${new Date().toISOString()}] ❌ Erro ${i + 1}: ${e}`),
+    };
+  };
 
-    if (!validation.valid) {
-      setErrorLogData({
-        isOpen: true,
-        title: 'Validação de Dados para o Bling ERP',
-        errorMessage: `${validation.errors.length} erro(s) encontrado(s). Corrija antes de sincronizar.`,
-        details: validation.errors.join('\n'),
-        logs: validation.errors.map((e, i) => `[${new Date().toISOString()}] ❌ Erro ${i + 1}: ${e}`),
-      });
+  const handleSave = async () => {
+    const erroDeValidacao = validarAntesDeEnviar();
+    if (erroDeValidacao) {
+      setErrorLogData(erroDeValidacao);
       return;
     }
 
@@ -210,19 +219,23 @@ export function ProductDetailModal({
     setSavedSuccess(false);
 
     try {
-      const payload: ProdutoUpdatePayload = {
+      // Montado pelo contrato compartilhado com a rota: uma divergência de
+      // forma falha aqui, antes da requisição, em vez de virar um `as` no
+      // servidor. O SKU só é enviado quando o usuário informou um — nem o
+      // modal nem o adapter inventam código.
+      const payload = buildProdutoRequest({
         id: produto?.id,
-        bling_id: produto?.bling_id,
+        blingId: /^\d+$/.test(String(produto?.bling_id ?? '')) ? String(produto?.bling_id) : undefined,
         nome: nomeSanitizado,
-        codigo: codigo.trim(),
+        codigo: codigo.trim() ? codigo.trim() : undefined,
         preco: parseFloat(preco) || 0,
         estoque: parseInt(estoque, 10) || 0,
         tipo,
         situacao,
         formato,
         unidade,
-        categoria_id: categoriaId || undefined,
-      };
+        categoriaId: categoriaId || undefined,
+      });
 
       const result = await submitProdutoUpdate(payload);
 
@@ -239,8 +252,11 @@ export function ProductDetailModal({
         return;
       }
 
-      if (onSave) {
-        onSave((result.product as Produto | undefined) || payload as Produto);
+      if (onSave && result.product) {
+        // Só o registro devolvido pelo servidor — ele carrega o id real do
+        // Bling. Ecoar o payload local aqui mascarava uma sincronização que
+        // não aconteceu.
+        onSave(result.product as Produto);
       }
 
       setIsSaving(false);
@@ -511,21 +527,21 @@ export function ProductDetailModal({
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-5 rounded-2xl glass-card border border-white/10 bg-white/[0.02]">
                   <div className="space-y-1.5">
                     <label htmlFor="product-detail-tipo" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Tipo *</label>
-                    <select id="product-detail-tipo" value={tipo} onChange={(e) => setTipo(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
+                    <select id="product-detail-tipo" value={tipo} onChange={(e) => setTipo(produtoTipoSchema.parse(e.target.value))} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
                       <option value="P">Produto (P)</option>
                       <option value="S">Serviço (S)</option>
                     </select>
                   </div>
                   <div className="space-y-1.5">
                     <label htmlFor="product-detail-situacao" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Situação *</label>
-                    <select id="product-detail-situacao" value={situacao} onChange={(e) => setSituacao(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
+                    <select id="product-detail-situacao" value={situacao} onChange={(e) => setSituacao(produtoSituacaoSchema.parse(e.target.value))} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
                       <option value="A">Ativo (A)</option>
                       <option value="I">Inativo (I)</option>
                     </select>
                   </div>
                   <div className="space-y-1.5">
                     <label htmlFor="product-detail-formato" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Formato *</label>
-                    <select id="product-detail-formato" value={formato} onChange={(e) => setFormato(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
+                    <select id="product-detail-formato" value={formato} onChange={(e) => setFormato(produtoFormatoSchema.parse(e.target.value))} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
                       <option value="S">Simples (S)</option>
                       <option value="V">Variações (V)</option>
                       <option value="E">Composição (E)</option>
