@@ -216,11 +216,21 @@ describe('erro do provedor', () => {
     }
   });
 
-  it('degrada leitura para lista vazia quando o provedor responde 500', async () => {
+  it('uma leitura que falha nao vira lista vazia', async () => {
+    // Este teste ja afirmou o contrario, e a afirmacao estava errada.
+    // Devolver `[]` numa falha tornava "o provedor recusou" indistinguivel de
+    // "nao ha nada": a sincronizacao concluia com zero itens, o checkpoint
+    // avancava, e a partir dali o Bling era consultado por "alterados desde o
+    // momento da falha" — respondendo zero, corretamente, para sempre.
     fake.programar({ status: 500, body: '{"error":{"type":"SERVER_ERROR"}}' });
 
-    // Listagem falha "para menos": sem dados é melhor que derrubar a tela.
-    expect(await adapter().getProdutos(1, 10)).toEqual([]);
+    await expect(adapter().getProdutos(1, 10)).rejects.toThrow(/produtos.*500/i);
+  });
+
+  it('uma falha de leitura de contatos tambem estoura, em vez de fingir zero', async () => {
+    fake.programar({ status: 403, body: '{"error":{"type":"FORBIDDEN"}}' });
+
+    await expect(adapter().getClientes(1, 10)).rejects.toThrow(/contatos.*403/i);
   });
 
   it('sobrevive a corpo que não é JSON', async () => {

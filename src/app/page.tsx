@@ -805,7 +805,7 @@ export default function Home() {
    * quando na verdade tinha sido aceita. `GET /api/sync/status`, que existe
    * desde o mesmo ticket, não tinha nenhum chamador.
    */
-  const handleSync = async () => {
+  const handleSync = async (completa = false) => {
     if (session?.role !== 'dono') {
       alert('Acesso negado: Somente o dono da loja pode sincronizar dados do ERP.');
       return;
@@ -814,7 +814,7 @@ export default function Home() {
     setSyncFeedback(null);
 
     try {
-      const response = await fetchWithAuth('/api/sync', { method: 'POST' });
+      const response = await fetchWithAuth(completa ? '/api/sync?completa=1' : '/api/sync', { method: 'POST' });
       const corpo = await response.json();
 
       if (!response.ok) {
@@ -1176,13 +1176,28 @@ export default function Home() {
                   </button>
                   <button
                     type="button"
-                    onClick={handleSync}
+                    onClick={() => { void handleSync(false); }}
                     disabled={isSyncing}
                     className="px-3.5 py-2 rounded-xl glass-button-primary text-xs font-bold flex items-center gap-2 cursor-pointer active:scale-95 transition"
-                    title={`Sincronizar pedidos e clientes do Bling ERP · ${syncAgoText}`}
+                    title={`Sincronizar o que mudou no Bling desde a última vez · ${syncAgoText}`}
                   >
                     <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
                     <span className="hidden sm:inline">{isSyncing ? 'Sincronizando...' : 'Sincronizar Bling'}</span>
+                  </button>
+                  {/*
+                    Sincronização completa: relê tudo, ignorando o marcador de
+                    "última alteração". É a saída quando o marcador avançou sem
+                    que os dados tivessem sido realmente importados.
+                  */}
+                  <button
+                    type="button"
+                    onClick={() => { void handleSync(true); }}
+                    disabled={isSyncing}
+                    className="px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 border border-white/15 hover:bg-white/5 flex items-center gap-2 cursor-pointer active:scale-95 transition"
+                    title="Reler todo o catálogo do Bling, ignorando a data da última sincronização"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                    <span className="hidden lg:inline">Completa</span>
                   </button>
                 </div>
               )}
