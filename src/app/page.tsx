@@ -32,6 +32,13 @@ import {
 } from "lucide-react";
 import type { Produto, Cliente, Categoria, ChatwootConversation, ChatwootMessage, ItemPedido } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
+import {
+  descreverProgresso,
+  jobEmAndamento,
+  syncEnqueueResponseSchema,
+  syncStatusResponseSchema,
+  type SyncJobStatusValue,
+} from '@/lib/config/syncContract';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 import { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { Sidebar } from '@/components/Sidebar';
@@ -182,6 +189,46 @@ function OrbitaLogo({ className = "h-6 w-6" }: { className?: string }) {
       </defs>
     </svg>
   );
+}
+
+
+/** Intervalo entre consultas ao estado do job de sincronização. */
+const INTERVALO_POLL_SYNC_MS = 2_000;
+/** Teto de espera: 10 minutos. Um catálogo grande leva minutos, não horas. */
+const MAX_POLLS_SYNC = 300;
+
+/**
+ * Acompanha o job durável até um estado final, atualizando o texto de
+ * progresso com os números que o servidor realmente reporta.
+ */
+async function acompanharSync(
+  jobId: string,
+  fetchWithAuth: (url: string, options?: RequestInit) => Promise<Response>,
+  reportar: (mensagem: string) => void,
+): Promise<SyncJobStatusValue | 'desconhecido'> {
+  for (let tentativa = 0; tentativa < MAX_POLLS_SYNC; tentativa += 1) {
+    await new Promise((resolve) => setTimeout(resolve, INTERVALO_POLL_SYNC_MS));
+
+    const resposta = await fetchWithAuth(`/api/sync/status?job_id=${encodeURIComponent(jobId)}`);
+    const corpo = await resposta.json();
+
+    if (!resposta.ok) {
+      reportar(`Não foi possível acompanhar a sincronização (HTTP ${resposta.status}): ${corpo?.error ?? ''}`);
+      return 'desconhecido';
+    }
+
+    const estado = syncStatusResponseSchema.safeParse(corpo);
+    if (!estado.success) {
+      reportar('O servidor respondeu o estado da sincronização num formato inesperado.');
+      return 'desconhecido';
+    }
+
+    reportar(descreverProgresso(estado.data.job));
+    if (!jobEmAndamento(estado.data.job.status)) return estado.data.job.status;
+  }
+
+  reportar('A sincronização continua rodando no servidor. Recarregue a página em alguns minutos.');
+  return 'desconhecido';
 }
 
 export default function Home() {
@@ -748,6 +795,16 @@ export default function Home() {
     await supabase.auth.signOut();
   };
 
+  /**
+   * Dispara a sincronização e acompanha o job durável até o fim.
+   *
+   * `POST /api/sync` responde `202` com `{ jobId, status }` desde o Ticket 12 —
+   * ele **enfileira**, não conclui. A versão anterior lia `result.stats.pedidos`
+   * dessa resposta; o acesso estourava `TypeError`, o `catch` genérico exibia
+   * "Erro ao comunicar com o servidor", e a sincronização parecia quebrada
+   * quando na verdade tinha sido aceita. `GET /api/sync/status`, que existe
+   * desde o mesmo ticket, não tinha nenhum chamador.
+   */
   const handleSync = async () => {
     if (session?.role !== 'dono') {
       alert('Acesso negado: Somente o dono da loja pode sincronizar dados do ERP.');
@@ -755,21 +812,35 @@ export default function Home() {
     }
     setIsSyncing(true);
     setSyncFeedback(null);
+
     try {
       const response = await fetchWithAuth('/api/sync', { method: 'POST' });
-      const result = await response.json();
-      if (result.success) {
-        setSyncFeedback(`Sincronizado! +${result.stats.pedidos} pedidos, +${result.stats.produtos || 0} produtos, +${result.stats.clientes} clientes.`);
+      const corpo = await response.json();
+
+      if (!response.ok) {
+        setSyncFeedback(`Erro (HTTP ${response.status}): ${corpo?.error ?? 'falha ao iniciar a sincronização'}`);
+        return;
+      }
+
+      const aceito = syncEnqueueResponseSchema.safeParse(corpo);
+      if (!aceito.success) {
+        // Resposta com forma inesperada é problema de contrato, não de rede.
+        setSyncFeedback('O servidor aceitou a sincronização mas respondeu num formato inesperado.');
+        return;
+      }
+
+      setSyncFeedback('Sincronização iniciada...');
+      const final = await acompanharSync(aceito.data.jobId, fetchWithAuth, setSyncFeedback);
+
+      if (final === 'completed') {
         setLastSyncDate(new Date());
         loadDashboardData();
-      } else {
-        setSyncFeedback(`Erro: ${result.error}`);
       }
-    } catch {
-      setSyncFeedback('Erro ao comunicar com o servidor.');
+    } catch (erro: unknown) {
+      setSyncFeedback(`Erro de rede ao falar com o servidor: ${erro instanceof Error ? erro.message : String(erro)}`);
     } finally {
       setIsSyncing(false);
-      setTimeout(() => setSyncFeedback(null), 5000);
+      setTimeout(() => setSyncFeedback(null), 8000);
     }
   };
 
