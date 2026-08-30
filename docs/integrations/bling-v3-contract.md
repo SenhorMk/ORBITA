@@ -214,3 +214,29 @@ usuário do Bling que autoriza precisa ter permissão sobre todos eles. Faltando
 qualquer um dos dois lados, o authorize devolve
 `error=forbidden` com "O usuário não possui autorização para acessar os recursos
 requisitados" — recusa do Bling sobre permissão, não sobre as credenciais.
+
+## Schema de `POST`/`PUT /produtos` (Ticket 31)
+
+Codificado em `src/lib/config/produtoContract.ts` e no builder
+`corpoProdutoBling` de `src/services/bling.ts`.
+
+**Obrigatórios:** `nome`, `tipo`, `situacao`, `formato`.
+
+| Campo | Valores | Observação |
+|---|---|---|
+| `tipo` | `S` Serviço, `P` Produto, `N` Serviço 06 21 22 | |
+| `situacao` | `A` Ativo, `I` Inativo | |
+| `formato` | `S` Simples, `V` Com variações, `E` Com composição | |
+| `codigo` | string | **Opcional.** O ORBITA não envia quando o usuário não informa — nada de SKU inventado |
+| `estoque` | **objeto** (`minimo`, `maximo`, `crossdocking`, `localizacao`) | `saldoVirtualTotal` é `readOnly`: **o saldo não entra no payload do produto**. Use `POST /estoques` |
+
+### Filtro por SKU em `GET /produtos`
+
+O parâmetro documentado é **`codigos[]`** (array). **Não existe `codigo`.**
+
+Enviar `codigo` fazia o Bling ignorar o filtro e devolver a listagem normal.
+O código tratava o primeiro item como "este produto já existe" e disparava um
+`PUT` sobrescrevendo nome, código e preço de um **produto não relacionado**,
+seguido de um lançamento de saldo absoluto nele. Corrigido no Ticket 31, com
+`buscarProdutoPorCodigo` conferindo o `codigo` do resultado antes de confiar —
+um filtro ignorado pelo provedor nunca mais pode virar escrita destrutiva.
