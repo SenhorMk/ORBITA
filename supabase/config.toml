@@ -118,7 +118,8 @@ schema_paths = [
   "../database/51_retencao_anonimizacao_eliminacao.sql",
   "../database/52_auditoria_anti_forjamento_catalogo.sql",
   "../database/53_venda_manual_transacional.sql",
-  "../database/54_produtos_unidade_categoria.sql"
+  "../database/54_produtos_unidade_categoria.sql",
+  "../database/55_upsert_conflito_inferivel.sql"
 ]
 
 [db.seed]
