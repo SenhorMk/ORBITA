@@ -24,13 +24,16 @@ export type {
 } from './handler';
 
 /**
- * Referência local da venda. Não é, e não finge ser, um identificador do
- * Bling: o prefixo `local:` diz isso explicitamente. Substitui o
- * `MANUAL-<Math.random()>` que a versão anterior gravava na coluna `bling_id`
- * como se fosse um ID do ERP.
+ * Referência da venda enviada ao Bling em `numeroLoja` — o número do pedido no
+ * sistema de origem, que é o campo que o Bling reserva para isso.
+ *
+ * Desde a migration 53 ela **não** é mais gravada em `pedidos.bling_id`: sem
+ * sincronização não existe id do Bling, e a coluna aceita NULL. Antes essa
+ * posição era ocupada por `MANUAL-<Math.random()>`, um identificador fictício
+ * se passando por ID do ERP.
  */
 function newLocalReference(): string {
-  return `local:${randomUUID()}`;
+  return `ORBITA-${randomUUID()}`;
 }
 
 function numberOrZero(value: unknown): number {
@@ -103,81 +106,46 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
   };
 }
 
-/** Grava pedido, itens, baixa de estoque e titulo financeiro da venda manual. */
+/**
+ * Grava a venda inteira numa transação única.
+ *
+ * Antes eram quatro chamadas separadas — pedido, itens, baixa de estoque e
+ * título financeiro. Uma falha no meio deixava estoque baixado sem título, ou
+ * pedido sem itens, sem nenhuma compensação. `registrar_venda_manual`
+ * (migration 53) faz tudo de uma vez: ou a venda inteira existe, ou nada
+ * existe. A RPC revalida cliente e produtos contra a organização e recusa
+ * estoque negativo.
+ */
 async function persistVenda(input: PersistManualOrderInput): Promise<{ pedidoId: string }> {
-  const referencia = input.blingPedidoId ?? input.referenciaLocal;
-
-  const { data: pedido, error: pedidoError } = await supabaseServer
-    .from('pedidos')
-    .insert({
-      user_id: input.scope.actorId,
-      organizacao_id: input.scope.organizationId,
-      cliente_id: input.clienteId,
-      bling_id: referencia,
-      numero: referencia,
-      data: `${input.dataStr}T00:00:00.000Z`,
-      total: input.total,
-      desconto: input.desconto,
-      frete: input.frete,
-      status: 'Entregue',
-      origem: 'Loja Física / Manual',
-      forma_pagamento: input.formaPagamento,
-      observacao: input.observacoes,
-    })
-    .select('id')
-    .single();
-
-  if (pedidoError || !pedido) {
-    throw new Error(`não foi possível criar o pedido (${pedidoError?.message ?? 'sem retorno'})`);
-  }
-
-  for (const item of input.itens) {
-    const { error: itemError } = await supabaseServer.from('itens_pedido').insert({
-      user_id: input.scope.actorId,
-      organizacao_id: input.scope.organizationId,
-      pedido_id: pedido.id,
+  const { data, error } = await supabaseServer.rpc('registrar_venda_manual', {
+    p_organizacao_id: input.scope.organizationId,
+    p_actor_id: input.scope.actorId,
+    p_cliente_id: input.clienteId,
+    // Sem sincronização com o Bling não existe id do Bling: a coluna aceita
+    // NULL desde a migration 53, em vez de receber um identificador inventado.
+    p_bling_pedido_id: input.blingPedidoId,
+    p_numero: input.blingPedidoId,
+    p_total: input.total,
+    p_desconto: input.desconto,
+    p_frete: input.frete,
+    p_forma_pagamento: input.formaPagamento,
+    p_observacoes: input.observacoes,
+    p_data: input.dataStr,
+    p_itens: input.itens.map((item) => ({
       produto_id: item.produto.id,
       quantidade: item.quantidade,
       valor_unitario: item.produto.preco,
-    });
-
-    if (itemError) {
-      throw new Error(`não foi possível registrar o item ${item.produto.nome} (${itemError.message})`);
-    }
-
-    // A RPC revalida que o produto pertence à organização informada e
-    // recusa estoque negativo; o escopo aqui é sempre o verificado.
-    const { error: estoqueError } = await supabaseServer.rpc('baixar_estoque_organizacao', {
-      p_organizacao_id: input.scope.organizationId,
-      p_produto_id: item.produto.id,
-      p_qty: item.quantidade,
-    });
-
-    if (estoqueError) {
-      throw new Error(`não foi possível baixar o estoque de ${item.produto.nome} (${estoqueError.message})`);
-    }
-  }
-
-  // `titulos_financeiros.organizacao_id` é NOT NULL desde a migration 45, e
-  // o trigger que preenchia a coluna pela primeira associação do usuário foi
-  // substituído por um que apenas valida. Omitir a coluna, como a versão
-  // anterior fazia, derrubava a venda inteira no último passo.
-  const { error: tituloError } = await supabaseServer.from('titulos_financeiros').insert({
-    user_id: input.scope.actorId,
-    organizacao_id: input.scope.organizationId,
-    tipo: 'receber',
-    situacao: 'pago',
-    valor: input.total,
-    data_vencimento: input.dataStr,
-    data_pagamento: input.dataStr,
-    descricao: `Venda manual ${referencia}`,
+    })),
   });
 
-  if (tituloError) {
-    throw new Error(`não foi possível registrar o título financeiro (${tituloError.message})`);
+  if (error) {
+    throw new Error(error.message);
+  }
+  if (typeof data !== 'string') {
+    throw new Error('a venda foi registrada mas o banco não devolveu o id do pedido');
   }
 
-  return { pedidoId: pedido.id };
+  return { pedidoId: data };
 }
 
 function blingManualOrderAdapter(client: ReturnType<typeof bling.forUser>): ManualOrderBlingPort {
