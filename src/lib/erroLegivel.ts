@@ -34,7 +34,10 @@ export function descreverErro(err: unknown): string {
   if (err === null || err === undefined) return String(err);
 
   if (err instanceof Error) {
-    const codigo = texto((err as unknown as ErroPostgrest).code);
+    // `in` estreita o tipo sem asserção: um Error pode carregar `code`
+    // (o `errno` do Node, por exemplo) e a asserção dupla que estava aqui
+    // desligava a checagem em vez de fazer a pergunta.
+    const codigo = 'code' in err ? texto(err.code) : undefined;
     return codigo ? `[${codigo}] ${err.message}` : err.message;
   }
 
