@@ -22,6 +22,13 @@ export async function POST(request: Request) {
       );
     }
 
+    // `?completa=1` ignora o checkpoint de `dataAlteracaoInicial` e relê tudo.
+    // Necessário porque o checkpoint podia ficar envenenado: uma leitura que
+    // falhava devolvia lista vazia, a etapa "concluía" com zero itens e o
+    // marcador avançava assim mesmo — e daí em diante o Bling respondia zero
+    // corretamente, para sempre.
+    const completa = new URL(request.url).searchParams.get('completa') === '1';
+
     // 1. Registra job ou retorna job ativo existente (idempotente)
     const { jobId, status, isNew } = await syncService.enqueueSync(session);
 
@@ -29,7 +36,7 @@ export async function POST(request: Request) {
     //    Se o job já estava ativo (isNew=false), não dispara um segundo processo.
     if (isNew || status === 'queued') {
       after(async () => {
-        await syncService.processJob(jobId, session);
+        await syncService.processJob(jobId, session, { completa });
       });
     }
 

@@ -39,6 +39,29 @@ function corpoProdutoBling(payload: ProdutoBlingEntrada): Record<string, unknown
   return corpo;
 }
 
+/**
+ * Erro de leitura do Bling.
+ *
+ * Existe porque os metodos de listagem devolviam `[]` em qualquer falha —
+ * 401, 403, 500, timeout — tornando "o provedor recusou" indistinguivel de
+ * "nao ha nada". Numa sincronizacao isso e desastroso: a etapa "conclui" com
+ * zero itens, o checkpoint avanca para agora, e as execucoes seguintes filtram
+ * por `dataAlteracaoInicial` a partir do momento da falha. O erro some e nunca
+ * mais volta sozinho.
+ *
+ * Quem realmente quiser degradar para lista vazia agora precisa dizer isso no
+ * ponto da chamada.
+ */
+export class BlingLeituraError extends Error {
+  readonly status: number;
+
+  constructor(recurso: string, status: number, detalhe: string) {
+    super(`Falha ao ler ${recurso} no Bling (HTTP ${status}): ${detalhe}`);
+    this.name = 'BlingLeituraError';
+    this.status = status;
+  }
+}
+
 export class BlingClient implements BlingPort {
   private baseUrl = process.env.BLING_API_BASE_URL || 'https://api.bling.com.br/Api/v3';
   private oauthUrl = process.env.BLING_OAUTH_URL || 'https://www.bling.com.br/Api/v3/oauth/token';
@@ -329,17 +352,14 @@ export class BlingClient implements BlingPort {
       const response = await this.fetchWithAuth(url.toString());
 
       if (!response.ok) {
-        const errText = await response.text();
-        console.warn(`⚠️ BlingClient: API Bling retornou erro (${response.status}):`, errText);
-        return [];
+        throw new BlingLeituraError('pedidos', response.status, await response.text());
       }
 
       const data = await response.json();
       return (data.data && Array.isArray(data.data)) ? data.data : [];
     } catch (error: unknown) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      console.warn('⚠️ BlingClient: Erro ao buscar pedidos reais do Bling:', errorMsg);
-      return [];
+      if (error instanceof BlingLeituraError) throw error;
+      throw new BlingLeituraError('pedidos', 0, error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -368,17 +388,14 @@ export class BlingClient implements BlingPort {
       const response = await this.fetchWithAuth(url.toString());
 
       if (!response.ok) {
-        const errText = await response.text();
-        console.warn(`⚠️ BlingClient: API Bling contatos retornou erro (${response.status}):`, errText);
-        return [];
+        throw new BlingLeituraError('contatos', response.status, await response.text());
       }
 
       const data = await response.json();
       return (data.data && Array.isArray(data.data)) ? data.data : [];
     } catch (error: unknown) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      console.warn('⚠️ BlingClient: Erro ao buscar contatos do Bling:', errorMsg);
-      return [];
+      if (error instanceof BlingLeituraError) throw error;
+      throw new BlingLeituraError('contatos', 0, error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -424,17 +441,14 @@ export class BlingClient implements BlingPort {
       const response = await this.fetchWithAuth(url.toString());
 
       if (!response.ok) {
-        const errText = await response.text();
-        console.warn(`⚠️ BlingClient: API Bling produtos retornou erro (${response.status}):`, errText);
-        return [];
+        throw new BlingLeituraError('produtos', response.status, await response.text());
       }
 
       const data = await response.json();
       return (data.data && Array.isArray(data.data)) ? data.data : [];
     } catch (error: unknown) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      console.warn('⚠️ BlingClient: Erro ao buscar produtos do Bling:', errorMsg);
-      return [];
+      if (error instanceof BlingLeituraError) throw error;
+      throw new BlingLeituraError('produtos', 0, error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -466,9 +480,7 @@ export class BlingClient implements BlingPort {
       const response = await this.fetchWithAuth(url.toString());
 
       if (!response.ok) {
-        const errText = await response.text();
-        console.warn(`⚠️ BlingClient: API Bling categorias retornou erro (${response.status}):`, errText);
-        return [];
+        throw new BlingLeituraError('categorias de produtos', response.status, await response.text());
       }
 
       const data = await response.json();
@@ -515,11 +527,14 @@ export class BlingClient implements BlingPort {
       idsProdutos.forEach(id => url.searchParams.append('idsProdutos[]', id));
 
       const response = await this.fetchWithAuth(url.toString());
-      if (!response.ok) return [];
+      if (!response.ok) {
+        throw new BlingLeituraError('saldos de estoque', response.status, await response.text());
+      }
       const data = await response.json();
       return (data.data && Array.isArray(data.data)) ? data.data : [];
-    } catch {
-      return [];
+    } catch (error: unknown) {
+      if (error instanceof BlingLeituraError) throw error;
+      throw new BlingLeituraError('saldos de estoque', 0, error instanceof Error ? error.message : String(error));
     }
   }
 

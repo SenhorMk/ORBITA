@@ -26,77 +26,12 @@ import { resolveTenantOrgId } from '../lib/organizationContext';
 // resulting verified scope (scope.organizationId), never the primitive
 // tenant/user id as authority.
 
-async function getLastSyncedAt(orgId: string, entidade: string): Promise<string | null> {
-  const { data } = await supabaseServer
-    .from('sync_state')
-    .select('last_synced_at')
-    .eq('entidade', entidade)
-    .eq('organizacao_id', orgId)
-    .maybeSingle();
-  return data?.last_synced_at ?? null;
-}
-
-async function touchSyncState(orgId: string, userId: string, entidade: string): Promise<void> {
-  const now = new Date().toISOString();
-  await supabaseServer
-    .from('sync_state')
-    .upsert(
-      {
-        organizacao_id: orgId,
-        user_id: userId,
-        entidade,
-        last_synced_at: now,
-        updated_at: now,
-      },
-      { onConflict: 'organizacao_id, entidade' },
-    );
-}
-
-function getBlingDateTime(isoString?: string | null): string | undefined {
-  if (!isoString) return undefined;
-  const d = new Date(isoString);
-  const formatter = new Intl.DateTimeFormat('pt-BR', {
-    timeZone: 'America/Sao_Paulo',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-  const parts = formatter.formatToParts(d);
-  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
-  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
-}
-
-async function syncPaginatedEntities<T>(
-  fetchPage: (page: number) => Promise<T[]>,
-  processItem: (item: T) => Promise<void>,
-  onPageDone: (page: number, count: number) => Promise<void>,
-): Promise<number> {
-  let total = 0;
-  let page = 1;
-  while (true) {
-    const items = await fetchPage(page);
-    if (items.length === 0) break;
-
-    for (const item of items) {
-      try {
-        await processItem(item);
-        total++;
-      } catch (itemErr: unknown) {
-        const msg = itemErr instanceof Error ? itemErr.message : String(itemErr);
-        console.warn(`⚠️ sync item error: ${msg}`);
-      }
-    }
-
-    await onPageDone(page, total);
-    page++;
-    if (items.length < 100) break;
-  }
-  return total;
-}
+import {
+  getBlingDateTime,
+  getLastSyncedAt,
+  syncPaginatedEntities,
+  touchSyncState,
+} from './syncCheckpoint';
 
 export interface EnqueueSyncResult {
   jobId: string;
@@ -133,7 +68,17 @@ export class SyncService {
     return enqueueJob(await this.resolveScope(context));
   }
 
-  async processJob(jobId: string, context: ActorContext): Promise<void> {
+  /**
+   * Processa o job. Com `completa: true`, ignora o checkpoint de
+   * `dataAlteracaoInicial` e relê tudo do Bling.
+   *
+   * A opção existe porque o checkpoint podia ser envenenado: uma leitura que
+   * falhava devolvia `[]`, a etapa "concluía" com zero itens e
+   * `touchSyncState` avançava o marcador mesmo assim. Da vez seguinte o Bling
+   * era consultado por "alterados desde o momento da falha" e respondia zero —
+   * corretamente. Sem uma sincronização completa não havia como sair disso.
+   */
+  async processJob(jobId: string, context: ActorContext, opcoes: { completa?: boolean } = {}): Promise<void> {
     let scope: VerifiedOrganizationScope;
     try {
       scope = await this.resolveScope(context);
@@ -179,13 +124,13 @@ export class SyncService {
           etapa: 'produtos',
           proxima: 'pedidos',
           field: 'produtos_processados',
-          action: () => this._syncProdutos(scope, jobId, tenant, blingClient, progress),
+          action: () => this._syncProdutos(scope, jobId, tenant, blingClient, progress, opcoes.completa === true),
         },
         {
           etapa: 'pedidos',
           proxima: 'concluido',
           field: 'pedidos_processados',
-          action: () => this._syncPedidos(scope, jobId, tenant, blingClient, progress),
+          action: () => this._syncPedidos(scope, jobId, tenant, blingClient, progress, opcoes.completa === true),
         },
       ];
 
@@ -228,6 +173,12 @@ export class SyncService {
     };
   }
 
+  /**
+   * Contatos não usam checkpoint: a etapa relê a lista inteira toda vez, então
+   * `completa` não muda nada aqui. Isso importa para o diagnóstico — esta
+   * etapa voltar zero com contatos existindo no Bling só pode significar
+   * leitura falhando, nunca "nada mudou".
+   */
   private async _syncClientes(
     scope: VerifiedOrganizationScope,
     jobId: string,
@@ -260,9 +211,11 @@ export class SyncService {
       await touchSyncState(scope.organizationId, tenant.id, 'clientes');
       return total;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn('⚠️ Etapa clientes falhou:', msg);
-      return 0;
+      // A etapa NAO devolve 0 numa falha. Devolver zero fazia o job
+      // concluir como sucesso, e — pior — o checkpoint ja tinha avancado,
+      // entao as execucoes seguintes filtravam por `dataAlteracaoInicial`
+      // a partir do momento da falha e nunca mais viam nada.
+      throw new Error(`Etapa clientes falhou: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -272,9 +225,10 @@ export class SyncService {
     tenant: VerifiedTenant,
     blingClient: BlingPort,
     progress: SyncJobProgress,
+    completa = false,
   ): Promise<number> {
     try {
-      const lastSynced = await getLastSyncedAt(scope.organizationId, 'produtos');
+      const lastSynced = completa ? null : await getLastSyncedAt(scope.organizationId, 'produtos');
       const dataAlteracao = getBlingDateTime(lastSynced);
 
       const total = await syncPaginatedEntities(
@@ -334,9 +288,11 @@ export class SyncService {
       await touchSyncState(scope.organizationId, tenant.id, 'produtos');
       return total;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn('⚠️ Etapa produtos falhou:', msg);
-      return 0;
+      // A etapa NAO devolve 0 numa falha. Devolver zero fazia o job
+      // concluir como sucesso, e — pior — o checkpoint ja tinha avancado,
+      // entao as execucoes seguintes filtravam por `dataAlteracaoInicial`
+      // a partir do momento da falha e nunca mais viam nada.
+      throw new Error(`Etapa produtos falhou: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -346,9 +302,10 @@ export class SyncService {
     tenant: VerifiedTenant,
     blingClient: BlingPort,
     progress: SyncJobProgress,
+    completa = false,
   ): Promise<number> {
     try {
-      const lastSynced = await getLastSyncedAt(scope.organizationId, 'pedidos');
+      const lastSynced = completa ? null : await getLastSyncedAt(scope.organizationId, 'pedidos');
       const dataInicial = lastSynced ? new Date(lastSynced).toISOString().split('T')[0] : undefined;
 
       const total = await syncPaginatedEntities(
@@ -405,9 +362,11 @@ export class SyncService {
       await touchSyncState(scope.organizationId, tenant.id, 'pedidos');
       return total;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn('⚠️ Etapa pedidos falhou:', msg);
-      return 0;
+      // A etapa NAO devolve 0 numa falha. Devolver zero fazia o job
+      // concluir como sucesso, e — pior — o checkpoint ja tinha avancado,
+      // entao as execucoes seguintes filtravam por `dataAlteracaoInicial`
+      // a partir do momento da falha e nunca mais viam nada.
+      throw new Error(`Etapa pedidos falhou: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }
