@@ -13,6 +13,7 @@ import {
 import type { Cliente } from '@/types';
 import { GlassModal } from '@/components/ui/glass-modal';
 import { supabase } from '@/lib/supabaseClient';
+import { buildClienteRequest, contatoTipoSchema, indicadorIeSchema } from '@/lib/config/clienteContract';
 import { ErrorLogModal } from './ErrorLogModal';
 import { Button } from '@/components/ui/button';
 
@@ -128,22 +129,25 @@ export function ClienteEditModal({
     setSavedSuccess(false);
 
     try {
-      const payload: Record<string, unknown> = {
+      // Montado pelo contrato compartilhado com a rota. `indicadorIe` é o
+      // nome real do campo no Bling — o antigo `contribuinte` não existe no
+      // schema oficial e era descartado em silêncio pelo provedor.
+      const payload = buildClienteRequest({
         id: cliente?.id,
-        bling_id: cliente?.bling_id,
+        blingId: /^\d+$/.test(String(cliente?.bling_id ?? '')) ? String(cliente?.bling_id) : undefined,
         nome: nome.trim(),
         email: email.trim(),
         telefone: telefone.trim(),
-        cpf_cnpj: cpfCnpj.trim(),
-        tipo,
-        contribuinte: parseInt(contribuinte, 10),
+        cpfCnpj: cpfCnpj.trim(),
+        tipo: contatoTipoSchema.parse(tipo),
+        indicadorIe: indicadorIeSchema.parse(parseInt(contribuinte, 10)),
         cep: cep.trim(),
         endereco: endereco.trim(),
         numero: numero.trim(),
         bairro: bairro.trim(),
         cidade: cidade.trim(),
-        uf: uf.trim().toUpperCase()
-      };
+        uf: uf.trim().toUpperCase(),
+      });
 
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
@@ -171,9 +175,11 @@ export function ClienteEditModal({
         return;
       }
 
-      if (onSave) {
-        // Mock the returned client with the extra fields so the UI can use them if needed
-        onSave({ ...resData.client, ...payload });
+      if (onSave && resData.client) {
+        // Só o registro devolvido pelo servidor: ele carrega o id real do
+        // Bling. Sobrescrever com o payload local mascarava uma sincronização
+        // que podia não ter acontecido.
+        onSave(resData.client);
       }
 
       setIsSaving(false);
