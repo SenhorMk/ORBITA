@@ -99,9 +99,11 @@ export interface Cliente {
   email?: string;
   telefone?: string;
   telefone_normalizado?: string; // soft-link Chatwoot
-  // Campos extras não salvos no Supabase mas usados no CRUD UI -> Bling
+  // Persistidos desde a migration 54. Antes eram "campos extras não salvos no
+  // Supabase": o formulário de edição abria sempre vazio e um PUT sem endereço
+  // podia apagar o que estava no Bling.
   tipo?: string;
-  contribuinte?: number;
+  indicador_ie?: number;
   cep?: string;
   endereco?: string;
   numero?: string;

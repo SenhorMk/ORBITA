@@ -70,6 +70,14 @@ const store: ClienteStorePort = {
       email: cliente.email,
       telefone: cliente.telefone,
       cpf_cnpj: cliente.cpfCnpj,
+      tipo: cliente.tipo,
+      indicador_ie: cliente.indicadorIe,
+      cep: cliente.cep,
+      endereco: cliente.endereco,
+      numero: cliente.numero,
+      bairro: cliente.bairro,
+      cidade: cliente.cidade,
+      uf: cliente.uf,
     });
 
     return { id: salvo.id!, blingId: salvo.bling_id!, nome: salvo.nome };

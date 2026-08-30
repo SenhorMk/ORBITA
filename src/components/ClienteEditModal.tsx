@@ -40,7 +40,7 @@ export function ClienteEditModal({
 
   // Extra fields for Bling
   const [tipo, setTipo] = useState(cliente?.tipo || 'F');
-  const [contribuinte, setContribuinte] = useState(cliente?.contribuinte !== undefined ? String(cliente.contribuinte) : '9');
+  const [contribuinte, setContribuinte] = useState(cliente?.indicador_ie !== undefined ? String(cliente.indicador_ie) : '9');
   const [cep, setCep] = useState(cliente?.cep || '');
   const [endereco, setEndereco] = useState(cliente?.endereco || '');
   const [numero, setNumero] = useState(cliente?.numero || '');
@@ -64,7 +64,7 @@ export function ClienteEditModal({
       setTelefone(cliente.telefone || '');
       setCpfCnpj(cliente.cpf_cnpj || '');
       setTipo(cliente.tipo || 'F');
-      setContribuinte(cliente.contribuinte !== undefined ? String(cliente.contribuinte) : '9');
+      setContribuinte(cliente.indicador_ie !== undefined ? String(cliente.indicador_ie) : '9');
       setCep(cliente.cep || '');
       setEndereco(cliente.endereco || '');
       setNumero(cliente.numero || '');

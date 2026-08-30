@@ -60,23 +60,43 @@ export async function syncPaginatedEntities<T>(
 ): Promise<number> {
   let total = 0;
   let page = 1;
+  let falhas = 0;
+  let primeiraFalha: string | undefined;
   while (true) {
     const items = await fetchPage(page);
     if (items.length === 0) break;
 
+    let falhasNaPagina = 0;
     for (const item of items) {
       try {
         await processItem(item);
         total++;
       } catch (itemErr: unknown) {
-        const msg = itemErr instanceof Error ? itemErr.message : String(itemErr);
-        console.warn(`⚠️ sync item error: ${msg}`);
+        falhasNaPagina += 1;
+        falhas += 1;
+        primeiraFalha ??= itemErr instanceof Error ? itemErr.message : String(itemErr);
       }
+    }
+
+    // Um item que falha e tolerável; a página inteira falhando é um defeito
+    // sistemático — coluna que não existe, constraint violada, permissão
+    // negada. Antes isso virava só `console.warn`, e a etapa concluía com
+    // total zero: a sincronização dizia "Sincronizado! 0 produtos" com o
+    // catálogo cheio no Bling, para sempre.
+    if (falhasNaPagina === items.length) {
+      throw new Error(
+        `nenhum dos ${items.length} registros da página ${page} pôde ser gravado. Primeira falha: ${primeiraFalha}`,
+      );
     }
 
     await onPageDone(page, total);
     page++;
     if (items.length < 100) break;
   }
+
+  if (falhas > 0) {
+    console.warn(`[sync] ${falhas} registro(s) não puderam ser gravados. Primeira falha: ${primeiraFalha}`);
+  }
+
   return total;
 }
