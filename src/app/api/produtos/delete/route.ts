@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { produtoRepository } from '@/repositories/produtoRepository';
 import { bling } from '@/services/bling';
+import type { BlingPort } from '@/services/blingPort';
 import { verifySessionAndRole } from '@/lib/auth';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
 /** Best-effort remote delete: local deletion must proceed even if the Bling side fails. */
 async function attemptBlingProductDelete(
-  blingClient: ReturnType<typeof bling.forVerifiedOrganization>,
+  blingClient: BlingPort,
   blingId: string | undefined,
   logEntries: string[],
 ): Promise<string | null> {

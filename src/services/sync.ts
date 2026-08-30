@@ -1,4 +1,5 @@
 import { bling, extractBlingImageUrl } from './bling';
+import type { BlingPort } from './blingPort';
 import { clienteRepository } from '../repositories/clienteRepository';
 import { produtoRepository } from '../repositories/produtoRepository';
 import { pedidoRepository } from '../repositories/pedidoRepository';
@@ -231,7 +232,7 @@ export class SyncService {
     scope: VerifiedOrganizationScope,
     jobId: string,
     tenant: VerifiedTenant,
-    blingClient: ReturnType<typeof bling.forVerifiedOrganization>,
+    blingClient: BlingPort,
     progress: SyncJobProgress,
   ): Promise<number> {
     try {
@@ -269,7 +270,7 @@ export class SyncService {
     scope: VerifiedOrganizationScope,
     jobId: string,
     tenant: VerifiedTenant,
-    blingClient: ReturnType<typeof bling.forVerifiedOrganization>,
+    blingClient: BlingPort,
     progress: SyncJobProgress,
   ): Promise<number> {
     try {
@@ -343,7 +344,7 @@ export class SyncService {
     scope: VerifiedOrganizationScope,
     jobId: string,
     tenant: VerifiedTenant,
-    blingClient: ReturnType<typeof bling.forVerifiedOrganization>,
+    blingClient: BlingPort,
     progress: SyncJobProgress,
   ): Promise<number> {
     try {

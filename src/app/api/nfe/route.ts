@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
+import type { BlingPort } from '@/services/blingPort';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { verifySessionAndRole } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabaseServer';
@@ -20,14 +21,13 @@ interface NfeApiResponse {
   data?: NfeApiResponse;
 }
 
-type BlingClient = ReturnType<typeof bling.forVerifiedOrganization>;
 
 /** Emite a NF-e no Bling e persiste o resultado local. Assume que o advisory lock do pedido já foi adquirido pelo chamador. */
 async function emitNfeWithLock(
   scope: VerifiedOrganizationScope,
   pedidoId: string,
   blingPedidoId: string,
-  blingClient: BlingClient,
+  blingClient: BlingPort,
 ): Promise<NextResponse> {
   // 2. Verificar no banco se a NF-e já existe na tabela canônica
   const { data: nfeExistente, error: nfeError } = await supabaseServer

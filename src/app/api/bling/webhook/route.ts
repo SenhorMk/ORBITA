@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { produtoRepository } from '../../../../repositories/produtoRepository';
 import { clienteRepository } from '../../../../repositories/clienteRepository';
 import { pedidoRepository } from '../../../../repositories/pedidoRepository';
-import { bling, extractBlingImageUrl, BlingClient } from '../../../../services/bling';
+import { bling, extractBlingImageUrl } from '../../../../services/bling';
+import type { BlingPort } from '../../../../services/blingPort';
 import { Produto, Cliente, Pedido, ItemPedido } from '../../../../types';
 import { supabaseServer } from '../../../../lib/supabaseServer';
 import { mapBlingStatus, normalizeToE164 } from '../../../../lib/utils';
@@ -20,7 +21,7 @@ export async function GET() {
 
 /** Resultado da resolução de tenant/organização a partir da assinatura HMAC do webhook. */
 type WebhookAuthorizationResult =
-  | { readonly _tag: 'Authorized'; readonly organizationScope: VerifiedOrganizationScope; readonly conexaoId: string | null; readonly blingClient: BlingClient }
+  | { readonly _tag: 'Authorized'; readonly organizationScope: VerifiedOrganizationScope; readonly conexaoId: string | null; readonly blingClient: BlingPort }
   | { readonly _tag: 'Denied'; readonly response: NextResponse };
 
 /**
@@ -206,7 +207,7 @@ async function buildPedidoItemsParaSalvar(
 /** Sincroniza um evento de pedido de venda recebido do webhook. */
 async function processPedidoEvent(
   eventData: Record<string, unknown>,
-  blingClient: BlingClient,
+  blingClient: BlingPort,
   organizationScope: VerifiedOrganizationScope,
 ): Promise<string> {
   const pedidoData = (eventData.pedido || eventData) as Record<string, unknown>;
@@ -260,7 +261,7 @@ function resolveSaldoEstoque(fullProduct: Record<string, unknown>, existingLocal
 async function fetchFullProdutoIfIncomplete(
   prodData: Record<string, unknown>,
   blingId: string,
-  blingClient: BlingClient,
+  blingClient: BlingPort,
 ): Promise<Record<string, unknown>> {
   const isComplete = prodData.nome !== undefined && prodData.preco !== undefined && Boolean(extractBlingImageUrl(prodData));
   if (isComplete) return prodData;
@@ -278,7 +279,7 @@ async function fetchFullProdutoIfIncomplete(
 /** Sincroniza um evento de produto/estoque recebido do webhook. Retorna `true` quando um produto foi persistido. */
 async function processProdutoEvent(
   eventData: Record<string, unknown>,
-  blingClient: BlingClient,
+  blingClient: BlingPort,
   organizationScope: VerifiedOrganizationScope,
 ): Promise<{ blingId: string; processed: boolean; ignoredReason?: string }> {
   const prodData = (eventData.produto || eventData) as Record<string, unknown>;
@@ -310,7 +311,7 @@ async function processProdutoEvent(
 /** Processa um único evento do webhook, registrando-o no inbox idempotente antes e depois. */
 async function processWebhookEvent(
   event: unknown,
-  blingClient: BlingClient,
+  blingClient: BlingPort,
   organizationScope: VerifiedOrganizationScope,
   conexaoId: string | null,
 ): Promise<number> {

@@ -5,6 +5,7 @@ import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizati
 import { organizationContextToScope } from '@/lib/verifiedOrganizationScope';
 import { produtoRepository } from '@/repositories/produtoRepository';
 import { bling } from '@/services/bling';
+import type { BlingPort } from '@/services/blingPort';
 
 import {
   createProdutoUpdateHandler,
@@ -56,7 +57,7 @@ const auth: ProdutoAuthPort = {
   },
 };
 
-function blingProdutoAdapter(client: ReturnType<typeof bling.forVerifiedOrganization>): ProdutoBlingPort {
+function blingProdutoAdapter(client: BlingPort): ProdutoBlingPort {
   return {
     async buscarPorCodigo(codigo) {
       try {
