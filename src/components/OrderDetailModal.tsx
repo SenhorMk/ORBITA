@@ -79,8 +79,6 @@ function PedidoDetails({ pedido }: { pedido: BlingPedido }) {
           <div className="space-y-2 text-sm">
             <p><span className="text-slate-500 font-medium">Nome:</span> <span className="text-slate-200 font-medium">{pedido.contato.nome}</span></p>
             {pedido.contato.numeroDocumento && <p><span className="text-slate-500 font-medium">Doc:</span> <span className="text-slate-300">{pedido.contato.numeroDocumento}</span></p>}
-            {pedido.contato.telefone && <p><span className="text-slate-500 font-medium">Telefone:</span> <span className="text-slate-300">{pedido.contato.telefone}</span></p>}
-            {pedido.contato.email && <p><span className="text-slate-500 font-medium">E-mail:</span> <span className="text-slate-300">{pedido.contato.email}</span></p>}
           </div>
         </div>
 
@@ -134,8 +132,8 @@ function PedidoDetails({ pedido }: { pedido: BlingPedido }) {
                   <td className="px-4 py-3 font-mono text-xs text-slate-400">{item.codigo || '-'}</td>
                   <td className="px-4 py-3 text-white font-medium">{item.descricao}</td>
                   <td className="px-4 py-3 text-center text-slate-300">{item.quantidade}</td>
-                  <td className="px-4 py-3 text-right text-slate-300">R$ {Number(item.valorunitario || item.valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                  <td className="px-4 py-3 text-right font-bold text-slate-200">R$ {(Number(item.quantidade) * Number(item.valorunitario || item.valor || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                  <td className="px-4 py-3 text-right text-slate-300">R$ {Number(item.valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                  <td className="px-4 py-3 text-right font-bold text-slate-200">R$ {(Number(item.quantidade) * Number(item.valor || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
                 </tr>
               ))}
             </tbody>

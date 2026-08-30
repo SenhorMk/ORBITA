@@ -1,0 +1,215 @@
+{
+  "descricao": "Schemas do OpenAPI oficial do Bling que os tipos Bling* de src/types/index.ts espelham. Extraidos de https://developer.bling.com.br/build/assets/openapi-BvBfsn8J.json (o hash muda; encontre a URL em build/assets/reference-*.js). Serve de guarda: src/services/bling-schemas.test.ts compara os tipos declarados com estes e falha no commit quando divergem.",
+  "origem": "https://developer.bling.com.br/build/assets/openapi-BvBfsn8J.json",
+  "capturadoEm": "2026-08-30",
+  "schemas": {
+    "VendasDadosBaseDTO": {
+      "obrigatorios": [
+        "contato",
+        "data",
+        "dataPrevista",
+        "dataSaida"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "numero": {
+          "tipo": "integer"
+        },
+        "numeroLoja": {
+          "tipo": "string"
+        },
+        "data": {
+          "tipo": "string",
+          "formato": "date"
+        },
+        "dataSaida": {
+          "tipo": "string",
+          "formato": "date"
+        },
+        "dataPrevista": {
+          "tipo": "string",
+          "formato": "date"
+        },
+        "totalProdutos": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "total": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "contato": {
+          "tipo": "object",
+          "ref": "VendasContatoDTO"
+        },
+        "situacao": {
+          "tipo": "object",
+          "ref": "VendasSituacaoDTO"
+        },
+        "loja": {
+          "tipo": "object",
+          "ref": "VendasLojaDTO"
+        }
+      }
+    },
+    "VendasDadosDTO": {
+      "obrigatorios": [
+        "itens",
+        "parcelas"
+      ],
+      "campos": {
+        "numeroPedidoCompra": {
+          "tipo": "string"
+        },
+        "outrasDespesas": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "observacoes": {
+          "tipo": "string"
+        },
+        "observacoesInternas": {
+          "tipo": "string"
+        },
+        "desconto": {
+          "tipo": "object",
+          "ref": "VendasDescontoDTO"
+        },
+        "categoria": {
+          "tipo": "object",
+          "ref": "VendasCategoriaDTO"
+        },
+        "notaFiscal": {
+          "tipo": "object",
+          "ref": "VendasNotaFiscalDTO"
+        },
+        "tributacao": {
+          "tipo": "object",
+          "ref": "VendasTributacaoDTO"
+        },
+        "itens": {
+          "tipo": "array"
+        },
+        "parcelas": {
+          "tipo": "array"
+        },
+        "transporte": {
+          "tipo": "object",
+          "ref": "VendasTransporteDTO"
+        },
+        "vendedor": {
+          "tipo": "object",
+          "ref": "VendasVendedorDTO"
+        },
+        "intermediador": {
+          "tipo": "object",
+          "ref": "VendasIntermediadorDTO"
+        },
+        "taxas": {
+          "tipo": "object",
+          "ref": "VendasTaxaDTO"
+        }
+      }
+    },
+    "VendasSituacaoDTO": {
+      "obrigatorios": [
+        "id",
+        "valor"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "valor": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "VendasContatoDTO": {
+      "obrigatorios": [
+        "id",
+        "nome"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "nome": {
+          "tipo": "string"
+        },
+        "tipoPessoa": {
+          "tipo": "string"
+        },
+        "numeroDocumento": {
+          "tipo": "string"
+        }
+      }
+    },
+    "VendasItemDTO": {
+      "obrigatorios": [
+        "id",
+        "quantidade",
+        "valor",
+        "valorLista",
+        "descricao"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "codigo": {
+          "tipo": "string"
+        },
+        "unidade": {
+          "tipo": "string"
+        },
+        "quantidade": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "desconto": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "valor": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "aliquotaIPI": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "descricao": {
+          "tipo": "string"
+        },
+        "descricaoDetalhada": {
+          "tipo": "string"
+        },
+        "produto": {
+          "tipo": "object",
+          "ref": "VendasItemProdutoDTO"
+        },
+        "comissao": {
+          "tipo": "object",
+          "ref": "VendasItemComissaoDTO"
+        },
+        "naturezaOperacao": {
+          "tipo": "object",
+          "ref": "VendasItemNaturezaOperacaoDTO"
+        }
+      }
+    },
+    "VendasItemProdutoDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    }
+  }
+}

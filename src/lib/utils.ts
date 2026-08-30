@@ -31,13 +31,54 @@ export function normalizeToE164(phone?: string): string | null {
 }
 
 /**
+ * Situações da venda por código numérico, como o Bling as publica no OpenAPI
+ * oficial (`ContasReceberDadosOrigemDTO.situacao`, "Situações da venda").
+ *
+ * `VendasSituacaoDTO.valor` é `integer`, não texto — e era exatamente esse o
+ * defeito: `mapBlingStatus(bp.situacao.valor)` recebia um número e estourava
+ * com `e.trim is not a function`, derrubando a etapa de pedidos inteira. Pior:
+ * mesmo se o número chegasse como string, nenhum caso do `switch` por nome
+ * casaria e todo pedido viraria 'Novo' em silêncio.
+ *
+ * Três destinos são juízo nosso, não do Bling, porque o vocabulário canônico
+ * do ORBITA é mais grosso que o do Bling: 5 e 6 (parciais) viram
+ * 'Em Processamento', e 8/11 viram 'A Emitir' por serem os estados em que o
+ * passo seguinte é a nota fiscal.
+ */
+const SITUACOES_VENDA_BLING: Readonly<Record<number, string>> = Object.freeze({
+  0: 'Pendente', // Em aberto — mesmo destino que o texto 'em aberto' já tinha
+  1: 'Atendido',
+  2: 'Cancelado',
+  3: 'Em Processamento', // Em andamento
+  5: 'Em Processamento', // Faturado parcialmente
+  6: 'Em Processamento', // Atendido parcialmente
+  7: 'Pendente', // Aguardando pagamento
+  8: 'A Emitir', // Pagamento confirmado
+  10: 'Novo', // Em digitação
+  11: 'A Emitir', // Verificado
+  12: 'Em Processamento', // Checkout parcial
+});
+
+/**
  * Mapeia a situação/status do Bling para os valores canônicos
  * Valores aceitos: 'Novo' | 'Aberto' | 'Em Processamento' | 'Despachado' | 'Enviado' | 'Entregue' | 'Pendente' | 'A Emitir' | 'Atendido' | 'Cancelado'
+ *
+ * Aceita número (pedidos de venda, onde `situacao.valor` é `integer`) e texto
+ * (webhook e financeiro, que enviam o rótulo).
  */
-export function mapBlingStatus(status?: string): string {
-  if (!status) return 'Novo';
+export function mapBlingStatus(status?: string | number | null): string {
+  if (status === null || status === undefined || status === '') return 'Novo';
+
+  if (typeof status === 'number') {
+    return SITUACOES_VENDA_BLING[status] ?? 'Novo';
+  }
 
   const normalized = status.trim().toLowerCase();
+
+  // Um número que chegou como texto é o mesmo código, não um rótulo.
+  if (/^\d+$/u.test(normalized)) {
+    return SITUACOES_VENDA_BLING[Number(normalized)] ?? 'Novo';
+  }
 
   switch (normalized) {
     case 'novo':

@@ -11,34 +11,64 @@ export interface BlingCliente {
   celular?: string;
 }
 
+/**
+ * Item de um pedido de venda — espelho de `VendasItemDTO` do OpenAPI oficial.
+ *
+ * `valorunitario` NÃO existe no schema do Bling; o campo é `valor`. O nome
+ * falso vinha primeiro num `??`, então o fallback salvava o valor e ninguém
+ * percebia que o primeiro nome nunca casava.
+ */
 export interface BlingItemPedido {
   codigo?: string;
   descricao?: string;
+  unidade?: string;
   quantidade: number;
-  valorunitario?: number;
+  /** Valor unitário do item. Nome oficial do campo. */
   valor?: number;
+  desconto?: number;
   produto?: {
-    id: string;
+    /** `integer` no schema oficial. */
+    id: number;
   };
 }
 
+/**
+ * Pedido de venda — espelho de `VendasDadosBaseDTO` (lista) somado a
+ * `VendasDadosDTO` (detalhe) do OpenAPI oficial do Bling.
+ *
+ * Os tipos aqui foram declarados uma vez, de memória, e nunca conferidos
+ * contra o schema: `id`, `numero`, `contato.id` e `situacao.valor` estavam
+ * todos como `string` e são `integer`. O último derrubava a sincronização
+ * inteira em `mapBlingStatus`, com `e.trim is not a function`.
+ *
+ * `itens` é OPCIONAL de propósito: `GET /pedidos/vendas` (lista) não devolve
+ * itens — eles só existem em `VendasDadosDTO`, do detalhe
+ * `GET /pedidos/vendas/{idPedidoVenda}`. Declará-lo obrigatório fazia o
+ * TypeScript garantir um `for...of` sobre `undefined`.
+ *
+ * Guarda: `src/services/bling-schemas.test.ts`.
+ */
 export interface BlingPedido {
-  id: string;
-  numero: string;
+  /** `integer` no schema oficial. */
+  id: number;
+  /** `integer` no schema oficial. */
+  numero: number;
   data: string;
   total: number;
   situacao: {
     id: number;
-    valor: string;
+    /** `integer`: código da situação da venda, não o rótulo. */
+    valor: number;
   };
   contato: {
-    id: string;
+    /** `integer` no schema oficial. */
+    id: number;
     nome: string;
     numeroDocumento?: string;
-    telefone?: string;
-    email?: string;
+    tipoPessoa?: 'F' | 'J' | 'E';
   };
-  itens: BlingItemPedido[];
+  /** Só vem no detalhe do pedido, nunca na listagem. */
+  itens?: BlingItemPedido[];
   transporte?: {
     fretePorConta?: number;
     frete?: number;

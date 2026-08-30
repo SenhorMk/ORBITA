@@ -185,7 +185,7 @@ async function processContatoEvent(
 
 /** Monta os itens locais de um pedido do Bling a partir dos itens remotos, ignorando produtos ainda não sincronizados. */
 async function buildPedidoItemsParaSalvar(
-  itensRemotos: Array<{ produto?: { id?: string | number }; quantidade: number; valorunitario?: number; valor?: number }>,
+  itensRemotos: Array<{ produto?: { id?: string | number }; quantidade: number; valor?: number }>,
   pedidoLocalId: string,
   organizationScope: VerifiedOrganizationScope,
 ): Promise<ItemPedido[]> {
@@ -198,7 +198,7 @@ async function buildPedidoItemsParaSalvar(
       pedido_id: pedidoLocalId,
       produto_id: produtoLocal.id,
       quantidade: item.quantidade,
-      valor_unitario: Number(item.valorunitario ?? item.valor ?? 0),
+      valor_unitario: Number(item.valor ?? 0),
     });
   }
   return itemsParaSalvar;
@@ -217,15 +217,15 @@ async function processPedidoEvent(
   const fullPedido = await blingClient.getPedido(blingId);
   if (!fullPedido || !fullPedido.contato?.id) return blingId;
 
-  const clienteLocal = await clienteRepository.getByBlingId(organizationScope, fullPedido.contato.id);
+  const clienteLocal = await clienteRepository.getByBlingId(organizationScope, String(fullPedido.contato.id));
   if (!clienteLocal?.id) {
     console.warn(`⚠️ Webhook Bling: Pedido ${fullPedido.numero} ignorado pois o cliente não existe localmente.`);
     return blingId;
   }
 
   const pedido: Pedido = {
-    bling_id: fullPedido.id,
-    numero: fullPedido.numero,
+    bling_id: String(fullPedido.id),
+    numero: String(fullPedido.numero),
     data: fullPedido.data,
     total: Number(fullPedido.total),
     status: mapBlingStatus(fullPedido.situacao.valor),
@@ -234,7 +234,7 @@ async function processPedidoEvent(
   const savedPedido = await pedidoRepository.upsert(organizationScope, pedido);
   if (!savedPedido.id) return blingId;
 
-  const itemsParaSalvar = await buildPedidoItemsParaSalvar(fullPedido.itens, savedPedido.id, organizationScope);
+  const itemsParaSalvar = await buildPedidoItemsParaSalvar(fullPedido.itens ?? [], savedPedido.id, organizationScope);
   if (itemsParaSalvar.length > 0) {
     await pedidoRepository.addItems(organizationScope, itemsParaSalvar);
   }

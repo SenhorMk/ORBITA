@@ -310,8 +310,18 @@ export class SyncService {
 
       const total = await syncPaginatedEntities(
         (page) => blingClient.getPedidos(page, 100, dataInicial),
-        async (bp) => {
-          const clienteLocal = await clienteRepository.getByBlingId(scope, bp.contato.id);
+        async (resumo) => {
+          // A LISTA de pedidos não traz itens: no schema oficial, `itens` só
+          // existe em `VendasDadosDTO`, do detalhe. Sem esta segunda chamada,
+          // `itens_pedido` fica vazio para sempre e faturamento por produto,
+          // estoque e NF-e nunca saem de zero.
+          const bp = await blingClient.getPedido(String(resumo.id));
+          if (!bp) {
+            console.warn(`⚠️ sync pedidos: pedido Bling ${resumo.id} sumiu entre a lista e o detalhe.`);
+            return;
+          }
+
+          const clienteLocal = await clienteRepository.getByBlingId(scope, String(bp.contato.id));
           if (!clienteLocal?.id) {
             console.warn(
               `⚠️ sync pedidos: cliente Bling ID ${bp.contato.id} não encontrado, pedido ${bp.numero} ignorado.`,
@@ -321,8 +331,8 @@ export class SyncService {
 
           const statusCanonico = mapBlingStatus(bp.situacao.valor);
           const pedido: Pedido = {
-            bling_id: bp.id,
-            numero: bp.numero,
+            bling_id: String(bp.id),
+            numero: String(bp.numero),
             data: bp.data,
             total: Number(bp.total),
             status: statusCanonico,
@@ -332,18 +342,18 @@ export class SyncService {
           const savedPedido = await pedidoRepository.upsert(scope, pedido);
 
           const itemsParaSalvar: ItemPedido[] = [];
-          for (const item of bp.itens) {
+          for (const item of bp.itens ?? []) {
             if (item.produto?.id) {
               const produtoLocal = await produtoRepository.getByBlingId(
                 scope,
-                item.produto.id,
+                String(item.produto.id),
               );
               if (produtoLocal?.id && savedPedido.id) {
                 itemsParaSalvar.push({
                   pedido_id: savedPedido.id,
                   produto_id: produtoLocal.id,
                   quantidade: item.quantidade,
-                  valor_unitario: Number(item.valorunitario ?? item.valor ?? 0),
+                  valor_unitario: Number(item.valor ?? 0),
                 });
               }
             }
