@@ -81,7 +81,9 @@ describe('GET /api/bling/callback', () => {
     const response = await handler(request);
     expect(response.status).toBe(400);
     const html = await response.text();
-    expect(html).toContain('Transação OAuth ausente ou inválida');
+    // Sem state e sem cookie: a mensagem nomeia as duas metades.
+    expect(html).toContain('não devolveu o parâmetro state');
+    expect(html).toContain('cookie da sessão de conexão também não chegou');
     expect(response.headers.get('set-cookie')).toContain('orbita_oauth_transaction=;');
   });
 
@@ -254,6 +256,40 @@ describe('GET /api/bling/callback', () => {
     expect(html).toContain('escopos');
     // Precisa apontar a acao concreta, senao repete o beco sem saida anterior.
     expect(html).toContain('proprietário da conta');
+  });
+
+
+  it('distingue "o Bling nao devolveu state" de "o cookie nao chegou"', async () => {
+    // Juntar as duas metades numa mensagem so apagava o diagnostico: sao
+    // causas completamente diferentes, com acoes diferentes.
+    const store = inMemoryOAuthTransactionStore();
+    const transaction = await createValidTransaction(store);
+    const handler = createBlingCallbackHandler(baseDeps({ oauthTransactionStore: store }));
+
+    // Cookie presente, state ausente -> problema na URL de retorno cadastrada.
+    const semState = await handler(new Request('https://orbita.test/api/bling/callback?code=abc', {
+      headers: { cookie: `orbita_oauth_transaction=${transaction.cookieValue}` },
+    }));
+    const htmlSemState = await semState.text();
+    expect(htmlSemState).toContain('não devolveu o parâmetro state');
+    expect(htmlSemState).toContain('/api/bling/callback');
+
+    // State presente, cookie ausente -> problema de sessao/aba/tempo.
+    const semCookie = await handler(
+      new Request(`https://orbita.test/api/bling/callback?code=abc&state=${transaction.state}`),
+    );
+    const htmlSemCookie = await semCookie.text();
+    expect(htmlSemCookie).toContain('cookie da sessão de conexão não chegou');
+    expect(htmlSemCookie).toContain('mesma aba');
+  });
+
+  it('o state e hexadecimal, formato que a documentacao do Bling exemplifica', async () => {
+    const store = inMemoryOAuthTransactionStore();
+    const transaction = await createValidTransaction(store);
+
+    // Sem `-` nem `_`: um caractere que o provedor possa nao preservar no
+    // redirect e uma variavel a mais entre nos e o token.
+    expect(transaction.state).toMatch(/^[0-9a-f]{32}$/u);
   });
 
 });

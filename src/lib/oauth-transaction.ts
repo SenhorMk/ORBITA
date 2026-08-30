@@ -4,7 +4,15 @@ import { z } from 'zod';
 import type { OAuthProvider, OAuthTransactionStorePort } from './oauthTransactionStore';
 import type { VerifiedOrganizationScope } from './verifiedOrganizationScope';
 
-const OAUTH_TRANSACTION_TTL_MS = 10 * 60 * 1_000;
+/**
+ * Janela para concluir a autorizacao no provedor.
+ *
+ * Eram 10 minutos, que nao cobrem uma primeira autorizacao real: entrar no
+ * Bling, passar por 2FA, escolher a conta e ler a tela de permissoes leva mais
+ * que isso, e o resultado era "transacao ausente" sem explicacao. 30 minutos
+ * continua curto para um token de uso unico e cabe na jornada de verdade.
+ */
+const OAUTH_TRANSACTION_TTL_MS = 30 * 60 * 1_000;
 const cookieValueSchema = z.uuid();
 
 /** Protected data returned to the caller after creating a pending OAuth transaction. */
@@ -52,7 +60,11 @@ export async function createOAuthTransaction(
   store: OAuthTransactionStorePort,
   now: number = Date.now(),
 ): Promise<OAuthTransactionCreationResult> {
-  const state = randomBytes(32).toString('base64url');
+  // Hexadecimal, nao base64url: o `state` atravessa o redirect do provedor, e
+  // a documentacao do Bling o exemplifica como uma sequencia hexadecimal. Um
+  // valor com `-` e `_` depende de o provedor preservar esses caracteres — uma
+  // variavel a menos, sem perder os 128 bits de entropia que o CSRF exige.
+  const state = randomBytes(16).toString('hex');
   const result = await store.create({
     actorId,
     organizacaoId,
