@@ -15,6 +15,8 @@
     "db:drift:check": "node scripts/check-database-drift.mjs",
     "db:catalog:write": "node scripts/database-catalog.mjs --write-reference",
     "db:ledger:write": "node scripts/database-ledger.mjs --write",
+    "db:remoto:status": "node scripts/migracoes-remotas.mjs",
+    "db:remoto:aplicar": "node scripts/migracoes-remotas.mjs --aplicar",
     "boundaries:check": "node scripts/check-module-boundaries.mjs",
     "build:artifact:check": "node scripts/check-build-artifact.mjs .next",
     "deploy:readiness": "node scripts/check-deploy-readiness.mjs",
