@@ -2,13 +2,13 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { bling } from '@/services/bling';
+import type { BlingPort } from '@/services/blingPort';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { mapBlingStatus } from '@/lib/utils';
 import { verifySessionAndRole } from '@/lib/auth';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
-type BlingClient = ReturnType<typeof bling.forVerifiedOrganization>;
 
 /**
  * Corpo de `POST /api/pedidos/status`. Os ids de situação são por conta
@@ -30,7 +30,7 @@ const statusRequestSchema = z.object({
  */
 async function syncEstoqueForPedidoItems(
   scope: VerifiedOrganizationScope,
-  blingClient: BlingClient,
+  blingClient: BlingPort,
   pedidoId: string,
 ): Promise<string | undefined> {
   const { data: itens, error: itensError } = await supabaseServer

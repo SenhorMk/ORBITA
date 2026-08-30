@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
+import type { BlingPort } from '@/services/blingPort';
 import { financeiroRepository } from '@/repositories/financeiroRepository';
 import { verifySessionAndRole } from '@/lib/auth';
 import { organizationContextStatus } from '@/lib/organizationAuthorization';
@@ -64,7 +65,6 @@ export async function GET(request: Request) {
   }
 }
 
-type BlingClient = ReturnType<typeof bling.forVerifiedOrganization>;
 
 const NOME_FORNECEDOR_PADRAO = 'Fornecedor Diverso';
 
@@ -72,7 +72,7 @@ const NOME_FORNECEDOR_PADRAO = 'Fornecedor Diverso';
  * Contato usado quando o lançamento não informa um fornecedor: procura o
  * "Fornecedor Diverso" e o cria se não existir.
  */
-async function resolverContatoPadrao(blingClient: BlingClient): Promise<BlingCallResult<number>> {
+async function resolverContatoPadrao(blingClient: BlingPort): Promise<BlingCallResult<number>> {
   try {
     const existentes = await blingClient.getContatosByNome(NOME_FORNECEDOR_PADRAO);
     const encontrado = Array.isArray(existentes)
@@ -113,7 +113,7 @@ function hojeEmSaoPaulo(): string {
   }).format(new Date());
 }
 
-function blingDespesaAdapter(client: BlingClient): DespesaBlingPort {
+function blingDespesaAdapter(client: BlingPort): DespesaBlingPort {
   return {
     resolverContatoPadrao: () => resolverContatoPadrao(client),
     criarContaPagar: (payload) => client.criarContaPagar(payload),

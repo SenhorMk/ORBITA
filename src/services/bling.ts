@@ -3,6 +3,12 @@ import { supabaseServer } from '../lib/supabaseServer';
 import { credentialsVault } from '../lib/integrations/credentialsVault';
 import { refreshBlingToken } from './blingOAuth';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
+import type {
+  BlingPort,
+  ContaPagarBlingEntrada,
+  ContatoBlingEntrada,
+  ProdutoBlingEntrada,
+} from './blingPort';
 import {
   blingFailure,
   parseBlingFailure,
@@ -12,17 +18,6 @@ import {
 } from '../lib/integrations/bling/pedidoVendaContract';
 
 const orgClientCache = new Map<string, BlingClient>();
-
-/** Entrada comum de criacao e atualizacao de produto no Bling v3. */
-interface ProdutoBlingEntrada {
-  nome: string;
-  codigo?: string;
-  preco: number;
-  tipo: string;
-  situacao: string;
-  formato: string;
-  unidade: string;
-}
 
 /**
  * Corpo de `POST`/`PUT /produtos`, com os quatro obrigatorios do OpenAPI
@@ -44,23 +39,7 @@ function corpoProdutoBling(payload: ProdutoBlingEntrada): Record<string, unknown
   return corpo;
 }
 
-/** Entrada comum de criacao e atualizacao de contato no Bling v3. */
-interface ContatoBlingEntrada {
-  nome: string;
-  email?: string;
-  telefone?: string;
-  numeroDocumento?: string;
-  tipo: string;
-  indicadorIe: number;
-  cep?: string;
-  endereco?: string;
-  numero?: string;
-  bairro?: string;
-  cidade?: string;
-  uf?: string;
-}
-
-export class BlingClient {
+export class BlingClient implements BlingPort {
   private baseUrl = process.env.BLING_API_BASE_URL || 'https://api.bling.com.br/Api/v3';
   private oauthUrl = process.env.BLING_OAUTH_URL || 'https://www.bling.com.br/Api/v3/oauth/token';
 
@@ -545,7 +524,7 @@ export class BlingClient {
   }
 
   // Lançamento de estoque (Operação 'B' define saldo físico absoluto)
-  async lancamentoEstoque(idProduto: string, quantidade: number, operacao: string = 'B'): Promise<unknown> {
+  private async lancamentoEstoque(idProduto: string, quantidade: number, operacao: string = 'B'): Promise<unknown> {
     const depositosRes = await this.fetchWithAuth(`${this.baseUrl}/depositos`);
     if (!depositosRes.ok) {
       const errText = await depositosRes.text();
@@ -601,160 +580,6 @@ export class BlingClient {
 
   async createNfe(pedidoId: string): Promise<unknown> {
     return this.emitirNfe(pedidoId);
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // PRODUTOS — Bling API v3
-  // Documentação: https://developer.bling.com.br/referencia#/Produtos
-  //
-  // POST /Api/v3/produtos — Campos obrigatórios:
-  //   nome (string) — Nome do produto
-  //   tipo (string) — "P" = Produto | "S" = Serviço
-  //   situacao (string) — "A" = Ativo | "I" = Inativo
-  //   unidade (string) — "UN", "PÇ", "KG", etc.
-  //   preco (number) — Preço de venda
-  //
-  // Campos opcionais importantes:
-  //   codigo (string) — SKU interno
-  //   formato (string) — "S" = Simples | "V" = Com variações | "E" = Com composição
-  //
-  // PUT /Api/v3/produtos/{idProduto} — Mesma estrutura (atualização parcial via PATCH também disponível)
-  // ═══════════════════════════════════════════════════════════════════════
-
-  // Atualizar dados de um produto no Bling ERP v3
-  async updateProduto(id: string, payload: { nome?: string; codigo?: string; preco?: number; estoque?: number; tipo?: string; situacao?: string; formato?: string; unidade?: string }): Promise<unknown> {
-    const url = `${this.baseUrl}/produtos/${id}`;
-    const bodyPayload: Record<string, unknown> = {};
-    if (payload.nome !== undefined) bodyPayload.nome = payload.nome;
-    if (payload.codigo !== undefined) bodyPayload.codigo = payload.codigo;
-    if (payload.preco !== undefined) bodyPayload.preco = payload.preco;
-
-    // Campos obrigatórios no PUT do Bling v3
-    bodyPayload.tipo = payload.tipo || 'P';
-    bodyPayload.situacao = payload.situacao || 'A';
-    bodyPayload.formato = payload.formato || 'S';
-    if (payload.unidade) bodyPayload.unidade = payload.unidade;
-    if (bodyPayload.formato === 'S') bodyPayload.variacoes = [];
-
-    const response = await this.fetchWithAuth(url, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(bodyPayload),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Erro na API Bling (HTTP ${response.status}): ${errText}`);
-    }
-
-    return await response.json();
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // CONTATOS — Bling API v3
-  // Documentação: https://developer.bling.com.br/referencia#/Contatos
-  //
-  // POST /Api/v3/contatos — Campos obrigatórios:
-  //   nome (string) — Nome do contato
-  //   tipo (string) — "F" = Pessoa Física | "J" = Pessoa Jurídica | "E" = Estrangeiro
-  //   contribuinte (integer) — 1 = Contribuinte ICMS | 2 = Isento | 9 = Não contribuinte
-  //
-  // Campos opcionais importantes:
-  //   email (string) — E-mail do contato
-  //   fone (string) — Telefone do contato (NÃO é "telefone")
-  //   numeroDocumento (string) — CPF ou CNPJ (sem pontuação)
-  //
-  // PUT /Api/v3/contatos/{idContato} — Mesma estrutura
-  // ═══════════════════════════════════════════════════════════════════════
-
-  // Atualizar dados de um contato/cliente no Bling ERP v3
-  async updateContato(id: string, payload: { nome?: string; email?: string; telefone?: string; cnpj?: string; tipo?: string; contribuinte?: number; cep?: string; endereco?: string; numero?: string; bairro?: string; cidade?: string; uf?: string }): Promise<unknown> {
-    const url = `${this.baseUrl}/contatos/${id}`;
-    const bodyPayload: Record<string, unknown> = {};
-    if (payload.nome !== undefined) bodyPayload.nome = payload.nome;
-    if (payload.email !== undefined) bodyPayload.email = payload.email;
-    if (payload.telefone !== undefined) bodyPayload.fone = payload.telefone;
-
-    // Configura tipo e contribuinte explícitos se fornecidos
-    if (payload.tipo) bodyPayload.tipo = payload.tipo;
-    if (payload.contribuinte !== undefined) bodyPayload.contribuinte = payload.contribuinte;
-
-    if (payload.cnpj !== undefined) {
-      bodyPayload.numeroDocumento = payload.cnpj;
-      // Se a UI não enviou o tipo e contribuinte explícitos, infere pelo CNPJ
-      if (!payload.tipo || payload.contribuinte === undefined) {
-        const cleanDoc = payload.cnpj.replace(/\D/g, '');
-        if (cleanDoc.length === 14) {
-          if (!payload.tipo) bodyPayload.tipo = 'J';
-          if (payload.contribuinte === undefined) bodyPayload.contribuinte = 1;
-        } else {
-          if (!payload.tipo) bodyPayload.tipo = 'F';
-          if (payload.contribuinte === undefined) bodyPayload.contribuinte = 9;
-        }
-      }
-    } else {
-      // Padrão seguro se não houver documento e não foi enviado explicitamente
-      if (payload.contribuinte === undefined) bodyPayload.contribuinte = 9;
-      if (!payload.tipo) bodyPayload.tipo = 'F';
-    }
-
-    // Endereço
-    const enderecoPayload: Record<string, unknown> = {};
-    let hasEndereco = false;
-    if (payload.cep) { enderecoPayload.cep = payload.cep; hasEndereco = true; }
-    if (payload.endereco) { enderecoPayload.endereco = payload.endereco; hasEndereco = true; }
-    if (payload.numero) { enderecoPayload.numero = payload.numero; hasEndereco = true; }
-    if (payload.bairro) { enderecoPayload.bairro = payload.bairro; hasEndereco = true; }
-    if (payload.cidade) { enderecoPayload.municipio = payload.cidade; hasEndereco = true; } // municipio no bling
-    if (payload.uf) { enderecoPayload.uf = payload.uf; hasEndereco = true; }
-
-    if (hasEndereco) {
-      bodyPayload.endereco = {
-        geral: enderecoPayload
-      };
-    }
-
-    const response = await this.fetchWithAuth(url, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(bodyPayload),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Erro na API Bling (HTTP ${response.status}): ${errText}`);
-    }
-
-    return await response.json();
-  }
-
-  // Criar um novo produto no Bling ERP v3
-  async createProduto(payload: { nome: string; codigo?: string; preco?: number; estoque?: number; tipo?: string; situacao?: string; formato?: string; unidade?: string }): Promise<unknown> {
-    const url = `${this.baseUrl}/produtos`;
-    const bodyPayload: Record<string, unknown> = {
-      nome: payload.nome,
-      codigo: payload.codigo || `ORB-${Date.now()}`,
-      preco: payload.preco !== undefined ? payload.preco : 0,
-      tipo: payload.tipo || 'P',          // P = Produto físico
-      situacao: payload.situacao || 'A',       // A = Ativo
-      formato: payload.formato || 'S',        // S = Simples (sem variações)
-      unidade: payload.unidade || 'UN',       // Unidade padrão — OBRIGATÓRIO para NF-e
-    };
-
-    if (bodyPayload.formato === 'S') bodyPayload.variacoes = [];
-
-    const response = await this.fetchWithAuth(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(bodyPayload),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Erro na API Bling ao criar produto (HTTP ${response.status}): ${errText}`);
-    }
-
-    return await response.json();
   }
 
   // Criar um novo contato no Bling ERP v3
@@ -901,18 +726,6 @@ export class BlingClient {
     }
 
     return { success: true };
-  }
-
-  // Buscar contatos por pesquisa (Nome, CPF/CNPJ, etc.) no Bling ERP v3
-  async getContatosByPesquisa(pesquisa: string): Promise<unknown[]> {
-    if (!pesquisa || !pesquisa.trim()) return [];
-    const url = `${this.baseUrl}/contatos?pesquisa=${encodeURIComponent(pesquisa.trim())}`;
-    const response = await this.fetchWithAuth(url);
-    if (!response.ok) {
-      return [];
-    }
-    const json = await response.json();
-    return json.data && Array.isArray(json.data) ? json.data : [];
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -1188,28 +1001,6 @@ export class BlingClient {
     return [];
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // CONTAS A PAGAR E RECEBER — Bling API v3
-  // ═══════════════════════════════════════════════════════════════════════
-
-  async createContaPagar(payload: unknown): Promise<unknown> {
-    const url = `${this.baseUrl}/contas/pagar`;
-    // O payload nao vai para o log: carrega valores e contraparte financeira,
-    // e `AGENTS.md` proibe registrar payload sensivel cru.
-    const response = await this.fetchWithAuth(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Erro na API Bling ao criar Conta a Pagar (HTTP ${response.status}): ${errorText}`);
-    }
-
-    return await response.json();
-  }
-
   // ── Contas a pagar com contrato oficial e falha tipada (Ticket 33) ─────
 
   /**
@@ -1221,15 +1012,7 @@ export class BlingClient {
    * "pago" e gravava `situacao: 'pago'` localmente — a conta ficava aberta no
    * ERP e quitada no ORBITA. Quitar exige `POST /contas/pagar/{id}/baixar`.
    */
-  async criarContaPagar(payload: {
-    contatoId: number;
-    vencimento: string;
-    valor: number;
-    historico: string;
-    dataEmissao: string;
-    competencia: string;
-    categoriaId?: number;
-  }): Promise<BlingCallResult<{ id: string }>> {
+  async criarContaPagar(payload: ContaPagarBlingEntrada): Promise<BlingCallResult<{ id: string }>> {
     const corpo: Record<string, unknown> = {
       contato: { id: payload.contatoId },
       vencimento: payload.vencimento,
@@ -1358,24 +1141,6 @@ export class BlingClient {
     }
   }
 
-  // Obter saldo/resumo financeiro consolidado
-  async getResumoFinanceiro(): Promise<{ saldoAtual: number; totalReceber: number; totalPagar: number }> {
-    try {
-      const [receber, pagar] = await Promise.all([
-        this.getContasReceber(1, 100),
-        this.getContasPagar(1, 100)
-      ]);
-
-      const totalReceber = (receber as Array<{ valor?: number; situacao?: number }>).reduce((acc, c) => c.situacao !== 2 ? acc + (Number(c.valor) || 0) : acc, 0);
-      const totalPagar = (pagar as Array<{ valor?: number; situacao?: number }>).reduce((acc, c) => c.situacao !== 2 ? acc + (Number(c.valor) || 0) : acc, 0);
-      const saldoAtual = totalReceber - totalPagar;
-
-      return { saldoAtual, totalReceber, totalPagar };
-    } catch {
-      return { saldoAtual: 0, totalReceber: 0, totalPagar: 0 };
-    }
-  }
-
   // ═══════════════════════════════════════════════════════════════════════
   // CATEGORIAS DE PRODUTOS
   // ═══════════════════════════════════════════════════════════════════════
@@ -1388,20 +1153,6 @@ export class BlingClient {
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`Erro na API Bling ao buscar categorias (HTTP ${response.status}): ${errorText}`);
-    }
-    const data = await response.json();
-    return (data.data && Array.isArray(data.data)) ? data.data : [];
-  }
-
-  // CONTAS FINANCEIRAS (Bancárias / Caixas) — Bling API v3.
-  // O caminho e `/contas-contabeis`; `/contas-financeiras` nao existe na API e
-  // devolvia 404 silencioso (o metodo caia no `return []`).
-  async getContasFinanceiras(): Promise<unknown[]> {
-    const url = `${this.baseUrl}/contas-contabeis`;
-    const response = await this.fetchWithAuth(url);
-    if (!response.ok) {
-      console.warn(`Erro ao buscar contas financeiras (HTTP ${response.status}):`, await response.text());
-      return [];
     }
     const data = await response.json();
     return (data.data && Array.isArray(data.data)) ? data.data : [];
@@ -1448,9 +1199,17 @@ export function extractProductImageUrl(data: unknown): string | undefined {
   return url;
 }
 
+/**
+ * Composition root do Bling: devolve a porta, nao a classe.
+ *
+ * O tipo de retorno e `BlingPort` de proposito — assim nenhum consumidor pode
+ * alcancar um metodo que a porta nao declara, e trocar a implementacao nao
+ * exige tocar em chamador nenhum.
+ */
 export const bling = {
-  forVerifiedOrganization: (scope: VerifiedOrganizationScope, conexaoId?: string) =>
+  forVerifiedOrganization: (scope: VerifiedOrganizationScope, conexaoId?: string): BlingPort =>
     BlingClient.forVerifiedOrganization(scope, conexaoId),
-  forOrganization: (organizacaoId: string, conexaoId?: string) => BlingClient.forOrganization(organizacaoId, conexaoId),
+  forOrganization: (organizacaoId: string, conexaoId?: string): BlingPort =>
+    BlingClient.forOrganization(organizacaoId, conexaoId),
 };
 export const extractBlingImageUrl = extractProductImageUrl;

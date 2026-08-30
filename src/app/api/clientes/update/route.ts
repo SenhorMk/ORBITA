@@ -5,6 +5,7 @@ import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizati
 import { organizationContextToScope } from '@/lib/verifiedOrganizationScope';
 import { clienteRepository } from '@/repositories/clienteRepository';
 import { bling } from '@/services/bling';
+import type { BlingPort } from '@/services/blingPort';
 
 import {
   createClienteUpdateHandler,
@@ -53,7 +54,7 @@ const auth: ClienteAuthPort = {
   },
 };
 
-function blingClienteAdapter(client: ReturnType<typeof bling.forVerifiedOrganization>): ClienteBlingPort {
+function blingClienteAdapter(client: BlingPort): ClienteBlingPort {
   return {
     criar: (payload) => client.criarContato(payload),
     atualizar: (id, payload) => client.atualizarContato(id, payload),

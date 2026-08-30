@@ -5,6 +5,7 @@ import { verifySessionAndRole } from '@/lib/auth';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { bling } from '@/services/bling';
+import type { BlingPort } from '@/services/blingPort';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 import {
@@ -148,7 +149,7 @@ async function persistVenda(input: PersistManualOrderInput): Promise<{ pedidoId:
   return { pedidoId: data };
 }
 
-function blingManualOrderAdapter(client: ReturnType<typeof bling.forVerifiedOrganization>): ManualOrderBlingPort {
+function blingManualOrderAdapter(client: BlingPort): ManualOrderBlingPort {
   return {
     getDefaultFormaPagamentoId: () => client.obterFormaPagamentoPadraoId(),
     createContato: (input) => client.criarContatoParaVenda(input),
