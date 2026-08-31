@@ -3,6 +3,7 @@ import { clienteRepository } from '@/repositories/clienteRepository';
 import { bling } from '@/services/bling';
 import { verifySessionAndRole } from '@/lib/auth';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { descreverErro } from '@/lib/erroLegivel';
 
 export async function POST(request: Request) {
   const logEntries: string[] = [];
@@ -38,7 +39,7 @@ export async function POST(request: Request) {
         await blingClient.deleteContato(bling_id);
         logEntries.push(`[${new Date().toISOString()}] ✅ Contato deletado no Bling com sucesso.`);
       } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
+        const errMsg = descreverErro(err);
         logEntries.push(`[${new Date().toISOString()}] ⚠️ Erro ao deletar no Bling: ${errMsg}. Continuando para excluir no cache local.`);
       }
     }
@@ -49,7 +50,7 @@ export async function POST(request: Request) {
       await clienteRepository.delete(scope, id);
       logEntries.push(`[${new Date().toISOString()}] ✅ Cliente removido do Supabase com sucesso.`);
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
+      const errMsg = descreverErro(err);
       logEntries.push(`[${new Date().toISOString()}] ❌ Erro ao deletar no Supabase: ${errMsg}`);
       return NextResponse.json(
         { success: false, error: 'Falha ao deletar do banco de dados local.', details: errMsg, logs: logEntries },
@@ -59,7 +60,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, logs: logEntries });
   } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : String(err);
+    const errMsg = descreverErro(err);
     logEntries.push(`[${new Date().toISOString()}] 💥 Erro crítico ao processar exclusão: ${errMsg}`);
     return NextResponse.json(
       { success: false, error: 'Erro interno.', details: errMsg, logs: logEntries },

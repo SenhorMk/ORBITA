@@ -6,6 +6,7 @@ import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationConte
 import { supabaseServer } from '@/lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { TituloFinanceiro } from '@/types';
+import { descreverErro } from '@/lib/erroLegivel';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,7 +40,7 @@ interface SyncStats {
  * payload/valor do item, apenas a classificação e um identificador (bling_id).
  */
 function isTemporaryError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = descreverErro(err);
   return /timeout|network|ECONNRESET|ETIMEDOUT|fetch failed|503|502|504|429/i.test(message);
 }
 

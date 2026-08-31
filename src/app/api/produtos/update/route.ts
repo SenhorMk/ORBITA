@@ -6,6 +6,7 @@ import { organizationContextToScope } from '@/lib/verifiedOrganizationScope';
 import { produtoRepository } from '@/repositories/produtoRepository';
 import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
+import { descreverErro } from '@/lib/erroLegivel';
 
 import {
   createProdutoUpdateHandler,
@@ -75,7 +76,7 @@ function blingProdutoAdapter(client: BlingPort): ProdutoBlingPort {
             _tag: 'BlingProviderFailure',
             type: 'UNKNOWN_ERROR',
             status: 0,
-            message: error instanceof Error ? error.message : String(error),
+            message: descreverErro(error),
             duplicateSale: false,
           },
         };

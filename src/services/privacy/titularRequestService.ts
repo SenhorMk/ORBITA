@@ -14,6 +14,7 @@ import {
   type VersionedTitularRequestState,
 } from '@/domain/privacy/titularRequestStateMachine';
 import type { AdapterOutcome, DireitoTipo, TarefaSistema, TitularSystemAdapter, TitularTaskContext } from './adapters/types';
+import { descreverErro } from '@/lib/erroLegivel';
 
 export interface OperatorScope {
   readonly organizationId: string;
@@ -135,7 +136,7 @@ export async function executeTitularRequest(
       // Nunca um catch vazio: exceção inesperada de um adapter vira `failed`
       // com o erro registrado, nunca interrompe o processamento dos demais
       // sistemas (não esconder sistema faltante).
-      outcome = { status: 'failed', erro: err instanceof Error ? err.message : String(err) };
+      outcome = { status: 'failed', erro: descreverErro(err) };
     }
     await deps.repository.recordTaskOutcome(params.request.id, adapter.sistema, outcome);
     summary.push({ sistema: adapter.sistema, outcome });

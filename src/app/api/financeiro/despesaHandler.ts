@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { despesaRequestSchema, type DespesaRequest } from '@/lib/config/despesaContract';
 import type { BlingCallResult } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { descreverErro } from '@/lib/erroLegivel';
 
 export interface ContaPagarPayload {
   readonly contatoId: number;
@@ -220,7 +221,7 @@ export function createDespesaHandler(deps: DespesaDependencies) {
         { status: 200 },
       );
     } catch (error: unknown) {
-      const causa = error instanceof Error ? error.message : String(error);
+      const causa = descreverErro(error);
       return fail(
         `Despesa lançada no Bling (id ${sincronizacao.blingId}), mas falhou ao gravar no ORBITA: ${causa}. Sincronize o financeiro para reconciliar.`,
         500,

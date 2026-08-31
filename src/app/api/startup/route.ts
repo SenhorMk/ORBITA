@@ -4,6 +4,7 @@ import { syncService, SyncAuthorizationStoreUnavailableError, SyncScopeDeniedErr
 import { verifySessionAndRole } from '@/lib/auth';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { checkEncryptionConfiguration } from '@/lib/crypto';
+import { descreverErro } from '@/lib/erroLegivel';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,7 +38,7 @@ export async function POST(request: Request) {
     try {
       isBlingAlive = await blingClient.ping();
     } catch (err: unknown) {
-      const errMessage = err instanceof Error ? err.message : String(err);
+      const errMessage = descreverErro(err);
       if (errMessage === 'BLING_INVALID_GRANT') {
         return NextResponse.json({
           success: false,
@@ -72,7 +73,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Serviço de autorização indisponível' }, { status: 503 });
     }
     console.error('Erro interno no startup sync.');
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = descreverErro(error);
     if (errorMsg.includes('em execução')) {
       return NextResponse.json({
         success: true,

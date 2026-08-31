@@ -1,6 +1,7 @@
 import { supabaseServer } from '../lib/supabaseServer';
 import type { Cliente } from '../types';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
+import { descreverErro } from '../lib/erroLegivel';
 
 export class IntegrationService {
   /**
@@ -70,7 +71,7 @@ export class IntegrationService {
       return { success: true, novosClientes };
     } catch (error: unknown) {
       console.error('❌ Erro na integração SAC-ERP:', error);
-      const errMsg = error instanceof Error ? error.message : String(error);
+      const errMsg = descreverErro(error);
       return { success: false, error: errMsg };
     }
   }

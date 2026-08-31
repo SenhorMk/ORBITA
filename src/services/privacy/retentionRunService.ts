@@ -14,6 +14,7 @@
  */
 
 import { evaluateRetentionEligibility, type RetentionPolicyStatus } from '@/domain/privacy/retentionPolicy';
+import { descreverErro } from '@/lib/erroLegivel';
 import type {
   RetentionAction,
   RetentionEffectAdapter,
@@ -167,7 +168,7 @@ export async function runRetention(
       // Nunca um catch vazio: exceção inesperada do adapter vira `failed`
       // com o erro registrado, sem interromper os demais candidatos do
       // lote (falha de um item nunca esconde os demais).
-      outcome = { status: 'failed' as const, erro: err instanceof Error ? err.message : String(err) };
+      outcome = { status: 'failed' as const, erro: descreverErro(err) };
     }
 
     if (outcome.status === 'done') {

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { produtoRequestSchema, type ProdutoRequest } from '@/lib/config/produtoContract';
 import type { BlingCallResult } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { descreverErro } from '@/lib/erroLegivel';
 
 /** Produto como o Bling o descreve, reduzido ao que esta fatia precisa. */
 export interface BlingProdutoResumo {
@@ -191,7 +192,7 @@ export function createProdutoUpdateHandler(deps: ProdutoDependencies) {
         { status: 200 },
       );
     } catch (error: unknown) {
-      const causa = error instanceof Error ? error.message : String(error);
+      const causa = descreverErro(error);
       // O produto já existe no Bling neste ponto; dizer isso é o que permite
       // reconciliar em vez de reenviar e duplicar.
       return fail(

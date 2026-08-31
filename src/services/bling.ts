@@ -3,6 +3,7 @@ import { supabaseServer } from '../lib/supabaseServer';
 import { credentialsVault } from '../lib/integrations/credentialsVault';
 import { refreshBlingToken } from './blingOAuth';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
+import { descreverErro } from '../lib/erroLegivel';
 import type {
   BlingPort,
   ContaPagarBlingEntrada,
@@ -307,7 +308,7 @@ export class BlingClient implements BlingPort {
           retries++;
           continue;
         } catch (err: unknown) {
-          const errMessage = err instanceof Error ? err.message : String(err);
+          const errMessage = descreverErro(err);
           console.error('❌ BlingClient: Falha na renovação automática do token Bling OAuth v3:', errMessage);
           if (errMessage === 'BLING_INVALID_GRANT') {
             throw new Error('BLING_INVALID_GRANT');
@@ -330,7 +331,7 @@ export class BlingClient implements BlingPort {
       const response = await this.fetchWithAuth(`${this.baseUrl}/produtos?limite=1`);
       return response.ok;
     } catch (err: unknown) {
-      const errMessage = err instanceof Error ? err.message : String(err);
+      const errMessage = descreverErro(err);
       if (errMessage === 'BLING_INVALID_GRANT') {
         throw err;
       }
@@ -359,7 +360,7 @@ export class BlingClient implements BlingPort {
       return (data.data && Array.isArray(data.data)) ? data.data : [];
     } catch (error: unknown) {
       if (error instanceof BlingLeituraError) throw error;
-      throw new BlingLeituraError('pedidos', 0, error instanceof Error ? error.message : String(error));
+      throw new BlingLeituraError('pedidos', 0, descreverErro(error));
     }
   }
 
@@ -384,7 +385,7 @@ export class BlingClient implements BlingPort {
       return resData.data || null;
     } catch (error: unknown) {
       if (error instanceof BlingLeituraError) throw error;
-      throw new BlingLeituraError('pedido', 0, error instanceof Error ? error.message : String(error));
+      throw new BlingLeituraError('pedido', 0, descreverErro(error));
     }
   }
 
@@ -408,7 +409,7 @@ export class BlingClient implements BlingPort {
       return (data.data && Array.isArray(data.data)) ? data.data : [];
     } catch (error: unknown) {
       if (error instanceof BlingLeituraError) throw error;
-      throw new BlingLeituraError('contatos', 0, error instanceof Error ? error.message : String(error));
+      throw new BlingLeituraError('contatos', 0, descreverErro(error));
     }
   }
 
@@ -429,7 +430,7 @@ export class BlingClient implements BlingPort {
       console.log(`[getContatosByNome] Busca por "${nome}": ${lista.length} resultado(s)`);
       return lista;
     } catch (error: unknown) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = descreverErro(error);
       console.warn('[getContatosByNome] Exceção:', errorMsg);
       return [];
     }
@@ -461,7 +462,7 @@ export class BlingClient implements BlingPort {
       return (data.data && Array.isArray(data.data)) ? data.data : [];
     } catch (error: unknown) {
       if (error instanceof BlingLeituraError) throw error;
-      throw new BlingLeituraError('produtos', 0, error instanceof Error ? error.message : String(error));
+      throw new BlingLeituraError('produtos', 0, descreverErro(error));
     }
   }
 
@@ -499,7 +500,7 @@ export class BlingClient implements BlingPort {
       const data = await response.json();
       return (data.data && Array.isArray(data.data)) ? data.data : [];
     } catch (error: unknown) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = descreverErro(error);
       console.warn('⚠️ BlingClient: Erro ao buscar categorias do Bling:', errorMsg);
       return [];
     }
@@ -547,7 +548,7 @@ export class BlingClient implements BlingPort {
       return (data.data && Array.isArray(data.data)) ? data.data : [];
     } catch (error: unknown) {
       if (error instanceof BlingLeituraError) throw error;
-      throw new BlingLeituraError('saldos de estoque', 0, error instanceof Error ? error.message : String(error));
+      throw new BlingLeituraError('saldos de estoque', 0, descreverErro(error));
     }
   }
 
@@ -848,7 +849,7 @@ export class BlingClient implements BlingPort {
       return blingFailure(
         'RESOURCE_NOT_FOUND',
         0,
-        `Não foi possível ler as situações de venda para cancelar: ${erro instanceof Error ? erro.message : String(erro)}`,
+        `Não foi possível ler as situações de venda para cancelar: ${descreverErro(erro)}`,
       );
     }
 
@@ -940,7 +941,7 @@ export class BlingClient implements BlingPort {
 
       return { _tag: 'BlingOk', value: { id } };
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = descreverErro(error);
       return blingFailure('UNKNOWN_ERROR', 0, message);
     }
   }
@@ -1006,7 +1007,7 @@ export class BlingClient implements BlingPort {
       await this.lancamentoEstoque(idProduto, quantidade, 'B');
       return { _tag: 'BlingOk', value: undefined };
     } catch (error: unknown) {
-      const mensagem = error instanceof Error ? error.message : String(error);
+      const mensagem = descreverErro(error);
       return blingFailure('UNKNOWN_ERROR', 0, mensagem);
     }
   }

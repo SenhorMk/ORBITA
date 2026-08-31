@@ -14,6 +14,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { RetentionAction, RetentionEffectAdapter, RetentionEffectContext, RetentionItemOutcome } from './retentionTypes';
+import { descreverErro } from '../../../lib/erroLegivel';
 
 export interface RetentionDatabasePort {
   entityExists(tabelaAlvo: string, organizationId: string, entidadeId: string): Promise<boolean>;
@@ -86,7 +87,7 @@ export class RetentionDbAdapter implements RetentionEffectAdapter {
     } catch (err) {
       // Nunca um catch vazio: exceção inesperada vira `failed` com o erro
       // registrado, nunca é engolida silenciosamente.
-      return { status: 'failed', erro: err instanceof Error ? err.message : String(err) };
+      return { status: 'failed', erro: descreverErro(err) };
     }
   }
 }

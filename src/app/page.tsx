@@ -79,6 +79,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { format, subDays, isAfter, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
+import { descreverErro } from '@/lib/erroLegivel';
 
 // Tipo de Usuário Logado
 interface UserSession {
@@ -819,7 +820,7 @@ export default function Home() {
         loadDashboardData();
       }
     } catch (erro: unknown) {
-      setSyncFeedback(`Erro de rede ao falar com o servidor: ${erro instanceof Error ? erro.message : String(erro)}`);
+      setSyncFeedback(`Erro de rede ao falar com o servidor: ${descreverErro(erro)}`);
     } finally {
       setIsSyncing(false);
       setTimeout(() => setSyncFeedback(null), 8000);

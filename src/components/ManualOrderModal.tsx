@@ -7,6 +7,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { buildManualOrderRequest, type ManualOrderRequest } from '@/lib/config/manualOrderContract';
 import { Search, Plus, Trash2, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
+import { descreverErro } from '@/lib/erroLegivel';
 
 interface ManualOrderModalProps {
   open: boolean;
@@ -486,7 +487,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
       setFrete('');
       setObservacoes('');
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(descreverErro(err));
     } finally {
       setLoading(false);
     }

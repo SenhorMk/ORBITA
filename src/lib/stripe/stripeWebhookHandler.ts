@@ -5,6 +5,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
+import { descreverErro } from '../erroLegivel';
 
 /**
  * Fronteira do webhook: o payload cru do Stripe nunca é autoridade sem parsing.
@@ -192,7 +193,7 @@ export async function processStripeWebhookEvent(
 
     return { status: 'processed', eventId, eventType };
   } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
+    const errorMsg = descreverErro(err);
     console.error(`[Stripe Webhook] Erro ao processar evento ${eventId}:`, errorMsg);
 
     await supabase
