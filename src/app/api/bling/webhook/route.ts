@@ -2,14 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { produtoRepository } from '../../../../repositories/produtoRepository';
 import { clienteRepository } from '../../../../repositories/clienteRepository';
 import { pedidoRepository } from '../../../../repositories/pedidoRepository';
-import { bling, extractBlingImageUrl } from '../../../../services/bling';
+import { extractBlingImageUrl } from '../../../../services/bling';
 import type { BlingPort } from '../../../../services/blingPort';
 import { Produto, Cliente, Pedido, ItemPedido } from '../../../../types';
 import { supabaseServer } from '../../../../lib/supabaseServer';
+import { descreverErro } from '../../../../lib/erroLegivel';
 import { mapBlingStatus, normalizeToE164 } from '../../../../lib/utils';
-import { createSupabaseBlingWebhookTenantStore, resolveSignedBlingConnection } from './tenants';
+import { authorizeWebhookTenant } from './autorizacao';
 import { blingInboxService, generateBlingIdempotencyKey } from '../../../../services/blingInboxService';
-import { verifyOrganizationScope, type VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
+import type { VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 
 export async function GET() {
   return NextResponse.json({
@@ -17,98 +18,6 @@ export async function GET() {
     message: 'Webhook do Bling ERP ativo e pronto para receber notificações de produtos, estoque e pedidos.',
     timestamp: new Date().toISOString(),
   });
-}
-
-/** Resultado da resolução de tenant/organização a partir da assinatura HMAC do webhook. */
-type WebhookAuthorizationResult =
-  | { readonly _tag: 'Authorized'; readonly organizationScope: VerifiedOrganizationScope; readonly conexaoId: string | null; readonly blingClient: BlingPort }
-  | { readonly _tag: 'Denied'; readonly response: NextResponse };
-
-/**
- * Valida a assinatura HMAC do evento contra o secret de cada conexão Bling
- * guardado no cofre e resolve a organização dona da conexão que assinou.
- *
- * A organização vem da própria linha de `conexoes_integracao` — não há mais
- * resolução por `user_id` legado (`metadata->>'migrado_de_user_id'`), por
- * varredura de `membros_organizacao`, nem ramo de ambiguidade: uma conexão
- * pertence a exatamente uma organização, por construção. Ver `tenants.ts`
- * para por que a leitura tinha de sair de `integracoes_bling`.
- *
- * O evento não tem ator humano. O escopo é verificado contra o **dono** da
- * organização, que é uma linha de membership real, e não um ator inventado.
- * Um `VerifiedOrganizationScope` sem ator exigiria tornar `actorId` opcional
- * em todos os repositórios; ficou registrado como dívida no ticket 11 em vez
- * de ser feito de passagem aqui.
- */
-async function authorizeWebhookTenant(
-  rawBody: string,
-  signatureHeader: string | null,
-): Promise<WebhookAuthorizationResult> {
-  if (!signatureHeader) {
-    console.warn('⚠️ Webhook Bling: Assinatura ausente. Payload ignorado.');
-    return { _tag: 'Denied', response: NextResponse.json({ success: false, error: 'Assinatura ausente' }, { status: 403 }) };
-  }
-
-  const store = createSupabaseBlingWebhookTenantStore(supabaseServer);
-  const connectionResult = await resolveSignedBlingConnection(store, rawBody, signatureHeader);
-
-  if (connectionResult._tag === 'ConnectionStoreUnavailable') {
-    // 503, e não 403: o Bling reentrega por até 3 dias diante de erro
-    // transitório, mas desiste de uma recusa. Responder "assinatura inválida"
-    // quando o problema é o banco perderia o evento para sempre.
-    console.error('❌ Webhook Bling: conexões indisponíveis:', connectionResult.cause);
-    return {
-      _tag: 'Denied',
-      response: NextResponse.json({ success: false, error: 'Serviço de conexões indisponível' }, { status: 503 }),
-    };
-  }
-
-  if (connectionResult._tag !== 'ConnectionResolved') {
-    console.warn('⚠️ Webhook Bling: Assinatura inválida (nenhuma conexão correspondente). Payload ignorado.');
-    return { _tag: 'Denied', response: NextResponse.json({ success: false, error: 'Assinatura inválida' }, { status: 403 }) };
-  }
-
-  const { id: conexaoId, organizacaoId } = connectionResult.connection;
-
-  const { data: owner, error: ownerError } = await supabaseServer
-    .from('membros_organizacao')
-    .select('user_id')
-    .eq('organizacao_id', organizacaoId)
-    .eq('papel', 'owner')
-    .limit(1)
-    .maybeSingle();
-
-  if (ownerError) {
-    console.error('❌ Webhook Bling: falha ao resolver o dono da organização:', ownerError.message);
-    return {
-      _tag: 'Denied',
-      response: NextResponse.json({ success: false, error: 'Serviço de autorização indisponível' }, { status: 503 }),
-    };
-  }
-
-  const actorId = typeof owner?.user_id === 'string' ? owner.user_id : null;
-  if (!actorId) {
-    console.warn(`⚠️ Webhook Bling: organização ${organizacaoId} não tem dono; evento recusado.`);
-    return {
-      _tag: 'Denied',
-      response: NextResponse.json({ success: false, error: 'Organização sem dono para atribuir o evento.' }, { status: 403 }),
-    };
-  }
-
-  const blingClient = bling.forOrganization(organizacaoId, conexaoId);
-  const scopeResult = await verifyOrganizationScope(supabaseServer, { organizationId: organizacaoId, actorId });
-  if (scopeResult._tag !== 'OrganizationScopeVerified') {
-    const unavailable = scopeResult._tag === 'OrganizationScopeStoreUnavailable';
-    return {
-      _tag: 'Denied',
-      response: NextResponse.json(
-        { success: false, error: unavailable ? 'Serviço de autorização indisponível' : 'Escopo organizacional inválido' },
-        { status: unavailable ? 503 : 403 },
-      ),
-    };
-  }
-
-  return { _tag: 'Authorized', organizationScope: scopeResult.scope, conexaoId, blingClient };
 }
 
 /** Interpreta o corpo bruto do webhook (JSON ou form-urlencoded) para a lista de eventos recebidos. */
@@ -317,13 +226,22 @@ async function processProdutoEvent(
   return { blingId, processed: true };
 }
 
+/**
+ * Desfecho de um evento. `Falhou` existe porque o número sozinho mentia: um
+ * evento que estourava devolvia `0`, indistinguível de um evento que não
+ * atualizou produto nenhum, e a rota somava zero e respondia sucesso.
+ */
+type ResultadoEvento =
+  | { readonly _tag: 'Concluido'; readonly produtosAtualizados: number }
+  | { readonly _tag: 'Falhou'; readonly idempotencyKey: string; readonly causa: string };
+
 /** Processa um único evento do webhook, registrando-o no inbox idempotente antes e depois. */
 async function processWebhookEvent(
   event: unknown,
   blingClient: BlingPort,
   organizationScope: VerifiedOrganizationScope,
   conexaoId: string | null,
-): Promise<number> {
+): Promise<ResultadoEvento> {
   const eventRecord = (event && typeof event === 'object') ? (event as Record<string, unknown>) : {};
   const entity = String(eventRecord.event || eventRecord.entity || eventRecord.entidade || eventRecord.topic || eventRecord.type || '').toLowerCase();
   const eventData = (eventRecord.data || eventRecord.retorno || eventRecord) as Record<string, unknown>;
@@ -336,15 +254,21 @@ async function processWebhookEvent(
     payload: event,
   });
 
+  // Só `processed` é curto-circuitado. Um evento `failed` reentregue **é**
+  // reprocessado — é exatamente assim que a recuperação acontece, sem
+  // consumidor de replay nenhum: a nova tentativa do Bling é o replay.
   if (inboxResult.isDuplicate && inboxResult.status === 'processed') {
-    return typeof inboxResult.cachedResponse?.processedProducts === 'number' ? inboxResult.cachedResponse.processedProducts : 0;
+    const cache = typeof inboxResult.cachedResponse?.processedProducts === 'number'
+      ? inboxResult.cachedResponse.processedProducts
+      : 0;
+    return { _tag: 'Concluido', produtosAtualizados: cache };
   }
 
   try {
     if (entity.includes('contact') || entity.includes('contato')) {
       const blingId = await processContatoEvent(eventData, organizationScope);
       await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, { success: true, entity: 'contato', blingId });
-      return 0;
+      return { _tag: 'Concluido', produtosAtualizados: 0 };
     }
 
     if (entity.includes('order') || entity.includes('pedido')) {
@@ -357,19 +281,19 @@ async function processWebhookEvent(
           blingId: exclusao.blingId,
           cancelado: exclusao.cancelled,
         });
-        return 0;
+        return { _tag: 'Concluido', produtosAtualizados: 0 };
       }
 
       const blingId = await processPedidoEvent(eventData, blingClient, organizationScope);
       await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, { success: true, entity: 'pedido', blingId });
-      return 0;
+      return { _tag: 'Concluido', produtosAtualizados: 0 };
     }
 
     if (entity.includes('product') || entity.includes('produto') || entity.includes('stock') || entity.includes('estoque')) {
       const result = await processProdutoEvent(eventData, blingClient, organizationScope);
       if (!result.processed) {
         await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, { success: true, ignored: true, reason: result.ignoredReason });
-        return 0;
+        return { _tag: 'Concluido', produtosAtualizados: 0 };
       }
       await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, {
         success: true,
@@ -377,14 +301,15 @@ async function processWebhookEvent(
         blingId: result.blingId,
         processedProducts: 1,
       });
-      return 1;
+      return { _tag: 'Concluido', produtosAtualizados: 1 };
     }
 
-    return 0;
+    return { _tag: 'Concluido', produtosAtualizados: 0 };
   } catch (err: unknown) {
     await blingInboxService.markFailed(supabaseServer, organizationScope, inboxResult.eventoId, err);
-    console.error(`❌ Erro ao processar evento do webhook Bling (Key: ${idempotencyKey}):`, err);
-    return 0;
+    const causa = descreverErro(err);
+    console.error(`❌ Erro ao processar evento do webhook Bling (Key: ${idempotencyKey}):`, causa);
+    return { _tag: 'Falhou', idempotencyKey, causa };
   }
 }
 
@@ -400,8 +325,30 @@ export async function POST(req: NextRequest) {
     const events = parseWebhookEvents(rawBody, req.headers.get('content-type') || '');
 
     let processedProducts = 0;
+    const falhas: Array<{ idempotencyKey: string; causa: string }> = [];
     for (const event of events) {
-      processedProducts += await processWebhookEvent(event, blingClient, organizationScope, conexaoId);
+      const resultado = await processWebhookEvent(event, blingClient, organizationScope, conexaoId);
+      if (resultado._tag === 'Falhou') falhas.push(resultado);
+      else processedProducts += resultado.produtosAtualizados;
+    }
+
+    if (falhas.length > 0) {
+      // Responder 2xx aqui encerrava o assunto: o evento ficava `failed` no
+      // inbox, o Bling considerava entregue e ninguém reprocessava — não há
+      // consumidor automático de replay. A documentação do Bling prevê nova
+      // tentativa para resposta diferente de 2xx, e é essa nova tentativa que
+      // reprocessa o evento `failed`. Os eventos que deram certo no mesmo lote
+      // voltam como duplicados já processados e não repetem efeito.
+      console.error(`❌ Webhook Bling: ${falhas.length} evento(s) falharam e serão reentregues.`);
+      return NextResponse.json(
+        {
+          success: false,
+          error: `${falhas.length} evento(s) não puderam ser processados; aguardando reentrega.`,
+          eventosComFalha: falhas.map((f) => f.idempotencyKey),
+          processedProducts,
+        },
+        { status: 503 },
+      );
     }
 
     return NextResponse.json({
@@ -410,7 +357,7 @@ export async function POST(req: NextRequest) {
       processedProducts,
     });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Erro ao processar webhook';
+    const message = descreverErro(error);
     console.error('❌ Erro ao processar webhook do Bling:', error);
     return NextResponse.json(
       { success: false, error: message },

@@ -26,9 +26,13 @@ let mockConexoes: Array<{ id: string; organizacao_id: string; provedor: string }
 /** Dono da organização, ou `null` para simular organização sem dono. */
 let mockOwnerId: string | null = OWNER_ID;
 
-const mockRpc = vi.fn().mockImplementation((fnName: string) => {
+/** Estado do inbox por chave de idempotência, para exercitar reentrega. */
+let mockInboxPorChave: Record<string, typeof mockInboxResult> = {};
+
+const mockRpc = vi.fn().mockImplementation((fnName: string, args?: Record<string, unknown>) => {
   if (fnName === 'registrar_evento_inbox_bling') {
-    return Promise.resolve({ data: [mockInboxResult], error: null });
+    const chave = String(args?.p_idempotency_key ?? '');
+    return Promise.resolve({ data: [mockInboxPorChave[chave] ?? mockInboxResult], error: null });
   }
   if (fnName === 'concluir_evento_inbox_bling') {
     return Promise.resolve({ data: null, error: null });
@@ -160,6 +164,7 @@ describe('Bling Webhook Endpoint Security & Idempotent Inbox', () => {
     mockConexoes = [{ id: CONEXAO_ID, organizacao_id: ORG_ID, provedor: 'bling' }];
     mockOwnerId = OWNER_ID;
     mockInboxResult = { evento_id: 'inbox-evt-1', status: 'received', is_duplicate: false, cached_response: null };
+    mockInboxPorChave = {};
     mockMarkCancelled.mockClear();
     mockMarkCancelled.mockResolvedValue(true);
     mockPedidoUpsert.mockClear();
@@ -280,5 +285,146 @@ describe('Bling Webhook Endpoint Security & Idempotent Inbox', () => {
     expect(response.status).toBe(200);
     expect((await response.json()).success).toBe(true);
     expect(mockMarkCancelled).toHaveBeenCalledWith(expect.anything(), '111222');
+  });
+});
+
+/**
+ * Recuperação de evento que falhou (ticket 11b).
+ *
+ * O defeito: um evento cujo efeito colateral estourava era marcado `failed` no
+ * inbox e a rota respondia **200**. Para o Bling o evento estava entregue, não
+ * havia nova tentativa, e não existe consumidor automático de replay — a
+ * recuperação nunca acontecia. Era a diferença entre "o webhook fecha a volta"
+ * e "o webhook fecha a volta quando dá tudo certo".
+ */
+describe('evento que falha é recuperado pela reentrega', () => {
+  const PAYLOAD_EXCLUSAO = JSON.stringify({ event: 'order.deleted', data: { id: 987654 } });
+
+  function statusDoInbox(): string | undefined {
+    const chamada = mockRpc.mock.calls.find(
+      ([nome, args]) => nome === 'concluir_evento_inbox_bling' && (args as Record<string, unknown>)?.p_status === 'failed',
+    );
+    return chamada ? String((chamada[1] as Record<string, unknown>).p_status) : undefined;
+  }
+
+  it('responde 503 quando o efeito colateral falha, em vez de 200', async () => {
+    mockMarkCancelled.mockRejectedValue(new Error('conexão com o banco recusada'));
+
+    const { POST: webhookHandler } = await import('./route');
+    const response = await webhookHandler(requisicaoAssinada(PAYLOAD_EXCLUSAO));
+
+    // Não-2xx é o que faz o Bling reentregar. Um 200 aqui encerraria o assunto
+    // com o pedido cancelado no Bling e ativo no ORBITA, para sempre.
+    expect(response.status).toBe(503);
+    const json = await response.json();
+    expect(json.success).toBe(false);
+    expect(json.eventosComFalha).toEqual(['order.deleted_987654']);
+
+    // E o evento fica `failed` no inbox, não `processed`.
+    expect(statusDoInbox()).toBe('failed');
+  });
+
+  it('a reentrega reprocessa o evento failed e o pedido é cancelado', async () => {
+    // Primeira entrega: falha.
+    mockMarkCancelled.mockRejectedValue(new Error('conexão com o banco recusada'));
+    const { POST: webhookHandler } = await import('./route');
+    const primeira = await webhookHandler(requisicaoAssinada(PAYLOAD_EXCLUSAO));
+    expect(primeira.status).toBe(503);
+
+    // Reentrega: o inbox devolve o evento como duplicado com status `failed`.
+    // Só `processed` é curto-circuitado, então este é reprocessado — é assim
+    // que a recuperação acontece, sem consumidor de replay.
+    mockInboxPorChave = {
+      'order.deleted_987654': {
+        evento_id: 'inbox-evt-1',
+        status: 'failed',
+        is_duplicate: true,
+        cached_response: null,
+      },
+    };
+    mockMarkCancelled.mockResolvedValue(true);
+
+    const segunda = await webhookHandler(requisicaoAssinada(PAYLOAD_EXCLUSAO));
+
+    expect(segunda.status).toBe(200);
+    expect((await segunda.json()).success).toBe(true);
+    expect(mockMarkCancelled).toHaveBeenLastCalledWith(
+      expect.objectContaining({ organizationId: ORG_ID }),
+      '987654',
+    );
+  });
+
+  it('a reentrega não repete o efeito do evento que já tinha dado certo', async () => {
+    const lote = JSON.stringify([
+      { event: 'order.deleted', data: { id: 111 } },
+      { event: 'order.deleted', data: { id: 222 } },
+    ]);
+
+    // Primeira entrega: o 111 passa, o 222 falha.
+    mockMarkCancelled.mockImplementation(async (_escopo: unknown, blingId: string) => {
+      if (blingId === '222') throw new Error('conexão com o banco recusada');
+      return true;
+    });
+
+    const { POST: webhookHandler } = await import('./route');
+    const primeira = await webhookHandler(requisicaoAssinada(lote));
+    expect(primeira.status).toBe(503);
+    expect((await primeira.json()).eventosComFalha).toEqual(['order.deleted_222']);
+
+    // Reentrega do lote inteiro: o 111 volta como duplicado JÁ PROCESSADO e é
+    // curto-circuitado; só o 222 roda de novo. Sem isso, cada reentrega
+    // cancelaria de novo tudo o que já tinha dado certo.
+    mockInboxPorChave = {
+      'order.deleted_111': {
+        evento_id: 'inbox-evt-111',
+        status: 'processed',
+        is_duplicate: true,
+        cached_response: { success: true, processedProducts: 0 },
+      },
+      'order.deleted_222': {
+        evento_id: 'inbox-evt-222',
+        status: 'failed',
+        is_duplicate: true,
+        cached_response: null,
+      },
+    };
+    mockMarkCancelled.mockClear();
+    mockMarkCancelled.mockResolvedValue(true);
+
+    const segunda = await webhookHandler(requisicaoAssinada(lote));
+
+    expect(segunda.status).toBe(200);
+    expect(mockMarkCancelled).toHaveBeenCalledTimes(1);
+    expect(mockMarkCancelled).toHaveBeenCalledWith(expect.anything(), '222');
+  });
+
+  it('a reentrega age na organização que assinou, nunca em outra', async () => {
+    // Duas organizações conectadas; só uma assina o evento.
+    mockConexoes = [
+      { id: CONEXAO_ID, organizacao_id: ORG_ID, provedor: 'bling' },
+      { id: 'conexao-de-outra-org', organizacao_id: '99999999-9999-4999-8999-999999999999', provedor: 'bling' },
+    ];
+    mockInboxPorChave = {
+      'order.deleted_987654': {
+        evento_id: 'inbox-evt-1',
+        status: 'failed',
+        is_duplicate: true,
+        cached_response: null,
+      },
+    };
+
+    const { POST: webhookHandler } = await import('./route');
+    const response = await webhookHandler(requisicaoAssinada(PAYLOAD_EXCLUSAO));
+
+    expect(response.status).toBe(200);
+    // O escopo vem da conexão que assinou, não do payload nem da ordem da lista.
+    expect(mockMarkCancelled).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: ORG_ID }),
+      '987654',
+    );
+    expect(mockMarkCancelled).not.toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: '99999999-9999-4999-8999-999999999999' }),
+      expect.anything(),
+    );
   });
 });

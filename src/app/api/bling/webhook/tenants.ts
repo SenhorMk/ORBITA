@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { authorizeSignedServiceTenant } from '../../../../lib/auth';
+import { descreverErro } from '../../../../lib/erroLegivel';
 import { blingVaultCredentialsSchema } from '../../../../lib/config/blingCredentialsContract';
 import { credentialsVault } from '../../../../lib/integrations/credentialsVault';
 
@@ -37,6 +38,13 @@ export interface BlingWebhookTenantStore {
 export type BlingWebhookConnectionResult =
   | { readonly _tag: 'ConnectionResolved'; readonly connection: BlingWebhookConnection }
   | { readonly _tag: 'SignatureUnmatched' }
+  /**
+   * Nenhuma conexão casou com a assinatura **e** pelo menos uma não pôde ser
+   * conferida — o cofre não respondeu para ela. Não é a mesma coisa que
+   * assinatura forjada: aqui não sabemos, e dizer "inválida" transformaria uma
+   * falha transitória em recusa definitiva do evento.
+   */
+  | { readonly _tag: 'SignatureUnconfirmable'; readonly cause: string; readonly conexoesAfetadas: readonly string[] }
   | { readonly _tag: 'ConnectionStoreUnavailable'; readonly cause: string };
 
 /** Adapta o Supabase à porta de leitura, buscando o secret sempre pelo cofre. */
@@ -97,18 +105,20 @@ export async function resolveSignedBlingConnection(
   }
 
   const candidates: Array<{ tenantId: string; secret: string; connection: BlingWebhookConnection }> = [];
+  const naoConferidas: Array<{ conexaoId: string; causa: string }> = [];
+
   for (const connection of connections) {
     let secret: string | null;
     try {
       secret = await store.getClientSecret(connection);
     } catch (err: unknown) {
-      // Um cofre que não abre para UMA conexão não pode derrubar as demais,
-      // mas também não pode sumir: sem isto, uma chave de cifra trocada vira
-      // "assinatura inválida" e a investigação começa do lado errado.
-      console.error(
-        `❌ Webhook Bling: falha ao ler o secret da conexão ${connection.id} no cofre:`,
-        err instanceof Error ? err.message : err,
-      );
+      // A falha de UMA conexão não derruba as demais: o laço continua, e uma
+      // organização saudável ainda autentica normalmente. Mas ela também não
+      // some — fica registrada para o caso de nenhuma casar, porque aí a
+      // resposta não pode ser "assinatura inválida".
+      const causa = descreverErro(err);
+      console.error(`❌ Webhook Bling: falha ao ler o secret da conexão ${connection.id} no cofre:`, causa);
+      naoConferidas.push({ conexaoId: connection.id, causa });
       continue;
     }
     if (!secret) continue;
@@ -116,7 +126,15 @@ export async function resolveSignedBlingConnection(
   }
 
   const authorization = authorizeSignedServiceTenant(rawBody, signature, candidates);
+
   if (authorization._tag !== 'ServiceTenantAuthorized') {
+    if (naoConferidas.length > 0) {
+      return {
+        _tag: 'SignatureUnconfirmable',
+        cause: naoConferidas.map((f) => `${f.conexaoId}: ${f.causa}`).join('; '),
+        conexoesAfetadas: naoConferidas.map((f) => f.conexaoId),
+      };
+    }
     return { _tag: 'SignatureUnmatched' };
   }
 

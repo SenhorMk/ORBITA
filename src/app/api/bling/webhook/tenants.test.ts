@@ -172,4 +172,86 @@ describe('resolveSignedBlingConnection', () => {
 
     expect(result).toEqual({ _tag: 'SignatureUnmatched' });
   });
+
+  describe('cofre que não responde não vira "assinatura inválida"', () => {
+    /** Porta cujo cofre falha para as conexões nomeadas e funciona para as outras. */
+    function storeComCofreInstavel(
+      conexoes: readonly { id: string; organizacaoId: string }[],
+      segredos: Record<string, string>,
+      falham: readonly string[],
+    ) {
+      return {
+        listConnections: async () => conexoes,
+        getClientSecret: async (c: { id: string }) => {
+          if (falham.includes(c.id)) throw new Error('timeout ao ler o cofre');
+          return segredos[c.id] ?? null;
+        },
+      };
+    }
+
+    it('responde SignatureUnconfirmable quando a única conexão não pôde ser conferida', async () => {
+      const rawBody = '{"event":"order.deleted","data":{"id":"1"}}';
+
+      const result = await resolveSignedBlingConnection(
+        storeComCofreInstavel([{ id: 'conn-a', organizacaoId: ORG_A }], {}, ['conn-a']),
+        rawBody,
+        assinar(rawBody, 'segredo-da-org-a'),
+      );
+
+      // Dizer "inválida" afirmaria que a assinatura é falsa. Não sabemos: o
+      // cofre não respondeu. A rota traduz isto em 503, não em 403.
+      expect(result).toMatchObject({ _tag: 'SignatureUnconfirmable', conexoesAfetadas: ['conn-a'] });
+    });
+
+    it('uma conexão saudável continua autenticando mesmo com outra em falha', async () => {
+      const rawBody = '{"event":"order.created","data":{"id":"2"}}';
+
+      const result = await resolveSignedBlingConnection(
+        storeComCofreInstavel(
+          [{ id: 'conn-quebrada', organizacaoId: ORG_B }, { id: 'conn-a', organizacaoId: ORG_A }],
+          { 'conn-a': 'segredo-da-org-a' },
+          ['conn-quebrada'],
+        ),
+        rawBody,
+        assinar(rawBody, 'segredo-da-org-a'),
+      );
+
+      // A falha de uma organização não pode derrubar o webhook das outras.
+      expect(result).toEqual({
+        _tag: 'ConnectionResolved',
+        connection: { id: 'conn-a', organizacaoId: ORG_A },
+      });
+    });
+
+    it('assinatura que não casa com a conexão saudável, havendo outra em falha, é inconclusiva', async () => {
+      const rawBody = '{"event":"order.created","data":{"id":"3"}}';
+
+      const result = await resolveSignedBlingConnection(
+        storeComCofreInstavel(
+          [{ id: 'conn-quebrada', organizacaoId: ORG_B }, { id: 'conn-a', organizacaoId: ORG_A }],
+          { 'conn-a': 'segredo-da-org-a' },
+          ['conn-quebrada'],
+        ),
+        rawBody,
+        assinar(rawBody, 'segredo-que-nao-e-da-org-a'),
+      );
+
+      // Pode ser forjada, ou pode ser da conexão que não conseguimos conferir.
+      // Falhar como "inconclusivo" é o único desfecho honesto.
+      expect(result).toMatchObject({ _tag: 'SignatureUnconfirmable' });
+    });
+
+    it('sem nenhuma falha de cofre, assinatura que não casa continua sendo recusa definitiva', async () => {
+      await conectarBling(fake, 'conn-a', ORG_A, 'segredo-da-org-a');
+      const rawBody = '{"event":"order.created"}';
+
+      const result = await resolveSignedBlingConnection(
+        createSupabaseBlingWebhookTenantStore(fake.client),
+        rawBody,
+        assinar(rawBody, 'segredo-forjado'),
+      );
+
+      expect(result).toEqual({ _tag: 'SignatureUnmatched' });
+    });
+  });
 });

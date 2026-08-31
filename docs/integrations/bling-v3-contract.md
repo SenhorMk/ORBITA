@@ -138,6 +138,18 @@ erro tipado `timeout` distinto de `network`.
   motivo adicional para nunca responder um erro transitório antes de
   persistir o evento no inbox (para não perder o evento quando o Bling
   desistir de re-entregar).
+- **Recuperação de evento que falhou (ticket 11b):** se qualquer evento do lote
+  falhar, a rota responde **503** — nunca 2xx. O evento fica `failed` no inbox
+  e a **nova tentativa do Bling é o replay**: `registrar_evento_inbox_bling`
+  devolve o evento como duplicado com status `failed`, e só `processed` é
+  curto-circuitado, então ele é reprocessado. Os eventos do mesmo lote que já
+  tinham dado certo voltam como `processed` e não repetem efeito.
+  `blingInboxService.prepareReplay` continua existindo para replay **manual**;
+  não há (nem é preciso) consumidor automático.
+- **Assinatura que não pôde ser conferida:** quando nenhuma conexão casa **e**
+  o cofre falhou para pelo menos uma delas, a resposta é **503**, não 403 —
+  não sabemos se a assinatura é válida. Uma conexão saudável continua
+  autenticando normalmente mesmo com outra em falha.
 - **Idempotência:** o Bling não garante ordem nem exactly-once — o inbox
   (`inbox_eventos_bling`, `blingInboxService`) registra o evento com uma
   chave de idempotência **antes** de qualquer efeito colateral e cacheia a
