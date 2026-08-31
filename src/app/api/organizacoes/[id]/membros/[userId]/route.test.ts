@@ -95,4 +95,21 @@ describe('DELETE /api/organizacoes/[id]/membros/[userId]', () => {
     const response = await DELETE(request(), params());
     expect(response.status).toBe(503);
   });
+
+  it('não devolve diagnóstico interno quando a RPC recusa (CWE-209)', async () => {
+    sessionOf(OWNER_ID);
+    membershipOf('owner');
+    revokeOrgMemberMock.mockRejectedValue(
+      Object.assign(new Error('Key (user_id)=(30000000-0000-4000-8000-000000000002) is still referenced'), { code: '23503' }),
+    );
+    const { DELETE } = await import('./route');
+
+    const response = await DELETE(request(), params());
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('Não foi possível revogar o membro');
+    expect(JSON.stringify(body)).not.toContain('is still referenced');
+    expect(JSON.stringify(body)).not.toContain('23503');
+  });
 });

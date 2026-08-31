@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { readBearerToken } from '@/lib/bearer-token';
 import { createActorScopedSupabaseClient } from '@/lib/supabaseActorClient';
 import { logger } from '@/lib/observability/logger';
+import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import { revokeOrgMember } from '@/lib/invitationService';
 import { authorizeRequestOrganizationCapability } from '@/lib/requestOrganizationContext';
 
@@ -53,7 +54,11 @@ export async function DELETE(
     );
     return NextResponse.json({ success });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Erro ao revogar membro';
-    return NextResponse.json({ error: message }, { status: 400 });
+    // CWE-209: a RPC recusa com texto do Postgres, que carrega valor de linha.
+    registrarFalhaInterna('organizacoes.membros.revogar', error, {
+      organizacaoId: authorization.scope.organizationId,
+      atorId: authorization.scope.actorId,
+    });
+    return NextResponse.json({ error: 'Não foi possível revogar o membro' }, { status: 400 });
   }
 }

@@ -107,6 +107,18 @@ describe('GET /api/organizacoes/[id]/convites', () => {
     expect(response.status).toBe(200);
     expect(listOrgInvitesMock).toHaveBeenCalledWith(expect.anything(), ORG_ID);
   });
+
+  it('não devolve diagnóstico interno quando a listagem falha', async () => {
+    sessionOf(OWNER_ID);
+    membershipOf('owner');
+    listOrgInvitesMock.mockRejectedValue(new Error('permission denied for relation convites_organizacao'));
+    const { GET } = await import('./route');
+
+    const body = await (await GET(request('GET'), params())).json();
+
+    expect(body.error).toBe('Erro interno');
+    expect(JSON.stringify(body)).not.toContain('permission denied');
+  });
 });
 
 describe('POST /api/organizacoes/[id]/convites', () => {
@@ -143,5 +155,43 @@ describe('POST /api/organizacoes/[id]/convites', () => {
     const { POST } = await import('./route');
     const response = await POST(request('POST'), params());
     expect(response.status).toBe(503);
+  });
+
+  // CWE-209 — a rota deixou de ser inalcançável, então o `catch` que devolvia
+  // `error.message` deixou de ser inerte (revisão do #63).
+  it('não devolve diagnóstico interno quando a criação falha', async () => {
+    sessionOf(OWNER_ID);
+    membershipOf('owner');
+    const falhaDoPostgres = Object.assign(new Error('duplicate key value violates unique constraint "convites_email_key" Key (email)=(alvo@empresa.com) already exists'), { code: '23505' });
+    createOrgInviteMock.mockRejectedValue(falhaDoPostgres);
+    const { POST } = await import('./route');
+
+    const response = await POST(request('POST'), params());
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.error).toBe('Erro interno');
+    expect(JSON.stringify(body)).not.toContain('alvo@empresa.com');
+    expect(JSON.stringify(body)).not.toContain('convites_email_key');
+    expect(JSON.stringify(body)).not.toContain('23505');
+  });
+
+
+  // O erro de domínio classificado continua chegando ao cliente: ele é escrito
+  // pelo aplicativo, é acionável, e não carrega nada do banco.
+  it('preserva a mensagem do erro de entitlement, que é de domínio', async () => {
+    sessionOf(OWNER_ID);
+    membershipOf('owner');
+    const { EntitlementDeniedError } = await import('@/services/authorizeEntitlement');
+    createOrgInviteMock.mockRejectedValue(
+      new EntitlementDeniedError('LIMIT_EXCEEDED', 'convites.criar', 'Limite de membros do plano atingido'),
+    );
+    const { POST } = await import('./route');
+
+    const response = await POST(request('POST'), params());
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error).toBe('Limite de membros do plano atingido');
   });
 });

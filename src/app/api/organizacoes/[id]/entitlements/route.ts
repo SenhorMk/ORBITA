@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { authorizeRequestOrganizationCapability } from '@/lib/requestOrganizationContext';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 import { getOrganizationEntitlements } from '@/services/entitlementsService';
 
 function authorizationFailureResponse(status: 401 | 403 | 503) {
@@ -35,7 +36,10 @@ export async function GET(
     const entitlements = await getOrganizationEntitlements(supabaseServer, authorization.scope.organizationId);
     return NextResponse.json({ entitlements });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Erro ao consultar plano da organização';
-    return NextResponse.json({ error: message }, { status: 500 });
+    registrarFalhaInterna('organizacoes.entitlements.consultar', error, {
+      organizacaoId: authorization.scope.organizationId,
+      atorId: authorization.scope.actorId,
+    });
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }

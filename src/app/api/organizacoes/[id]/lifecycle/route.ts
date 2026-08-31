@@ -8,6 +8,7 @@ import {
   cancelOrganizationDeletion,
 } from '@/services/organizationLifecycleService';
 import { authorizeRequestOrganizationCapability } from '@/lib/requestOrganizationContext';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 
 function authorizationFailureResponse(status: 401 | 403 | 503) {
   const error = status === 503
@@ -73,8 +74,9 @@ export async function GET(
       history: historico || [],
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Erro interno ao consultar ciclo de vida';
-    return NextResponse.json({ error: message }, { status: 500 });
+    // CWE-209: o diagnóstico fica no servidor; o cliente recebe a frase fixa.
+    registrarFalhaInterna('organizacoes.lifecycle.consultar', err);
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }
 
@@ -143,7 +145,7 @@ export async function POST(
 
     return NextResponse.json({ error: 'Acao desconhecida' }, { status: 400 });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Erro ao processar ciclo de vida';
-    return NextResponse.json({ error: message }, { status: 500 });
+    registrarFalhaInterna('organizacoes.lifecycle.executar', err);
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }

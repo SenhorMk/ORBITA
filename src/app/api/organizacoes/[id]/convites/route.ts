@@ -3,6 +3,7 @@ import { readBearerToken } from '@/lib/bearer-token';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { createActorScopedSupabaseClient } from '@/lib/supabaseActorClient';
 import { logger } from '@/lib/observability/logger';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 import {
   createInviteInputSchema,
   createOrgInvite,
@@ -43,8 +44,12 @@ export async function GET(
     const convites = await listOrgInvites(supabaseServer, authorization.scope.organizationId);
     return NextResponse.json({ convites });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Erro ao listar convites';
-    return NextResponse.json({ error: message }, { status: 500 });
+    // CWE-209: o diagnóstico fica no servidor; o cliente recebe a frase fixa.
+    registrarFalhaInterna('organizacoes.convites.listar', error, {
+      organizacaoId: authorization.scope.organizationId,
+      atorId: authorization.scope.actorId,
+    });
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }
 
@@ -99,7 +104,10 @@ export async function POST(
         { status: 403 },
       );
     }
-    const message = error instanceof Error ? error.message : 'Erro ao criar convite';
-    return NextResponse.json({ error: message }, { status: 500 });
+    registrarFalhaInterna('organizacoes.convites.criar', error, {
+      organizacaoId: authorization.scope.organizationId,
+      atorId: authorization.scope.actorId,
+    });
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }

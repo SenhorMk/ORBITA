@@ -117,4 +117,19 @@ describe('GET /api/organizacoes/[id]/entitlements', () => {
     expect(response.status).toBe(503);
     expect(getOrganizationEntitlementsMock).not.toHaveBeenCalled();
   });
+
+  it('não devolve diagnóstico interno quando a consulta falha (CWE-209)', async () => {
+    sessionOf(ACTOR_ID);
+    membershipOf('owner');
+    getOrganizationEntitlementsMock.mockRejectedValue(
+      Object.assign(new Error('function public.entitlements_da_organizacao(uuid) does not exist'), { code: '42883' }),
+    );
+    const { GET } = await import('./route');
+
+    const body = await (await GET(request(), params())).json();
+
+    expect(body.error).toBe('Erro interno');
+    expect(JSON.stringify(body)).not.toContain('does not exist');
+    expect(JSON.stringify(body)).not.toContain('42883');
+  });
 });

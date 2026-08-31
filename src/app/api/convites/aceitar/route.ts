@@ -3,6 +3,7 @@ import { resolveAuthenticatedIdentity } from '@/lib/auth';
 import { readBearerToken } from '@/lib/bearer-token';
 import { createActorScopedSupabaseClient } from '@/lib/supabaseActorClient';
 import { logger } from '@/lib/observability/logger';
+import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import { ACTIVE_ORG_COOKIE_NAME } from '@/lib/organizationContext';
 import {
   acceptInviteInputSchema,
@@ -68,8 +69,13 @@ export function createAcceptInviteHandler(
         organizacaoId,
       });
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Erro ao aceitar convite';
-      return NextResponse.json({ error: message }, { status: 400 });
+      // A RPC recusa por várias razões — convite inexistente, expirado, já
+      // aceito, e-mail de outro destinatário. A mensagem dela é texto do
+      // Postgres, que carrega valor de linha em vários casos, e ainda diria a
+      // quem tenta um token qualquer *por que* aquele token não serve. As duas
+      // coisas são vazamento, então a resposta é uma só (CWE-209, Ticket 20).
+      registrarFalhaInterna('convites.aceitar', error, { atorId: identity.user.id });
+      return NextResponse.json({ error: 'Não foi possível aceitar o convite' }, { status: 400 });
     }
   };
 }

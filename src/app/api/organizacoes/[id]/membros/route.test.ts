@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const ORG_ID = '20000000-0000-4000-8000-000000000001';
 const ACTOR_ID = '30000000-0000-4000-8000-000000000001';
+const OUTRO_ID = '30000000-0000-4000-8000-000000000002';
 
 const getUserMock = vi.fn();
 const maybeSingleMock = vi.fn();
@@ -76,7 +77,7 @@ describe('GET /api/organizacoes/[id]/membros', () => {
     orderMock.mockResolvedValue({
       data: [
         { user_id: ACTOR_ID, papel: 'owner', created_at: '2026-08-01T00:00:00Z' },
-        { user_id: 'invalid-not-a-uuid', papel: 'member', created_at: '2026-08-02T00:00:00Z' },
+        { user_id: OUTRO_ID, papel: 'member', created_at: '2026-08-02T00:00:00Z' },
       ],
       error: null,
     });
@@ -88,19 +89,47 @@ describe('GET /api/organizacoes/[id]/membros', () => {
     expect(response.status).toBe(200);
     expect(fromMock).toHaveBeenCalledWith('membros_organizacao');
     expect(eqMock).toHaveBeenCalledWith('organizacao_id', ORG_ID);
-    // A linha malformada (UUID inválido) é descartada em vez de chegar ao cliente.
-    expect(body.membros).toEqual([{ user_id: ACTOR_ID, papel: 'owner', created_at: '2026-08-01T00:00:00Z' }]);
+    expect(body.membros).toEqual([
+      { user_id: ACTOR_ID, papel: 'owner', created_at: '2026-08-01T00:00:00Z' },
+      { user_id: OUTRO_ID, papel: 'member', created_at: '2026-08-02T00:00:00Z' },
+    ]);
   });
 
-  it('devolve 500 quando a leitura da lista falha', async () => {
+  // Uma linha persistida que o servidor não sabe ler é falha do servidor. Se ela
+  // sumisse da lista com 200, a tela concluiria que o membro não existe.
+  it('falha em vez de omitir um membro cuja linha não passa no contrato', async () => {
     sessionOf(ACTOR_ID);
     membershipOf('owner');
-    orderMock.mockResolvedValue({ data: null, error: { message: 'db down' } });
+    orderMock.mockResolvedValue({
+      data: [
+        { user_id: ACTOR_ID, papel: 'owner', created_at: '2026-08-01T00:00:00Z' },
+        { user_id: 'invalid-not-a-uuid', papel: 'member', created_at: '2026-08-02T00:00:00Z' },
+      ],
+      error: null,
+    });
     const { GET } = await import('./route');
 
     const response = await GET(request(), params());
+    const body = await response.json();
 
     expect(response.status).toBe(500);
+    expect(body.membros).toBeUndefined();
+  });
+
+  it('não devolve diagnóstico interno quando a leitura falha (CWE-209)', async () => {
+    sessionOf(ACTOR_ID);
+    membershipOf('owner');
+    orderMock.mockResolvedValue({
+      data: null,
+      error: { message: 'permission denied for relation membros_organizacao', code: '42501' },
+    });
+    const { GET } = await import('./route');
+
+    const body = await (await GET(request(), params())).json();
+
+    expect(body.error).toBe('Erro interno');
+    expect(JSON.stringify(body)).not.toContain('permission denied');
+    expect(JSON.stringify(body)).not.toContain('42501');
   });
 
   it('devolve 503 quando o depósito de vínculos está indisponível', async () => {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { papelMembroSchema } from '@/lib/organizationContext';
 import { authorizeRequestOrganizationCapability } from '@/lib/requestOrganizationContext';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 
 const membroRowSchema = z.object({
   user_id: z.string().uuid(),
@@ -45,16 +46,30 @@ export async function GET(
     .order('created_at', { ascending: true });
 
   if (error) {
-    return NextResponse.json({ error: 'Erro ao listar membros' }, { status: 500 });
+    registrarFalhaInterna('organizacoes.membros.listar', error, {
+      organizacaoId: authorization.scope.organizationId,
+      atorId: authorization.scope.actorId,
+    });
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 
-  const membros: OrganizationMemberRow[] = [];
-  for (const item of data ?? []) {
-    const parsed = membroRowSchema.safeParse(item);
-    if (parsed.success) {
-      membros.push(parsed.data);
-    }
+  // A lista inteira é parseada, e uma linha inválida derruba a resposta.
+  //
+  // Antes as linhas que falhavam no Zod eram descartadas em silêncio e a rota
+  // respondia 200. Isso era inerte enquanto a rota negava todo mundo com 401;
+  // alcançável, é pior que uma falha: a tela conclui que o membro *não existe*
+  // — some da lista, some da contagem, e a revogação parece já ter acontecido.
+  // Um membro persistido que o servidor não sabe ler é falha do servidor, e é
+  // assim que ela é dita (Ticket 20).
+  const lista = membroRowSchema.array().safeParse(data ?? []);
+  if (!lista.success) {
+    registrarFalhaInterna('organizacoes.membros.listar', lista.error, {
+      organizacaoId: authorization.scope.organizationId,
+      atorId: authorization.scope.actorId,
+    });
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 
+  const membros: OrganizationMemberRow[] = lista.data;
   return NextResponse.json({ membros });
 }

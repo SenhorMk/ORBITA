@@ -72,4 +72,27 @@ describe('POST /api/convites/aceitar', () => {
     expect(acceptOrgInviteMock).toHaveBeenCalled();
     expect(ativada).toEqual([ORG_ID]);
   });
+
+  // A resposta é a mesma para toda recusa de propósito: variar por causa diria
+  // a quem tenta um token qualquer *por que* aquele token não serve.
+  it('não devolve diagnóstico interno nem o motivo da recusa (CWE-209)', async () => {
+    getUserMock.mockResolvedValue({
+      data: {
+        user: { id: NOVO_MEMBRO_ID, app_metadata: { provider: 'email', providers: ['email'] } },
+      },
+      error: null,
+    });
+    acceptOrgInviteMock.mockRejectedValue(
+      Object.assign(new Error('Convite destinado a outro@empresa.com, expirado em 2026-08-01'), { code: 'P0001' }),
+    );
+    const { createAcceptInviteHandler } = await import('./route');
+
+    const response = await createAcceptInviteHandler(async () => {})(request());
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('Não foi possível aceitar o convite');
+    expect(JSON.stringify(body)).not.toContain('outro@empresa.com');
+    expect(JSON.stringify(body)).not.toContain('expirado');
+  });
 });
