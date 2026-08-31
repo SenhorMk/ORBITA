@@ -61,8 +61,11 @@ async function avisoNaTela(dependencias: FinanceiroSyncDependencies): Promise<st
   const resposta = await createFinanceiroSyncHandler(dependencias)(
     new Request('https://orbita.test/api/financeiro/sync', { method: 'POST' }),
   );
-  // O dublê é só do transporte: devolve exatamente a Response que a rota
-  // produziu, como `fetchWithAuth` faz — sem lançar em não-2xx.
+  // O que está sob prova é a fronteira handler↔consumidor: a `Response` é a
+  // que o handler produziu de fato, e o transporte devolve ela sem lançar em
+  // não-2xx, como `fetchWithAuth` faz. Auth, store e Bling também são dublês —
+  // não é a pilha inteira que está sendo exercitada, é o contrato entre os
+  // dois lados que divergiram.
   return executarSyncFinanceiro(async () => resposta);
 }
 
