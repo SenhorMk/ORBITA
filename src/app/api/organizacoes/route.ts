@@ -12,21 +12,53 @@ import {
 import { organizationContextStatus } from '@/lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizationContext';
 
+/**
+ * Organizações do usuário logado, e qual delas está ativa — se alguma estiver.
+ *
+ * Exigia contexto de organização ATIVA para responder, e devolvia 401 sem ele.
+ * Isso deixava o primeiro minuto de vida de toda conta nova sem saída: o
+ * cadastro cria só o usuário no provedor de identidade, sem organização
+ * nenhuma, então a primeira tela depois do login pedia a lista de organizações
+ * e ouvia "Não autorizado" — de uma sessão perfeitamente válida.
+ *
+ * A exigência também era desnecessária: `listUserOrganizations` recebe o ator,
+ * não a organização. O contexto ativo só alimentava um campo da resposta.
+ *
+ * Agora basta identidade. `activeOrg` e `selectionVersion` vêm nulos enquanto
+ * não houver seleção — que é a verdade, e é o que o cliente precisa saber para
+ * oferecer "crie sua primeira organização" em vez de uma tela de erro.
+ *
+ * Encontrado pela spec E2E `usuário externo não enxerga nenhuma organização`,
+ * na primeira vez que a suíte rodou.
+ */
 export async function GET(req: Request) {
+  const identity = await resolveAuthenticatedIdentity(req);
+  if (identity._tag !== 'IdentityVerified') {
+    const status = identity._tag === 'IdentityProviderUnavailable' ? 503 : 401;
+    return NextResponse.json(
+      { error: status === 503 ? 'Serviço de autenticação indisponível' : 'Não autorizado' },
+      { status },
+    );
+  }
+
+  const organizacoes = await listUserOrganizations(supabaseServer, identity.user.id);
+
   const contextResult = await resolveActiveRequestOrganizationContext(req);
   if (contextResult._tag !== 'OrganizationContextResolved') {
-    const status = organizationContextStatus(contextResult);
-    return NextResponse.json({ error: status === 503 ? 'Serviço de autorização indisponível' : 'Não autorizado' }, { status });
+    // Autorização indisponível é falha de infraestrutura e não pode virar
+    // "você não tem organização ativa" — são coisas diferentes.
+    if (organizationContextStatus(contextResult) === 503) {
+      return NextResponse.json({ error: 'Serviço de autorização indisponível' }, { status: 503 });
+    }
+    return NextResponse.json({ organizacoes, activeOrg: null, selectionVersion: null });
   }
-  const organizacoes = await listUserOrganizations(supabaseServer, contextResult.context.actorId);
-  const activeOrg = {
-    organizacao: contextResult.context.organization,
-    papel: contextResult.context.role,
-  };
 
   return NextResponse.json({
     organizacoes,
-    activeOrg,
+    activeOrg: {
+      organizacao: contextResult.context.organization,
+      papel: contextResult.context.role,
+    },
     selectionVersion: contextResult.context.selectionVersion,
   });
 }
