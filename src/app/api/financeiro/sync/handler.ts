@@ -28,6 +28,21 @@ export type {
 } from './ports';
 
 /**
+ * Número vindo do provedor.
+ *
+ * `Number()` cru aceita coisa demais: `''` e `'   '` viram **zero**, `'0xFF'`
+ * vira **255**. Numa conta a pagar isso não é um detalhe de parsing — é um
+ * valor inventado sendo gravado como se o Bling o tivesse mandado.
+ *
+ * Aceita número de verdade, ou string decimal simples com sinal opcional.
+ * Zero numérico legítimo continua passando; vazio, espaço e hexadecimal não.
+ */
+const numeroDoProvedor = z.union([
+  z.number(),
+  z.string().regex(/^\s*-?\d+(?:\.\d+)?\s*$/u).transform((texto) => Number(texto.trim())),
+]);
+
+/**
  * Contrato do item de conta, conferido **antes** da persistência.
  *
  * O tipo TypeScript e a comparação textual com o catálogo do OpenAPI dizem o
@@ -40,9 +55,9 @@ export type {
  * idempotência, e gravar sem chave é pior que não gravar.
  */
 const contaFinanceiraSchema = z.object({
-  id: z.union([z.number(), z.string()]).transform((v) => Number(v)).pipe(z.number().int().positive()),
-  situacao: z.union([z.number(), z.string()]).transform((v) => Number(v)).pipe(z.number().finite()),
-  valor: z.union([z.number(), z.string()]).transform((v) => Number(v)).pipe(z.number().finite()),
+  id: numeroDoProvedor.pipe(z.number().int().positive()),
+  situacao: numeroDoProvedor.pipe(z.number().finite()),
+  valor: numeroDoProvedor.pipe(z.number().finite()),
   vencimento: z.string().min(1),
   pagamento: z.object({ data: z.string().optional() }).optional(),
   historico: z.string().optional(),
@@ -50,6 +65,21 @@ const contaFinanceiraSchema = z.object({
 
 /** Item já provado contra o contrato, pronto para virar `TituloFinanceiro`. */
 type ContaValidada = z.infer<typeof contaFinanceiraSchema>;
+
+/**
+ * Identificador do item **sem confiar na forma dele**.
+ *
+ * O ramo de item inválido lia `raw.id` para nomear a linha do log — e `raw`
+ * pode ser `null`, que é justamente uma das formas rejeitadas: acessar `.id`
+ * ali lançava `TypeError`, abortava o lote inteiro e nem tentava os itens
+ * válidos seguintes. Não se lê campo de um valor cuja forma acabou de ser
+ * recusada.
+ */
+function identificadorNaoConfiavel(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const id = (raw as { id?: unknown }).id;
+  return typeof id === 'number' || typeof id === 'string' ? String(id) : undefined;
+}
 
 const LIMITE_POR_PAGINA = 100;
 const MAX_PAGINAS_PADRAO = 50;
@@ -174,7 +204,7 @@ async function sincronizarEntidade(
           etapa: 'validar-item',
           entidade,
           organizacaoId: scope.organizationId,
-          blingId: raw.id === undefined ? undefined : String(raw.id),
+          blingId: identificadorNaoConfiavel(raw),
         });
         continue;
       }
@@ -268,7 +298,11 @@ export function createFinanceiroSyncHandler(deps: FinanceiroSyncDependencies) {
         return json(
           {
             success: false,
-            error: 'A sincronização parou no limite de páginas e não trouxe todas as contas. Rode novamente.',
+            // Nao mandar "rode novamente": cada execucao comeca na pagina 1,
+            // entao repetir le exatamente as mesmas paginas e deixa as mesmas
+            // contas de fora. Prometer progresso por repeticao seria mentira.
+            error: 'A sincronização parou no limite de páginas e não trouxe todas as contas. '
+              + 'Repetir agora lê as mesmas páginas: é preciso ampliar o limite ou filtrar por período.',
             stats,
           },
           200,
