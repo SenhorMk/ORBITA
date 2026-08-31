@@ -39,10 +39,20 @@ export function criarPortaSupabase(supabase: SupabaseClient): PortaDoProjeto {
         const email = usuario.email ?? '';
         if (email.includes(runId)) registros.push({ identificador: email, id: usuario.id });
       }
-      if (usuarios.length < USUARIOS_POR_PAGINA) break;
+      if (usuarios.length < USUARIOS_POR_PAGINA) {
+        return { _tag: 'Lido', registros };
+      }
     }
 
-    return { _tag: 'Lido', registros };
+    // Chegou ao teto com a última página cheia: há mais usuários adiante.
+    // Devolver `Lido` aqui seria dizer "li tudo" tendo lido parte — e a
+    // limpeza trataria o que não foi lido como já removido.
+    return {
+      _tag: 'FalhaDeLeitura',
+      recurso: 'usuarios',
+      causa: `a listagem passou de ${MAX_PAGINAS_DE_USUARIOS} páginas de ${USUARIOS_POR_PAGINA} e não terminou; `
+        + 'a leitura está incompleta',
+    };
   }
 
   async function lerOrganizacoesDaExecucao(runId: string): Promise<LeituraDoProjeto> {

@@ -40,7 +40,47 @@ describe('o plano é escrito antes de qualquer escrita', () => {
       acc[o.tipo] = (acc[o.tipo] ?? 0) + 1;
       return acc;
     }, {});
-    expect(porTipo).toEqual({ usuario: 5, organizacao: 2, membership: 4 });
+    // 2 organizações do seed + 1 que a spec cria durante os testes: ela entra
+    // no plano para a limpeza alcançá-la.
+    expect(porTipo).toEqual({ usuario: 5, organizacao: 3, membership: 4 });
+  });
+
+  it('a organização criada pela spec entra no plano, marcada como tal', () => {
+    // Sem isto ela ficava fora de tudo: nenhum plano a conhecia, e sobrava no
+    // projeto a cada execução.
+    const plano = planejarExecucao(manifesto(), PROJETO);
+    const daSpec = plano.operacoes.filter((o) => o.criadoPor === 'spec');
+
+    expect(daSpec).toHaveLength(1);
+    expect(daSpec[0]!.identificador).toContain('spec-created-org');
+    expect(plano.operacoes.filter((o) => o.criadoPor === 'seed')).toHaveLength(11);
+  });
+
+  it('conclusão que diverge do projeto é reportada, sem reescrever o diário', () => {
+    // Confiar no id gravado sem olhar era o buraco: a retomada reutilizava esse
+    // id para criar membership, e um id obsoleto aponta para registro alheio.
+    const plano = planejarExecucao(manifesto(), PROJETO);
+    const primeira = plano.operacoes[0]!;
+    const diario = registrarConclusao(iniciarDiario(plano), primeira.chave, 'id-do-diario');
+
+    const resultado = reconciliar(diario, [{ identificador: primeira.identificador, id: 'id-do-projeto' }]);
+
+    expect(resultado.divergentes).toEqual([{
+      chave: primeira.chave,
+      identificador: primeira.identificador,
+      idNoDiario: 'id-do-diario',
+      idNoProjeto: 'id-do-projeto',
+    }]);
+    // O diário é histórico: reescrevê-lo apagaria a prova do que foi criado.
+    expect(resultado.diario.concluidas[0]!.idReal).toBe('id-do-diario');
+  });
+
+  it('conclusão ausente do projeto não é divergência — pode ter sido apagada', () => {
+    const plano = planejarExecucao(manifesto(), PROJETO);
+    const primeira = plano.operacoes[0]!;
+    const diario = registrarConclusao(iniciarDiario(plano), primeira.chave, 'id-do-diario');
+
+    expect(reconciliar(diario, []).divergentes).toEqual([]);
   });
 
   it('a persona externa não gera membership — ela existe justamente sem organização', () => {

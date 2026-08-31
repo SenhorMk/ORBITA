@@ -137,9 +137,12 @@ describe('o seed grava o diário antes e durante as escritas', () => {
       porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
     });
 
-    // 1 plano + 11 operações.
-    expect(disco.gravacoes).toHaveLength(1 + diario.plano.operacoes.length);
-    expect(disco.ultimo().concluidas).toHaveLength(diario.plano.operacoes.length);
+    // 1 plano + as 11 que o seed cria. A décima segunda operação do plano é a
+    // organização que a **spec** cria durante os testes: prevista para a
+    // limpeza alcançá-la, nunca escrita pelo seed.
+    const criadasPeloSeed = diario.plano.operacoes.filter((o) => o.criadoPor === 'seed').length;
+    expect(disco.gravacoes).toHaveLength(1 + criadasPeloSeed);
+    expect(disco.ultimo().concluidas).toHaveLength(criadasPeloSeed);
   });
 
   it('escrita que falha no meio deixa o diário com tudo o que já foi criado', async () => {
@@ -186,7 +189,9 @@ describe('a retomada não destrói o diário existente', () => {
     // A primeira gravação da retomada já traz o que existia — nunca um vazio.
     const primeiraDaRetomada = JSON.parse(discoRetomada.gravacoes[0]!) as DiarioDeExecucao;
     expect(primeiraDaRetomada.concluidas).toHaveLength(6);
-    expect(diario.concluidas).toHaveLength(diario.plano.operacoes.length);
+    expect(diario.concluidas).toHaveLength(
+      diario.plano.operacoes.filter((o) => o.criadoPor === 'seed').length,
+    );
   });
 
   it('reconcilia usuários, organizações e memberships — não só organizações', async () => {
@@ -255,7 +260,9 @@ describe('a limpeza distingue falha de leitura de registro ausente', () => {
 
     const resultado = await executarLimpeza(projeto.porta, diario, { simular: false });
 
-    expect(resultado.removidos).toBe(diario.plano.operacoes.length);
+    // A organização da spec não foi criada neste cenário, então não há o que
+    // apagar dela: sobram as 11 do seed.
+    expect(resultado.removidos).toBe(11);
     expect([...projeto.criados.keys()]).toEqual(['cliente-de-verdade@empresa.com']);
   });
 
@@ -267,6 +274,7 @@ describe('a limpeza distingue falha de leitura de registro ausente', () => {
 
     expect(segunda.removidos).toBe(0);
     expect(segunda.plano.jaRemovidas).toHaveLength(diario.plano.operacoes.length);
+    expect(segunda.plano.naoRegistradas).toEqual([]);
   });
 
   it('exclusão que falha no meio manda repetir com o mesmo diário', async () => {
@@ -287,7 +295,7 @@ describe('a limpeza distingue falha de leitura de registro ausente', () => {
 
     expect(resultado.simulado).toBe(true);
     expect(resultado.removidos).toBe(0);
-    expect(projeto.criados.size).toBe(diario.plano.operacoes.length);
+    expect(projeto.criados.size).toBe(11);
     for (const aprovada of resultado.plano.aprovadas) {
       expect(resultado.simulacao).toContain(aprovada.identificador);
     }
@@ -328,5 +336,154 @@ describe('órfãos são relatados sobre o que o projeto tem, não sobre o que o 
     const resultado = await executarLimpeza(projeto.porta, diario, { simular: true });
 
     expect(resultado.orfaos).toEqual([]);
+  });
+});
+
+describe('a gravação local falha depois de a criação remota concluir', () => {
+  /** Disco que lança na enésima gravação, como um disco cheio faria. */
+  function discoQueFalhaNa(gravacaoQueFalha: number) {
+    const gravacoes: string[] = [];
+    return {
+      gravacoes,
+      persistir: (conteudo: string) => {
+        if (gravacoes.length === gravacaoQueFalha) {
+          throw new Error('falha simulada ao gravar o diário');
+        }
+        gravacoes.push(conteudo);
+      },
+      ultimo: (): DiarioDeExecucao => JSON.parse(gravacoes.at(-1)!) as DiarioDeExecucao,
+    };
+  }
+
+  it('o registro remoto existe e o diário não o tem — e a retomada o recupera', async () => {
+    // O cenário exato: a organização foi criada no projeto, e o processo morreu
+    // gravando o diário. O disco anterior nunca falhava, então isso nunca era
+    // exercitado.
+    const projeto = projetoFalso();
+    const disco = discoQueFalhaNa(1); // 0 = plano, 1 = primeira conclusão
+
+    await expect(executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
+    })).rejects.toThrow(/falha simulada ao gravar o diário/u);
+
+    // O projeto tem a organização; o diário gravado não sabe dela.
+    const diarioNoDisco = disco.ultimo();
+    expect(diarioNoDisco.concluidas).toEqual([]);
+    expect(projeto.criados.size).toBe(1);
+
+    // Retomada: reconcilia, adota o id que existe, e termina o resto.
+    const discoRetomada = discoFalso();
+    const { diario, recuperadas } = await executarSeed({
+      porta: projeto.porta,
+      manifest: manifesto(),
+      projetoRef: PROJETO,
+      persistir: discoRetomada.persistir,
+      diarioExistente: diarioNoDisco,
+    });
+
+    expect(recuperadas).toBe(1);
+    const criadasPeloSeed = diario.plano.operacoes.filter((o) => o.criadoPor === 'seed').length;
+    expect(diario.concluidas).toHaveLength(criadasPeloSeed);
+    // E o projeto não ganhou organização duplicada.
+    const slugs = [...projeto.criados.values()].filter((c) => c.tipo === 'organizacao');
+    expect(slugs).toHaveLength(2);
+  });
+
+  it('sem a retomada, a limpeza adota o registro e o apaga — em vez de escondê-lo', async () => {
+    const projeto = projetoFalso();
+    const disco = discoQueFalhaNa(1);
+
+    await expect(executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
+    })).rejects.toThrow();
+
+    const diarioNoDisco = disco.ultimo();
+    expect(diarioNoDisco.concluidas).toEqual([]);
+    const orgCriada = [...projeto.criados.values()].find((c) => c.tipo === 'organizacao')!;
+
+    const resultado = await executarLimpeza(projeto.porta, diarioNoDisco, { simular: false });
+
+    // Antes: a operação sem conclusão caía em `jaRemovidas` e sumia do
+    // relatório de órfãos — existia no projeto e ninguém via. Agora a
+    // reconciliação da limpeza adota o id real e ela é de fato apagada, que é
+    // um desfecho melhor que apenas relatá-la.
+    expect(resultado.plano.aprovadas.map((a) => a.identificador)).toContain(orgCriada.identificador);
+    expect(projeto.criados.has(orgCriada.identificador)).toBe(false);
+  });
+});
+
+describe('a organização que a spec cria é alcançada pela limpeza', () => {
+  it('criada durante os testes, sem passar pelo seed, ainda assim é apagada', async () => {
+    // Ela não está em `concluidas` — o seed não a cria. A reconciliação antes
+    // da limpeza adota o id real, e aí ela vira exclusão aprovada. Sem isso,
+    // sobrava no projeto a cada execução.
+    const disco = discoFalso();
+    const projeto = projetoFalso();
+    const { diario } = await executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
+    });
+
+    const slugDaSpec = `orbita-e2e-${RUN}-spec-created-org`;
+    projeto.criados.set(slugDaSpec, { identificador: slugDaSpec, id: 'id-spec-org', tipo: 'organizacao' });
+
+    const resultado = await executarLimpeza(projeto.porta, diario, { simular: false });
+
+    expect(resultado.plano.aprovadas.map((a) => a.identificador)).toContain(slugDaSpec);
+    expect(projeto.criados.has(slugDaSpec)).toBe(false);
+  });
+
+  it('quando a spec não roda, a organização dela é apenas "já removida"', async () => {
+    const disco = discoFalso();
+    const projeto = projetoFalso();
+    const { diario } = await executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
+    });
+
+    const resultado = await executarLimpeza(projeto.porta, diario, { simular: true });
+
+    expect(resultado.plano.jaRemovidas.map((o) => o.criadoPor)).toEqual(['spec']);
+    expect(resultado.plano.naoRegistradas).toEqual([]);
+  });
+});
+
+describe('divergência entre diário e projeto interrompe', () => {
+  it('a retomada para quando o id no projeto não é o do diário', async () => {
+    const disco = discoFalso();
+    const projeto = projetoFalso();
+    const { diario } = await executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
+    });
+
+    // Alguém apagou e recriou a organização: mesmo slug, id novo.
+    const primeira = diario.plano.operacoes.find((o) => o.tipo === 'organizacao')!;
+    projeto.criados.set(primeira.identificador, {
+      identificador: primeira.identificador, id: 'id-recriado', tipo: 'organizacao',
+    });
+
+    await expect(executarSeed({
+      porta: projeto.porta,
+      manifest: manifesto(),
+      projetoRef: PROJETO,
+      persistir: discoFalso().persistir,
+      diarioExistente: diario,
+    })).rejects.toThrow(/Retomada abortada: 1 registro\(s\) com id diferente/u);
+  });
+
+  it('a limpeza também para, e o diário é preservado', async () => {
+    const disco = discoFalso();
+    const projeto = projetoFalso();
+    const { diario } = await executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
+    });
+
+    const primeira = diario.plano.operacoes.find((o) => o.tipo === 'organizacao')!;
+    projeto.criados.set(primeira.identificador, {
+      identificador: primeira.identificador, id: 'id-recriado', tipo: 'organizacao',
+    });
+
+    await expect(executarLimpeza(projeto.porta, diario, { simular: false }))
+      .rejects.toThrow(/Limpeza abortada: 1 registro\(s\) com id diferente/u);
+    // Nada foi apagado.
+    expect(projeto.criados.size).toBeGreaterThan(0);
   });
 });

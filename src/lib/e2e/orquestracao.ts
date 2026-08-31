@@ -4,6 +4,7 @@ import {
   reconciliar,
   registrarConclusao,
   type DiarioDeExecucao,
+  type DivergenciaDeReconciliacao,
   type RegistroEncontrado,
 } from './execucaoSeed';
 import {
@@ -60,6 +61,24 @@ export async function lerTudoDaExecucao(porta: PortaDoProjeto, runId: string): P
   return { _tag: 'Lido', registros };
 }
 
+/**
+ * Interrompe diante de divergência entre o diário e o projeto.
+ *
+ * Reutilizar um id que o projeto já não tem é como um membership passa a
+ * apontar para a organização de outra pessoa. O diário **não** é corrigido: ele
+ * é o histórico, e reescrevê-lo apagaria a prova do que foi criado.
+ */
+function exigirSemDivergencia(divergentes: readonly DivergenciaDeReconciliacao[], etapa: string): void {
+  if (divergentes.length === 0) return;
+  const detalhe = divergentes
+    .map((d) => `  ${d.identificador}: diário=${d.idNoDiario} projeto=${d.idNoProjeto}`)
+    .join('\n');
+  throw new Error(
+    `${etapa} abortada: ${divergentes.length} registro(s) com id diferente do que o diário guarda.\n${detalhe}\n`
+      + 'O diário foi preservado. Reutilizar id obsoleto criaria vínculo com registro de outra pessoa.',
+  );
+}
+
 export interface ResultadoDoSeed {
   readonly diario: DiarioDeExecucao;
   readonly manifest: SeedManifest;
@@ -110,6 +129,7 @@ export async function executarSeed(opcoes: OpcoesDoSeed): Promise<ResultadoDoSee
       );
     }
     const reconciliado = reconciliar(diario, leitura.registros);
+    exigirSemDivergencia(reconciliado.divergentes, 'Retomada');
     recuperadas = reconciliado.recuperadas.length;
     diario = gravar(reconciliado.diario);
   }
@@ -126,6 +146,8 @@ export async function executarSeed(opcoes: OpcoesDoSeed): Promise<ResultadoDoSee
     diario = gravar(registrarConclusao(diario, chave, escrita.id));
   }
 
+  // As organizações que as specs criam estão no plano para a limpeza
+  // alcançá-las, mas o seed não as cria: quem cria é a suíte, durante o teste.
   for (const persona of manifest.personas) {
     const chaveUsuario = `persona:${persona.key}`;
     let userId = idPorChave().get(chaveUsuario);
@@ -188,7 +210,13 @@ export async function executarLimpeza(
     );
   }
 
-  const plano = planejarLimpeza(diario, leitura.registros);
+  // Reconcilia antes de planejar: adota o id real do que existe no projeto e o
+  // diário não registrou — inclusive as organizações que as **specs** criam,
+  // previstas no plano mas nunca escritas pelo seed. Sem isto elas ficavam no
+  // projeto a cada execução.
+  const reconciliado = reconciliar(diario, leitura.registros);
+  exigirSemDivergencia(reconciliado.divergentes, 'Limpeza');
+  const plano = planejarLimpeza(reconciliado.diario, leitura.registros);
   const orfaos = relatarOrfaos(leitura.registros, plano.runId, plano);
   const simulacao = descreverSimulacao(plano);
 

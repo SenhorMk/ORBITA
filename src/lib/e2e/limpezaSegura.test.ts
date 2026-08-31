@@ -139,7 +139,11 @@ describe('limpeza repetida termina em sucesso', () => {
     const limpeza = planejarLimpeza(diario, encontrados);
 
     expect(limpeza.aprovadas).toEqual([]);
-    expect(limpeza.jaRemovidas).toHaveLength(plano.operacoes.length);
+    // Existem no projeto e o diário não registrou: são órfãs, não "já
+    // removidas". Classificá-las como removidas escondia exatamente o caso que
+    // o diário existe para revelar.
+    expect(limpeza.naoRegistradas).toHaveLength(plano.operacoes.length);
+    expect(limpeza.jaRemovidas).toEqual([]);
   });
 });
 

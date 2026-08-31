@@ -46,6 +46,15 @@ export interface PlanoDeLimpeza {
    * exatamente isto, e precisa terminar em sucesso.
    */
   readonly jaRemovidas: readonly OperacaoPlanejada[];
+  /**
+   * Existem no projeto e o diário nunca registrou a conclusão delas.
+   *
+   * São órfãos no sentido estrito: a operação remota deu certo e a gravação
+   * local não. Não entram em `aprovadas` porque não há id registrado para
+   * conferir — apagar por identificador seria apagar por semelhança —, e não
+   * entram em `jaRemovidas` porque **existem**.
+   */
+  readonly naoRegistradas: readonly { readonly operacao: OperacaoPlanejada; readonly encontrado: RegistroEncontrado }[];
 }
 
 /** Ordem de exclusão: dependente antes do dependido. */
@@ -115,22 +124,27 @@ export function planejarLimpeza(
   const aprovadas: ExclusaoAprovada[] = [];
   const recusadas: ExclusaoRecusada[] = [];
   const jaRemovidas: OperacaoPlanejada[] = [];
+  const naoRegistradas: PlanoDeLimpeza['naoRegistradas'][number][] = [];
 
   for (const operacao of diario.plano.operacoes) {
     const idRegistrado = idPorChave.get(operacao.chave);
+    const encontrado = porIdentificador.get(operacao.identificador);
+
     if (idRegistrado === undefined) {
-      // Operação que nunca concluiu. Se o registro existir no projeto, quem
-      // resolve é a reconciliação do diário — não a limpeza por adivinhação.
-      jaRemovidas.push(operacao);
+      // Operação sem conclusão gravada. Se o registro **existe** no projeto,
+      // ele é órfão: foi criado e o diário não soube. Tratá-lo como "já
+      // removido" era esconder exatamente o caso que o diário existe para
+      // revelar — e o relatório de órfãos, que exclui `jaRemovidas`, o
+      // silenciava de novo.
+      if (encontrado !== undefined) {
+        naoRegistradas.push({ operacao, encontrado });
+      } else {
+        jaRemovidas.push(operacao);
+      }
       continue;
     }
 
-    const resultado = conferirIdentidade(
-      operacao,
-      idRegistrado,
-      porIdentificador.get(operacao.identificador),
-      diario.plano.runId,
-    );
+    const resultado = conferirIdentidade(operacao, idRegistrado, encontrado, diario.plano.runId);
 
     if (resultado._tag === 'Aprovada') aprovadas.push(resultado.exclusao);
     else if (resultado._tag === 'Recusada') recusadas.push(resultado.recusa);
@@ -145,6 +159,7 @@ export function planejarLimpeza(
     aprovadas,
     recusadas,
     jaRemovidas,
+    naoRegistradas,
   };
 }
 
@@ -170,6 +185,13 @@ export function descreverSimulacao(plano: PlanoDeLimpeza): string {
   if (plano.aprovadas.length === 0) linhas.push('  (nenhum)');
   for (const e of plano.aprovadas) {
     linhas.push(`  ${e.tipo.padEnd(12)} ${e.identificador}  id=${e.id}`);
+  }
+
+  if (plano.naoRegistradas.length > 0) {
+    linhas.push('', `EXISTEM E O DIÁRIO NÃO REGISTROU (${plano.naoRegistradas.length}) — órfãos, não serão apagados:`);
+    for (const { operacao, encontrado } of plano.naoRegistradas) {
+      linhas.push(`  ${operacao.tipo.padEnd(12)} ${operacao.identificador}  id=${encontrado.id}`);
+    }
   }
 
   linhas.push('', `JÁ REMOVIDOS OU NUNCA CRIADOS (${plano.jaRemovidas.length}), nada a fazer:`);
@@ -215,6 +237,8 @@ export function relatarOrfaos(
   runId: string,
   plano: PlanoDeLimpeza,
 ): readonly RegistroEncontrado[] {
+  // `naoRegistradas` **não** entra aqui: elas são órfãs por definição, e
+  // omiti-las era o defeito. O que sai são as que o diário conhece.
   const conhecidos = new Set([
     ...plano.aprovadas.map((a) => a.identificador),
     ...plano.jaRemovidas.map((o) => o.identificador),
