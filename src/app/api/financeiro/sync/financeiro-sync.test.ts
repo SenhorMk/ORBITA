@@ -339,4 +339,124 @@ describe('POST /api/financeiro/sync', () => {
       expect(await resposta.json()).toEqual({ success: false, error: 'Erro interno' });
     });
   });
+
+  describe('item fora do contrato não alcança o repositório (ticket 05b)', () => {
+    it.each([
+      ['sem id', { situacao: 1, valor: 10, vencimento: '2026-09-10' }],
+      ['id nulo', { id: null, situacao: 1, valor: 10, vencimento: '2026-09-10' }],
+      ['id zero', { id: 0, situacao: 1, valor: 10, vencimento: '2026-09-10' }],
+      ['valor nulo', { id: 9001, situacao: 1, valor: null, vencimento: '2026-09-10' }],
+      ['valor ausente', { id: 9001, situacao: 1, vencimento: '2026-09-10' }],
+      ['vencimento ausente', { id: 9001, situacao: 1, valor: 10 }],
+    ])('%s: não grava e conta como inválido', async (_nome, item) => {
+      const { deps, upsertTitulo } = montarDeps({
+        bling: blingComPaginas({ financeiro_contas_pagar: [[item as RawContaFinanceira]] }),
+      });
+
+      const resposta = await createFinanceiroSyncHandler(deps)(requisicao());
+      const json = await resposta.json();
+
+      // Sem `id` não há chave de idempotência: gravaria `bling_id: null`, que é
+      // justamente a coluna do `ON CONFLICT`. E `valor` ausente virava `0` pelo
+      // `Number()`, inventando uma conta de zero real.
+      expect(upsertTitulo).not.toHaveBeenCalled();
+      expect(json.stats.contasPagar.itensInvalidos).toBe(1);
+      expect(json.success).toBe(false);
+    });
+
+    it('um item inválido não impede os válidos da mesma página', async () => {
+      const { deps, upsertTitulo } = montarDeps({
+        bling: blingComPaginas({
+          financeiro_contas_pagar: [[CONTA, { situacao: 1, valor: 5 } as RawContaFinanceira, { ...CONTA, id: 9002 }]],
+        }),
+      });
+
+      const { stats } = await (await createFinanceiroSyncHandler(deps)(requisicao())).json();
+
+      expect(stats.contasPagar.processados).toBe(2);
+      expect(stats.contasPagar.itensInvalidos).toBe(1);
+      expect(upsertTitulo.mock.calls.map(([, t]) => t.bling_id)).toEqual([9001, 9002]);
+    });
+
+    it('id em texto é aceito e normalizado para número', async () => {
+      // O OpenAPI diz `integer`, mas JSON de provedor às vezes manda string.
+      // Aceitar e normalizar é diferente de aceitar qualquer coisa.
+      const { deps, upsertTitulo } = montarDeps({
+        bling: blingComPaginas({ financeiro_contas_pagar: [[{ ...CONTA, id: '9001' } as unknown as RawContaFinanceira]] }),
+      });
+
+      await createFinanceiroSyncHandler(deps)(requisicao());
+
+      expect(upsertTitulo.mock.calls[0]![1].bling_id).toBe(9001);
+    });
+  });
+
+  describe('teto de páginas não é fim dos dados (ticket 05b)', () => {
+    it('parar no teto com página cheia não marca checkpoint nem diz sucesso', async () => {
+      const cheia = Array.from({ length: 100 }, (_, i) => ({ ...CONTA, id: 4000 + i }));
+      const { deps: base, marcarCheckpoint } = montarDeps({ bling: { lerPagina: vi.fn().mockResolvedValue(cheia) } });
+      const deps: FinanceiroSyncDependencies = { ...base, maxPaginas: 3 };
+
+      const resposta = await createFinanceiroSyncHandler(deps)(requisicao());
+      const json = await resposta.json();
+
+      // Havia mais páginas do outro lado: dizer sucesso e marcar conclusão
+      // deixaria dados de fora sem ninguém notar.
+      expect(json.success).toBe(false);
+      expect(json.stats.contasPagar.leituraIncompleta).toBe(true);
+      expect(json.error).toContain('limite de páginas');
+      expect(marcarCheckpoint).not.toHaveBeenCalled();
+    });
+
+    it('parar no teto com a última página parcial é fim de dados legítimo', async () => {
+      const cheia = Array.from({ length: 100 }, (_, i) => ({ ...CONTA, id: 5000 + i }));
+      const { deps: base, marcarCheckpoint } = montarDeps({
+        bling: blingComPaginas({
+          financeiro_contas_pagar: [cheia, cheia, [CONTA]],
+          financeiro_contas_receber: [[CONTA]],
+        }),
+      });
+      const deps: FinanceiroSyncDependencies = { ...base, maxPaginas: 3 };
+
+      const resposta = await createFinanceiroSyncHandler(deps)(requisicao());
+
+      expect((await resposta.json()).success).toBe(true);
+      expect(marcarCheckpoint).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('o log distingue as causas (ticket 05b)', () => {
+    async function logDe(erro: unknown): Promise<string> {
+      const linhas: string[] = [];
+      const espia = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+        linhas.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+      });
+      try {
+        const { deps } = montarDeps({ bling: { lerPagina: vi.fn().mockRejectedValue(erro) } });
+        await createFinanceiroSyncHandler(deps)(requisicao());
+      } finally {
+        espia.mockRestore();
+      }
+      return linhas.join('\n');
+    }
+
+    it('403 e 500 do provedor deixam de virar a mesma linha', async () => {
+      const proibido = Object.assign(new Error('Falha ao ler contas a pagar no Bling (HTTP 403)'), { status: 403 });
+      const indisponivel = Object.assign(new Error('Falha ao ler contas a pagar no Bling (HTTP 500)'), { status: 500 });
+
+      const log403 = await logDe(proibido);
+      const log500 = await logDe(indisponivel);
+
+      // Antes as duas linhas eram idênticas: só o nome da classe.
+      expect(log403).toContain('403');
+      expect(log500).toContain('500');
+      expect(log403).not.toContain('500');
+    });
+
+    it('status implausível é descartado, como o código técnico', async () => {
+      const log = await logDe(Object.assign(new Error('falhou'), { status: 'Bearer tok-sintetico' }));
+
+      expect(log).not.toContain('tok-sintetico');
+    });
+  });
 });
