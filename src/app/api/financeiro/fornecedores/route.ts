@@ -90,7 +90,7 @@ export async function POST(request: Request) {
       nome,
       cnpj,
       tipo: 'J',
-      contribuinte: 1,
+      indicadorIe: 1,
       endereco: logradouro,
       numero: numero || 'S/N',
       bairro: bairro || undefined,

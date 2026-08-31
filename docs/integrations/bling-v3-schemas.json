@@ -1,6 +1,10 @@
 {
   "descricao": "Schemas do OpenAPI oficial do Bling que os tipos Bling* de src/types/index.ts espelham. Extraidos de https://developer.bling.com.br/build/assets/openapi-BvBfsn8J.json (o hash muda; encontre a URL em build/assets/reference-*.js). Serve de guarda: src/services/bling-schemas.test.ts compara os tipos declarados com estes e falha no commit quando divergem.",
-  "origem": "https://developer.bling.com.br/build/assets/openapi-BvBfsn8J.json",
+  "origem": {
+    "url": "https://developer.bling.com.br/build/assets/openapi-BvBfsn8J.json",
+    "capturadoEm": "2026-08-31",
+    "observacao": "O hash muda a cada publicacao do Bling; a URL corrente esta em build/assets/reference-*.js. `allOf` do requestBody achatado na extracao — `escrita` registra a composicao original. `somenteLeitura` e `nulavel` vem de readOnly/nullable do spec."
+  },
   "capturadoEm": "2026-08-30",
   "schemas": {
     "VendasDadosBaseDTO": {
@@ -12,7 +16,8 @@
       ],
       "campos": {
         "id": {
-          "tipo": "integer"
+          "tipo": "integer",
+          "somenteLeitura": true
         },
         "numero": {
           "tipo": "integer"
@@ -34,11 +39,13 @@
         },
         "totalProdutos": {
           "tipo": "number",
-          "formato": "float"
+          "formato": "float",
+          "somenteLeitura": true
         },
         "total": {
           "tipo": "number",
-          "formato": "float"
+          "formato": "float",
+          "somenteLeitura": true
         },
         "contato": {
           "tipo": "object",
@@ -90,10 +97,12 @@
           "ref": "VendasTributacaoDTO"
         },
         "itens": {
-          "tipo": "array"
+          "tipo": "array",
+          "itens": "VendasItemDTO"
         },
         "parcelas": {
-          "tipo": "array"
+          "tipo": "array",
+          "itens": "VendasParcelaDTO"
         },
         "transporte": {
           "tipo": "object",
@@ -123,7 +132,8 @@
           "tipo": "integer"
         },
         "valor": {
-          "tipo": "integer"
+          "tipo": "integer",
+          "somenteLeitura": true
         }
       }
     },
@@ -137,7 +147,8 @@
           "tipo": "integer"
         },
         "nome": {
-          "tipo": "string"
+          "tipo": "string",
+          "somenteLeitura": true
         },
         "tipoPessoa": {
           "tipo": "string"
@@ -149,15 +160,16 @@
     },
     "VendasItemDTO": {
       "obrigatorios": [
+        "descricao",
         "id",
         "quantidade",
         "valor",
-        "valorLista",
-        "descricao"
+        "valorLista"
       ],
       "campos": {
         "id": {
-          "tipo": "integer"
+          "tipo": "integer",
+          "somenteLeitura": true
         },
         "codigo": {
           "tipo": "string"
@@ -295,6 +307,1035 @@
           "ref": "ContasReceberDadosOrigemDTO"
         }
       }
+    },
+    "ContatosDadosBaseDTO": {
+      "obrigatorios": [
+        "id",
+        "nome",
+        "situacao"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer",
+          "somenteLeitura": true
+        },
+        "nome": {
+          "tipo": "string"
+        },
+        "codigo": {
+          "tipo": "string"
+        },
+        "situacao": {
+          "tipo": "string"
+        },
+        "numeroDocumento": {
+          "tipo": "string"
+        },
+        "telefone": {
+          "tipo": "string"
+        },
+        "celular": {
+          "tipo": "string"
+        }
+      }
+    },
+    "ContatosDadosDTO": {
+      "obrigatorios": [
+        "tipo"
+      ],
+      "campos": {
+        "fantasia": {
+          "tipo": "string"
+        },
+        "tipo": {
+          "tipo": "string"
+        },
+        "indicadorIe": {
+          "tipo": "integer"
+        },
+        "ie": {
+          "tipo": "string"
+        },
+        "rg": {
+          "tipo": "string"
+        },
+        "inscricaoMunicipal": {
+          "tipo": "string"
+        },
+        "orgaoEmissor": {
+          "tipo": "string"
+        },
+        "email": {
+          "tipo": "string"
+        },
+        "emailNotaFiscal": {
+          "tipo": "string"
+        },
+        "numeroDocumento": {
+          "tipo": "string"
+        },
+        "orgaoPublico": {
+          "tipo": "string"
+        },
+        "endereco": {
+          "tipo": "object",
+          "ref": "ContatosEnderecoDTO"
+        },
+        "vendedor": {
+          "tipo": "object",
+          "ref": "ContatosVendedorDTO"
+        },
+        "dadosAdicionais": {
+          "tipo": "object",
+          "ref": "ContatosDadoAdicionalDTO"
+        },
+        "financeiro": {
+          "tipo": "object",
+          "ref": "ContatosFinanceiroDTO"
+        },
+        "pais": {
+          "tipo": "object",
+          "ref": "ContatosPaisDTO"
+        },
+        "tiposContato": {
+          "tipo": "array",
+          "itens": "ContatosTipoContatoDTO"
+        },
+        "pessoasContato": {
+          "tipo": "array",
+          "itens": "ContatosPessoaContatoDTO"
+        }
+      }
+    },
+    "ProdutosDadosDTO": {
+      "obrigatorios": [
+        "formato",
+        "nome",
+        "situacao",
+        "tipo"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "nome": {
+          "tipo": "string"
+        },
+        "codigo": {
+          "tipo": "string"
+        },
+        "preco": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "tipo": {
+          "tipo": "string"
+        },
+        "situacao": {
+          "tipo": "string"
+        },
+        "formato": {
+          "tipo": "string"
+        },
+        "descricaoCurta": {
+          "tipo": "string"
+        },
+        "imagemURL": {
+          "tipo": "string",
+          "somenteLeitura": true
+        },
+        "dataValidade": {
+          "tipo": "string",
+          "formato": "date"
+        },
+        "unidade": {
+          "tipo": "string"
+        },
+        "pesoLiquido": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "pesoBruto": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "volumes": {
+          "tipo": "integer"
+        },
+        "itensPorCaixa": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "gtin": {
+          "tipo": "string"
+        },
+        "gtinEmbalagem": {
+          "tipo": "string"
+        },
+        "tipoProducao": {
+          "tipo": "string"
+        },
+        "condicao": {
+          "tipo": "integer"
+        },
+        "freteGratis": {
+          "tipo": "boolean"
+        },
+        "marca": {
+          "tipo": "string"
+        },
+        "descricaoComplementar": {
+          "tipo": "string"
+        },
+        "linkExterno": {
+          "tipo": "string"
+        },
+        "observacoes": {
+          "tipo": "string"
+        },
+        "descricaoEmbalagemDiscreta": {
+          "tipo": "string"
+        },
+        "categoria": {
+          "tipo": "object",
+          "ref": "ProdutosCategoriaDTO"
+        },
+        "estoque": {
+          "tipo": "object",
+          "ref": "ProdutosEstoqueDTO"
+        },
+        "fornecedor": {
+          "tipo": "object",
+          "ref": "ProdutoFornecedorDTO"
+        },
+        "actionEstoque": {
+          "tipo": "string"
+        },
+        "dimensoes": {
+          "tipo": "object",
+          "ref": "ProdutosDimensoesDTO"
+        },
+        "tributacao": {
+          "tipo": "object",
+          "ref": "ProdutosTributacaoDTO"
+        },
+        "midia": {
+          "tipo": "object",
+          "ref": "ProdutosMidiaDTO"
+        },
+        "linhaProduto": {
+          "tipo": "object",
+          "ref": "ProdutosLinhaProdutoDTO"
+        },
+        "estrutura": {
+          "tipo": "object",
+          "ref": "ProdutosEstruturaDTO"
+        },
+        "camposCustomizados": {
+          "tipo": "array",
+          "itens": "ProdutosCampoCustomizadoDTO"
+        },
+        "artigoPerigoso": {
+          "tipo": "boolean"
+        },
+        "duns": {
+          "tipo": "array",
+          "tipoDosItens": "object"
+        },
+        "variacoes": {
+          "tipo": "array"
+        }
+      }
+    },
+    "VendasLojaDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "unidadeNegocio": {
+          "tipo": "object",
+          "ref": "LojaUnidadeNegocioDTO"
+        }
+      }
+    },
+    "VendasDescontoDTO": {
+      "obrigatorios": [
+        "valor"
+      ],
+      "campos": {
+        "valor": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "unidade": {
+          "tipo": "string"
+        }
+      }
+    },
+    "VendasCategoriaDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "VendasNotaFiscalDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "VendasTributacaoDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "totalICMS": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "totalIPI": {
+          "tipo": "number",
+          "formato": "float"
+        }
+      }
+    },
+    "VendasParcelaDTO": {
+      "obrigatorios": [
+        "dataVencimento",
+        "formaPagamento",
+        "id",
+        "valor"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "dataVencimento": {
+          "tipo": "string",
+          "formato": "date"
+        },
+        "valor": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "observacoes": {
+          "tipo": "string"
+        },
+        "caut": {
+          "tipo": "string"
+        },
+        "formaPagamento": {
+          "tipo": "object",
+          "ref": "VendasParcelaFormaPagamentoDTO"
+        }
+      }
+    },
+    "VendasTransporteDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "fretePorConta": {
+          "tipo": "integer"
+        },
+        "frete": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "quantidadeVolumes": {
+          "tipo": "integer"
+        },
+        "pesoBruto": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "prazoEntrega": {
+          "tipo": "integer"
+        },
+        "contato": {
+          "tipo": "object",
+          "ref": "VendasTransporteContatoDTO"
+        },
+        "etiqueta": {
+          "tipo": "object",
+          "ref": "VendasTransporteEtiquetaDTO"
+        },
+        "volumes": {
+          "tipo": "array",
+          "itens": "VendasTransporteVolumeDTO"
+        }
+      }
+    },
+    "VendasVendedorDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "VendasIntermediadorDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "cnpj": {
+          "tipo": "string"
+        },
+        "nomeUsuario": {
+          "tipo": "string"
+        }
+      }
+    },
+    "VendasTaxaDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "taxaComissao": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "custoFrete": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "valorBase": {
+          "tipo": "number",
+          "formato": "float"
+        }
+      }
+    },
+    "ContatosEnderecoDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "geral": {
+          "tipo": "object",
+          "ref": "ContatosEnderecoDadosDTO"
+        },
+        "cobranca": {
+          "tipo": "object",
+          "ref": "ContatosEnderecoDadosDTO"
+        }
+      }
+    },
+    "ContatosVendedorDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "ContatosDadoAdicionalDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "dataNascimento": {
+          "tipo": "string",
+          "formato": "date"
+        },
+        "sexo": {
+          "tipo": "string"
+        },
+        "naturalidade": {
+          "tipo": "string"
+        }
+      }
+    },
+    "ContatosFinanceiroDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "limiteCredito": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "condicaoPagamento": {
+          "tipo": "string"
+        },
+        "categoria": {
+          "tipo": "object",
+          "ref": "ContatosFinanceiroCategoriaDTO"
+        }
+      }
+    },
+    "ContatosPaisDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "nome": {
+          "tipo": "string"
+        }
+      }
+    },
+    "ContatosTipoContatoDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "descricao": {
+          "tipo": "string"
+        }
+      }
+    },
+    "ContatosPessoaContatoDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "descricao": {
+          "tipo": "string"
+        }
+      }
+    },
+    "ProdutosCategoriaDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "ProdutosEstoqueDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "minimo": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "maximo": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "crossdocking": {
+          "tipo": "integer"
+        },
+        "localizacao": {
+          "tipo": "string"
+        },
+        "saldoVirtualTotal": {
+          "tipo": "number",
+          "formato": "float",
+          "somenteLeitura": true
+        }
+      }
+    },
+    "ProdutoFornecedorDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "contato": {
+          "tipo": "object",
+          "ref": "FornecedorContatoDTO"
+        },
+        "codigo": {
+          "tipo": "string"
+        },
+        "precoCusto": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "precoCompra": {
+          "tipo": "number",
+          "formato": "float"
+        }
+      }
+    },
+    "ProdutosDimensoesDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "largura": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "altura": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "profundidade": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "unidadeMedida": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "ProdutosTributacaoDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "origem": {
+          "tipo": "integer"
+        },
+        "nFCI": {
+          "tipo": "string"
+        },
+        "ncm": {
+          "tipo": "string"
+        },
+        "cest": {
+          "tipo": "string"
+        },
+        "codigoListaServicos": {
+          "tipo": "string"
+        },
+        "spedTipoItem": {
+          "tipo": "string"
+        },
+        "codigoItem": {
+          "tipo": "string"
+        },
+        "percentualTributos": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "valorBaseStRetencao": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "valorStRetencao": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "valorICMSSubstituto": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "codigoExcecaoTipi": {
+          "tipo": "string"
+        },
+        "classeEnquadramentoIpi": {
+          "tipo": "string"
+        },
+        "valorIpiFixo": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "codigoSeloIpi": {
+          "tipo": "string"
+        },
+        "valorPisFixo": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "valorCofinsFixo": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "codigoANP": {
+          "tipo": "string"
+        },
+        "descricaoANP": {
+          "tipo": "string"
+        },
+        "percentualGLP": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "percentualGasNacional": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "percentualGasImportado": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "valorPartida": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "tipoArmamento": {
+          "tipo": "integer"
+        },
+        "descricaoCompletaArmamento": {
+          "tipo": "string"
+        },
+        "dadosAdicionais": {
+          "tipo": "string"
+        },
+        "grupoProduto": {
+          "tipo": "object",
+          "ref": "ProdutosGrupoProdutoDTO"
+        }
+      }
+    },
+    "ProdutosMidiaDTO": {
+      "obrigatorios": [
+        "imagens",
+        "video"
+      ],
+      "campos": {
+        "video": {
+          "tipo": "object",
+          "ref": "ProdutosVideoDTO"
+        },
+        "imagens": {
+          "tipo": "object",
+          "ref": "ProdutosImagensDTO"
+        }
+      }
+    },
+    "ProdutosLinhaProdutoDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "ProdutosEstruturaDTO": {
+      "obrigatorios": [
+        "componentes",
+        "lancamentoEstoque",
+        "tipoEstoque"
+      ],
+      "campos": {
+        "tipoEstoque": {
+          "tipo": "string"
+        },
+        "lancamentoEstoque": {
+          "tipo": "string"
+        },
+        "componentes": {
+          "tipo": "array",
+          "itens": "ProdutosComponenteDTO"
+        }
+      }
+    },
+    "ProdutosCampoCustomizadoDTO": {
+      "obrigatorios": [
+        "idCampoCustomizado"
+      ],
+      "campos": {
+        "idCampoCustomizado": {
+          "tipo": "integer"
+        },
+        "idVinculo": {
+          "tipo": "integer"
+        },
+        "valor": {
+          "tipo": "string"
+        },
+        "item": {
+          "tipo": "string"
+        }
+      }
+    },
+    "LojaUnidadeNegocioDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "VendasItemComissaoDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "base": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "aliquota": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "valor": {
+          "tipo": "number",
+          "formato": "float"
+        }
+      }
+    },
+    "VendasItemNaturezaOperacaoDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "VendasParcelaFormaPagamentoDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "VendasTransporteContatoDTO": {
+      "obrigatorios": [
+        "nome"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "nome": {
+          "tipo": "string"
+        }
+      }
+    },
+    "VendasTransporteEtiquetaDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "nome": {
+          "tipo": "string"
+        },
+        "endereco": {
+          "tipo": "string"
+        },
+        "numero": {
+          "tipo": "string"
+        },
+        "complemento": {
+          "tipo": "string"
+        },
+        "municipio": {
+          "tipo": "string"
+        },
+        "uf": {
+          "tipo": "string"
+        },
+        "cep": {
+          "tipo": "string"
+        },
+        "bairro": {
+          "tipo": "string"
+        },
+        "nomePais": {
+          "tipo": "string"
+        }
+      }
+    },
+    "VendasTransporteVolumeDTO": {
+      "obrigatorios": [
+        "id",
+        "servico"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "servico": {
+          "tipo": "string"
+        },
+        "codigoRastreamento": {
+          "tipo": "string"
+        }
+      }
+    },
+    "ContatosEnderecoDadosDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "endereco": {
+          "tipo": "string"
+        },
+        "cep": {
+          "tipo": "string"
+        },
+        "bairro": {
+          "tipo": "string"
+        },
+        "municipio": {
+          "tipo": "string"
+        },
+        "uf": {
+          "tipo": "string"
+        },
+        "numero": {
+          "tipo": "string"
+        },
+        "complemento": {
+          "tipo": "string"
+        }
+      }
+    },
+    "ContatosFinanceiroCategoriaDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "FornecedorContatoDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "nome": {
+          "tipo": "string"
+        }
+      }
+    },
+    "ProdutosGrupoProdutoDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "ProdutosVideoDTO": {
+      "obrigatorios": [
+        "url"
+      ],
+      "campos": {
+        "url": {
+          "tipo": "string"
+        }
+      }
+    },
+    "ProdutosImagensDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "imagensURL": {
+          "tipo": "array",
+          "itens": "ProdutosImagemDTO"
+        },
+        "externas": {
+          "tipo": "array",
+          "itens": "ProdutosImagemDTO",
+          "somenteLeitura": true
+        },
+        "internas": {
+          "tipo": "array",
+          "itens": "ProdutosImagemInternaDTO",
+          "somenteLeitura": true
+        }
+      }
+    },
+    "ProdutosComponenteDTO": {
+      "obrigatorios": [
+        "produto",
+        "quantidade"
+      ],
+      "campos": {
+        "produto": {
+          "tipo": "object",
+          "ref": "ProdutosComponenteProdutoDTO"
+        },
+        "quantidade": {
+          "tipo": "number",
+          "formato": "float"
+        }
+      }
+    },
+    "ProdutosImagemDTO": {
+      "obrigatorios": [
+        "link"
+      ],
+      "campos": {
+        "link": {
+          "tipo": "string"
+        }
+      }
+    },
+    "ProdutosImagemInternaDTO": {
+      "obrigatorios": [
+        "anexo",
+        "anexoVinculo",
+        "link",
+        "linkMiniatura",
+        "ordem",
+        "validade"
+      ],
+      "campos": {
+        "link": {
+          "tipo": "string"
+        },
+        "linkMiniatura": {
+          "tipo": "string",
+          "somenteLeitura": true
+        },
+        "validade": {
+          "tipo": "string",
+          "somenteLeitura": true
+        },
+        "ordem": {
+          "tipo": "integer",
+          "somenteLeitura": true
+        },
+        "anexo": {
+          "tipo": "object",
+          "ref": "ProdutosAnexoDTO"
+        },
+        "anexoVinculo": {
+          "tipo": "object",
+          "ref": "ProdutosAnexoVinculoDTO"
+        }
+      }
+    },
+    "ProdutosComponenteProdutoDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "ProdutosAnexoDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer",
+          "somenteLeitura": true
+        }
+      }
+    },
+    "ProdutosAnexoVinculoDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer",
+          "somenteLeitura": true
+        }
+      }
     }
+  },
+  "escrita": {
+    "POST /pedidos/vendas": [
+      "VendasDadosBaseDTO",
+      "VendasDadosDTO"
+    ],
+    "POST /contatos": [
+      "ContatosDadosBaseDTO",
+      "ContatosDadosDTO"
+    ],
+    "POST /produtos": [
+      "ProdutosDadosDTO"
+    ]
   }
 }

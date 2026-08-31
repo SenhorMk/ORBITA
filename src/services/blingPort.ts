@@ -128,7 +128,13 @@ export interface ContatoLegadoEntrada {
   telefone?: string;
   cnpj?: string;
   tipo?: string;
-  contribuinte?: number;
+  /**
+   * Indicador de IE — `indicadorIe` no OpenAPI oficial.
+   *
+   * Chamava-se `contribuinte` ate o ticket 06, nome que o Bling **nao** tem: a
+   * requisicao era aceita e o campo descartado em silencio.
+   */
+  indicadorIe?: number;
   cep?: string;
   endereco?: string;
   numero?: string;
