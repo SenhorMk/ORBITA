@@ -1,4 +1,6 @@
-import type { APIRequestContext, APIResponse } from '@playwright/test';
+import type { Page, APIResponse } from '@playwright/test';
+
+import { cabecalhosAutenticados } from './sessaoAutenticada';
 
 /**
  * Not a UI Page Object — deliberately. `src/app/page.tsx` has no
@@ -26,37 +28,43 @@ import type { APIRequestContext, APIResponse } from '@playwright/test';
  * - `DELETE /api/organizacoes/:id/membros/:userId` — revoke
  */
 export class OrganizationApi {
-  constructor(private readonly request: APIRequestContext) {}
+  constructor(private readonly page: Page) {}
 
   async createOrganization(nome: string, slug: string): Promise<APIResponse> {
-    return this.request.post('/api/organizacoes', { data: { nome, slug } });
+    return this.page.request.post('/api/organizacoes', {
+      headers: await cabecalhosAutenticados(this.page),
+      data: { nome, slug } });
   }
 
   async listOrganizations(): Promise<APIResponse> {
-    return this.request.get('/api/organizacoes');
+    return this.page.request.get('/api/organizacoes', { headers: await cabecalhosAutenticados(this.page) });
   }
 
   async switchActiveOrganization(organizacaoId: string, expectedVersion: number): Promise<APIResponse> {
-    return this.request.post('/api/organizacoes/switch', {
+    return this.page.request.post('/api/organizacoes/switch', {
+      headers: await cabecalhosAutenticados(this.page),
       data: { organizacao_id: organizacaoId, expected_version: expectedVersion },
     });
   }
 
   async createInvite(organizacaoId: string, email: string, papel: 'admin' | 'member'): Promise<APIResponse> {
-    return this.request.post(`/api/organizacoes/${organizacaoId}/convites`, {
+    return this.page.request.post(`/api/organizacoes/${organizacaoId}/convites`, {
+      headers: await cabecalhosAutenticados(this.page),
       data: { email, papel },
     });
   }
 
   async listInvites(organizacaoId: string): Promise<APIResponse> {
-    return this.request.get(`/api/organizacoes/${organizacaoId}/convites`);
+    return this.page.request.get(`/api/organizacoes/${organizacaoId}/convites`, { headers: await cabecalhosAutenticados(this.page) });
   }
 
   async acceptInvite(token: string): Promise<APIResponse> {
-    return this.request.post('/api/convites/aceitar', { data: { token } });
+    return this.page.request.post('/api/convites/aceitar', {
+      headers: await cabecalhosAutenticados(this.page),
+      data: { token } });
   }
 
   async revokeMember(organizacaoId: string, userId: string): Promise<APIResponse> {
-    return this.request.delete(`/api/organizacoes/${organizacaoId}/membros/${userId}`);
+    return this.page.request.delete(`/api/organizacoes/${organizacaoId}/membros/${userId}`, { headers: await cabecalhosAutenticados(this.page) });
   }
 }

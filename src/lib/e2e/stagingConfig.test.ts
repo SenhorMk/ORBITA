@@ -54,13 +54,26 @@ describe('resolveStagingConfig', () => {
     expect(config.baseURL).toBe('https://qa.internal.example.com/');
   });
 
-  it('lança StagingConfigError quando SUPABASE_URL está presente mas não é staging', () => {
+  it('recusa SUPABASE_URL sem a confirmação nominal do projeto', () => {
+    // Host de Supabase é sempre , e o ref é gerado: exigir
+    // a palavra "staging" no host era impossível de satisfazer. A trava agora
+    // é o operador digitar o ref exato.
     expect(() =>
       resolveStagingConfig({
         STAGING_URL: VALID_STAGING_URL,
-        SUPABASE_URL: 'https://orbita-producao.supabase.co',
+        SUPABASE_URL: 'https://orbitaproducao.supabase.co',
       }),
-    ).toThrow(/E2E real nunca deve rodar contra o projeto Supabase de produção/);
+    ).toThrow(/E2E_SUPABASE_REF é obrigatória/);
+  });
+
+  it('recusa quando a confirmação aponta para outro projeto', () => {
+    expect(() =>
+      resolveStagingConfig({
+        STAGING_URL: VALID_STAGING_URL,
+        SUPABASE_URL: 'https://projetoalvo.supabase.co',
+        E2E_SUPABASE_REF: 'outroprojeto',
+      }),
+    ).toThrow(/não corresponde ao projeto de SUPABASE_URL/);
   });
 
   it('lança StagingConfigError quando NEXT_PUBLIC_SUPABASE_URL usa http', () => {
@@ -76,6 +89,7 @@ describe('resolveStagingConfig', () => {
     const config = resolveStagingConfig({
       STAGING_URL: VALID_STAGING_URL,
       SUPABASE_URL: VALID_SUPABASE_STAGING_URL,
+      E2E_SUPABASE_REF: 'orbita-staging',
     });
     expect(config.supabaseUrl).toBe(`${VALID_SUPABASE_STAGING_URL}/`);
   });
@@ -84,6 +98,7 @@ describe('resolveStagingConfig', () => {
     const config = resolveStagingConfig({
       STAGING_URL: VALID_STAGING_URL,
       SUPABASE_URL: VALID_SUPABASE_STAGING_URL,
+      E2E_SUPABASE_REF: 'orbita-staging',
       NEXT_PUBLIC_SUPABASE_URL: 'https://outro-staging.supabase.co',
     });
     expect(config.supabaseUrl).toBe(`${VALID_SUPABASE_STAGING_URL}/`);

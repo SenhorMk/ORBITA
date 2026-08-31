@@ -27,8 +27,8 @@
  *   SUPABASE_SERVICE_ROLE_KEY=... \
  *   npm run e2e:seed
  */
-import { writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
@@ -135,6 +135,10 @@ async function seedStaging(): Promise<SeedManifest> {
 async function main(): Promise<void> {
   const manifest = await seedStaging();
   const manifestPath = resolve(process.cwd(), `e2e/.manifests/${manifest.runId}.json`);
+  //  nao cria diretorio. Sem isto o seed inteiro roda, cria os
+  // usuarios e as organizacoes, e morre na ultima linha sem deixar o manifesto
+  // que o cleanup usa para saber o que apagar.
+  mkdirSync(dirname(manifestPath), { recursive: true });
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
 
   process.stdout.write(

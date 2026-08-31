@@ -93,15 +93,36 @@ export function resolveStagingConfig(
   const supabaseUrlRaw = env.SUPABASE_URL?.trim() || env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   if (supabaseUrlRaw) {
     const parsedSupabaseUrl = parseHttpsUrl(supabaseUrlRaw, 'SUPABASE_URL/NEXT_PUBLIC_SUPABASE_URL');
-    if (
-      !options.allowAnyNonLocalHostnameForTest &&
-      !parsedSupabaseUrl.hostname.toLowerCase().includes('staging')
-    ) {
-      throw new StagingConfigError(
-        `SUPABASE_URL ("${parsedSupabaseUrl.hostname}") não contém "staging" no host. E2E real nunca deve ` +
-          'rodar contra o projeto Supabase de produção.',
-      );
+
+    // A regra anterior exigia "staging" no host do Supabase. Era impossível de
+    // satisfazer: host de Supabase é sempre `<ref>.supabase.co`, e o ref é
+    // gerado, nunca contém o nome do projeto. Nenhum projeto real passaria —
+    // e por isso a suíte E2E nunca rodou, nem uma vez.
+    //
+    // A trava agora é mais forte, não mais fraca: o operador precisa DIGITAR o
+    // ref exato do projeto alvo. Um host chamado "staging-prod.supabase.co"
+    // passava na regra antiga; aqui, apontar para um projeto cujo ref você não
+    // escreveu é impossível.
+    if (!options.allowAnyNonLocalHostnameForTest) {
+      const refAlvo = parsedSupabaseUrl.hostname.toLowerCase().split('.')[0] ?? '';
+      const refConfirmado = env.E2E_SUPABASE_REF?.trim().toLowerCase();
+
+      if (!refConfirmado) {
+        throw new StagingConfigError(
+          'E2E_SUPABASE_REF é obrigatória quando SUPABASE_URL está definida. Ela confirma, por escrito, ' +
+            `contra qual projeto Supabase a suíte pode rodar. O alvo atual é "${refAlvo}". ` +
+            'Sem essa confirmação explícita, um E2E que cria e apaga dados poderia atingir o projeto errado.',
+        );
+      }
+
+      if (refConfirmado !== refAlvo) {
+        throw new StagingConfigError(
+          `E2E_SUPABASE_REF ("${refConfirmado}") não corresponde ao projeto de SUPABASE_URL ("${refAlvo}"). ` +
+            'A suíte recusa rodar contra um projeto que não foi confirmado nominalmente.',
+        );
+      }
     }
+
     supabaseUrl = parsedSupabaseUrl.toString();
   }
 
