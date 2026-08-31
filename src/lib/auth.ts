@@ -2,7 +2,6 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 
 import { readBearerToken } from './bearer-token';
-import { decrypt } from './crypto';
 
 const actorIdSchema = z.uuid().brand<'ActorId'>();
 const tenantIdSchema = z.uuid().brand<'TenantId'>();
@@ -16,7 +15,7 @@ const collaboratorMembershipSchema = z.object({
 });
 const signedTenantCandidateSchema = z.object({
   tenantId: tenantIdSchema,
-  encryptedSecret: z.string().min(1),
+  secret: z.string().min(1),
 });
 const verifiedTenantBrand: unique symbol = Symbol('VerifiedTenant');
 
@@ -80,6 +79,12 @@ export type ActorContextDenial = Exclude<
   ActorContextResult,
   { readonly _tag: 'ActorContextResolved' }
 >;
+
+/** Server-owned mapping from a tenant to the secret that signs its webhooks. */
+export interface SignedTenantCandidate {
+  readonly tenantId: string;
+  readonly secret: string;
+}
 
 /** Tagged result of authorizing a non-session server workflow for one tenant. */
 export type ServiceTenantAuthorizationResult =
@@ -202,13 +207,19 @@ export function actorContextDenialStatus(denial: ActorContextDenial): 401 | 403 
 /**
  * Resolve a privileged tenant from an HMAC signature and server-owned mappings.
  *
- * Candidate mappings must come from server-side configuration. The tenant is
- * returned only when its decrypted secret authenticates the exact raw body.
+ * Candidate mappings must come from server-side configuration, and each one
+ * carries the secret already in clear text. Decryption is deliberately NOT done
+ * here: the credential now lives in the vault (`credenciais_integracao`), and
+ * only the vault knows how to open it. Ticket 11 — while this function decrypted
+ * its own candidates, its single caller (the Bling webhook) kept reading the
+ * aposentada `integracoes_bling`, which has been empty since ticket 10b. Every
+ * legitimate event got 403. Taking the secret in clear text forces the caller to
+ * name where the credential came from.
  */
 export function authorizeSignedServiceTenant(
   rawBody: string,
   signature: string,
-  candidates: readonly unknown[],
+  candidates: readonly SignedTenantCandidate[],
 ): ServiceTenantAuthorizationResult {
   const signatureBuffer = Buffer.from(signature);
 
@@ -216,9 +227,7 @@ export function authorizeSignedServiceTenant(
     const candidateResult = signedTenantCandidateSchema.safeParse(untrustedCandidate);
     if (!candidateResult.success) continue;
 
-    const secret = decrypt(candidateResult.data.encryptedSecret);
-    if (!secret) continue;
-
+    const secret = candidateResult.data.secret;
     const expected = `sha256=${createHmac('sha256', secret).update(rawBody, 'utf8').digest('hex')}`;
     const expectedBuffer = Buffer.from(expected);
     if (

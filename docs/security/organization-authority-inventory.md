@@ -13,7 +13,7 @@ Snapshot do Ticket 06. Os números de linha são verificáveis pelos comandos ab
 | `src/app/api/bling/callback/route.ts:12-34` | query/state e transação OAuth assinada | transação persistida vincula ator/organização | manter contrato OAuth |
 | `src/app/api/stripe/webhook/route.ts:12` | header de assinatura Stripe | autenticidade do evento | manter; organização vem do mapeamento persistido do provedor |
 | `src/app/api/chatwoot/webhook/route.ts:89-164` | assinatura + inbox/membership persistidos | mapeamento do webhook | remover fallback pessoal em `:169` em ticket próprio |
-| `src/app/api/bling/webhook/route.ts:24-91` | query hint + assinatura + conexões/membership | hint não é autoridade | remover fallbacks `tenant.id`/`user_id` em ticket próprio |
+| `src/app/api/bling/webhook/route.ts` | assinatura HMAC contra o cofre | a conexão que assina determina a organização | **resolvido no ticket 11**: o hint `?userId=` e os fallbacks `tenant.id`/`membros_organizacao` foram removidos; a organização vem da linha de `conexoes_integracao` |
 
 ## Entradas HTTP não confiáveis já confrontadas com contexto canônico
 

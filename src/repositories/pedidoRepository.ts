@@ -127,6 +127,34 @@ export class PedidoRepository {
     }
   }
 
+  /**
+   * Marca como `Cancelado` o pedido correspondente a um `bling_id`, dentro do
+   * limite organizacional já verificado.
+   *
+   * Decisão do proprietário (31/08, ticket 11): uma exclusão feita **no Bling**
+   * cancela o pedido no ORBITA, nunca o apaga. Preserva histórico, estoque e
+   * financeiro auditáveis, e sobrevive a um evento espúrio ou reentregue —
+   * `deleteByBlingId` não teria volta.
+   *
+   * @returns `true` se havia um pedido local para cancelar; `false` se o evento
+   *          se refere a um pedido que o ORBITA nunca conheceu (caso normal:
+   *          pedido criado e excluído no Bling sem nunca ter sincronizado).
+   */
+  async markCancelledByBlingId(scope: VerifiedOrganizationScope, blingId: string): Promise<boolean> {
+    const { data, error } = await supabaseServer
+      .from('pedidos')
+      .update({ status: 'Cancelado' })
+      .eq('organizacao_id', scope.organizationId)
+      .eq('bling_id', blingId)
+      .select('id');
+
+    if (error) {
+      console.error(`Erro ao cancelar pedido por Bling ID ${blingId} no Supabase:`, error);
+      throw error;
+    }
+    return (data?.length ?? 0) > 0;
+  }
+
   async upsert(scope: VerifiedOrganizationScope, pedido: Pedido): Promise<Pedido> {
     const payload = {
       ...pedido,

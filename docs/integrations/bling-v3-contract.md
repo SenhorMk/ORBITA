@@ -119,6 +119,18 @@ erro tipado `timeout` distinto de `network`.
   de uma conexão real determina o tenant candidato; a organização é então
   resolvida a partir de vínculos persistidos e verificados (nunca do
   payload). Ver `src/app/api/bling/webhook/route.ts`.
+- **Origem do segredo:** o `client_secret` da **conexão**, lido do cofre
+  (`conexoes_integracao` + `credenciais_integracao`) por
+  `src/app/api/bling/webhook/tenants.ts`. Não existe variável de ambiente de
+  segredo de webhook: ele é por organização, não por deploy. Até o ticket 11 o
+  webhook lia a aposentada `integracoes_bling`, vazia desde o ticket 10b — o
+  que fazia **todo** evento legítimo receber `403`.
+- **Exclusão de pedido:** um evento de exclusão (`order.deleted` e variantes)
+  marca o pedido local como `Cancelado`; **nunca** o apaga (decisão do
+  proprietário, 31/08). Se o pedido não existe localmente, o evento é
+  registrado e concluído sem erro. Antes do ticket 11 não havia esse ramo:
+  `order.deleted` caía no caminho de atualização, pedia ao Bling um pedido já
+  apagado e retornava em silêncio.
 - **Resposta esperada pelo Bling:** HTTP `2xx` dentro de **5 segundos**.
   Fora dessa janela ou com status não-2xx, o Bling tenta novamente.
 - **Retry do Bling:** até **3 dias**, com intervalos crescentes. Depois de

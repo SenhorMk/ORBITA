@@ -7,7 +7,7 @@ import type { BlingPort } from '../../../../services/blingPort';
 import { Produto, Cliente, Pedido, ItemPedido } from '../../../../types';
 import { supabaseServer } from '../../../../lib/supabaseServer';
 import { mapBlingStatus, normalizeToE164 } from '../../../../lib/utils';
-import { authorizeSignedServiceTenant } from '../../../../lib/auth';
+import { createSupabaseBlingWebhookTenantStore, resolveSignedBlingConnection } from './tenants';
 import { blingInboxService, generateBlingIdempotencyKey } from '../../../../services/blingInboxService';
 import { verifyOrganizationScope, type VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 
@@ -25,107 +25,78 @@ type WebhookAuthorizationResult =
   | { readonly _tag: 'Denied'; readonly response: NextResponse };
 
 /**
- * Valida a assinatura HMAC do webhook contra os secrets de todos os tenants
- * candidatos e resolve, de forma inequívoca, a organização associada.
- * Nunca atribui ao "primeiro" resultado ambíguo: se a organização não puder
- * ser resolvida sem ambiguidade, falha fechado.
+ * Valida a assinatura HMAC do evento contra o secret de cada conexão Bling
+ * guardado no cofre e resolve a organização dona da conexão que assinou.
+ *
+ * A organização vem da própria linha de `conexoes_integracao` — não há mais
+ * resolução por `user_id` legado (`metadata->>'migrado_de_user_id'`), por
+ * varredura de `membros_organizacao`, nem ramo de ambiguidade: uma conexão
+ * pertence a exatamente uma organização, por construção. Ver `tenants.ts`
+ * para por que a leitura tinha de sair de `integracoes_bling`.
+ *
+ * O evento não tem ator humano. O escopo é verificado contra o **dono** da
+ * organização, que é uma linha de membership real, e não um ator inventado.
+ * Um `VerifiedOrganizationScope` sem ator exigiria tornar `actorId` opcional
+ * em todos os repositórios; ficou registrado como dívida no ticket 11 em vez
+ * de ser feito de passagem aqui.
  */
 async function authorizeWebhookTenant(
   rawBody: string,
   signatureHeader: string | null,
-  userIdHint: string | null,
 ): Promise<WebhookAuthorizationResult> {
   if (!signatureHeader) {
     console.warn('⚠️ Webhook Bling: Assinatura ausente. Payload ignorado.');
     return { _tag: 'Denied', response: NextResponse.json({ success: false, error: 'Assinatura ausente' }, { status: 403 }) };
   }
 
-  let integracoes: Array<{ user_id: string; client_secret: string }> = [];
-  if (userIdHint) {
-    const { data } = await supabaseServer
-      .from('integracoes_bling')
-      .select('user_id, client_secret')
-      .eq('user_id', userIdHint)
-      .maybeSingle();
-    if (data) integracoes = [data];
+  const store = createSupabaseBlingWebhookTenantStore(supabaseServer);
+  const connectionResult = await resolveSignedBlingConnection(store, rawBody, signatureHeader);
+
+  if (connectionResult._tag === 'ConnectionStoreUnavailable') {
+    // 503, e não 403: o Bling reentrega por até 3 dias diante de erro
+    // transitório, mas desiste de uma recusa. Responder "assinatura inválida"
+    // quando o problema é o banco perderia o evento para sempre.
+    console.error('❌ Webhook Bling: conexões indisponíveis:', connectionResult.cause);
+    return {
+      _tag: 'Denied',
+      response: NextResponse.json({ success: false, error: 'Serviço de conexões indisponível' }, { status: 503 }),
+    };
   }
 
-  if (integracoes.length === 0) {
-    const { data } = await supabaseServer.from('integracoes_bling').select('user_id, client_secret');
-    if (data) integracoes = data;
-  }
-
-  const tenantAuthorization = authorizeSignedServiceTenant(
-    rawBody,
-    signatureHeader,
-    integracoes.map((integration) => ({
-      tenantId: integration.user_id,
-      encryptedSecret: integration.client_secret,
-    })),
-  );
-
-  if (tenantAuthorization._tag === 'ServiceTenantDenied') {
-    console.warn('⚠️ Webhook Bling: Assinatura inválida (nenhum tenant correspondente). Payload ignorado.');
+  if (connectionResult._tag !== 'ConnectionResolved') {
+    console.warn('⚠️ Webhook Bling: Assinatura inválida (nenhuma conexão correspondente). Payload ignorado.');
     return { _tag: 'Denied', response: NextResponse.json({ success: false, error: 'Assinatura inválida' }, { status: 403 }) };
   }
 
-  const tenant = tenantAuthorization.tenant;
+  const { id: conexaoId, organizacaoId } = connectionResult.connection;
 
-  // Resolução de escopo multi-tenant organizacional. `tenant.id` é o
-  // user_id legado autenticado pela assinatura HMAC acima (nunca um hint
-  // de payload/query não verificado). `conexoes_integracao` não possui
-  // coluna `user_id` — o vínculo legado é rastreado em
-  // `metadata->>'migrado_de_user_id'` pelo backfill contabilizado
-  // (database/46_backfill_bling_conexoes_organizacao_contabilizado.sql).
-  let organizacaoId: string | null = null;
-  let conexaoId: string | null = null;
-
-  const { data: linkedConn } = await supabaseServer
-    .from('conexoes_integracao')
-    .select('id, organizacao_id')
-    .eq('provedor', 'bling')
-    .contains('metadata', { migrado_de_user_id: tenant.id })
+  const { data: owner, error: ownerError } = await supabaseServer
+    .from('membros_organizacao')
+    .select('user_id')
+    .eq('organizacao_id', organizacaoId)
+    .eq('papel', 'owner')
     .limit(1)
     .maybeSingle();
 
-  if (linkedConn) {
-    organizacaoId = linkedConn.organizacao_id;
-    conexaoId = linkedConn.id;
-  } else {
-    const { data: memberships } = await supabaseServer
-      .from('membros_organizacao')
-      .select('organizacao_id')
-      .eq('user_id', tenant.id);
-    const distinctOrgIds = Array.from(new Set((memberships || []).map((m) => m.organizacao_id)));
-
-    if (distinctOrgIds.length === 1) {
-      organizacaoId = distinctOrgIds[0];
-    } else {
-      console.warn(
-        `⚠️ Webhook Bling: não foi possível resolver organização inequívoca para o tenant legado (${distinctOrgIds.length} organizações candidatas). Payload rejeitado.`,
-      );
-      return {
-        _tag: 'Denied',
-        response: NextResponse.json(
-          { success: false, error: 'Organização não pôde ser determinada de forma inequívoca para este evento.' },
-          { status: 403 },
-        ),
-      };
-    }
+  if (ownerError) {
+    console.error('❌ Webhook Bling: falha ao resolver o dono da organização:', ownerError.message);
+    return {
+      _tag: 'Denied',
+      response: NextResponse.json({ success: false, error: 'Serviço de autorização indisponível' }, { status: 503 }),
+    };
   }
 
-  if (!organizacaoId) {
-    // Defesa em profundidade: nunca deveria ser alcançável (os dois ramos
-    // acima ou definem organizacaoId ou retornam antes), mas falha fechado
-    // em vez de invocar o adapter com um escopo indefinido.
-    return { _tag: 'Denied', response: NextResponse.json({ success: false, error: 'Organização não pôde ser determinada.' }, { status: 403 }) };
+  const actorId = typeof owner?.user_id === 'string' ? owner.user_id : null;
+  if (!actorId) {
+    console.warn(`⚠️ Webhook Bling: organização ${organizacaoId} não tem dono; evento recusado.`);
+    return {
+      _tag: 'Denied',
+      response: NextResponse.json({ success: false, error: 'Organização sem dono para atribuir o evento.' }, { status: 403 }),
+    };
   }
 
-  const blingClient = bling.forOrganization(organizacaoId, conexaoId || undefined);
-  const scopeResult = await verifyOrganizationScope(supabaseServer, {
-    organizationId: organizacaoId,
-    actorId: tenant.id,
-  });
+  const blingClient = bling.forOrganization(organizacaoId, conexaoId);
+  const scopeResult = await verifyOrganizationScope(supabaseServer, { organizationId: organizacaoId, actorId });
   if (scopeResult._tag !== 'OrganizationScopeVerified') {
     const unavailable = scopeResult._tag === 'OrganizationScopeStoreUnavailable';
     return {
@@ -204,14 +175,52 @@ async function buildPedidoItemsParaSalvar(
   return itemsParaSalvar;
 }
 
+/** Extrai o `bling_id` do pedido das formas em que o evento pode trazê-lo. */
+function resolvePedidoBlingId(eventData: Record<string, unknown>): string {
+  const pedidoData = (eventData.pedido || eventData) as Record<string, unknown>;
+  return String(pedidoData.id || pedidoData.bling_id || '');
+}
+
+/**
+ * Reconhece um evento de exclusão pelo nome (`recurso.acao`, ex. `order.deleted`).
+ *
+ * Antes do ticket 11 não havia este ramo: `order.deleted` casava com
+ * `entity.includes('order')` e caía no caminho de criação/atualização, que
+ * pedia ao Bling um pedido recém-apagado, não o encontrava e **retornava em
+ * silêncio**. O pedido excluído no Bling ficava para sempre no ORBITA sem que
+ * nada indicasse a divergência.
+ */
+function isDeletionEvent(entity: string): boolean {
+  return entity.includes('delet') || entity.includes('exclu') || entity.includes('remov');
+}
+
+/**
+ * Aplica no ORBITA uma exclusão de pedido feita no Bling: o pedido local é
+ * marcado `Cancelado`, nunca apagado (decisão do proprietário, ticket 11).
+ *
+ * @returns O `bling_id` do pedido tratado, ou string vazia se o evento não o traz.
+ */
+async function processPedidoExclusaoEvent(
+  eventData: Record<string, unknown>,
+  organizationScope: VerifiedOrganizationScope,
+): Promise<{ blingId: string; cancelled: boolean }> {
+  const blingId = resolvePedidoBlingId(eventData);
+  if (!blingId) return { blingId, cancelled: false };
+
+  const cancelled = await pedidoRepository.markCancelledByBlingId(organizationScope, blingId);
+  if (!cancelled) {
+    console.warn(`⚠️ Webhook Bling: exclusão do pedido ${blingId} recebida, mas ele não existe no ORBITA.`);
+  }
+  return { blingId, cancelled };
+}
+
 /** Sincroniza um evento de pedido de venda recebido do webhook. */
 async function processPedidoEvent(
   eventData: Record<string, unknown>,
   blingClient: BlingPort,
   organizationScope: VerifiedOrganizationScope,
 ): Promise<string> {
-  const pedidoData = (eventData.pedido || eventData) as Record<string, unknown>;
-  const blingId = String(pedidoData.id || pedidoData.bling_id || '');
+  const blingId = resolvePedidoBlingId(eventData);
   if (!blingId) return blingId;
 
   const fullPedido = await blingClient.getPedido(blingId);
@@ -339,6 +348,18 @@ async function processWebhookEvent(
     }
 
     if (entity.includes('order') || entity.includes('pedido')) {
+      if (isDeletionEvent(entity)) {
+        const exclusao = await processPedidoExclusaoEvent(eventData, organizationScope);
+        await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, {
+          success: true,
+          entity: 'pedido',
+          acao: 'cancelado',
+          blingId: exclusao.blingId,
+          cancelado: exclusao.cancelled,
+        });
+        return 0;
+      }
+
       const blingId = await processPedidoEvent(eventData, blingClient, organizationScope);
       await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, { success: true, entity: 'pedido', blingId });
       return 0;
@@ -369,13 +390,10 @@ async function processWebhookEvent(
 
 export async function POST(req: NextRequest) {
   try {
-    const url = new URL(req.url);
-    const userIdHint = url.searchParams.get('userId');
-
     const rawBody = await req.text();
     const signatureHeader = req.headers.get('x-bling-signature-256');
 
-    const authorization = await authorizeWebhookTenant(rawBody, signatureHeader, userIdHint);
+    const authorization = await authorizeWebhookTenant(rawBody, signatureHeader);
     if (authorization._tag === 'Denied') return authorization.response;
     const { blingClient, organizationScope, conexaoId } = authorization;
 
