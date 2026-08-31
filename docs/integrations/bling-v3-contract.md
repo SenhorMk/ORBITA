@@ -156,6 +156,13 @@ erro tipado `timeout` distinto de `network`.
   resposta processada, de forma que uma redelivery retorna sucesso/no-op
   sem repetir efeitos.
 
+## 7. Idempotência de sync
+
+Cada execução de sync deve ser seguramente reexecutável: checkpoint por
+conexão avança apenas após persistir a página corrente; recursos são
+upsertados por `bling_id` escopado à organização/conexão (nunca por
+"primeiro usuário" ou tenant global).
+
 ## 8. Guarda de payload de escrita, e o que ela não alcança
 
 `src/services/bling-payload-escrita.test.ts` confere o corpo **capturado do
@@ -184,13 +191,6 @@ Fechar isso exigiria o Bling corrigir o spec, ou declararmos o tipo por conta
 própria — que seria adivinhação com cara de contrato. Enquanto isso, quem
 protege esse campo é o Zod de `pedidoVendaContract.ts`, que o exige
 `z.number().nonnegative()`.
-
-## 7. Idempotência de sync
-
-Cada execução de sync deve ser seguramente reexecutável: checkpoint por
-conexão avança apenas após persistir a página corrente; recursos são
-upsertados por `bling_id` escopado à organização/conexão (nunca por
-"primeiro usuário" ou tenant global).
 
 ## Schema de `POST /pedidos/vendas` (Ticket 30)
 
