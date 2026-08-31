@@ -3,7 +3,7 @@
   "origem": {
     "url": "https://developer.bling.com.br/build/assets/openapi-BvBfsn8J.json",
     "capturadoEm": "2026-08-31",
-    "observacao": "O hash do arquivo muda a cada publicacao do Bling; a URL corrente esta em build/assets/reference-*.js. Recapturar antes de confiar numa divergencia. `allOf` do requestBody foi achatado na extracao — `escrita` registra a composicao original."
+    "observacao": "O hash muda a cada publicacao do Bling; a URL corrente esta em build/assets/reference-*.js. `allOf` do requestBody achatado na extracao — `escrita` registra a composicao original. `somenteLeitura` e `nulavel` vem de readOnly/nullable do spec."
   },
   "capturadoEm": "2026-08-30",
   "schemas": {
@@ -539,7 +539,8 @@
           "tipo": "boolean"
         },
         "duns": {
-          "tipo": "array"
+          "tipo": "array",
+          "tipoDosItens": "object"
         },
         "variacoes": {
           "tipo": "array"

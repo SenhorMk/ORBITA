@@ -36,8 +36,12 @@ interface CampoOficial {
   readonly tipo: string;
   readonly formato?: string;
   readonly ref?: string;
+  /** DTO dos elementos, quando a lista é de objetos. */
   readonly itens?: string;
+  /** Tipo primitivo dos elementos, quando a lista não é de objetos. */
+  readonly tipoDosItens?: string;
   readonly somenteLeitura?: boolean;
+  readonly nulavel?: boolean;
 }
 
 interface SchemaOficial {
@@ -54,36 +58,43 @@ const catalogo = JSON.parse(
   origem?: { url: string; capturadoEm: string };
 };
 
+type Motivo = 'inexistente' | 'somente-leitura' | 'tipo' | 'nulo' | 'obrigatorio-ausente';
+
 /** Divergência entre o que enviamos e o que o schema oficial declara. */
 interface Divergencia {
   readonly campo: string;
-  readonly motivo: 'inexistente' | 'somente-leitura' | 'tipo';
+  readonly motivo: Motivo;
   readonly detalhe: string;
 }
 
-/**
- * Campos oficiais do corpo de um endpoint de escrita.
- *
- * O `requestBody` do Bling é um `allOf` de dois DTOs — base mais extensão — e
- * conferir só contra o primeiro reprovaria metade do payload legítimo. A
- * composição vem do catálogo, extraída do próprio spec, e não de palpite.
- */
-function camposDoEndpoint(endpoint: string): Readonly<Record<string, CampoOficial>> {
+/** Campos e obrigatórios da composição oficial de um endpoint de escrita. */
+function contratoDoEndpoint(endpoint: string): SchemaOficial {
   const dtos = catalogo.escrita[endpoint];
   if (!dtos) throw new Error(`endpoint de escrita ausente no catálogo: ${endpoint}`);
-  const unido: Record<string, CampoOficial> = {};
+  const campos: Record<string, CampoOficial> = {};
+  const obrigatorios = new Set<string>();
   for (const dto of dtos) {
     const schema = catalogo.schemas[dto];
     if (!schema) throw new Error(`schema oficial ausente no catálogo: ${dto}`);
-    Object.assign(unido, schema.campos);
+    Object.assign(campos, schema.campos);
+    schema.obrigatorios.forEach((o) => obrigatorios.add(o));
   }
-  return unido;
+  return { campos, obrigatorios: [...obrigatorios].sort() };
 }
 
-function obrigatoriosDoEndpoint(endpoint: string): readonly string[] {
-  const dtos = catalogo.escrita[endpoint];
-  if (!dtos) throw new Error(`endpoint de escrita ausente no catálogo: ${endpoint}`);
-  return [...new Set(dtos.flatMap((dto) => catalogo.schemas[dto]!.obrigatorios))];
+/**
+ * Obrigatórios que valem para **enviar**, e não para receber.
+ *
+ * A regra é do próprio OpenAPI: uma propriedade `readOnly` marcada como
+ * `required` é obrigatória apenas na **resposta**, e não deve ser enviada na
+ * requisição. É o caso de `id` em `POST /contatos` — obrigatório no recurso,
+ * proibido no corpo de criação.
+ *
+ * Excluir `readOnly` aqui é ler o contrato, não abrir exceção. Só o que sobra
+ * depois disso é obrigação de envio de verdade.
+ */
+function obrigatoriosDeEnvio(contrato: SchemaOficial): readonly string[] {
+  return contrato.obrigatorios.filter((campo) => !contrato.campos[campo]?.somenteLeitura);
 }
 
 function tipoDoValor(valor: unknown): string {
@@ -92,36 +103,86 @@ function tipoDoValor(valor: unknown): string {
   return typeof valor === 'object' ? 'object' : typeof valor;
 }
 
-function tipoCompativel(valor: unknown, oficial: CampoOficial): boolean {
+/** O valor bate com o tipo declarado? `integer` exige inteiro, não só número. */
+function tipoCompativel(valor: unknown, tipo: string): boolean {
   const nosso = tipoDoValor(valor);
-  if (nosso === 'null') return true; // ausência declarada explicitamente
-  if (oficial.tipo === 'integer' || oficial.tipo === 'number') return nosso === 'number';
-  if (oficial.tipo === 'boolean') return nosso === 'boolean';
-  if (oficial.tipo === 'string') return nosso === 'string';
-  if (oficial.tipo === 'array') return nosso === 'array';
-  if (oficial.tipo === 'object') return nosso === 'object';
+  if (tipo === 'integer') return typeof valor === 'number' && Number.isInteger(valor);
+  if (tipo === 'number') return nosso === 'number';
+  if (tipo === 'boolean') return nosso === 'boolean';
+  if (tipo === 'string') return nosso === 'string';
+  if (tipo === 'array') return nosso === 'array';
+  if (tipo === 'object') return nosso === 'object';
   return true;
 }
 
+/** Confere um elemento de lista: objeto conhecido, primitivo declarado, ou nada. */
+function conferirElemento(valor: unknown, oficial: CampoOficial, caminho: string): Divergencia[] {
+  if (valor === null) {
+    return [{ campo: caminho, motivo: 'nulo', detalhe: 'elemento nulo numa lista que não declara nulos' }];
+  }
+
+  if (oficial.itens) {
+    const filho = catalogo.schemas[oficial.itens];
+    if (!filho) return [];
+    if (typeof valor !== 'object' || Array.isArray(valor)) {
+      return [{
+        campo: caminho,
+        motivo: 'tipo',
+        detalhe: `enviado \`${tipoDoValor(valor)}\`, oficial \`${oficial.itens}\` (objeto)`,
+      }];
+    }
+    return conferirObjeto(valor as Record<string, unknown>, filho, oficial.itens, caminho);
+  }
+
+  if (oficial.tipoDosItens && !tipoCompativel(valor, oficial.tipoDosItens)) {
+    return [{
+      campo: caminho,
+      motivo: 'tipo',
+      detalhe: `enviado \`${tipoDoValor(valor)}\`, oficial \`${oficial.tipoDosItens}\``,
+    }];
+  }
+
+  return [];
+}
+
 /**
- * Confere um objeto enviado contra um conjunto de campos oficiais.
+ * Confere um objeto enviado contra um schema oficial, recursivamente.
  *
  * Devolve a lista de divergências em vez de lançar, para o teste nomear todas
  * de uma vez em vez de uma por execução.
  */
-export function conferirCampos(
+export function conferirObjeto(
   enviado: Record<string, unknown>,
-  oficiais: Readonly<Record<string, CampoOficial>>,
+  contrato: SchemaOficial,
   rotulo: string,
   prefixo = '',
+  obrigatoriosEsperados: readonly string[] = obrigatoriosDeEnvio(contrato),
 ): Divergencia[] {
   const divergencias: Divergencia[] = [];
+  const caminhoDe = (chave: string) => (prefixo ? `${prefixo}.${chave}` : chave);
+
+  for (const chave of obrigatoriosEsperados) {
+    if (enviado[chave] === undefined) {
+      divergencias.push({
+        campo: caminhoDe(chave),
+        motivo: 'obrigatorio-ausente',
+        detalhe: `${rotulo} exige este campo no envio`,
+      });
+    }
+  }
 
   for (const [chave, valor] of Object.entries(enviado)) {
-    const caminho = prefixo ? `${prefixo}.${chave}` : chave;
-    const oficial = oficiais[chave];
+    const caminho = caminhoDe(chave);
+    const oficial = contrato.campos[chave];
 
     if (!oficial) {
+      // O spec do Bling é internamente inconsistente em pelo menos um ponto:
+      // `VendasItemDTO` lista `valorLista` em `required` e **não o declara** em
+      // `properties`. O campo é real — o contrato do ORBITA o envia e o pedido
+      // 26735988980 foi criado com ele. Um campo nomeado pelo próprio schema
+      // não pode ser tratado como inventado; o que não dá é conferir o tipo.
+      if (contrato.obrigatorios.includes(chave)) continue;
+
       divergencias.push({
         campo: caminho,
         motivo: 'inexistente',
@@ -134,12 +195,21 @@ export function conferirCampos(
       divergencias.push({
         campo: caminho,
         motivo: 'somente-leitura',
-        detalhe: `é readOnly no schema oficial; o Bling descarta o que enviarmos`,
+        detalhe: 'é readOnly no schema oficial; o Bling descarta o que enviarmos',
       });
       continue;
     }
 
-    if (!tipoCompativel(valor, oficial)) {
+    if (valor === null) {
+      // Nenhum campo do catálogo é `nullable`. Aceitar `null` de graça era
+      // permissividade, não tolerância a contrato.
+      if (!oficial.nulavel) {
+        divergencias.push({ campo: caminho, motivo: 'nulo', detalhe: 'o schema não declara este campo como nullable' });
+      }
+      continue;
+    }
+
+    if (!tipoCompativel(valor, oficial.tipo)) {
       divergencias.push({
         campo: caminho,
         motivo: 'tipo',
@@ -148,61 +218,52 @@ export function conferirCampos(
       continue;
     }
 
-    // Aninhados só são conferidos quando o schema nomeia o DTO filho; sem isso
-    // a checagem viraria adivinhação.
-    if (oficial.ref && valor && typeof valor === 'object' && !Array.isArray(valor)) {
+    if (oficial.ref && typeof valor === 'object' && !Array.isArray(valor)) {
       const filho = catalogo.schemas[oficial.ref];
-      if (filho) divergencias.push(...conferirCampos(valor as Record<string, unknown>, filho.campos, oficial.ref, caminho));
-    }
-    if (oficial.itens && Array.isArray(valor)) {
-      const filho = catalogo.schemas[oficial.itens];
       if (filho) {
-        valor.forEach((item, i) => {
-          if (item && typeof item === 'object') {
-            divergencias.push(...conferirCampos(item as Record<string, unknown>, filho.campos, oficial.itens!, `${caminho}[${i}]`));
-          }
-        });
+        divergencias.push(...conferirObjeto(valor as Record<string, unknown>, filho, oficial.ref, caminho));
       }
+    }
+
+    if (Array.isArray(valor)) {
+      valor.forEach((item, i) => {
+        divergencias.push(...conferirElemento(item, oficial, `${caminho}[${i}]`));
+      });
     }
   }
 
   return divergencias;
 }
 
+/**
+ * Obrigatórios de envio que o ORBITA deliberadamente **não** manda, por
+ * endpoint e por campo, cada um com a evidência que sustenta a exceção.
+ *
+ * Não é generalização: `readOnly` já sai por leitura do contrato, e o que resta
+ * aqui é omissão real, aceita caso a caso. Uma omissão nova aparece no diff.
+ */
+const OMISSOES_JUSTIFICADAS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  'POST /pedidos/vendas': {
+    dataPrevista: 'o pedido 26735988980 foi criado na conta real sem este campo (evidência do ticket 01)',
+    dataSaida: 'idem — criado sem este campo',
+    parcelas: 'idem — a venda manual não parcela; o Bling aceitou sem a lista',
+  },
+  'POST /contatos': {},
+  'POST /produtos': {},
+};
+
+/** Divergências que não estão justificadas para aquele endpoint. */
+function naoJustificadas(divergencias: readonly Divergencia[], endpoint: string): Divergencia[] {
+  const justificadas = OMISSOES_JUSTIFICADAS[endpoint] ?? {};
+  return divergencias.filter(
+    (d) => !(d.motivo === 'obrigatorio-ausente' && d.campo in justificadas),
+  );
+}
+
 /** Confere o corpo enviado contra a composição oficial do endpoint. */
 function conferirCorpo(enviado: Record<string, unknown>, endpoint: string): Divergencia[] {
-  return conferirCampos(enviado, camposDoEndpoint(endpoint), endpoint);
+  return conferirObjeto(enviado, contratoDoEndpoint(endpoint), endpoint);
 }
-
-/** Campos obrigatórios do endpoint que o payload não trouxe. */
-function obrigatoriosAusentes(enviado: Record<string, unknown>, endpoint: string): string[] {
-  return obrigatoriosDoEndpoint(endpoint).filter((campo) => enviado[campo] === undefined);
-}
-
-/**
- * Campos que o spec marca `required` e que o ORBITA **não** envia na criação.
- *
- * A lista `required` deste spec não descreve o corpo de criação: ela descreve o
- * recurso. A prova está em `POST /contatos`, que exige **`id`** — num endpoint
- * cuja função é justamente criar o contato e receber o id de volta. E o pedido
- * `26735988980` foi criado de verdade na conta do proprietário sem
- * `dataPrevista`, `dataSaida` nem `parcelas`.
- *
- * Por isso a ausência de obrigatório **não reprova** a guarda: reprovaria o
- * código que funciona. Fica registrada aqui, explícita, para a omissão ser
- * decisão e não descuido — e para uma omissão nova aparecer no diff.
- *
- * O que reprova é o que já custou defeito de verdade: campo que não existe,
- * campo `readOnly` e tipo divergente.
- */
-const OMISSOES_CONHECIDAS: Readonly<Record<string, readonly string[]>> = {
-  'POST /pedidos/vendas': ['dataPrevista', 'dataSaida', 'parcelas'],
-  // `createContato` manda `situacao` e `tipo`; so `id` fica de fora — e `id`
-  // num endpoint de criacao e o proprio argumento de que esta lista e do
-  // recurso, nao do corpo.
-  'POST /contatos': ['id'],
-  'POST /produtos': ['formato', 'situacao', 'tipo'],
-};
 
 const fake = new BlingFake();
 const ORG = '11111111-1111-4111-8111-111111111111';
@@ -229,6 +290,17 @@ function urlEnviada(): URL {
   if (!ultima) throw new Error('nenhuma requisição capturada');
   return new URL(ultima.url, 'http://fake.local');
 }
+
+/** Produto representativo: todos os campos que o tipo do domínio exige. */
+const PRODUTO: Parameters<BlingPort['criarProduto']>[0] = {
+  nome: 'Produto Sintético',
+  codigo: 'SKU-1',
+  preco: 10,
+  tipo: 'P',
+  situacao: 'A',
+  formato: 'S',
+  unidade: 'UN',
+};
 
 beforeAll(async () => {
   const baseUrl = await fake.iniciar();
@@ -266,77 +338,130 @@ describe('o catálogo declara sua origem e cobre a escrita', () => {
   });
 });
 
-describe('prova negativa — a guarda reprova os campos falsos históricos', () => {
-  it('`fone` no corpo do contato: o campo oficial é `telefone`', () => {
-    const divergencias = conferirCorpo({ nome: 'Cliente', fone: '11999998888' }, 'POST /contatos');
+describe('`readOnly` sai dos obrigatórios de envio — é o contrato, não exceção', () => {
+  it('`id` é obrigatório e readOnly em POST /contatos, logo não se envia', () => {
+    // A regra é do OpenAPI: `readOnly` + `required` obriga na resposta e
+    // **proíbe** na requisição. Foi por não ler isso que eu tratei a lista
+    // inteira de obrigatórios como não confiável.
+    const contrato = contratoDoEndpoint('POST /contatos');
 
-    expect(divergencias.map((d) => d.campo)).toContain('fone');
+    expect(contrato.obrigatorios).toContain('id');
+    expect(contrato.campos.id?.somenteLeitura).toBe(true);
+    expect(obrigatoriosDeEnvio(contrato)).not.toContain('id');
+  });
+
+  it('os demais obrigatórios continuam sendo cobrados', () => {
+    expect(obrigatoriosDeEnvio(contratoDoEndpoint('POST /contatos')).slice().sort())
+      .toEqual(['nome', 'situacao', 'tipo']);
+  });
+
+it('campo obrigatório que o spec não declara é aceito, e a inconsistência fica registrada', () => {
+    // `VendasItemDTO` lista `valorLista` em `required` e não o declara em
+    // `properties`. É defeito do spec do Bling, não nosso: o campo é real, o
+    // contrato do ORBITA o envia e o pedido 26735988980 foi criado com ele.
+    const item = catalogo.schemas.VendasItemDTO!;
+    expect(item.obrigatorios).toContain('valorLista');
+    expect(item.campos.valorLista, 'o spec não declara esta propriedade').toBeUndefined();
+
+    // Enviá-lo não pode ser reprovado como campo inventado.
+    const divergencias = conferirObjeto(
+      { descricao: 'X', quantidade: 1, valor: 10, valorLista: 10 },
+      item,
+      'VendasItemDTO',
+    );
+    expect(divergencias).toEqual([]);
+  });
+
+    it('obrigatório ausente é reprovado', () => {
+    const faltando = conferirCorpo({ nome: 'Cliente' }, 'POST /contatos');
+
+    expect(faltando.filter((d) => d.motivo === 'obrigatorio-ausente').map((d) => d.campo).sort())
+      .toEqual(['situacao', 'tipo']);
+  });
+});
+
+describe('prova negativa — a guarda reprova o que já custou defeito', () => {
+  const CONTATO_VALIDO = { nome: 'Cliente', situacao: 'A', tipo: 'F' };
+  const PEDIDO_VALIDO = {
+    contato: { id: 1 },
+    data: '2026-08-31',
+    itens: [{ descricao: 'X', quantidade: 1, valor: 10, valorLista: 10 }],
+  };
+
+  it('`fone` no corpo do contato: o campo oficial é `telefone`', () => {
+    const divergencias = conferirCorpo({ ...CONTATO_VALIDO, fone: '11999998888' }, 'POST /contatos');
+
     expect(divergencias.find((d) => d.campo === 'fone')?.motivo).toBe('inexistente');
   });
 
   it('`contribuinte` no corpo do contato: o campo oficial é `indicadorIe`', () => {
-    const divergencias = conferirCorpo({ nome: 'Cliente', contribuinte: 1 }, 'POST /contatos');
+    const divergencias = conferirCorpo({ ...CONTATO_VALIDO, contribuinte: 1 }, 'POST /contatos');
 
     expect(divergencias.map((d) => d.campo)).toContain('contribuinte');
   });
 
   it('os nomes corretos passam — senão a guarda reprovaria tudo e não valeria nada', () => {
     const divergencias = conferirCorpo(
-      { nome: 'Cliente', telefone: '11999998888', indicadorIe: 1 },
+      { ...CONTATO_VALIDO, telefone: '11999998888', indicadorIe: 1 },
       'POST /contatos',
     );
 
     expect(divergencias).toEqual([]);
   });
 
-  it('campo inventado no pedido de venda é reprovado', () => {
-    const divergencias = conferirCorpo({ contato: { id: 1 }, valorunitario: 10 }, 'POST /pedidos/vendas');
+  it('campo inventado e campo em objeto aninhado são alcançados', () => {
+    const campos = naoJustificadas(
+      conferirCorpo({ ...PEDIDO_VALIDO, valorunitario: 10, contato: { id: 1, apelido: 'Zé' } }, 'POST /pedidos/vendas'),
+      'POST /pedidos/vendas',
+    ).map((d) => d.campo);
 
-    expect(divergencias.map((d) => d.campo)).toContain('valorunitario');
+    expect(campos).toContain('valorunitario');
+    expect(campos).toContain('contato.apelido');
   });
 
-  it('campo inventado dentro de objeto aninhado também é alcançado', () => {
-    const divergencias = conferirCorpo({ contato: { id: 1, apelido: 'Zé' } }, 'POST /pedidos/vendas');
-
-    expect(divergencias.map((d) => d.campo)).toContain('contato.apelido');
-  });
-
-  it('tipo divergente é reprovado, não só nome desconhecido', () => {
-    const divergencias = conferirCorpo({ contato: { id: '1' } }, 'POST /pedidos/vendas');
+  it('`integer` fracionário é reprovado — `1.5` não é inteiro', () => {
+    const divergencias = conferirCorpo({ ...PEDIDO_VALIDO, contato: { id: 1.5 } }, 'POST /pedidos/vendas');
 
     expect(divergencias.find((d) => d.campo === 'contato.id')?.motivo).toBe('tipo');
   });
 
-  it('campo `readOnly` é reprovado: o Bling descarta o que enviarmos', () => {
+  it('`null` é reprovado: nenhum campo do catálogo é nullable', () => {
+    const divergencias = conferirCorpo({ ...CONTATO_VALIDO, nome: null }, 'POST /contatos');
+
+    expect(divergencias.find((d) => d.campo === 'nome')?.motivo).toBe('nulo');
+  });
+
+  it.each([
+    ['nulo', null, 'nulo'],
+    ['número', 42, 'tipo'],
+    ['texto', 'x', 'tipo'],
+  ])('elemento %s numa lista de objetos é reprovado', (_nome, elemento, motivo) => {
+    // Antes os elementos que não fossem objeto eram simplesmente ignorados:
+    // `itens: [null, 42, "x"]` passava inteiro.
+    const divergencias = conferirCorpo(
+      { ...PEDIDO_VALIDO, itens: [elemento] },
+      'POST /pedidos/vendas',
+    );
+
+    expect(divergencias.find((d) => d.campo === 'itens[0]')?.motivo).toBe(motivo);
+  });
+
+  it('lista mista reprova cada elemento ruim, e não só o primeiro', () => {
+    const divergencias = conferirCorpo(
+      { ...PEDIDO_VALIDO, itens: [null, 42, { descricao: 'ok', quantidade: 1, valor: 1, valorLista: 1 }] },
+      'POST /pedidos/vendas',
+    );
+
+    expect(divergencias.filter((d) => d.campo.startsWith('itens[')).map((d) => d.campo))
+      .toEqual(['itens[0]', 'itens[1]']);
+  });
+
+  it('campo `readOnly` enviado é reprovado: o Bling descarta o que mandarmos', () => {
     // Foi o caso de `situacao` em contas a pagar: a despesa marcada como paga
     // continuava aberta no ERP, sem erro nenhum.
-    const somenteLeitura = Object.entries(camposDoEndpoint('POST /produtos'))
-      .find(([, campo]) => campo.somenteLeitura)?.[0];
+    const divergencias = conferirCorpo({ ...CONTATO_VALIDO, id: 123 }, 'POST /contatos');
 
-    if (!somenteLeitura) {
-      // Se o spec deixar de ter campo readOnly aqui, o caso perde o objeto — e
-      // é melhor dizer isso do que passar em silêncio.
-      expect(somenteLeitura, 'nenhum campo readOnly em POST /produtos para exercitar').toBeUndefined();
-      return;
-    }
-
-    const divergencias = conferirCorpo({ [somenteLeitura]: 'x' }, 'POST /produtos');
-    expect(divergencias.find((d) => d.campo === somenteLeitura)?.motivo).toBe('somente-leitura');
-  });
-
-  it('obrigatório ausente é detectado', () => {
-    const obrigatorio = obrigatoriosDoEndpoint('POST /pedidos/vendas')[0];
-
-    expect(obrigatorio, 'o endpoint precisa ter ao menos um obrigatório').toBeDefined();
-    expect(obrigatoriosAusentes({}, 'POST /pedidos/vendas')).toContain(obrigatorio);
-  });
-
-  it('a lista `required` do spec não descreve o corpo de criação', () => {
-    // `POST /contatos` exige `id` — num endpoint cuja função é criar o contato
-    // e devolver o id. E o pedido real foi criado sem `dataPrevista`,
-    // `dataSaida` e `parcelas`. Por isso a ausência de obrigatório é
-    // informativa aqui, e não reprovação: reprovaria o código que funciona.
-    expect(obrigatoriosDoEndpoint('POST /contatos')).toContain('id');
+    expect(divergencias.find((d) => d.campo === 'id')?.motivo).toBe('somente-leitura');
   });
 });
 
@@ -347,21 +472,21 @@ describe('o payload que sai pelo fio bate com o schema oficial', () => {
     await adapter().criarPedidoVenda({
       contato: { id: 1234 },
       data: '2026-08-31',
-      itens: [{ descricao: 'Produto', quantidade: 1, valor: 10, produto: { id: 55 } }],
+      itens: [{ descricao: 'Produto', quantidade: 1, valor: 10, valorLista: 10, produto: { id: 55 } }],
     } as Parameters<BlingPort['criarPedidoVenda']>[0]);
 
     const url = urlEnviada();
     expect(url.pathname).toBe('/pedidos/vendas');
     expect([...url.searchParams.keys()], 'criação não leva filtro na query').toEqual([]);
 
-    const corpo = corpoEnviado();
-    expect(conferirCorpo(corpo, 'POST /pedidos/vendas')).toEqual([]);
-    // Omissao nova aparece aqui; as conhecidas estao registradas com o motivo.
-    expect(obrigatoriosAusentes(corpo, 'POST /pedidos/vendas').sort())
-      .toEqual([...OMISSOES_CONHECIDAS['POST /pedidos/vendas']!].sort());
+    const divergencias = conferirCorpo(corpoEnviado(), 'POST /pedidos/vendas');
+    // As três omissões justificadas ficam de fora; qualquer outra reprova.
+    expect(naoJustificadas(divergencias, 'POST /pedidos/vendas')).toEqual([]);
+    expect(divergencias.map((d) => d.campo).sort())
+      .toEqual(Object.keys(OMISSOES_JUSTIFICADAS['POST /pedidos/vendas']!).sort());
   });
 
-  it('POST /contatos', async () => {
+  it('POST /contatos — sem omissão nenhuma', async () => {
     fake.programar({ status: 201, body: JSON.stringify({ data: { id: 77 } }) });
 
     await adapter().criarContatoParaVenda({
@@ -372,21 +497,16 @@ describe('o payload que sai pelo fio bate com o schema oficial', () => {
     });
 
     expect(urlEnviada().pathname).toBe('/contatos');
-
-    const corpo = corpoEnviado();
-    expect(conferirCorpo(corpo, 'POST /contatos')).toEqual([]);
-    expect(obrigatoriosAusentes(corpo, 'POST /contatos').sort())
-      .toEqual([...OMISSOES_CONHECIDAS['POST /contatos']!].sort());
+    expect(conferirCorpo(corpoEnviado(), 'POST /contatos')).toEqual([]);
   });
 
-  it('POST /produtos', async () => {
+  it('POST /produtos — com entrada representativa, sem omissão nenhuma', async () => {
+    // Sem cast que esconda campo: `PRODUTO` traz tudo o que
+    // `ProdutoBlingEntrada` exige. Omitir com `as` provaria só que o teste
+    // concorda consigo mesmo.
     fake.programar({ status: 201, body: JSON.stringify({ data: { id: 88 } }) });
 
-    await adapter().criarProduto({
-      nome: 'Produto Sintético',
-      codigo: 'SKU-1',
-      preco: 10,
-    } as Parameters<BlingPort['criarProduto']>[0]);
+    await adapter().criarProduto(PRODUTO);
 
     expect(urlEnviada().pathname).toBe('/produtos');
     expect(conferirCorpo(corpoEnviado(), 'POST /produtos')).toEqual([]);
@@ -407,18 +527,14 @@ describe('caminho e query são conferidos separadamente do corpo', () => {
     expect(chaves, '`codigo` no singular não existe na API').not.toContain('codigo');
   });
 
-  it('a atualização de produto leva o id no caminho, não no corpo', async () => {
+  it('a atualização de produto leva o id no caminho, não no corpo nem na query', async () => {
     fake.programar({ status: 200, body: JSON.stringify({ data: { id: 88 } }) });
 
-    await adapter().atualizarProduto('88', {
-      nome: 'Produto Sintético',
-      codigo: 'SKU-1',
-      preco: 12,
-    } as Parameters<BlingPort['atualizarProduto']>[1]);
+    await adapter().atualizarProduto('88', PRODUTO);
 
     const url = urlEnviada();
     expect(url.pathname).toBe('/produtos/88');
-    expect(url.searchParams.has('id'), 'o id vai no caminho, não na query').toBe(false);
-    expect(corpoEnviado().id, 'o id vai no caminho, não no corpo').toBeUndefined();
+    expect(url.searchParams.has('id')).toBe(false);
+    expect(corpoEnviado().id).toBeUndefined();
   });
 });
