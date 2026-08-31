@@ -78,10 +78,18 @@ export function planejarExecucao(
   }
   for (const persona of manifest.personas) {
     if (persona.organizationKey === null) continue;
+    const organizacao = manifest.organizations.find((o) => o.key === persona.organizationKey);
+    if (!organizacao) {
+      throw new Error(`Persona "${persona.key}" aponta para a organização "${persona.organizationKey}", que o manifesto não tem.`);
+    }
     operacoes.push({
       tipo: 'membership',
       chave: `membership:${persona.key}`,
-      identificador: `${persona.email}@${persona.organizationKey}`,
+      // E-mail e slug, os dois legíveis no projeto. Usar a chave interna da
+      // organização tornaria o identificador irreconstruível a partir do que o
+      // Supabase devolve — e a conferência de identidade compararia o plano
+      // consigo mesmo, que não prova nada.
+      identificador: `${persona.email}@${organizacao.slug}`,
     });
   }
 
@@ -179,11 +187,19 @@ function ehTexto(valor: unknown): valor is string {
   return typeof valor === 'string' && valor.trim().length > 0;
 }
 
+function ehTipoDeRegistro(valor: unknown): valor is TipoDeRegistro {
+  return valor === 'usuario' || valor === 'organizacao' || valor === 'membership';
+}
+
 /**
  * Valida um diário lido do disco contra o projeto e a execução esperados.
  *
  * Recusar é o comportamento correto: agir sobre um diário de outra execução, ou
  * de outro projeto, é exatamente como uma limpeza apagaria o que não criou.
+ *
+ * A validação é **integral** — plano e `concluidas`, item a item. Um diário
+ * meio válido é pior que um inválido: ele passa na porta e falha lá dentro,
+ * quando já há escrita em curso.
  */
 export function lerDiario(
   bruto: unknown,
@@ -191,7 +207,7 @@ export function lerDiario(
 ): LeituraDoDiario {
   const recusar = (motivo: DiarioInvalido): LeituraDoDiario => ({ _tag: 'DiarioRecusado', motivo });
 
-  if (typeof bruto !== 'object' || bruto === null) {
+  if (typeof bruto !== 'object' || bruto === null || Array.isArray(bruto)) {
     return recusar({ _tag: 'FormaInvalida', detalhe: 'o diário não é um objeto' });
   }
 
@@ -201,15 +217,55 @@ export function lerDiario(
   }
 
   const p = plano as Partial<PlanoDeExecucao>;
-  if (!ehTexto(p.projetoRef) || !ehTexto(p.runId) || !Array.isArray(p.operacoes)) {
-    return recusar({ _tag: 'FormaInvalida', detalhe: 'o plano não traz `projetoRef`, `runId` e `operacoes`' });
+  if (!ehTexto(p.projetoRef) || !ehTexto(p.runId) || !ehTexto(p.criadoEm) || !Array.isArray(p.operacoes)) {
+    return recusar({ _tag: 'FormaInvalida', detalhe: 'o plano não traz `projetoRef`, `runId`, `criadoEm` e `operacoes`' });
   }
 
-  if (!p.runId.startsWith(SYNTHETIC_DATA_PREFIX) && !p.operacoes.every((o) => o.identificador.includes(SYNTHETIC_DATA_PREFIX))) {
-    return recusar({
-      _tag: 'FormaInvalida',
-      detalhe: 'nenhum identificador do plano carrega o prefixo sintético; este diário não é de uma execução de seed',
-    });
+  if (p.operacoes.length === 0) {
+    return recusar({ _tag: 'FormaInvalida', detalhe: 'o plano não tem operação nenhuma' });
+  }
+
+  const chaves = new Set<string>();
+  for (const [i, operacao] of p.operacoes.entries()) {
+    if (typeof operacao !== 'object' || operacao === null) {
+      return recusar({ _tag: 'FormaInvalida', detalhe: `operacoes[${i}] não é um objeto` });
+    }
+    const o = operacao as Partial<OperacaoPlanejada>;
+    if (!ehTexto(o.chave) || !ehTexto(o.identificador) || !ehTipoDeRegistro(o.tipo)) {
+      return recusar({ _tag: 'FormaInvalida', detalhe: `operacoes[${i}] não traz \`tipo\`, \`chave\` e \`identificador\` válidos` });
+    }
+    if (chaves.has(o.chave)) {
+      return recusar({ _tag: 'FormaInvalida', detalhe: `chave repetida no plano: "${o.chave}"` });
+    }
+    chaves.add(o.chave);
+    if (!o.identificador.includes(SYNTHETIC_DATA_PREFIX) || !o.identificador.includes(p.runId)) {
+      // Salvaguarda contra apontar a limpeza para dados reais montando um
+      // arquivo à mão: todo identificador tem de ser desta execução sintética.
+      return recusar({
+        _tag: 'FormaInvalida',
+        detalhe: `operacoes[${i}] ("${o.identificador}") não é um identificador sintético desta execução`,
+      });
+    }
+  }
+
+  const vistas = new Set<string>();
+  for (const [i, concluida] of concluidas.entries()) {
+    if (typeof concluida !== 'object' || concluida === null) {
+      return recusar({ _tag: 'FormaInvalida', detalhe: `concluidas[${i}] não é um objeto` });
+    }
+    const c = concluida as Partial<OperacaoConcluida>;
+    if (!ehTexto(c.chave) || !ehTexto(c.idReal) || !ehTexto(c.concluidaEm)) {
+      return recusar({ _tag: 'FormaInvalida', detalhe: `concluidas[${i}] não traz \`chave\`, \`idReal\` e \`concluidaEm\`` });
+    }
+    if (!chaves.has(c.chave)) {
+      // Uma conclusão sem operação no plano é registro de algo que ninguém
+      // planejou criar. Não se apaga por um registro desses.
+      return recusar({ _tag: 'FormaInvalida', detalhe: `concluidas[${i}] aponta para "${c.chave}", que o plano não prevê` });
+    }
+    if (vistas.has(c.chave)) {
+      return recusar({ _tag: 'FormaInvalida', detalhe: `chave concluída em duplicidade: "${c.chave}"` });
+    }
+    vistas.add(c.chave);
   }
 
   if (p.projetoRef !== esperado.projetoRef) {

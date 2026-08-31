@@ -1,169 +1,66 @@
 /**
- * Limpeza do que uma execução de seed criou no projeto Supabase compartilhado.
+ * Apaga o que uma execução de seed criou no ambiente compartilhado — e nada
+ * além.
  *
- * A decisão de **o que** apagar não mora aqui: mora em
- * `src/lib/e2e/limpezaSegura.ts`, que é puro e coberto por teste. Este arquivo
- * só lê o projeto, pergunta lá o que fazer, e executa o que foi aprovado.
- *
- * Regra: apaga-se o que esta execução criou, provado registro a registro pelo
- * id que o diário guardou. Qualquer divergência **para a limpeza inteira** —
- * não se resolve por aproximação.
+ * A decisão de o que pode ser apagado mora em `src/lib/e2e/limpezaSegura.ts` e
+ * `orquestracao.ts`, cobertas por teste com falhas simuladas. Este arquivo só
+ * liga as peças e imprime.
  *
  * Uso:
- *   npm run e2e:cleanup -- <diario.json> --simular   (não apaga nada)
- *   npm run e2e:cleanup -- <diario.json>
+ *   npm run e2e:cleanup -- <runId> --simular   (não apaga nada)
+ *   npm run e2e:cleanup -- <runId>
  */
 import { readFileSync } from 'node:fs';
 
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { lerDiario } from '../../src/lib/e2e/execucaoSeed';
+import { executarLimpeza } from '../../src/lib/e2e/orquestracao';
 
-import { lerDiario, type DiarioDeExecucao, type RegistroEncontrado } from '../../src/lib/e2e/execucaoSeed';
-import {
-  descreverSimulacao,
-  limpezaPodeProsseguir,
-  planejarLimpeza,
-  relatarOrfaos,
-  type PlanoDeLimpeza,
-} from '../../src/lib/e2e/limpezaSegura';
-import { resolveStagingConfig } from '../../src/lib/e2e/stagingConfig';
+import { caminhoDoDiario, resolverAmbiente } from './ambiente';
+import { criarPortaSupabase } from './supabasePorta';
 
-interface Argumentos {
-  readonly caminhoDoDiario: string;
-  readonly simular: boolean;
-}
-
-function lerArgumentos(): Argumentos {
+function lerArgumentos(): { runId: string; simular: boolean } {
   const args = process.argv.slice(2).filter((a) => a !== '--');
-  const caminhoDoDiario = args.find((a) => !a.startsWith('--'));
-  if (!caminhoDoDiario) {
-    throw new Error('Uso: npm run e2e:cleanup -- <caminho-do-diario.json> [--simular]');
+  const runId = args.find((a) => !a.startsWith('--'));
+  if (!runId) {
+    throw new Error('Uso: npm run e2e:cleanup -- <runId> [--simular]');
   }
-  return { caminhoDoDiario, simular: args.includes('--simular') };
+  return { runId, simular: args.includes('--simular') };
 }
 
-/** Ref do projeto que a configuração autorizou, para conferir contra o diário. */
-function refDoProjetoAutorizado(supabaseUrl: string): string {
-  return new URL(supabaseUrl).hostname.toLowerCase().split('.')[0] ?? '';
-}
+async function main(): Promise<void> {
+  const { runId, simular } = lerArgumentos();
+  const { supabase, projetoRef } = resolverAmbiente();
 
-/** Lê do projeto os registros que o diário diz ter criado. */
-async function lerRegistrosDoProjeto(
-  supabase: SupabaseClient,
-  diario: DiarioDeExecucao,
-): Promise<RegistroEncontrado[]> {
-  const encontrados: RegistroEncontrado[] = [];
-
-  const { data: organizacoes, error: erroOrganizacoes } = await supabase
-    .from('organizacoes')
-    .select('id, slug')
-    .ilike('slug', `%${diario.plano.runId}%`);
-  if (erroOrganizacoes) {
-    throw new Error(`Falha ao ler organizações da execução: ${erroOrganizacoes.message}.`);
-  }
-  for (const linha of (organizacoes ?? []) as Array<{ id: string; slug: string }>) {
-    encontrados.push({ identificador: linha.slug, id: linha.id });
-  }
-
-  // Usuários e memberships são lidos pelo id que o próprio diário registrou:
-  // buscar por e-mail exigiria varrer a base de autenticação inteira, e é
-  // justamente esse tipo de varredura que a conferência de identidade evita.
-  for (const concluida of diario.concluidas) {
-    const operacao = diario.plano.operacoes.find((o) => o.chave === concluida.chave);
-    if (!operacao || operacao.tipo === 'organizacao') continue;
-
-    if (operacao.tipo === 'usuario') {
-      const { data, error } = await supabase.auth.admin.getUserById(concluida.idReal);
-      if (error || !data?.user) continue;
-      encontrados.push({ identificador: operacao.identificador, id: data.user.id });
-      continue;
-    }
-
-    const { data, error } = await supabase
-      .from('membros_organizacao')
-      .select('id')
-      .eq('id', concluida.idReal)
-      .maybeSingle();
-    if (error || !data) continue;
-    encontrados.push({ identificador: operacao.identificador, id: String(data.id) });
-  }
-
-  return encontrados;
-}
-
-/** Executa apenas o que o plano aprovou, na ordem que ele definiu. */
-async function executarLimpeza(supabase: SupabaseClient, plano: PlanoDeLimpeza): Promise<void> {
-  for (const exclusao of plano.aprovadas) {
-    if (exclusao.tipo === 'usuario') {
-      const { error } = await supabase.auth.admin.deleteUser(exclusao.id);
-      if (error) throw new Error(`Falha ao remover usuário ${exclusao.identificador}: ${error.message}.`);
-      continue;
-    }
-
-    const tabela = exclusao.tipo === 'organizacao' ? 'organizacoes' : 'membros_organizacao';
-    const { error } = await supabase.from(tabela).delete().eq('id', exclusao.id);
-    if (error) throw new Error(`Falha ao remover ${exclusao.tipo} ${exclusao.identificador}: ${error.message}.`);
-  }
-}
-
-async function limpar(): Promise<void> {
-  const { caminhoDoDiario, simular } = lerArgumentos();
-
-  const stagingConfig = resolveStagingConfig(process.env);
-  if (!stagingConfig.supabaseUrl) {
-    throw new Error('SUPABASE_URL/NEXT_PUBLIC_SUPABASE_URL é obrigatória para rodar o cleanup.');
-  }
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (!serviceRoleKey) {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY é obrigatória para rodar o cleanup (fail-closed, sem fallback).');
-  }
-
-  const projetoRef = refDoProjetoAutorizado(stagingConfig.supabaseUrl);
-  const leitura = lerDiario(JSON.parse(readFileSync(caminhoDoDiario, 'utf8')), { projetoRef });
+  const leitura = lerDiario(JSON.parse(readFileSync(caminhoDoDiario(runId), 'utf8')), { projetoRef, runId });
   if (leitura._tag !== 'DiarioValido') {
     throw new Error(
       `Diário recusado (${leitura.motivo._tag}). A limpeza não age sobre um diário que não confere com o `
-        + `projeto autorizado (${projetoRef}).`,
+        + `projeto autorizado (${projetoRef}) e a execução ${runId}.`,
     );
   }
 
-  const supabase = createClient(stagingConfig.supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  const resultado = await executarLimpeza(criarPortaSupabase(supabase), leitura.diario, { simular });
 
-  const encontrados = await lerRegistrosDoProjeto(supabase, leitura.diario);
-  const plano = planejarLimpeza(leitura.diario, encontrados);
+  process.stdout.write(`${resultado.simulacao}\n`);
 
-  process.stdout.write(`${descreverSimulacao(plano)}\n`);
-
-  const orfaos = relatarOrfaos(encontrados, plano.runId, plano);
-  if (orfaos.length > 0) {
+  if (resultado.orfaos.length > 0) {
     // Informativo por decisão: apagar por varredura é o que a conferência de
     // identidade existe para impedir. Quem decide é quem está operando.
     process.stdout.write(
-      `\nÓRFÃOS desta execução (${orfaos.length}) — informativo, nada será apagado:\n`
-        + orfaos.map((o) => `  ${o.identificador}  id=${o.id}`).join('\n')
-        + '\n',
+      `\nÓRFÃOS desta execução (${resultado.orfaos.length}) — informativo, nada será apagado:\n`
+        + resultado.orfaos.map((o) => `  ${o.identificador}  id=${o.id}`).join('\n') + '\n',
     );
   }
 
-  if (!limpezaPodeProsseguir(plano)) {
-    throw new Error(
-      `${plano.recusadas.length} registro(s) recusado(s) na conferência de identidade. Nada foi apagado.`,
-    );
-  }
-
-  if (simular) {
-    process.stdout.write('\nSimulação: nada foi apagado.\n');
-    return;
-  }
-
-  await executarLimpeza(supabase, plano);
   process.stdout.write(
-    `\nLimpeza concluída: ${plano.aprovadas.length} removido(s), ${plano.jaRemovidas.length} já não existia(m).\n`,
+    resultado.simulado
+      ? '\nSimulação: nada foi apagado.\n'
+      : `\nLimpeza concluída: ${resultado.removidos} removido(s), `
+        + `${resultado.plano.jaRemovidas.length} já não existia(m).\n`,
   );
 }
 
-limpar().catch((error: unknown) => {
+main().catch((error: unknown) => {
   process.stderr.write(`Falha na limpeza: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
 });

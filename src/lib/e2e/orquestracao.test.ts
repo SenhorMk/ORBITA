@@ -1,0 +1,332 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import { lerDiario, planejarExecucao, type DiarioDeExecucao, type RegistroEncontrado } from './execucaoSeed';
+import { executarLimpeza, executarSeed } from './orquestracao';
+import type {
+  EscritaNoProjeto,
+  ExclusaoNoProjeto,
+  LeituraDoProjeto,
+  PortaDoProjeto,
+} from './portaDoProjeto';
+import { buildSeedManifest } from './syntheticSeedData';
+
+/**
+ * Execução do seed e da limpeza, com falhas simuladas.
+ *
+ * Nenhum destes casos toca rede ou disco: a porta do projeto é um dublê que
+ * sabe falhar na hora exata, e o diário é gravado numa variável. O que está sob
+ * teste é o que o orquestrador faz **quando dá errado** — que é onde os
+ * defeitos moravam.
+ */
+
+const PROJETO = 'etqjqeqqbjrzyyxodntv';
+const RUN = 'run-1';
+
+interface FalhasSimuladas {
+  /** Falha na escrita de índice N daquele tipo (0 = a primeira). */
+  readonly escritaFalhaEm?: { readonly tipo: 'usuario' | 'organizacao' | 'membership'; readonly indice: number };
+  readonly leituraFalhaEm?: 'usuarios' | 'organizacoes' | 'memberships';
+  readonly exclusaoFalhaEm?: number;
+  /** Registros que já existem no projeto antes de o seed começar. */
+  readonly jaExistentes?: readonly RegistroEncontrado[];
+}
+
+/** Projeto em memória: guarda o que foi criado e devolve o que foi lido. */
+function projetoFalso(falhas: FalhasSimuladas = {}) {
+  const criados = new Map<string, RegistroEncontrado & { tipo: string }>();
+  const contadores = { usuario: 0, organizacao: 0, membership: 0 };
+  let exclusoes = 0;
+  let proximoId = 1;
+
+  for (const existente of falhas.jaExistentes ?? []) {
+    criados.set(existente.identificador, { ...existente, tipo: inferirTipo(existente.identificador) });
+  }
+
+  function inferirTipo(identificador: string): string {
+    if (identificador.includes('@') && identificador.split('@').length > 2) return 'membership';
+    return identificador.includes('@') ? 'usuario' : 'organizacao';
+  }
+
+  function escrever(tipo: 'usuario' | 'organizacao' | 'membership', identificador: string): EscritaNoProjeto {
+    const indice = contadores[tipo];
+    contadores[tipo] += 1;
+    if (falhas.escritaFalhaEm?.tipo === tipo && falhas.escritaFalhaEm.indice === indice) {
+      return { _tag: 'FalhaDeEscrita', causa: `falha simulada em ${tipo}[${indice}]` };
+    }
+    const id = `id-${proximoId++}`;
+    criados.set(identificador, { identificador, id, tipo });
+    return { _tag: 'Escrito', id };
+  }
+
+  function ler(recurso: 'usuarios' | 'organizacoes' | 'memberships', tipo: string): LeituraDoProjeto {
+    if (falhas.leituraFalhaEm === recurso) {
+      return { _tag: 'FalhaDeLeitura', recurso, causa: 'falha simulada de leitura' };
+    }
+    return {
+      _tag: 'Lido',
+      registros: [...criados.values()].filter((c) => c.tipo === tipo).map(({ identificador, id }) => ({ identificador, id })),
+    };
+  }
+
+  function apagar(id: string): ExclusaoNoProjeto {
+    exclusoes += 1;
+    if (falhas.exclusaoFalhaEm === exclusoes - 1) {
+      return { _tag: 'FalhaDeExclusao', causa: 'falha simulada de exclusão' };
+    }
+    for (const [chave, valor] of criados) if (valor.id === id) criados.delete(chave);
+    return { _tag: 'Excluido' };
+  }
+
+  const porta: PortaDoProjeto = {
+    criarUsuario: async (email) => escrever('usuario', email),
+    criarOrganizacao: async (slug) => escrever('organizacao', slug),
+    criarMembership: async (organizacaoId, userId) => {
+      const org = [...criados.values()].find((c) => c.id === organizacaoId);
+      const usuario = [...criados.values()].find((c) => c.id === userId);
+      return escrever('membership', `${usuario?.identificador ?? '?'}@${org?.identificador ?? '?'}`);
+    },
+    lerUsuariosDaExecucao: async () => ler('usuarios', 'usuario'),
+    lerOrganizacoesDaExecucao: async () => ler('organizacoes', 'organizacao'),
+    lerMembershipsDaExecucao: async () => ler('memberships', 'membership'),
+    apagarUsuario: async (id) => apagar(id),
+    apagarOrganizacao: async (id) => apagar(id),
+    apagarMembership: async (id) => apagar(id),
+  };
+
+  return { porta, criados };
+}
+
+/** Disco em memória: guarda a última gravação do diário. */
+function discoFalso() {
+  const gravacoes: string[] = [];
+  return {
+    persistir: (conteudo: string) => { gravacoes.push(conteudo); },
+    gravacoes,
+    ultimo: (): DiarioDeExecucao => JSON.parse(gravacoes.at(-1)!) as DiarioDeExecucao,
+  };
+}
+
+const manifesto = () => buildSeedManifest({ runId: RUN });
+
+describe('o seed grava o diário antes e durante as escritas', () => {
+  it('o plano vai a disco antes da primeira escrita', async () => {
+    const disco = discoFalso();
+    const { porta } = projetoFalso();
+    const criarOrganizacao = vi.fn(porta.criarOrganizacao);
+
+    await executarSeed({
+      porta: { ...porta, criarOrganizacao },
+      manifest: manifesto(),
+      projetoRef: PROJETO,
+      persistir: disco.persistir,
+    });
+
+    // A primeira gravação é o plano vazio, e ela acontece antes de qualquer
+    // chamada de escrita.
+    const primeiro = JSON.parse(disco.gravacoes[0]!) as DiarioDeExecucao;
+    expect(primeiro.concluidas).toEqual([]);
+    expect(primeiro.plano.operacoes.length).toBeGreaterThan(0);
+    expect(criarOrganizacao).toHaveBeenCalled();
+  });
+
+  it('cada operação concluída é gravada na hora', async () => {
+    const disco = discoFalso();
+    const { porta } = projetoFalso();
+
+    const { diario } = await executarSeed({
+      porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
+    });
+
+    // 1 plano + 11 operações.
+    expect(disco.gravacoes).toHaveLength(1 + diario.plano.operacoes.length);
+    expect(disco.ultimo().concluidas).toHaveLength(diario.plano.operacoes.length);
+  });
+
+  it('escrita que falha no meio deixa o diário com tudo o que já foi criado', async () => {
+    // É o cenário que motivou o diário: interromper no meio não pode apagar o
+    // rastro do que já existe no projeto.
+    const disco = discoFalso();
+    const { porta } = projetoFalso({ escritaFalhaEm: { tipo: 'usuario', indice: 2 } });
+
+    await expect(executarSeed({
+      porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
+    })).rejects.toThrow(/Falha ao criar o usuário/u);
+
+    const diario = disco.ultimo();
+    // 2 organizações + 2 usuários + os 2 memberships deles: o laço cria o
+    // membership logo depois de cada usuário, então a falha no terceiro
+    // usuário deixa seis registros gravados.
+    expect(diario.concluidas).toHaveLength(6);
+    expect(lerDiario(diario, { projetoRef: PROJETO, runId: RUN })._tag).toBe('DiarioValido');
+  });
+});
+
+describe('a retomada não destrói o diário existente', () => {
+  it('o diário de uma execução interrompida é preservado, não sobrescrito', async () => {
+    // O defeito: a retomada montava plano novo e gravava por cima, apagando o
+    // registro do que já tinha sido criado — antes mesmo de ler o projeto.
+    const disco = discoFalso();
+    const primeiroProjeto = projetoFalso({ escritaFalhaEm: { tipo: 'usuario', indice: 2 } });
+
+    await expect(executarSeed({
+      porta: primeiroProjeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
+    })).rejects.toThrow();
+    const diarioParcial = disco.ultimo();
+    expect(diarioParcial.concluidas).toHaveLength(6);
+
+    const discoRetomada = discoFalso();
+    const { diario } = await executarSeed({
+      porta: primeiroProjeto.porta,
+      manifest: manifesto(),
+      projetoRef: PROJETO,
+      persistir: discoRetomada.persistir,
+      diarioExistente: diarioParcial,
+    });
+
+    // A primeira gravação da retomada já traz o que existia — nunca um vazio.
+    const primeiraDaRetomada = JSON.parse(discoRetomada.gravacoes[0]!) as DiarioDeExecucao;
+    expect(primeiraDaRetomada.concluidas).toHaveLength(6);
+    expect(diario.concluidas).toHaveLength(diario.plano.operacoes.length);
+  });
+
+  it('reconcilia usuários, organizações e memberships — não só organizações', async () => {
+    // Reconciliar só organizações deixava o seed tentar recriar usuário com
+    // e-mail já existente, e falhar por conta própria.
+    const disco = discoFalso();
+    const plano = planejarExecucao(manifesto(), PROJETO);
+    const jaExistentes = plano.operacoes.map((o, i) => ({ identificador: o.identificador, id: `pre-${i}` }));
+    const { porta } = projetoFalso({ jaExistentes });
+
+    const { recuperadas, diario } = await executarSeed({
+      porta,
+      manifest: manifesto(),
+      projetoRef: PROJETO,
+      persistir: disco.persistir,
+      diarioExistente: { plano, concluidas: [] },
+    });
+
+    expect(recuperadas).toBe(plano.operacoes.length);
+    expect(diario.concluidas.map((c) => c.idReal)).toEqual(jaExistentes.map((j) => j.id));
+  });
+
+  it('falha de leitura aborta a retomada em vez de duplicar registros', async () => {
+    const disco = discoFalso();
+    const plano = planejarExecucao(manifesto(), PROJETO);
+    const { porta } = projetoFalso({ leituraFalhaEm: 'usuarios' });
+
+    await expect(executarSeed({
+      porta,
+      manifest: manifesto(),
+      projetoRef: PROJETO,
+      persistir: disco.persistir,
+      diarioExistente: { plano, concluidas: [] },
+    })).rejects.toThrow(/Retomada abortada: falha ao ler usuarios/u);
+  });
+});
+
+describe('a limpeza distingue falha de leitura de registro ausente', () => {
+  async function semear() {
+    const disco = discoFalso();
+    const projeto = projetoFalso();
+    const { diario } = await executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
+    });
+    return { projeto, diario };
+  }
+
+  it.each(['usuarios', 'organizacoes', 'memberships'] as const)(
+    'falha ao ler %s aborta: erro de leitura não é ausência',
+    async (recurso) => {
+      // O defeito: `catch → continue` fazia falha de rede parecer registro já
+      // removido, e a limpeza declarava sucesso deixando dado no projeto.
+      const { diario } = await semear();
+      const { porta } = projetoFalso({ leituraFalhaEm: recurso });
+
+      await expect(executarLimpeza(porta, diario, { simular: false }))
+        .rejects.toThrow(new RegExp(`Limpeza abortada: falha ao ler ${recurso}`, "u"));
+    },
+  );
+
+  it('apaga tudo o que a execução criou, e nada além', async () => {
+    const { projeto, diario } = await semear();
+    projeto.criados.set('cliente-de-verdade@empresa.com', {
+      identificador: 'cliente-de-verdade@empresa.com', id: 'id-real', tipo: 'usuario',
+    });
+
+    const resultado = await executarLimpeza(projeto.porta, diario, { simular: false });
+
+    expect(resultado.removidos).toBe(diario.plano.operacoes.length);
+    expect([...projeto.criados.keys()]).toEqual(['cliente-de-verdade@empresa.com']);
+  });
+
+  it('a segunda limpeza termina em sucesso, sem nada a apagar', async () => {
+    const { projeto, diario } = await semear();
+    await executarLimpeza(projeto.porta, diario, { simular: false });
+
+    const segunda = await executarLimpeza(projeto.porta, diario, { simular: false });
+
+    expect(segunda.removidos).toBe(0);
+    expect(segunda.plano.jaRemovidas).toHaveLength(diario.plano.operacoes.length);
+  });
+
+  it('exclusão que falha no meio manda repetir com o mesmo diário', async () => {
+    // Semeia num projeto cuja terceira exclusão falha.
+    const comFalha = projetoFalso({ exclusaoFalhaEm: 2 });
+    const semeado = await executarSeed({
+      porta: comFalha.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: discoFalso().persistir,
+    });
+
+    await expect(executarLimpeza(comFalha.porta, semeado.diario, { simular: false }))
+      .rejects.toThrow(/rode a limpeza de novo com o mesmo diário/u);
+  });
+
+  it('simular não apaga nada e descreve o que apagaria', async () => {
+    const { projeto, diario } = await semear();
+
+    const resultado = await executarLimpeza(projeto.porta, diario, { simular: true });
+
+    expect(resultado.simulado).toBe(true);
+    expect(resultado.removidos).toBe(0);
+    expect(projeto.criados.size).toBe(diario.plano.operacoes.length);
+    for (const aprovada of resultado.plano.aprovadas) {
+      expect(resultado.simulacao).toContain(aprovada.identificador);
+    }
+  });
+});
+
+describe('órfãos são relatados sobre o que o projeto tem, não sobre o que o diário conhece', () => {
+  it('registro criado pela execução e ausente do diário aparece como órfão', async () => {
+    // O defeito: os órfãos eram procurados dentro da lista que o próprio
+    // diário produzia, então um registro que o diário não conhecia jamais
+    // apareceria. É justamente esse que interessa.
+    const disco = discoFalso();
+    const projeto = projetoFalso();
+    const { diario } = await executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
+    });
+
+    projeto.criados.set(`orbita-e2e-${RUN}-sobra@e2e.orbita.test`, {
+      identificador: `orbita-e2e-${RUN}-sobra@e2e.orbita.test`, id: 'id-sobra', tipo: 'usuario',
+    });
+
+    const resultado = await executarLimpeza(projeto.porta, diario, { simular: true });
+
+    expect(resultado.orfaos.map((o) => o.id)).toEqual(['id-sobra']);
+  });
+
+  it('órfão de outra execução não é relatado', async () => {
+    const disco = discoFalso();
+    const projeto = projetoFalso();
+    const { diario } = await executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
+    });
+
+    projeto.criados.set('orbita-e2e-run-9-outro@e2e.orbita.test', {
+      identificador: 'orbita-e2e-run-9-outro@e2e.orbita.test', id: 'id-9', tipo: 'usuario',
+    });
+
+    const resultado = await executarLimpeza(projeto.porta, diario, { simular: true });
+
+    expect(resultado.orfaos).toEqual([]);
+  });
+});
