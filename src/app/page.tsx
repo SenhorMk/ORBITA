@@ -510,7 +510,11 @@ export default function Home() {
       try {
         const { data: items, error } = await supabase
           .from('itens_pedido')
-          .select('*, produto:produtos(*)')
+          // `!fk_item_produto` é obrigatório: as migrations de tenancy criaram
+          // uma segunda FK composta para `produtos`, e sem escolher uma delas o
+          // PostgREST recusa a consulta inteira (PGRST201). Os itens do pedido
+          // nunca carregavam por causa disso.
+          .select('*, produto:produtos!fk_item_produto(*)')
           .eq('pedido_id', selectedPedido.id);
 
         if (error) throw error;

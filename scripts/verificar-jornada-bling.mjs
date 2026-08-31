@@ -231,7 +231,26 @@ function passosDeEscrita({ base, token, escrever, estado, clienteId, produtoId, 
         if (!estado.pedido?.pedidoId) return { estado: PULADO, detalhe: 'depende do passo anterior' };
         const r = await chamar(base, token, '/api/dashboard');
         if (!r.ok) return { estado: FALHOU, detalhe: `HTTP ${r.status} — ${resumir(r.corpo)}` };
-        return { estado: PASSOU, detalhe: `pedido local ${estado.pedido.pedidoId}` };
+
+        // Conferir só o status HTTP não fecha ciclo nenhum. Esta versão o fazia,
+        // e por isso deu PASSOU enquanto o painel mostrava "R$ 0,00" e "0
+        // pedidos": a rota respondia 200 com a lista vazia, porque engolia a
+        // falha da consulta. O passo agora PROCURA o pedido na resposta.
+        const pedidos = r.corpo?.data?.pedidos;
+        if (!Array.isArray(pedidos)) {
+          return { estado: FALHOU, detalhe: 'o painel respondeu 200 mas sem a lista de pedidos' };
+        }
+
+        const encontrado = pedidos.some((p) => p?.id === estado.pedido.pedidoId);
+        if (!encontrado) {
+          return {
+            estado: FALHOU,
+            detalhe: `pedido ${estado.pedido.pedidoId} existe no Bling e NÃO aparece no painel `
+              + `(${pedidos.length} pedido(s) listados). O lojista veria a venda sumida.`,
+          };
+        }
+
+        return { estado: PASSOU, detalhe: `pedido ${estado.pedido.pedidoId} listado entre ${pedidos.length}` };
       },
     },
   ];
