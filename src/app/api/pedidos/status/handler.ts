@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { descreverErro } from '@/lib/erroLegivel';
+import { logger, sanitizeErrorForLog } from '@/lib/observability/logger';
 import { mapBlingStatus } from '@/lib/utils';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
@@ -24,6 +24,43 @@ export type {
 
 function json(body: PedidoStatusResponseBody, status: number): NextResponse {
   return NextResponse.json(body, { status });
+}
+
+/**
+ * SQLSTATE: exatamente cinco caracteres alfanuméricos maiúsculos (`42501`,
+ * `23505`, `PGRST201`… — este último não passa, e é o ponto).
+ *
+ * O `code` do erro é texto que vem de fora. Sem validar, ele próprio seria um
+ * canal para empurrar conteúdo arbitrário para dentro do log estruturado.
+ */
+const CODIGO_SQLSTATE = /^[0-9A-Z]{5}$/u;
+
+/** Código técnico do erro, apenas se for um SQLSTATE reconhecível. */
+function codigoTecnicoValidado(erro: unknown): string | undefined {
+  const bruto = (erro as { code?: unknown } | null | undefined)?.code;
+  return typeof bruto === 'string' && CODIGO_SQLSTATE.test(bruto) ? bruto : undefined;
+}
+
+/**
+ * Registra a falha no servidor sem carregar nada que não possa ser lido depois.
+ *
+ * Deliberadamente **não** registra `message`, `details` nem `hint`. Numa
+ * violação de unicidade o Postgres coloca valores de linha dentro deles
+ * (`Key (email)=(...) already exists`), ou seja, dado de cliente — e
+ * `descreverErro` sozinho não resolve isso, porque o trabalho dele é tornar o
+ * erro legível, não decidir o que pode sair daqui.
+ *
+ * O que fica: qual operação falhou, em qual organização, a classe do erro e o
+ * SQLSTATE. É o suficiente para saber onde olhar.
+ */
+function registrarFalhaInterna(erro: unknown, organizacaoId: string | undefined): void {
+  logger.error('Falha ao atualizar situação do pedido', {
+    subsystem: 'app',
+    operacao: 'pedidos.status.atualizar',
+    organizacaoId,
+    erro: sanitizeErrorForLog(erro).name,
+    codigo: codigoTecnicoValidado(erro),
+  });
 }
 
 /**
@@ -56,7 +93,7 @@ async function alinharEstoqueComBling(
   try {
     produtoIds = await store.findProdutoIdsDoPedido(scope, pedidoId);
   } catch (err: unknown) {
-    console.error('Erro ao buscar itens do pedido:', err);
+    registrarFalhaInterna(err, scope.organizationId);
     return 'Status atualizado, mas falhou ao buscar itens para alinhar estoque';
   }
   if (produtoIds.length === 0) return undefined;
@@ -85,7 +122,7 @@ async function alinharEstoqueComBling(
       await store.updateEstoqueProduto(scope, produto.id, saldo);
     } catch (err: unknown) {
       // DÍVIDA (preservada): o produto que não grava fica só no log do servidor.
-      console.error(`Erro ao atualizar estoque do produto ${produto.id}:`, err);
+      registrarFalhaInterna(err, scope.organizationId);
     }
   }
 
@@ -103,6 +140,9 @@ export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
   const { auth, store, bling, aguardarProcessamentoBling } = deps;
 
   return async function handlePedidoStatus(request: Request): Promise<NextResponse> {
+    // Fora do `try` para que o log da falha saiba a organização mesmo quando o
+    // erro acontece depois da resolução do escopo.
+    let organizacaoId: string | undefined;
     try {
       const ator = await auth.authenticate(request);
       if (!ator) return json({ error: 'Não autorizado' }, 401);
@@ -110,6 +150,7 @@ export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
       const scopeResult = await auth.resolveScope(request);
       if (scopeResult._tag !== 'Resolved') return scopeResult.response;
       const { scope } = scopeResult;
+      organizacaoId = scope.organizationId;
 
       let rawBody: unknown;
       try {
@@ -149,8 +190,11 @@ export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
 
       return json({ success: true, status: novoStatusCanonico }, 200);
     } catch (error: unknown) {
-      console.error('Erro ao atualizar status do pedido:', error);
-      return json({ error: descreverErro(error) }, 500);
+      // CWE-209: o diagnóstico do Postgres fica no servidor. O cliente recebe
+      // sempre a mesma frase — `message` inclusive, que pode carregar valor de
+      // linha tanto quanto `details`.
+      registrarFalhaInterna(error, organizacaoId);
+      return json({ error: 'Erro interno' }, 500);
     }
   };
 }

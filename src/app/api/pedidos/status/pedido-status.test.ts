@@ -86,6 +86,24 @@ function montarDeps(sobrescritas: {
   return { deps, store, bling, auth, updateSituacaoPedido, savePedidoStatus, updateEstoqueProduto, aguardarProcessamentoBling };
 }
 
+/**
+ * Executa o handler capturando o que ele escreve no log do servidor.
+ *
+ * `logStructured` emite JSON em `console.error`, entao capturar ai cobre a
+ * infraestrutura real de log, e nao um dublê dela.
+ */
+async function comLogCapturado(fn: () => Promise<Response>): Promise<{ resposta: Response; log: string }> {
+  const linhas: string[] = [];
+  const espia = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    linhas.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+  });
+  try {
+    return { resposta: await fn(), log: linhas.join('\n') };
+  } finally {
+    espia.mockRestore();
+  }
+}
+
 const CORPO_VALIDO = { pedidoId: PEDIDO_ID, novaSituacaoId: 9, novaSituacaoNome: 'Atendido' };
 
 describe('POST /api/pedidos/status', () => {
@@ -255,7 +273,7 @@ describe('POST /api/pedidos/status', () => {
     });
   });
 
-  describe('falha do Bling é reportada com a causa', () => {
+  describe('falha do Bling é reportada com a causa — no servidor, não ao cliente', () => {
     it('recusa da situação derruba a requisição e não grava nada localmente', async () => {
       const { deps, savePedidoStatus } = montarDeps({
         bling: {
@@ -265,18 +283,23 @@ describe('POST /api/pedidos/status', () => {
         },
       });
 
-      const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+      const { resposta, log } = await comLogCapturado(() =>
+        createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO)),
+      );
 
       expect(resposta.status).toBe(500);
-      expect((await resposta.json()).error).toContain('situação inexistente');
+      // A causa deixou de ir ao cliente (CWE-209) e passou a viver no log.
+      expect(await resposta.json()).toEqual({ error: 'Erro interno' });
+      expect(log).toContain('pedidos.status.atualizar');
       // O Bling é a fonte da verdade: se ele recusou, o ORBITA não pode
       // registrar uma situação que não existe lá.
       expect(savePedidoStatus).not.toHaveBeenCalled();
     });
 
-    it('erro do PostgREST não vira [object Object]', async () => {
-      // O que o supabase-js lança não é um Error. Antes do ticket 03 esta
-      // mensagem chegava como "[object Object]" e o código SQL sumia.
+    it('erro do PostgREST fica legível no servidor e genérico na resposta', async () => {
+      // O que o supabase-js lança não é um Error. Antes do ticket 03 o log
+      // dizia "[object Object]" e o código SQL sumia; desde o ticket 04 ele
+      // chegava legível — só que na resposta HTTP, que era o vazamento.
       const { deps } = montarDeps({
         store: {
           savePedidoStatus: vi.fn().mockRejectedValue({
@@ -286,12 +309,18 @@ describe('POST /api/pedidos/status', () => {
         },
       });
 
-      const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+      const { resposta, log } = await comLogCapturado(() =>
+        createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO)),
+      );
 
       expect(resposta.status).toBe(500);
-      const { error } = await resposta.json();
-      expect(error).toContain('42P10');
-      expect(error).not.toContain('[object Object]');
+      expect(await resposta.json()).toEqual({ error: 'Erro interno' });
+
+      // A cobertura não sumiu, mudou de lado: o SQLSTATE continua investigável.
+      expect(log).toContain('42P10');
+      expect(log).not.toContain('[object Object]');
+      // E a mensagem não vai junto, porque é onde o Postgres põe valor de linha.
+      expect(log).not.toContain('ON CONFLICT');
     });
 
     it('falha ao ler os itens vira aviso, porque a situação já mudou nos dois lados', async () => {
@@ -307,6 +336,116 @@ describe('POST /api/pedidos/status', () => {
       const corpoResposta = await resposta.json();
       expect(corpoResposta.success).toBe(true);
       expect(corpoResposta.warning).toContain('alinhar estoque');
+    });
+  });
+
+  describe('CWE-209: a resposta 500 não expõe diagnóstico interno', () => {
+    /**
+     * Erro do PostgREST com os quatro campos que o Postgres devolve. `details`
+     * é o pior: numa violação de unicidade ele carrega **valores de linha**
+     * ("Key (email)=(...) already exists"), quer dizer, dado de cliente.
+     * Todos os valores aqui são sintéticos.
+     */
+    const ERRO_POSTGREST = {
+      code: '42501',
+      message: 'permission denied for table pedidos',
+      details: 'Key (email)=(cliente-sintetico@exemplo.com) already exists.',
+      hint: 'conceda SELECT ao papel service_role',
+    };
+
+    /** Marcadores que jamais podem aparecer no corpo da resposta HTTP. */
+    const MARCADORES = [
+      '42501',
+      'permission denied',
+      'cliente-sintetico@exemplo.com',
+      'service_role',
+      'Key (email)',
+    ];
+
+    it('erro do PostgREST não vaza code, message, details nem hint', async () => {
+      const { deps } = montarDeps({
+        store: { savePedidoStatus: vi.fn().mockRejectedValue(ERRO_POSTGREST) },
+      });
+
+      const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+
+      expect(resposta.status).toBe(500);
+      const json = await resposta.json();
+
+      // Exatamente a mensagem genérica: nada além dela.
+      expect(json).toEqual({ error: 'Erro interno' });
+
+      const serializado = JSON.stringify(json);
+      for (const marcador of MARCADORES) {
+        expect(serializado, `vazou "${marcador}" na resposta HTTP`).not.toContain(marcador);
+      }
+    });
+
+    it('Error com mensagem sensível também não vaza', async () => {
+      const erro = new Error(
+        'falha ao gravar — Authorization: Bearer tok-sintetico-abcdefgh; Set-Cookie: sessao=valor-sintetico',
+      );
+      const { deps } = montarDeps({
+        bling: { updateSituacaoPedido: vi.fn().mockRejectedValue(erro) },
+      });
+
+      const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+
+      expect(resposta.status).toBe(500);
+      expect(await resposta.json()).toEqual({ error: 'Erro interno' });
+    });
+
+    it('o diagnóstico seguro fica no servidor: operação e código técnico', async () => {
+      const capturado: string[] = [];
+      const espia = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+        capturado.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+      });
+
+      try {
+        const { deps } = montarDeps({
+          store: { savePedidoStatus: vi.fn().mockRejectedValue(ERRO_POSTGREST) },
+        });
+        await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+      } finally {
+        espia.mockRestore();
+      }
+
+      const log = capturado.join('\n');
+
+      // O que serve para investigar: qual operação falhou e qual o SQLSTATE.
+      expect(log).toContain('pedidos.status.atualizar');
+      expect(log).toContain('42501');
+
+      // O que não pode estar lá: mensagem, dica e, sobretudo, valores de linha.
+      expect(log).not.toContain('cliente-sintetico@exemplo.com');
+      expect(log).not.toContain('Key (email)');
+      expect(log).not.toContain('permission denied');
+      expect(log).not.toContain('service_role');
+    });
+
+    it('código técnico que não é SQLSTATE não entra no log', async () => {
+      const capturado: string[] = [];
+      const espia = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+        capturado.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+      });
+
+      try {
+        const { deps } = montarDeps({
+          store: {
+            savePedidoStatus: vi.fn().mockRejectedValue({
+              // `code` é texto livre vindo de fora; sem validação, ele mesmo
+              // seria um canal para injetar conteúdo no log.
+              code: 'Bearer tok-sintetico-abcdefgh',
+              message: 'qualquer coisa',
+            }),
+          },
+        });
+        await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+      } finally {
+        espia.mockRestore();
+      }
+
+      expect(capturado.join('\n')).not.toContain('tok-sintetico-abcdefgh');
     });
   });
 });
