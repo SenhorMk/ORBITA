@@ -210,6 +210,91 @@
           "tipo": "integer"
         }
       }
+    },
+    "ContasDadosBaseDTO": {
+      "obrigatorios": [
+        "contato",
+        "situacao",
+        "valor",
+        "vencimento"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "situacao": {
+          "tipo": "integer"
+        },
+        "vencimento": {
+          "tipo": "string",
+          "formato": "date"
+        },
+        "valor": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "contato": {
+          "tipo": "object",
+          "ref": "ContasContatoDTO"
+        },
+        "formaPagamento": {
+          "tipo": "object",
+          "ref": "ContasFormaPagamentoDTO"
+        }
+      }
+    },
+    "ContasReceberDadosListDTO": {
+      "obrigatorios": [
+        "contato",
+        "situacao",
+        "valor",
+        "vencimento"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "situacao": {
+          "tipo": "integer"
+        },
+        "vencimento": {
+          "tipo": "string",
+          "formato": "date"
+        },
+        "valor": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "idTransacao": {
+          "tipo": "string"
+        },
+        "linkQRCodePix": {
+          "tipo": "string"
+        },
+        "linkBoleto": {
+          "tipo": "string"
+        },
+        "dataEmissao": {
+          "tipo": "string",
+          "formato": "date"
+        },
+        "contato": {
+          "tipo": "object",
+          "ref": "ContasReceberContatoDTO"
+        },
+        "formaPagamento": {
+          "tipo": "object",
+          "ref": "ContasReceberFormaPagamentoDTO"
+        },
+        "contaContabil": {
+          "tipo": "object",
+          "ref": "ContasReceberContaContabilDTO"
+        },
+        "origem": {
+          "tipo": "object",
+          "ref": "ContasReceberDadosOrigemDTO"
+        }
+      }
     }
   }
 }
