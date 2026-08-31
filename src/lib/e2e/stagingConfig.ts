@@ -81,12 +81,33 @@ export function resolveStagingConfig(
   }
 
   const stagingUrl = parseHttpsUrl(stagingUrlRaw, 'STAGING_URL');
-  if (!options.allowAnyNonLocalHostnameForTest && !stagingUrl.hostname.toLowerCase().includes('staging')) {
-    throw new StagingConfigError(
-      `STAGING_URL ("${stagingUrl.hostname}") não contém "staging" no host. Essa exigência é uma salvaguarda ` +
-        'deliberada contra apontar acidentalmente para produção. Se o host de staging real não seguir essa ' +
-        'convenção de nome, ajuste esta validação em revisão explícita — nunca contorne com uma URL fake.',
-    );
+  if (!options.allowAnyNonLocalHostnameForTest) {
+    const hostAlvo = stagingUrl.hostname.toLowerCase();
+    const hostConfirmado = env.E2E_HOST_CONFIRMADO?.trim().toLowerCase();
+
+    // A heurística "o host contém staging" resolve o caso comum e não resolve
+    // o nosso: não existe ambiente de staging separado, e o alvo real é o
+    // host de desenvolvimento publicado. A saída **não** é afrouxar nem usar o
+    // atalho reservado aos testes — é a mesma trava do Supabase, que é mais
+    // forte que a heurística: o operador digita o host exato.
+    //
+    // Um host chamado "staging-prod.example.com" passa na heurística; aqui,
+    // apontar para um host que você não escreveu é impossível.
+    if (!hostAlvo.includes('staging') && !hostConfirmado) {
+      throw new StagingConfigError(
+        `STAGING_URL ("${hostAlvo}") não contém "staging" no host, então exige confirmação nominal. ` +
+          `Defina E2E_HOST_CONFIRMADO="${hostAlvo}" para declarar por escrito contra qual ambiente a suíte ` +
+          'pode criar e apagar dados. Essa exigência é uma salvaguarda deliberada contra apontar ' +
+          'acidentalmente para produção.',
+      );
+    }
+
+    if (hostConfirmado && hostConfirmado !== hostAlvo) {
+      throw new StagingConfigError(
+        `E2E_HOST_CONFIRMADO ("${hostConfirmado}") não corresponde ao host de STAGING_URL ("${hostAlvo}"). ` +
+          'A suíte recusa rodar contra um ambiente que não foi confirmado nominalmente.',
+      );
+    }
   }
 
   let supabaseUrl: string | null = null;
