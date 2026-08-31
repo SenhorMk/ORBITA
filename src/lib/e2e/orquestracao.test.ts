@@ -559,28 +559,60 @@ describe('conclusão registrada mas ausente do projeto: as duas políticas diver
 });
 
 describe('a adoção pelo identificador natural é restrita', () => {
-  it('com o diário completo, nada do seed é adotado — só o que a spec criou', async () => {
-    // A prova nesses casos é o identificador determinístico, não um id
-    // previamente registrado. Fora do estado de recuperação, adotar registro do
-    // seed seria apagar por parecença.
+  const slugDaSpec = `orbita-e2e-${RUN}-spec-created-org`;
+
+  async function semearComOrgDaSpec() {
+    const projeto = projetoFalso();
+    const { diario } = await executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: discoFalso().persistir,
+    });
+    // A suíte criou a organização dela durante os testes.
+    projeto.criados.set(slugDaSpec, { identificador: slugDaSpec, id: 'id-spec-org', tipo: 'organizacao' });
+    return { projeto, diario };
+  }
+
+  it('diário completo: a única adoção é a organização que a spec criou', async () => {
+    // Todas as operações do seed têm conclusão gravada, então não há nada do
+    // seed a adotar. A da spec é adotada pelo identificador determinístico —
+    // o seed nunca teria id dela.
+    const { projeto, diario } = await semearComOrgDaSpec();
+
+    const resultado = await executarLimpeza(projeto.porta, diario, { simular: true });
+
+    expect(resultado.adotadas).toEqual([
+      expect.objectContaining({ identificador: slugDaSpec, idAdotado: 'id-spec-org', criadoPor: 'spec' }),
+    ]);
+  });
+
+  it('estado de recuperação: adota também o registro do seed que ficou sem conclusão', async () => {
+    // Gravação que falhou depois da criação remota. Aqui a adoção do registro
+    // do seed é legítima: ele existe no projeto e o diário não soube.
+    const { projeto, diario } = await semearComOrgDaSpec();
+    const semConclusao = diario.plano.operacoes.find((o) => o.chave === 'persona:owner-a')!;
+    const idNoProjeto = diario.concluidas.find((c) => c.chave === semConclusao.chave)!.idReal;
+    const diarioIncompleto = {
+      ...diario,
+      concluidas: diario.concluidas.filter((c) => c.chave !== semConclusao.chave),
+    };
+
+    const resultado = await executarLimpeza(projeto.porta, diarioIncompleto, { simular: true });
+
+    expect(resultado.adotadas).toEqual([
+      expect.objectContaining({ identificador: semConclusao.identificador, idAdotado: idNoProjeto, criadoPor: 'seed' }),
+      expect.objectContaining({ identificador: slugDaSpec, criadoPor: 'spec' }),
+    ]);
+  });
+
+  it('a organização da spec não é adotada quando não existe no projeto', async () => {
+    // O outro lado: adotar sem o registro existir seria inventar id.
     const projeto = projetoFalso();
     const { diario } = await executarSeed({
       porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: discoFalso().persistir,
     });
 
-    const slugDaSpec = `orbita-e2e-${RUN}-spec-created-org`;
-    projeto.criados.set(slugDaSpec, { identificador: slugDaSpec, id: 'id-spec-org', tipo: 'organizacao' });
-    // E um registro do seed que o diário conhece, mas com a conclusão removida.
-    const semRegistro = [...projeto.criados.values()].find((c) => c.tipo === 'usuario')!;
-    const diarioSemUma = {
-      ...diario,
-      concluidas: diario.concluidas.filter((c) => !c.chave.startsWith('persona:owner-a')),
-    };
+    const resultado = await executarLimpeza(projeto.porta, diario, { simular: true });
 
-    const resultado = await executarLimpeza(projeto.porta, diarioSemUma, { simular: true });
-
-    const adotados = resultado.adotadas.map((a) => a.criadoPor);
-    expect(adotados).toContain('spec');
-    expect(semRegistro.identificador).toBeTruthy();
+    expect(resultado.adotadas).toEqual([]);
+    expect(resultado.plano.jaRemovidas.map((o) => o.criadoPor)).toEqual(['spec']);
   });
 });

@@ -14,6 +14,10 @@ import { criarPortaSupabase } from './supabasePorta';
 const POR_PAGINA = 200;
 const TETO = 50;
 
+// SAFETY: dublê parcial do cliente Supabase. O adapter só usa os métodos
+// implementados aqui; tipar o cliente inteiro exigiria centenas de membros
+// que este teste nunca toca, e o cast fica confinado ao arquivo de teste.
+
 /** Cliente que sempre devolve páginas cheias: a listagem nunca termina. */
 function clienteComPaginasInfinitas(): { supabase: SupabaseClient; chamadas: () => number } {
   let chamadas = 0;
@@ -34,6 +38,7 @@ function clienteComPaginasInfinitas(): { supabase: SupabaseClient; chamadas: () 
         },
       },
     },
+  // SAFETY: ver a nota no topo — dublê parcial, cast confinado ao teste.
   } as unknown as SupabaseClient;
   return { supabase, chamadas: () => chamadas };
 }
@@ -56,6 +61,7 @@ function clienteComDuasPaginas(): SupabaseClient {
         }),
       },
     },
+  // SAFETY: ver a nota acima.
   } as unknown as SupabaseClient;
 }
 
@@ -107,7 +113,8 @@ describe('paginação de usuários', () => {
             : { data: null, error: { message: 'conexão recusada' } }),
         },
       },
-    } as unknown as SupabaseClient;
+    // SAFETY: ver a nota acima.
+  } as unknown as SupabaseClient;
 
     const leitura = await criarPortaSupabase(supabase).lerUsuariosDaExecucao('run-1');
 
@@ -133,7 +140,8 @@ describe('paginação de usuários', () => {
           }),
         },
       },
-    } as unknown as SupabaseClient;
+    // SAFETY: ver a nota acima.
+  } as unknown as SupabaseClient;
 
     const leitura = await criarPortaSupabase(supabase).lerUsuariosDaExecucao('run-1');
 

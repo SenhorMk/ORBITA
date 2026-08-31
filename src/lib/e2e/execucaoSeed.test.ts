@@ -188,7 +188,27 @@ describe('recuperação: a operação remota concluiu e o registro local falhou'
     expect(recuperadas).toEqual([]);
   });
 
-  it('reconciliar duas vezes não duplica', () => {
+it('com `adotarOperacoesDoSeed: false`, só o que a spec cria é adotado', () => {
+    // A restrição em si, exercitada direto: é o que impede adotar registro do
+    // seed fora de um estado de recuperação conhecido.
+    const plano = planejarExecucao(manifesto(), PROJETO);
+    const doSeed = plano.operacoes.find((o) => o.criadoPor === 'seed')!;
+    const daSpec = plano.operacoes.find((o) => o.criadoPor === 'spec')!;
+
+    const { recuperadas, adotadas } = reconciliar(
+      iniciarDiario(plano),
+      [
+        { identificador: doSeed.identificador, id: 'id-do-seed' },
+        { identificador: daSpec.identificador, id: 'id-da-spec' },
+      ],
+      { adotarOperacoesDoSeed: false },
+    );
+
+    expect(adotadas.map((a) => a.criadoPor)).toEqual(['spec']);
+    expect(recuperadas.map((r) => r.chave)).toEqual([daSpec.chave]);
+  });
+
+    it('reconciliar duas vezes não duplica', () => {
     const plano = planejarExecucao(manifesto(), PROJETO);
     const primeira = plano.operacoes[0]!;
     const encontrados = [{ identificador: primeira.identificador, id: 'id-1' }];
