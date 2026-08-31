@@ -7,6 +7,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { Search, Plus, Trash2, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 
 import { BlingPedido } from '@/types';
+import { fetchWithAuth } from '@/lib/fetchWithAuth';
 
 interface EditOrderModalProps {
   open: boolean;
@@ -70,8 +71,8 @@ interface EditOrderFormSetters {
 /** Carrega clientes/produtos disponíveis e, se houver um pedido para editar, hidrata o formulário com seus dados. */
 async function loadEditOrderFormData(pedido: BlingPedido | null, setters: EditOrderFormSetters): Promise<void> {
   const [cRes, pRes] = await Promise.all([
-    fetch('/api/clientes'),
-    fetch('/api/produtos')
+    fetchWithAuth('/api/clientes'),
+    fetchWithAuth('/api/produtos')
   ]);
   const cData = await cRes.json();
   const pData = await pRes.json();
@@ -496,7 +497,7 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
         throw new Error('ID do pedido original não encontrado para edição.');
       }
 
-      const res = await fetch(`/api/bling/pedidos/${pedido.id}`, {
+      const res = await fetchWithAuth(`/api/bling/pedidos/${pedido.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

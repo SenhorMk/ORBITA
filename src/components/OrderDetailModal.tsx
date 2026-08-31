@@ -14,6 +14,7 @@ import { BlingPedido } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
 import { ErrorLogModal } from '@/components/ErrorLogModal';
 import { EditOrderModal } from '@/components/EditOrderModal';
+import { fetchWithAuth } from '@/lib/fetchWithAuth';
 
 interface OrderDetailModalProps {
   open: boolean;
@@ -27,7 +28,7 @@ async function fetchPedidoDetalhes(id: string): Promise<BlingPedido> {
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token;
 
-  const res = await fetch(`/api/bling/pedidos/${encodeURIComponent(id)}`, {
+  const res = await fetchWithAuth(`/api/bling/pedidos/${encodeURIComponent(id)}`, {
     headers: (token ? { Authorization: `Bearer ${token}` } : {})
   });
   const data = await res.json();
@@ -214,7 +215,7 @@ export function OrderDetailModal({ open, onOpenChange, pedidoBlingId }: OrderDet
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
-      const res = await fetch(`/api/bling/pedidos/${encodeURIComponent(pedidoBlingId)}`, {
+      const res = await fetchWithAuth(`/api/bling/pedidos/${encodeURIComponent(pedidoBlingId)}`, {
         method: 'DELETE',
         headers: (token ? { Authorization: `Bearer ${token}` } : {})
       });
