@@ -1,5 +1,6 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { descreverErro } from '@/lib/erroLegivel';
 
 export type OutboxDestination = 'chatwoot' | 'bling' | 'webhook_externo';
 
@@ -110,7 +111,7 @@ export function sanitizeErrorMessage(msg: string): string {
 }
 
 export function classifyError(error: unknown): ClassifiedError {
-  const rawMsg = error instanceof Error ? error.message : String(error);
+  const rawMsg = descreverErro(error);
   const message = sanitizeErrorMessage(rawMsg);
   const lower = message.toLowerCase();
 

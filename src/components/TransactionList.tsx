@@ -19,6 +19,7 @@ import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { DropdownMenu } from './DropdownMenu';
 import { OrderDetailModal } from './OrderDetailModal';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
+import { descreverErro } from '@/lib/erroLegivel';
 
 interface TransactionListProps {
   pedidos: PedidoEnriquecido[];
@@ -89,7 +90,7 @@ export const TransactionList = React.memo(function TransactionList({
       // Recarrega a página ou chama um callback onRefresh (aqui simplificado via window.location)
       window.location.reload();
     } catch (err: unknown) {
-      alert(`Erro: ${err instanceof Error ? err.message : String(err)}`);
+      alert(`Erro: ${descreverErro(err)}`);
     } finally {
       setIsCanceling(false);
       setCancelModalOpen(false);

@@ -15,6 +15,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { ErrorLogModal } from '@/components/ErrorLogModal';
 import { EditOrderModal } from '@/components/EditOrderModal';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
+import { descreverErro } from '@/lib/erroLegivel';
 
 interface OrderDetailModalProps {
   open: boolean;
@@ -179,7 +180,7 @@ export function OrderDetailModal({ open, onOpenChange, pedidoBlingId }: OrderDet
       const data = await fetchPedidoDetalhes(id);
       if (isMounted()) setPedido(data);
     } catch (err: unknown) {
-      if (isMounted()) setError(err instanceof Error ? err.message : String(err));
+      if (isMounted()) setError(descreverErro(err));
     } finally {
       if (isMounted()) setLoading(false);
     }
@@ -232,7 +233,7 @@ export function OrderDetailModal({ open, onOpenChange, pedidoBlingId }: OrderDet
       window.dispatchEvent(new CustomEvent('pedido-apagado')); // Evento customizado para a lista recarregar, caso queira implementar
 
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
+      const errMsg = descreverErro(err);
       setErrorLog({
         isOpen: true,
         message: 'Erro ao Apagar Pedido',

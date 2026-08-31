@@ -15,6 +15,8 @@
  * specification" num sintoma vago que não apontava para lugar nenhum.
  */
 
+import { redactSensitiveData } from './dadosSensiveis';
+
 /** Formato do erro que o PostgREST devolve através do `supabase-js`. */
 interface ErroPostgrest {
   message?: unknown;
@@ -56,9 +58,12 @@ export function descreverErro(err: unknown): string {
 
     if (partes.length > 0) return partes.join(' ');
 
-    // Último recurso: qualquer coisa é melhor que `[object Object]`.
+    // Último recurso: qualquer coisa é melhor que `[object Object]` — mas o
+    // objeto vai inteiro para o log e, em vários pontos, para a tela. Um erro
+    // que carregue `access_token` ou `client_secret` vazaria por aqui, então
+    // as chaves sensíveis são redigidas antes.
     try {
-      return JSON.stringify(err);
+      return JSON.stringify(redactSensitiveData(err));
     } catch {
       return Object.prototype.toString.call(err);
     }

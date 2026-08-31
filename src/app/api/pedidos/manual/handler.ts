@@ -7,6 +7,7 @@ import {
 } from '@/lib/config/manualOrderContract';
 import { pedidoVendaPayloadSchema, type PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { descreverErro } from '@/lib/erroLegivel';
 
 import type {
   ManualOrderCliente,
@@ -279,7 +280,7 @@ async function compensarNoBling(
   error: unknown,
   deps: ManualOrderDependencies,
 ): Promise<NextResponse> {
-  const causa = error instanceof Error ? error.message : String(error);
+  const causa = descreverErro(error);
 
   if (blingPedidoId === null) {
     return fail(`Falha ao registrar a venda no ORBITA: ${causa}.`, 500, { blingPedidoId });

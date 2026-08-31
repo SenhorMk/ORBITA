@@ -1,6 +1,7 @@
 import { supabaseServer } from '../lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { Produto } from '../types';
+import { descreverErro } from '../lib/erroLegivel';
 
 export class ProdutoRepository {
   async getAll(scope: VerifiedOrganizationScope): Promise<Produto[]> {
@@ -52,7 +53,7 @@ export class ProdutoRepository {
         try {
           await this.delete(scope, existingBling.id);
         } catch (delErr: unknown) {
-          const errMsg = delErr instanceof Error ? delErr.message : String(delErr);
+          const errMsg = descreverErro(delErr);
           console.warn(`⚠️ Não foi possível deletar o duplicado: ${errMsg}`);
         }
       }

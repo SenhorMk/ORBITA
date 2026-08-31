@@ -13,6 +13,7 @@
  */
 
 import Stripe from 'stripe';
+import { descreverErro } from '../../lib/erroLegivel';
 import {
   stripeVerifiedEventSchema,
   type CreateCheckoutSessionInput,
@@ -62,7 +63,7 @@ function mapThrown<T>(err: unknown): StripeBillingResult<T> {
   return {
     _tag: 'StripeBillingFailed',
     reason: 'network',
-    message: err instanceof Error ? err.message : String(err),
+    message: descreverErro(err),
     retryable: true,
   };
 }

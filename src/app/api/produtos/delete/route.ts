@@ -4,6 +4,7 @@ import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
 import { verifySessionAndRole } from '@/lib/auth';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { descreverErro } from '@/lib/erroLegivel';
 
 /** Best-effort remote delete: local deletion must proceed even if the Bling side fails. */
 async function attemptBlingProductDelete(
@@ -21,7 +22,7 @@ async function attemptBlingProductDelete(
     logEntries.push(`[${new Date().toISOString()}] ✅ Produto deletado no Bling ERP com sucesso!`);
     return null;
   } catch (deleteErr: unknown) {
-    const blingError = deleteErr instanceof Error ? deleteErr.message : String(deleteErr);
+    const blingError = descreverErro(deleteErr);
     logEntries.push(`[${new Date().toISOString()}] ⚠️ Falha ao deletar no Bling (pode já ter sido excluído): ${blingError}`);
     return blingError;
   }
@@ -62,7 +63,7 @@ export async function POST(request: Request) {
       await produtoRepository.delete(scope, id);
       logEntries.push(`[${new Date().toISOString()}] ✅ Registro excluído do Supabase!`);
     } catch (dbErr: unknown) {
-      const dbErrMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);
+      const dbErrMsg = descreverErro(dbErr);
       logEntries.push(`[${new Date().toISOString()}] ❌ ERRO SUPABASE: ${dbErrMsg}`);
       return NextResponse.json(
         {
@@ -91,7 +92,7 @@ export async function POST(request: Request) {
       logs: logEntries,
     });
   } catch (err: unknown) {
-    const errMessage = err instanceof Error ? err.message : String(err);
+    const errMessage = descreverErro(err);
     logEntries.push(`[${new Date().toISOString()}] 💥 ERRO CRÍTICO NA API DE EXCLUSÃO DE PRODUTOS: ${errMessage}`);
     return NextResponse.json(
       {

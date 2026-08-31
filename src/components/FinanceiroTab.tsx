@@ -8,6 +8,7 @@ import { ptBR } from 'date-fns/locale';
 import { buildDespesaRequest } from '@/lib/config/despesaContract';
 import { NovaDespesaModal, type Fornecedor } from './NovaDespesaModal';
 import { NovoFornecedorModal, type DadosCNPJ } from './NovoFornecedorModal';
+import { descreverErro } from '@/lib/erroLegivel';
 
 const BRASILAPI_CNPJ_URL =
   process.env.NEXT_PUBLIC_BRASILAPI_CNPJ_URL || 'https://brasilapi.com.br/api/cnpj/v1';
@@ -134,7 +135,7 @@ function useFornecedorCadastro(
         alert('Erro ao salvar fornecedor: ' + (json.error || 'Desconhecido'));
       }
     } catch (err: unknown) {
-      alert('Erro: ' + (err instanceof Error ? err.message : String(err)));
+      alert('Erro: ' + (descreverErro(err)));
     } finally {
       setSalvandoFornecedor(false);
     }
@@ -368,7 +369,7 @@ async function submitNovaDespesa(
     input.onSaved();
   } catch (err: unknown) {
     console.error(err);
-    alert('Erro inesperado: ' + (err instanceof Error ? err.message : String(err)));
+    alert('Erro inesperado: ' + (descreverErro(err)));
   }
 }
 

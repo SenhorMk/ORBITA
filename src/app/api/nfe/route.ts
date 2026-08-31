@@ -6,6 +6,7 @@ import { verifySessionAndRole } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { descreverErro } from '@/lib/erroLegivel';
 
 export const dynamic = 'force-dynamic';
 
@@ -89,7 +90,7 @@ async function emitNfeWithLock(
 
     return NextResponse.json({ success: true, data: nfeCache });
   } catch (dbError: unknown) {
-    const dbErrMsg = dbError instanceof Error ? dbError.message : String(dbError);
+    const dbErrMsg = descreverErro(dbError);
     console.error('❌ CRÍTICO: NF-e emitida com sucesso no Bling, mas ocorreu uma falha ao atualizar o banco local!', dbError);
     return NextResponse.json({
       success: false,

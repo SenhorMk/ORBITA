@@ -8,6 +8,7 @@ import { Search, Plus, Trash2, CheckCircle2, Loader2, AlertCircle } from 'lucide
 
 import { BlingPedido } from '@/types';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
+import { descreverErro } from '@/lib/erroLegivel';
 
 interface EditOrderModalProps {
   open: boolean;
@@ -519,7 +520,7 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
       setFrete('');
       setObservacoes('');
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
+      const errMsg = descreverErro(err);
       if (errMsg.includes('Informa\\u00e7\\u00f5es id\\u00eanticas a \\u00faltima venda salva') || errMsg.includes('code":3')) {
         setError('Erro: Venda Duplicada. Não é permitido enviar um pedido idêntico ao anterior (mesmo cliente, produtos e valores). Altere alguma informação ou aguarde se for intencional.');
       } else {

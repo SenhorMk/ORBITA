@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { clienteRequestSchema, type ClienteRequest } from '@/lib/config/clienteContract';
 import type { BlingCallResult } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { descreverErro } from '@/lib/erroLegivel';
 
 export interface ContatoBlingPayload {
   readonly nome: string;
@@ -168,7 +169,7 @@ export function createClienteUpdateHandler(deps: ClienteDependencies) {
 
       return NextResponse.json({ success: true, client } satisfies ClienteResponseBody, { status: 200 });
     } catch (error: unknown) {
-      const causa = error instanceof Error ? error.message : String(error);
+      const causa = descreverErro(error);
       return fail(
         `Contato salvo no Bling (id ${blingId}), mas falhou ao gravar no ORBITA: ${causa}. Sincronize os clientes para reconciliar.`,
         500,
