@@ -459,4 +459,97 @@ describe('POST /api/financeiro/sync', () => {
       expect(log).not.toContain('tok-sintetico');
     });
   });
+
+  describe('validação não pode abortar o lote nem inventar valor (revisão do #58)', () => {
+    it('item nulo no meio do lote não derruba os válidos', async () => {
+      // O ramo de item inválido lia `raw.id` para nomear a linha do log, e
+      // `null` é justamente uma das formas rejeitadas: `TypeError`, 500, lote
+      // inteiro perdido e o item válido nem tentado.
+      const { deps, upsertTitulo } = montarDeps({
+        bling: blingComPaginas({
+          financeiro_contas_pagar: [[null as unknown as RawContaFinanceira, CONTA]],
+        }),
+      });
+
+      const resposta = await createFinanceiroSyncHandler(deps)(requisicao());
+      const json = await resposta.json();
+
+      expect(resposta.status).toBe(200);
+      expect(json.stats.contasPagar.itensInvalidos).toBe(1);
+      expect(json.stats.contasPagar.processados).toBe(1);
+      expect(upsertTitulo.mock.calls.map(([, t]) => t.bling_id)).toEqual([9001]);
+    });
+
+    it.each([
+      ['undefined', undefined],
+      ['número', 42],
+      ['texto', 'nao-e-conta'],
+      ['lista', []],
+    ])('item %s também é contado e o lote segue', async (_nome, item) => {
+      const { deps, upsertTitulo } = montarDeps({
+        bling: blingComPaginas({
+          financeiro_contas_pagar: [[item as unknown as RawContaFinanceira, CONTA]],
+        }),
+      });
+
+      const json = await (await createFinanceiroSyncHandler(deps)(requisicao())).json();
+
+      expect(json.stats.contasPagar.itensInvalidos).toBe(1);
+      expect(upsertTitulo).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['string vazia', ''],
+      ['só espaços', '   '],
+      ['hexadecimal', '0xFF'],
+      ['notação científica', '1e3'],
+      ['texto', 'abc'],
+    ])('valor %s é recusado em vez de virar número', async (_nome, valor) => {
+      // `Number('')` e `Number('   ')` são 0; `Number('0xFF')` é 255. Gravar
+      // isso é inventar um valor que o Bling não mandou.
+      const { deps, upsertTitulo } = montarDeps({
+        bling: blingComPaginas({
+          financeiro_contas_pagar: [[{ ...CONTA, valor } as unknown as RawContaFinanceira]],
+        }),
+      });
+
+      const json = await (await createFinanceiroSyncHandler(deps)(requisicao())).json();
+
+      expect(upsertTitulo).not.toHaveBeenCalled();
+      expect(json.stats.contasPagar.itensInvalidos).toBe(1);
+    });
+
+    it.each([
+      ['zero numérico', 0, 0],
+      ['zero em texto', '0', 0],
+      ['decimal em texto', '250.50', 250.5],
+      ['negativo em texto', '-30', -30],
+    ])('valor %s é legítimo e passa', async (_nome, valor, esperado) => {
+      // O outro lado da guarda: apertar demais recusaria conta de valor zero,
+      // que existe.
+      const { deps, upsertTitulo } = montarDeps({
+        bling: blingComPaginas({
+          financeiro_contas_pagar: [[{ ...CONTA, valor } as unknown as RawContaFinanceira]],
+        }),
+      });
+
+      await createFinanceiroSyncHandler(deps)(requisicao());
+
+      expect(upsertTitulo.mock.calls[0]![1].valor).toBe(esperado);
+    });
+
+    it('o aviso do teto de páginas não promete progresso por repetição', async () => {
+      // Cada execução começa na página 1: repetir lê as mesmas páginas e deixa
+      // as mesmas contas de fora.
+      const cheia = Array.from({ length: 100 }, (_, i) => ({ ...CONTA, id: 8000 + i }));
+      const { deps: base } = montarDeps({ bling: { lerPagina: vi.fn().mockResolvedValue(cheia) } });
+      const deps: FinanceiroSyncDependencies = { ...base, maxPaginas: 2 };
+
+      const { error } = await (await createFinanceiroSyncHandler(deps)(requisicao())).json();
+
+      expect(error).toContain('limite de páginas');
+      expect(error).not.toMatch(/rode novamente/iu);
+      expect(error).toMatch(/ampliar o limite|filtrar por período/iu);
+    });
+  });
 });

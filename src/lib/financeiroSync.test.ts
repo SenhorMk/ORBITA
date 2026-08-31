@@ -138,4 +138,48 @@ describe('a resposta da rota chega à tela', () => {
 
     expect(aviso).toBe('Não foi possível concluir a sincronização.');
   });
+
+  describe('HTTP 200 com corpo inválido não é conclusão (revisão do #58)', () => {
+    it.each([
+      ['objeto vazio', '{}', 'application/json'],
+      ['nulo', 'null', 'application/json'],
+      ['lista', '[]', 'application/json'],
+      ['HTML de proxy', '<html>OK</html>', 'text/html'],
+      ['texto solto', 'ok', 'text/plain'],
+    ])('%s com HTTP 200 gera aviso genérico', async (_nome, corpo, tipo) => {
+      // Antes bastava não existir `success: false` para a tela ficar calada:
+      // qualquer 200 sem envelope passava por conclusão.
+      const aviso = await executarSyncFinanceiro(async () =>
+        new Response(corpo, { status: 200, headers: { 'content-type': tipo } }));
+
+      expect(aviso).toBe('Não foi possível concluir a sincronização.');
+    });
+
+    it('sucesso precisa ser afirmado, não apenas não-negado', async () => {
+      const semAfirmacao = await executarSyncFinanceiro(async () =>
+        new Response(JSON.stringify({ stats: {} }), { status: 200 }));
+      const afirmado = await executarSyncFinanceiro(async () =>
+        new Response(JSON.stringify({ success: true, stats: {} }), { status: 200 }));
+
+      expect(semAfirmacao).not.toBe('');
+      expect(afirmado).toBe('');
+    });
+
+    it('`error` que não é texto não vai para a tela', async () => {
+      // Exibir sem conferir o tipo colocaria `[object Object]` na tela — a
+      // mesma família de defeito do ticket 03.
+      const aviso = await executarSyncFinanceiro(async () =>
+        new Response(JSON.stringify({ success: false, error: { codigo: 42 } }), { status: 200 }));
+
+      expect(aviso).toBe('Não foi possível concluir a sincronização.');
+      expect(aviso).not.toContain('[object Object]');
+    });
+
+    it('`error` vazio ou só espaços cai na mensagem genérica', async () => {
+      const vazio = await executarSyncFinanceiro(async () =>
+        new Response(JSON.stringify({ success: false, error: '   ' }), { status: 200 }));
+
+      expect(vazio).toBe('Não foi possível concluir a sincronização.');
+    });
+  });
 });
