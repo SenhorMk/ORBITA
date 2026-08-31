@@ -13,40 +13,28 @@ export async function GET(request: Request) {
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
 
-    let stats = { faturamento30: 0, total: 0, pendentes: 0, cancelados: 0, atendidos: 0 };
-    let pedidos: unknown[] = [];
-    let produtos: unknown[] = [];
-    let clientes: unknown[] = [];
-    let categorias: unknown[] = [];
+    // Nenhuma destas leituras é embrulhada em try/catch que devolve vazio.
+    //
+    // A versão anterior capturava cada uma e seguia com `[]` e estatísticas
+    // zeradas, respondendo HTTP 200. Quando a consulta de pedidos quebrou por
+    // um embed ambíguo, o painel passou a exibir "R$ 0,00" e "0 pedidos" com
+    // três pedidos gravados no banco — e ninguém tinha como saber, porque a
+    // resposta dizia sucesso.
+    //
+    // Zero e "não sei" são coisas diferentes. Num painel que mostra dinheiro,
+    // confundir as duas é o pior erro possível: falhar em voz alta é a única
+    // opção honesta.
+    const produtos = await produtoRepository.getAll(scope);
+    const clientes = await clienteRepository.getAll(scope);
+    const pedidos = await pedidoRepository.getAllEnriched(scope);
+    const stats = await pedidoRepository.getDashboardStats(scope);
 
-    try {
-      produtos = await produtoRepository.getAll(scope);
-    } catch (e: unknown) {
-      console.error('Erro ao carregar produtos no dashboard:', e);
-    }
-
-    try {
-      clientes = await clienteRepository.getAll(scope);
-    } catch (e: unknown) {
-      console.error('Erro ao carregar clientes no dashboard:', e);
-    }
-
-    try {
-      pedidos = await pedidoRepository.getAllEnriched(scope);
-      stats = await pedidoRepository.getDashboardStats(scope);
-    } catch (e: unknown) {
-      console.error('Erro ao carregar pedidos no dashboard:', e);
-    }
-
-    try {
-      const { data: catData } = await supabaseServer
-        .from('categorias')
-        .select('*')
-        .eq('organizacao_id', scope.organizationId);
-      if (catData) categorias = catData;
-    } catch (e: unknown) {
-      console.error('Erro ao carregar categorias no dashboard:', e);
-    }
+    const { data: catData, error: catErr } = await supabaseServer
+      .from('categorias')
+      .select('*')
+      .eq('organizacao_id', scope.organizationId);
+    if (catErr) throw catErr;
+    const categorias = catData ?? [];
 
     return NextResponse.json({
       success: true,

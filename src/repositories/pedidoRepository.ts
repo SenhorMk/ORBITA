@@ -1,7 +1,6 @@
 import { supabaseServer } from '../lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { Pedido, ItemPedido, Nfe, Cliente } from '../types';
-import { clienteRepository } from './clienteRepository';
 
 // Tipo enriquecido para visualização no dashboard
 export interface PedidoEnriquecido extends Pedido {
@@ -43,50 +42,45 @@ function mapDocumentoToNfe(doc?: RawDocumentoFiscal | null): Nfe | undefined {
 }
 
 export class PedidoRepository {
+  /**
+   * Pedidos da organização, com cliente e nota fiscal embutidos.
+   *
+   * Os dois embeds são desambiguados **pelo nome da constraint**, e isso não é
+   * estilo: as migrations de tenancy criaram uma segunda chave estrangeira
+   * composta em cima da original, então `documentos_fiscais(*)` sozinho é
+   * ambíguo e o PostgREST recusa a consulta inteira:
+   *
+   *   PGRST201 — Could not embed because more than one relationship was found
+   *
+   * Isso derrubava TODA leitura de pedidos do painel. Havia um fallback logo
+   * abaixo que existia para essa hipótese — mas ele repetia o mesmo embed
+   * ambíguo, falhava igual, e devolvia `[]`. O painel então mostrava
+   * "R$ 0,00" e "0 pedidos" com os pedidos gravados no banco.
+   *
+   * O fallback saiu: com o embed correto ele não tem hipótese que atenda, e
+   * um caminho alternativo que devolve lista vazia em silêncio é pior que
+   * não ter caminho nenhum. Guarda: `postgrest-embeds.test.ts`.
+   */
   async getAllEnriched(scope: VerifiedOrganizationScope): Promise<PedidoEnriquecido[]> {
-    try {
-      const { data, error } = await supabaseServer
-        .from('pedidos')
-        .select(`
-          *,
-          cliente:clientes!fk_pedido_cliente(*),
-          nfe:documentos_fiscais(*)
-        `)
-        .eq('organizacao_id', scope.organizationId)
-        .order('data', { ascending: false });
+    const { data, error } = await supabaseServer
+      .from('pedidos')
+      .select(`
+        *,
+        cliente:clientes!fk_pedido_cliente(*),
+        nfe:documentos_fiscais!documentos_fiscais_pedido_id_fkey(*)
+      `)
+      .eq('organizacao_id', scope.organizationId)
+      .order('data', { ascending: false });
 
-      if (!error && data) {
-        return (data as PedidoEnriquecido[]).map((p) => ({
-          ...p,
-          nfe: Array.isArray(p.nfe) ? mapDocumentoToNfe(p.nfe[0]) : mapDocumentoToNfe(p.nfe),
-        }));
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.warn('⚠️ Alerta: Busca de pedidos com join explícito falhou, tentando fallback simples:', msg);
+    if (error) {
+      console.error('Erro ao buscar pedidos no Supabase:', error);
+      throw error;
     }
 
-    try {
-      const { data: rawPedidos, error: pErr } = await supabaseServer
-        .from('pedidos')
-        .select('*, nfe:documentos_fiscais(*)')
-        .eq('organizacao_id', scope.organizationId)
-        .order('data', { ascending: false });
-
-      if (pErr) throw pErr;
-
-      const clientes = await clienteRepository.getAll(scope);
-      const clienteMap = new Map(clientes.map((c) => [c.id, c]));
-
-      return ((rawPedidos || []) as PedidoEnriquecido[]).map((p) => ({
-        ...p,
-        cliente: p.cliente_id ? clienteMap.get(p.cliente_id) : undefined,
-        nfe: Array.isArray(p.nfe) ? mapDocumentoToNfe(p.nfe[0]) : mapDocumentoToNfe(p.nfe),
-      }));
-    } catch (err: unknown) {
-      console.error('Erro ao buscar pedidos no fallback:', err);
-      return [];
-    }
+    return ((data ?? []) as PedidoEnriquecido[]).map((p) => ({
+      ...p,
+      nfe: Array.isArray(p.nfe) ? mapDocumentoToNfe(p.nfe[0]) : mapDocumentoToNfe(p.nfe),
+    }));
   }
 
   async getById(scope: VerifiedOrganizationScope, id: string): Promise<Pedido | null> {
