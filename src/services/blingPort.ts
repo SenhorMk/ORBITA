@@ -41,6 +41,8 @@ export interface BlingPort {
   criarPedidoVenda(payload: PedidoVendaPayload): Promise<BlingCallResult<{ id: string; alertas: readonly string[] }>>;
   /** Baixa de estoque vinculada ao pedido (Ticket 30). */
   lancarEstoquePedidoVenda(idPedido: string): Promise<BlingCallResult<void>>;
+  /** Compensacao: marca como cancelado um pedido que o ORBITA nao conseguiu gravar. */
+  cancelarPedidoVenda(idPedido: string): Promise<BlingCallResult<void>>;
   /** Forma de pagamento padrão da conta (Ticket 30). */
   obterFormaPagamentoPadraoId(): Promise<BlingCallResult<number>>;
 

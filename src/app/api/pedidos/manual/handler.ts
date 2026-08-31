@@ -263,6 +263,50 @@ async function sincronizarComBling(
 }
 
 /**
+ * Desfaz no Bling a venda que o ORBITA não conseguiu gravar.
+ *
+ * O efeito remoto acontece ANTES da gravação local, e não há como inverter a
+ * ordem: o `bling_id` do pedido só existe depois da criação remota. A única
+ * saída honesta é compensar — cancelar lá o que não existe aqui.
+ *
+ * Sem isto, cada tentativa deixava um pedido órfão na conta real do lojista.
+ * Aconteceu em 2026-08-30: o pedido 26735607230 nasceu no Bling, a gravação
+ * local foi recusada pelo banco, e ele ficou sem par no ORBITA. Não havia
+ * retentativa segura — tentar de novo criava mais um.
+ */
+async function compensarNoBling(
+  blingPedidoId: string | null,
+  error: unknown,
+  deps: ManualOrderDependencies,
+): Promise<NextResponse> {
+  const causa = error instanceof Error ? error.message : String(error);
+
+  if (blingPedidoId === null) {
+    return fail(`Falha ao registrar a venda no ORBITA: ${causa}.`, 500, { blingPedidoId });
+  }
+
+  const compensacao = await deps.bling.cancelarPedidoVenda(blingPedidoId);
+  if (compensacao._tag === 'BlingFailed') {
+    // As duas metades falharam. É o único caminho que exige ação humana, e por
+    // isso ele diz exatamente o quê, onde e por quê.
+    return fail(
+      `Falha ao registrar a venda no ORBITA: ${causa}. O pedido ${blingPedidoId} foi criado no Bling e o `
+        + `cancelamento automático também falhou (${compensacao.failure.message}). `
+        + 'Cancele o pedido no Bling antes de tentar de novo, senão a próxima tentativa cria outro.',
+      500,
+      { blingPedidoId, compensado: false },
+    );
+  }
+
+  return fail(
+    `Falha ao registrar a venda no ORBITA: ${causa}. O pedido ${blingPedidoId} foi cancelado no Bling `
+      + 'automaticamente, então nada ficou pendente lá. Pode tentar de novo.',
+    500,
+    { blingPedidoId, compensado: true },
+  );
+}
+
+/**
  * `POST /api/pedidos/manual`.
  *
  * A venda só é gravada localmente depois que o Bling confirma a criação do
@@ -345,14 +389,7 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
 
       return json({ success: true, pedidoId, blingPedidoId, total, avisos }, 201);
     } catch (error: unknown) {
-      const causa = error instanceof Error ? error.message : String(error);
-      // O pedido pode já existir no Bling. Dizer isso é o que permite ao
-      // usuário reconciliar em vez de reenviar e duplicar a venda.
-      const contexto =
-        blingPedidoId === null
-          ? ''
-          : ` O pedido ${blingPedidoId} JÁ FOI criado no Bling e precisa ser conferido ou cancelado lá antes de tentar de novo.`;
-      return fail(`Falha ao registrar a venda no ORBITA: ${causa}.${contexto}`, 500, { blingPedidoId });
+      return compensarNoBling(blingPedidoId, error, deps);
     }
   };
 }
