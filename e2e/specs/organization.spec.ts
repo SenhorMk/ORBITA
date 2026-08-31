@@ -25,17 +25,19 @@ test.describe('organização', () => {
     await loginPage.goto();
     await loginPage.loginAndWaitForDashboard(owner.email, owner.password);
 
-    const organizationApi = new OrganizationApi(page.request);
+    const organizationApi = new OrganizationApi(page);
     const slug = `${manifest.prefix}spec-created-org`;
     const createResponse = await organizationApi.createOrganization('ORBITA E2E Spec Org', slug);
     expect(createResponse.ok()).toBe(true);
-    const created = (await createResponse.json()) as { id: string };
-    expect(created.id).toBeTruthy();
+    // A rota devolve { organizacao }, nao { id } solto. O spec foi escrito
+    // contra um contrato imaginado e nunca chegou a rodar para descobrir.
+    const created = (await createResponse.json()) as { organizacao: { id: string } };
+    expect(created.organizacao?.id).toBeTruthy();
 
     const listResponse = await organizationApi.listOrganizations();
     expect(listResponse.ok()).toBe(true);
     const listed = (await listResponse.json()) as { organizacoes: Array<{ id: string }> };
-    expect(listed.organizacoes.some((org) => org.id === created.id)).toBe(true);
+    expect(listed.organizacoes.some((org) => org.id === created.organizacao.id)).toBe(true);
   });
 
   test('seleção CAS aceita a versão esperada e rejeita uma versão desatualizada (evita corrida silenciosa)', async ({
@@ -46,7 +48,7 @@ test.describe('organização', () => {
     await loginPage.goto();
     await loginPage.loginAndWaitForDashboard(owner.email, owner.password);
 
-    const organizationApi = new OrganizationApi(page.request);
+    const organizationApi = new OrganizationApi(page);
     const listResponse = await organizationApi.listOrganizations();
     const listed = (await listResponse.json()) as {
       organizacoes: Array<{ id: string }>;
@@ -79,7 +81,7 @@ test.describe('organização', () => {
     await ownerLogin.goto();
     await ownerLogin.loginAndWaitForDashboard(owner.email, owner.password);
 
-    const ownerOrgApi = new OrganizationApi(page.request);
+    const ownerOrgApi = new OrganizationApi(page);
     const ownList = (await (await ownerOrgApi.listOrganizations()).json()) as {
       activeOrg: { organizacao: { id: string } };
     };
@@ -87,8 +89,8 @@ test.describe('organização', () => {
 
     const inviteResponse = await ownerOrgApi.createInvite(orgId, member.email, 'member');
     expect(inviteResponse.ok()).toBe(true);
-    const invite = (await inviteResponse.json()) as { token: string };
-    expect(invite.token).toBeTruthy();
+    const invite = (await inviteResponse.json()) as { convite: { token: string } };
+    expect(invite.convite.token).toBeTruthy();
 
     const memberContext = await browser.newContext();
     const memberPage = await memberContext.newPage();
@@ -96,8 +98,8 @@ test.describe('organização', () => {
     await memberLogin.goto();
     await memberLogin.loginAndWaitForDashboard(member.email, member.password);
 
-    const memberOrgApi = new OrganizationApi(memberPage.request);
-    const acceptResponse = await memberOrgApi.acceptInvite(invite.token);
+    const memberOrgApi = new OrganizationApi(memberPage);
+    const acceptResponse = await memberOrgApi.acceptInvite(invite.convite.token);
     expect(acceptResponse.ok()).toBe(true);
 
     await memberContext.close();
@@ -114,7 +116,7 @@ test.describe('organização', () => {
     await ownerLogin.goto();
     await ownerLogin.loginAndWaitForDashboard(owner.email, owner.password);
 
-    const ownerOrgApi = new OrganizationApi(page.request);
+    const ownerOrgApi = new OrganizationApi(page);
     const ownList = (await (await ownerOrgApi.listOrganizations()).json()) as {
       activeOrg: { organizacao: { id: string } };
     };

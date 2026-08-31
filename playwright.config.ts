@@ -1,6 +1,14 @@
 import { defineConfig, devices } from '@playwright/test';
+import dotenv from 'dotenv';
 
 import { resolveStagingConfig } from './src/lib/e2e/stagingConfig';
+
+// `.env.local` é o mesmo arquivo que o resto do projeto usa e o git ignora.
+// Sem isto, rodar a suíte exigia repetir seis variáveis na linha de comando a
+// cada execução — e o jeito mais provável de errar um alvo é digitá-lo de novo
+// toda vez. Variáveis já presentes no ambiente continuam vencendo (`override`
+// fica desligado), então o CI segue mandando.
+dotenv.config({ path: '.env.local', quiet: true });
 
 /**
  * Fail-closed by construction: `resolveStagingConfig` throws

@@ -30,7 +30,7 @@ test.beforeAll(async ({ browser }) => {
   const loginPage = new LoginPage(page);
   await loginPage.goto();
   await loginPage.loginAndWaitForDashboard(ownerB.email, ownerB.password);
-  const orgApi = new OrganizationApi(page.request);
+  const orgApi = new OrganizationApi(page);
   const listResponse = await orgApi.listOrganizations();
   const listed = (await listResponse.json()) as { activeOrg: { organizacao: { id: string } } };
   foreignOrgId = listed.activeOrg.organizacao.id;
@@ -44,7 +44,7 @@ test.describe('negações cross-tenant', () => {
     await loginPage.goto();
     await loginPage.loginAndWaitForDashboard(memberA.email, memberA.password);
 
-    const probe = new CrossTenantProbe(page.request);
+    const probe = new CrossTenantProbe(page);
     const response = await probe.attemptSwitchToForeignOrganization(foreignOrgId, 0);
     expect(response.ok()).toBe(false);
     expect([401, 403, 404]).toContain(response.status());
@@ -56,7 +56,7 @@ test.describe('negações cross-tenant', () => {
     await loginPage.goto();
     await loginPage.loginAndWaitForDashboard(ownerA.email, ownerA.password);
 
-    const probe = new CrossTenantProbe(page.request);
+    const probe = new CrossTenantProbe(page);
     const response = await probe.attemptListForeignInvites(foreignOrgId);
     expect(response.ok()).toBe(false);
     expect([401, 403, 404]).toContain(response.status());
@@ -68,7 +68,7 @@ test.describe('negações cross-tenant', () => {
     await loginPage.goto();
     await loginPage.loginAndWaitForDashboard(ownerA.email, ownerA.password);
 
-    const probe = new CrossTenantProbe(page.request);
+    const probe = new CrossTenantProbe(page);
     const response = await probe.attemptInviteIntoForeignOrganization(
       foreignOrgId,
       `${manifest.prefix}should-never-exist@e2e.orbita.test`,
@@ -83,12 +83,12 @@ test.describe('negações cross-tenant', () => {
     await loginPage.goto();
     await loginPage.loginAndWaitForDashboard(memberA.email, memberA.password);
 
-    const orgApi = new OrganizationApi(page.request);
+    const orgApi = new OrganizationApi(page);
     const ownList = (await (await orgApi.listOrganizations()).json()) as {
       activeOrg: { organizacao: { id: string } };
     };
 
-    const probe = new CrossTenantProbe(page.request);
+    const probe = new CrossTenantProbe(page);
     const response = await probe.attemptMemberOnlyInvite(
       ownList.activeOrg.organizacao.id,
       `${manifest.prefix}member-attempted-invite@e2e.orbita.test`,
@@ -105,7 +105,7 @@ test.describe('negações cross-tenant', () => {
     await loginPage.loginAndWaitForDashboard(external.email, external.password);
     await dashboard.expectAuthenticated();
 
-    const orgApi = new OrganizationApi(page.request);
+    const orgApi = new OrganizationApi(page);
     const response = await orgApi.listOrganizations();
     const body = (await response.json()) as { organizacoes: Array<{ id: string }> };
     expect(body.organizacoes.some((org) => org.id === foreignOrgId)).toBe(false);

@@ -1,0 +1,12 @@
+{
+  "//": "Compiler options do seed/cleanup E2E, rodados por ts-node.",
+  "//2": "Estavam embutidos como JSON na linha de comando do package.json e o shell comia as aspas, então o script nunca chegou a rodar. Arquivo não tem esse problema.",
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "jsx": "react-jsx",
+    "noEmit": false
+  },
+  "include": ["seed/**/*.ts", "../src/lib/e2e/**/*.ts"]
+}

@@ -28,8 +28,8 @@
     "e2e": "playwright test",
     "e2e:report": "playwright show-report playwright-report",
     "e2e:list": "playwright test --list",
-    "e2e:seed": "ts-node --transpile-only --compiler-options {\"module\":\"commonjs\",\"moduleResolution\":\"node\"} e2e/seed/run-seed.ts",
-    "e2e:cleanup": "ts-node --transpile-only --compiler-options {\"module\":\"commonjs\",\"moduleResolution\":\"node\"} e2e/seed/run-cleanup.ts --",
+    "e2e:seed": "ts-node --transpile-only --project e2e/tsconfig.seed.json e2e/seed/run-seed.ts",
+    "e2e:cleanup": "ts-node --transpile-only --project e2e/tsconfig.seed.json e2e/seed/run-cleanup.ts --",
     "verificar:bling": "node scripts/verificar-jornada-bling.mjs"
   },
   "dependencies": {
