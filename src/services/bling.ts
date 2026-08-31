@@ -1188,29 +1188,29 @@ export class BlingClient implements BlingPort {
 
   // Obter lançamentos de contas a receber com paginação e filtros
   async getContasReceber(pagina = 1, limite = 100, dataInicial?: string, dataFinal?: string): Promise<unknown[]> {
-    try {
-      const url = new URL(`${this.baseUrl}/contas/receber`);
-      url.searchParams.append('pagina', pagina.toString());
-      url.searchParams.append('limite', limite.toString());
-      if (dataInicial) url.searchParams.append('dataVencimentoInicial', dataInicial);
-      if (dataFinal) url.searchParams.append('dataVencimentoFinal', dataFinal);
-
-      const response = await this.fetchWithAuth(url.toString());
-      if (!response.ok) {
-        throw new BlingLeituraError('contas a receber', response.status, await response.text());
-      }
-      const data = await response.json();
-      return (data.data && Array.isArray(data.data)) ? data.data : [];
-    } catch (error: unknown) {
-      if (error instanceof BlingLeituraError) throw error;
-      throw new BlingLeituraError('contas a receber', 0, descreverErro(error));
-    }
+    return this.lerContasPaginadas('contas a receber', '/contas/receber', pagina, limite, dataInicial, dataFinal);
   }
 
   // Obter lançamentos de contas a pagar com paginação e filtros
-  async getContasPagar(pagina = 1, limite = 100, dataInicial?: string, dataFinal?: string): Promise<unknown[]> {
+  /**
+   * Lê uma página de contas (a pagar ou a receber), conferindo o envelope.
+   *
+   * As duas direções são a mesma requisição com outro caminho, e a checagem de
+   * envelope precisa ser idêntica nas duas — duplicá-la é como uma das metades
+   * fica para trás. Devolver `[]` num erro tornava "o provedor recusou"
+   * indistinguível de "não há contas": o laço da sincronização lê lista vazia
+   * como fim dos dados, marca checkpoint e responde sucesso com zero itens.
+   */
+  private async lerContasPaginadas(
+    recurso: 'contas a pagar' | 'contas a receber',
+    caminho: string,
+    pagina: number,
+    limite: number,
+    dataInicial?: string,
+    dataFinal?: string,
+  ): Promise<unknown[]> {
     try {
-      const url = new URL(`${this.baseUrl}/contas/pagar`);
+      const url = new URL(`${this.baseUrl}${caminho}`);
       url.searchParams.append('pagina', pagina.toString());
       url.searchParams.append('limite', limite.toString());
       if (dataInicial) url.searchParams.append('dataVencimentoInicial', dataInicial);
@@ -1218,15 +1218,24 @@ export class BlingClient implements BlingPort {
 
       const response = await this.fetchWithAuth(url.toString());
       if (!response.ok) {
-        throw new BlingLeituraError('contas a pagar', response.status, await response.text());
+        throw new BlingLeituraError(recurso, response.status, await response.text());
       }
+
       const data = await response.json();
-      return (data.data && Array.isArray(data.data)) ? data.data : [];
+      if (!data || typeof data !== 'object' || !Array.isArray((data as { data?: unknown }).data)) {
+        throw new BlingLeituraError(recurso, response.status, 'resposta sem a lista `data` esperada');
+      }
+      return (data as { data: unknown[] }).data;
     } catch (error: unknown) {
       if (error instanceof BlingLeituraError) throw error;
-      throw new BlingLeituraError('contas a pagar', 0, descreverErro(error));
+      throw new BlingLeituraError(recurso, 0, descreverErro(error));
     }
   }
+
+  async getContasPagar(pagina = 1, limite = 100, dataInicial?: string, dataFinal?: string): Promise<unknown[]> {
+    return this.lerContasPaginadas('contas a pagar', '/contas/pagar', pagina, limite, dataInicial, dataFinal);
+  }
+
 
   // ═══════════════════════════════════════════════════════════════════════
   // CATEGORIAS DE PRODUTOS

@@ -99,15 +99,21 @@ export interface FinanceiroSyncDependencies {
 }
 
 /**
- * Contagem por entidade. `leituraFalhou` é o campo que faltava: sem ele,
- * `processados: 0` significava tanto "não havia nada" quanto "não conseguimos
- * ler nada", e as duas viravam sucesso.
+ * Contagem por entidade.
+ *
+ * `leituraFalhou` e `leituraIncompleta` são coisas diferentes e as duas
+ * impedem o checkpoint: a primeira é o provedor recusando, a segunda é o teto
+ * de páginas sendo atingido com a última página cheia — dados ficaram de fora
+ * sem ninguém errar. `itensInvalidos` conta o que não passou na validação de
+ * contrato e por isso nunca chegou ao repositório.
  */
 export interface SyncStats {
   readonly processados: number;
   readonly falhasTemporarias: number;
   readonly falhasPermanentes: number;
+  readonly itensInvalidos: number;
   readonly leituraFalhou: boolean;
+  readonly leituraIncompleta: boolean;
 }
 
 /** Corpo de resposta da rota. A forma `{ success, stats }` é a de antes. */

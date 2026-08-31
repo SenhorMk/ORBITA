@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 
 import { descreverErro } from '@/lib/erroLegivel';
 import { logger, sanitizeErrorForLog } from '@/lib/observability/logger';
@@ -25,6 +26,30 @@ export type {
   RawContaFinanceira,
   SyncStats,
 } from './ports';
+
+/**
+ * Contrato do item de conta, conferido **antes** da persistência.
+ *
+ * O tipo TypeScript e a comparação textual com o catálogo do OpenAPI dizem o
+ * que o Bling *deveria* mandar; nenhum dos dois olha o que ele mandou. Sem esta
+ * validação, um item sem `id` chegava ao repositório com `bling_id: null` — que
+ * é a chave do `ON CONFLICT` — e `valor: null` virava `0` pelo `Number()`.
+ *
+ * `situacao` e `vencimento` são obrigatórios no OpenAPI oficial. `id` não é
+ * declarado obrigatório lá, mas aqui é: sem ele não existe chave de
+ * idempotência, e gravar sem chave é pior que não gravar.
+ */
+const contaFinanceiraSchema = z.object({
+  id: z.union([z.number(), z.string()]).transform((v) => Number(v)).pipe(z.number().int().positive()),
+  situacao: z.union([z.number(), z.string()]).transform((v) => Number(v)).pipe(z.number().finite()),
+  valor: z.union([z.number(), z.string()]).transform((v) => Number(v)).pipe(z.number().finite()),
+  vencimento: z.string().min(1),
+  pagamento: z.object({ data: z.string().optional() }).optional(),
+  historico: z.string().optional(),
+});
+
+/** Item já provado contra o contrato, pronto para virar `TituloFinanceiro`. */
+type ContaValidada = z.infer<typeof contaFinanceiraSchema>;
 
 const LIMITE_POR_PAGINA = 100;
 const MAX_PAGINAS_PADRAO = 50;
@@ -67,19 +92,28 @@ function registrarFalha(
     organizacaoId: contexto.organizacaoId,
     blingId: contexto.blingId,
     erro: sanitizeErrorForLog(erro).name,
+    // Sem o status, um 403 e um 500 do provedor viravam a mesma linha
+    // `BlingLeituraError` — o log existia e nao distinguia causa nenhuma.
+    status: statusTecnico(erro),
   });
 }
 
-function toTitulo(raw: RawContaFinanceira, tipo: 'pagar' | 'receber'): TituloFinanceiro {
+/** Status HTTP do erro, quando ele carrega um numero de status crivel. */
+function statusTecnico(erro: unknown): number | undefined {
+  const bruto = (erro as { status?: unknown } | null | undefined)?.status;
+  return typeof bruto === 'number' && Number.isInteger(bruto) && bruto >= 0 && bruto <= 599 ? bruto : undefined;
+}
+
+function toTitulo(conta: ContaValidada, tipo: 'pagar' | 'receber'): TituloFinanceiro {
   const rotulo = tipo === 'pagar' ? 'Conta a Pagar' : 'Conta a Receber';
   return {
-    bling_id: Number(raw.id),
+    bling_id: conta.id,
     tipo,
-    situacao: mapSituacao(Number(raw.situacao)),
-    valor: Number(raw.valor),
-    data_vencimento: String(raw.vencimento),
-    data_pagamento: raw.pagamento?.data || undefined,
-    descricao: raw.historico || `${rotulo} #${raw.id}`,
+    situacao: mapSituacao(conta.situacao),
+    valor: conta.valor,
+    data_vencimento: conta.vencimento,
+    data_pagamento: conta.pagamento?.data || undefined,
+    descricao: conta.historico || `${rotulo} #${conta.id}`,
   };
 }
 
@@ -108,24 +142,47 @@ async function sincronizarEntidade(
   let processados = 0;
   let falhasTemporarias = 0;
   let falhasPermanentes = 0;
+  let itensInvalidos = 0;
+  /** Verdadeiro enquanto não vimos o fim dos dados (página vazia ou parcial). */
+  let aindaHaPaginas = true;
 
-  for (let pagina = 1; pagina <= maxPaginas; pagina++) {
+  for (let pagina = 1; pagina <= maxPaginas && aindaHaPaginas; pagina++) {
     let itens: readonly RawContaFinanceira[];
     try {
       itens = await bling.lerPagina(entidade, pagina, LIMITE_POR_PAGINA);
     } catch (err: unknown) {
       registrarFalha(err, { etapa: 'ler-pagina', entidade, organizacaoId: scope.organizationId });
       // Sai sem marcar checkpoint: o que veio até aqui é parcial e assumido.
-      return { processados, falhasTemporarias, falhasPermanentes, leituraFalhou: true };
+      return {
+        processados, falhasTemporarias, falhasPermanentes, itensInvalidos,
+        leituraFalhou: true, leituraIncompleta: false,
+      };
     }
 
-    if (itens.length === 0) break;
+    if (itens.length === 0) {
+      aindaHaPaginas = false;
+      break;
+    }
 
     for (const raw of itens) {
+      const validado = contaFinanceiraSchema.safeParse(raw);
+      if (!validado.success) {
+        // Nunca alcança o repositório: sem `id` válido não há chave de
+        // idempotência, e `valor` ausente viraria `0` silenciosamente.
+        itensInvalidos++;
+        registrarFalha(new Error('item fora do contrato'), {
+          etapa: 'validar-item',
+          entidade,
+          organizacaoId: scope.organizationId,
+          blingId: raw.id === undefined ? undefined : String(raw.id),
+        });
+        continue;
+      }
+
       try {
         // Idempotente: `onConflict (organizacao_id, bling_id)` no repositório
         // faz a reexecução atualizar o mesmo registro, nunca duplicar.
-        await store.upsertTitulo(scope, toTitulo(raw, tipo));
+        await store.upsertTitulo(scope, toTitulo(validado.data, tipo));
         processados++;
       } catch (err: unknown) {
         if (ehFalhaTemporaria(err)) falhasTemporarias++;
@@ -134,16 +191,36 @@ async function sincronizarEntidade(
           etapa: 'gravar-titulo',
           entidade,
           organizacaoId: scope.organizationId,
-          blingId: raw.id === undefined ? undefined : String(raw.id),
+          blingId: String(validado.data.id),
         });
       }
     }
 
-    if (itens.length < LIMITE_POR_PAGINA) break;
+    if (itens.length < LIMITE_POR_PAGINA) aindaHaPaginas = false;
+  }
+
+  if (aindaHaPaginas) {
+    // O laço terminou porque bateu no teto, com a última página cheia: há mais
+    // dados do outro lado. Atingir um limite de segurança não é esgotar os
+    // dados, e marcar checkpoint aqui registraria uma conclusão que não houve.
+    logger.warn('Sincronização financeira interrompida pelo teto de páginas', {
+      subsystem: 'provider',
+      operacao: 'financeiro.sync.teto-de-paginas',
+      entidade,
+      organizacaoId: scope.organizationId,
+      maxPaginas,
+    });
+    return {
+      processados, falhasTemporarias, falhasPermanentes, itensInvalidos,
+      leituraFalhou: false, leituraIncompleta: true,
+    };
   }
 
   await store.marcarCheckpoint(scope, entidade);
-  return { processados, falhasTemporarias, falhasPermanentes, leituraFalhou: false };
+  return {
+    processados, falhasTemporarias, falhasPermanentes, itensInvalidos,
+    leituraFalhou: false, leituraIncompleta: false,
+  };
 }
 
 /**
@@ -173,8 +250,10 @@ export function createFinanceiroSyncHandler(deps: FinanceiroSyncDependencies) {
 
       const stats = { contasPagar, contasReceber };
       const leituraFalhou = contasPagar.leituraFalhou || contasReceber.leituraFalhou;
+      const leituraIncompleta = contasPagar.leituraIncompleta || contasReceber.leituraIncompleta;
       const itensPerdidos = contasPagar.falhasPermanentes + contasReceber.falhasPermanentes
-        + contasPagar.falhasTemporarias + contasReceber.falhasTemporarias;
+        + contasPagar.falhasTemporarias + contasReceber.falhasTemporarias
+        + contasPagar.itensInvalidos + contasReceber.itensInvalidos;
 
       if (leituraFalhou) {
         // 502: o provedor não respondeu o que devia. A mensagem nomeia a etapa
@@ -182,6 +261,17 @@ export function createFinanceiroSyncHandler(deps: FinanceiroSyncDependencies) {
         return json(
           { success: false, error: 'Não foi possível ler as contas no Bling; a sincronização ficou incompleta.', stats },
           502,
+        );
+      }
+
+      if (leituraIncompleta) {
+        return json(
+          {
+            success: false,
+            error: 'A sincronização parou no limite de páginas e não trouxe todas as contas. Rode novamente.',
+            stats,
+          },
+          200,
         );
       }
 

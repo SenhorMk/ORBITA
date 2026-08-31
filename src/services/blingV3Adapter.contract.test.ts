@@ -233,7 +233,36 @@ describe('erro do provedor', () => {
     await expect(adapter().getClientes(1, 10)).rejects.toThrow(/contatos.*403/i);
   });
 
-  it('sobrevive a corpo que não é JSON', async () => {
+it.each([
+    ['envelope de erro com HTTP 200', '{"error":{"type":"SERVER_ERROR"}}'],
+    ['data que não é lista', '{"data":{}}'],
+    ['corpo sem data', '{"pagina":1}'],
+    ['nulo', 'null'],
+  ])('conta a pagar: %s não vira lista vazia', async (_nome, body) => {
+    // A porta que ficou aberta no ticket 05. O 401/403/500 passou a estourar,
+    // mas um HTTP **200** com envelope inválido ainda caía em `[]` — e `[]` é
+    // exatamente o que o laço lê como "acabaram os dados": checkpoint avança,
+    // rota responde sucesso, zero contas.
+    fake.programar({ status: 200, body });
+
+    await expect(adapter().getContasPagar(1, 100)).rejects.toThrow(/contas a pagar/i);
+  });
+
+  it('conta a receber: envelope inválido com HTTP 200 também estoura', async () => {
+    fake.programar({ status: 200, body: '{"data":"nao-e-lista"}' });
+
+    await expect(adapter().getContasReceber(1, 100)).rejects.toThrow(/contas a receber/i);
+  });
+
+  it('lista vazia legítima continua sendo lista vazia', async () => {
+    // O outro lado da guarda: apertar demais transformaria "não há contas" em
+    // erro, e a sincronização nunca concluiria.
+    fake.programar({ status: 200, body: '{"data":[]}' });
+
+    await expect(adapter().getContasPagar(1, 100)).resolves.toEqual([]);
+  });
+
+    it('sobrevive a corpo que não é JSON', async () => {
     fake.programar({ status: 502, body: '<html>Bad Gateway</html>' });
 
     const resultado = await adapter().obterContaFinanceiraPadraoId();

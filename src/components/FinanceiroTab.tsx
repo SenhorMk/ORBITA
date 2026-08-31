@@ -2,13 +2,16 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Plus, ArrowDown, ArrowUp, RefreshCw } from 'lucide-react';
+import { ArrowDown, ArrowUp } from 'lucide-react';
+
+import { AvisoSincronizacao, FinanceiroHeader } from './FinanceiroHeader';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { buildDespesaRequest } from '@/lib/config/despesaContract';
 import { NovaDespesaModal, type Fornecedor } from './NovaDespesaModal';
 import { NovoFornecedorModal, type DadosCNPJ } from './NovoFornecedorModal';
 import { descreverErro } from '@/lib/erroLegivel';
+import { executarSyncFinanceiro } from '@/lib/financeiroSync';
 
 const BRASILAPI_CNPJ_URL =
   process.env.NEXT_PUBLIC_BRASILAPI_CNPJ_URL || 'https://brasilapi.com.br/api/cnpj/v1';
@@ -379,6 +382,8 @@ function useFinanceiroResumo(fetchWithAuth: FinanceiroTabProps['fetchWithAuth'])
   const [resumo, setResumo] = useState<ResumoFinanceiro>({ receitas: 0, despesas: 0, saldo: 0 });
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  /** Falha ou parcialidade da última sincronização, para a tela não mentir. */
+  const [avisoSync, setAvisoSync] = useState('');
   const [filtroTipo, setFiltroTipo] = useState<'todos' | 'receber' | 'pagar'>('todos');
 
   const fetchFinanceiro = React.useCallback(async (isMounted: () => boolean = () => true) => {
@@ -400,11 +405,13 @@ function useFinanceiroResumo(fetchWithAuth: FinanceiroTabProps['fetchWithAuth'])
 
   const syncFinanceiro = async () => {
     setSyncing(true);
+    setAvisoSync('');
     try {
-      await fetchWithAuth('/api/financeiro/sync', { method: 'POST' });
+      setAvisoSync(await executarSyncFinanceiro(fetchWithAuth));
+      // Recarrega de todo jeito: o que entrou antes da falha é dado bom.
       await fetchFinanceiro();
     } catch (err) {
-      console.error('Erro ao sincronizar:', err);
+      setAvisoSync(descreverErro(err));
     } finally {
       setSyncing(false);
     }
@@ -439,47 +446,13 @@ function useFinanceiroResumo(fetchWithAuth: FinanceiroTabProps['fetchWithAuth'])
     }, [])
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  return { titulos, resumo, loading, syncing, setSyncing, filtroTipo, setFiltroTipo, fetchFinanceiro, syncFinanceiro, chartData };
+  return { titulos, resumo, loading, syncing, setSyncing, avisoSync, filtroTipo, setFiltroTipo, fetchFinanceiro, syncFinanceiro, chartData };
 }
 
-interface FinanceiroHeaderProps {
-  syncing: boolean;
-  onSync: () => void;
-  onNovaDespesa: () => void;
-}
-
-/** Cabeçalho da aba financeira: título e ações (sincronizar / nova despesa). */
-function FinanceiroHeader({ syncing, onSync, onNovaDespesa }: FinanceiroHeaderProps) {
-  return (
-    <div className="flex items-center justify-between">
-      <div>
-        <h2 className="text-2xl font-bold text-white">Controle Financeiro</h2>
-        <p className="text-slate-400 text-sm mt-0.5">Gestão simplificada de fluxo de caixa e saídas</p>
-      </div>
-      <div className="flex gap-3">
-        <button
-          onClick={onSync}
-          disabled={syncing}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 text-sm font-medium transition-all"
-        >
-          <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-          {syncing ? 'Sincronizando...' : 'Sincronizar'}
-        </button>
-        <button
-          onClick={onNovaDespesa}
-          className="flex items-center gap-2 px-5 py-2 rounded-xl bg-gradient-to-r from-[#FF9F0A] to-[#FF6B00] text-zinc-900 text-sm font-bold shadow-lg hover:opacity-90 transition-all"
-        >
-          <Plus className="w-4 h-4" />
-          Nova Despesa
-        </button>
-      </div>
-    </div>
-  );
-}
 
 export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
   const {
-    titulos, resumo, loading, syncing, setSyncing, filtroTipo, setFiltroTipo,
+    titulos, resumo, loading, syncing, setSyncing, avisoSync, filtroTipo, setFiltroTipo,
     fetchFinanceiro, syncFinanceiro, chartData,
   } = useFinanceiroResumo(fetchWithAuth);
 
@@ -575,6 +548,8 @@ export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
           setModoLancamento('contabil');
         }}
       />
+
+      <AvisoSincronizacao mensagem={avisoSync} />
 
       <ResumoCards resumo={resumo} loading={loading} formatCurrency={formatCurrency} />
 
