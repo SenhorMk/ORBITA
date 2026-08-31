@@ -15,7 +15,7 @@
  * specification" num sintoma vago que não apontava para lugar nenhum.
  */
 
-import { redactSensitiveData } from './dadosSensiveis';
+import { redactSensitiveData, redactSensitiveText } from './dadosSensiveis';
 
 /** Formato do erro que o PostgREST devolve através do `supabase-js`. */
 interface ErroPostgrest {
@@ -25,9 +25,19 @@ interface ErroPostgrest {
   hint?: unknown;
 }
 
+/**
+ * Normaliza um campo de texto do erro e **redige** segredos embutidos nele.
+ *
+ * Redigir aqui é o ponto certo: `message`, `details` e `hint` são texto livre
+ * vindo de fora — um provedor que interpola o header da requisição na mensagem
+ * de erro faz o segredo chegar por este caminho. A redação é por padrão de
+ * chave e de forma (`Bearer …`, `Set-Cookie: …`, JWT), então o que é
+ * diagnóstico continua inteiro: `42P10` e a mensagem do Postgres não casam com
+ * padrão nenhum.
+ */
 function texto(valor: unknown): string | undefined {
   if (typeof valor !== 'string') return undefined;
-  const limpo = valor.trim();
+  const limpo = redactSensitiveText(valor).trim();
   return limpo.length > 0 ? limpo : undefined;
 }
 
@@ -40,7 +50,8 @@ export function descreverErro(err: unknown): string {
     // (o `errno` do Node, por exemplo) e a asserção dupla que estava aqui
     // desligava a checagem em vez de fazer a pergunta.
     const codigo = 'code' in err ? texto(err.code) : undefined;
-    return codigo ? `[${codigo}] ${err.message}` : err.message;
+    const mensagem = redactSensitiveText(err.message);
+    return codigo ? `[${codigo}] ${mensagem}` : mensagem;
   }
 
   if (typeof err === 'object') {

@@ -60,9 +60,13 @@ describe('CredentialsVault & Redaction Boundary', () => {
       expect(redacted.name).toBe('Integration Config');
       expect(redacted.client_id).toBe('client-123');
       expect(redacted.client_secret).toBe('[REDACTED]');
-      expect(redacted.tokens.access_token).toBe('[REDACTED]');
-      expect(redacted.tokens.refresh_token).toBe('[REDACTED]');
-      expect(redacted.tokens.expires_in).toBe(3600);
+      // Desde a unificacao da politica (ticket 03b), uma CHAVE sensivel redige
+      // o valor inteiro, inclusive quando ele e um objeto. `tokens` casa com o
+      // padrao, entao some por completo — e some junto o `expires_in`, que era
+      // diagnostico. E o preco certo: a regra anterior descia no objeto e
+      // deixaria passar `{ secret: { valor: ... } }`, cuja chave interna nao
+      // casa com nada.
+      expect(redacted.tokens).toBe('[REDACTED]');
       expect(redacted.metadata.account).toBe('Empresa Alpha');
       expect(redacted.metadata.api_key).toBe('[REDACTED]');
     });
