@@ -8,7 +8,6 @@ import {
   type AuthenticatedUser,
   type AuthUserLookup,
 } from './auth';
-import { encrypt } from './crypto';
 
 const OWNER_ID = '11111111-1111-4111-8111-111111111111';
 const COLLABORATOR_ID = '22222222-2222-4222-8222-222222222222';
@@ -128,19 +127,14 @@ describe('authorizeSignedServiceTenant', () => {
     vi.unstubAllEnvs();
   });
 
-  it('resolves a tenant from an encrypted server mapping and a valid signature', () => {
-    vi.stubEnv('ENCRYPTION_KEY', '11'.repeat(32));
+  it('resolves a tenant from a server mapping and a valid signature', () => {
     const rawBody = '{"event":"product.updated"}';
     const secret = 'provider-webhook-secret';
-    const encryptedSecret = encrypt(secret);
-    if (!encryptedSecret) {
-      throw new Error('The test secret must produce an encrypted value.');
-    }
     const signature = `sha256=${createHmac('sha256', secret).update(rawBody).digest('hex')}`;
 
     const result = authorizeSignedServiceTenant(rawBody, signature, [{
       tenantId: TENANT_ID,
-      encryptedSecret,
+      secret,
     }]);
 
     expect(result).toMatchObject({
@@ -152,13 +146,13 @@ describe('authorizeSignedServiceTenant', () => {
   it('denies invalid signatures and malformed server mappings', () => {
     expect(authorizeSignedServiceTenant('body', 'sha256=invalid', [{
       tenantId: TENANT_ID,
-      encryptedSecret: 'provider-webhook-secret',
+      secret: 'provider-webhook-secret',
     }])).toEqual({
       _tag: 'ServiceTenantDenied',
     });
     expect(authorizeSignedServiceTenant('body', 'sha256=invalid', [{
       tenantId: 'tenant-from-payload',
-      encryptedSecret: 'provider-webhook-secret',
+      secret: 'provider-webhook-secret',
     }])).toEqual({
       _tag: 'ServiceTenantDenied',
     });
