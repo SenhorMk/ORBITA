@@ -16,6 +16,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { buildClienteRequest, contatoTipoSchema, indicadorIeSchema } from '@/lib/config/clienteContract';
 import { ErrorLogModal } from './ErrorLogModal';
 import { Button } from '@/components/ui/button';
+import { fetchWithAuth } from '@/lib/fetchWithAuth';
 
 interface ClienteEditModalProps {
   isOpen: boolean;
@@ -152,7 +153,7 @@ export function ClienteEditModal({
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
-      const res = await fetch('/api/clientes/update', {
+      const res = await fetchWithAuth('/api/clientes/update', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

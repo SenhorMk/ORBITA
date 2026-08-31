@@ -18,6 +18,7 @@ import {
 import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { DropdownMenu } from './DropdownMenu';
 import { OrderDetailModal } from './OrderDetailModal';
+import { fetchWithAuth } from '@/lib/fetchWithAuth';
 
 interface TransactionListProps {
   pedidos: PedidoEnriquecido[];
@@ -48,9 +49,22 @@ export const TransactionList = React.memo(function TransactionList({
 
     try {
       // 1. Busca as situações
-      const sitRes = await fetch('/api/bling/situacoes');
-      const situacoes = (await sitRes.json()) as Array<{ id: number; nome: string }>;
+      const sitRes = await fetchWithAuth('/api/bling/situacoes');
+      const sitCorpo: unknown = await sitRes.json();
 
+      // A rota devolve LISTA no sucesso e OBJETO `{ error }` na falha. O código
+      // anterior fazia `as Array<...>` e chamava `.find` direto: num 401 isso
+      // virava "(intermediate value).find is not a function", uma mensagem que
+      // não diz nada sobre a causa. A asserção mentia; agora a forma é
+      // conferida antes de ser usada.
+      if (!sitRes.ok || !Array.isArray(sitCorpo)) {
+        const motivo = typeof sitCorpo === 'object' && sitCorpo !== null && 'error' in sitCorpo
+          ? String((sitCorpo as { error: unknown }).error)
+          : `HTTP ${sitRes.status}`;
+        throw new Error(`Não foi possível ler as situações do Bling: ${motivo}`);
+      }
+
+      const situacoes = sitCorpo as Array<{ id: number; nome: string }>;
       const situacaoCancelado = situacoes.find((s) => s.nome.toLowerCase() === 'cancelado' || s.nome.toLowerCase() === 'cancelada');
 
       if (!situacaoCancelado) {
@@ -58,7 +72,7 @@ export const TransactionList = React.memo(function TransactionList({
       }
 
       // 2. Faz o cancelamento
-      const cancelRes = await fetch('/api/pedidos/status', {
+      const cancelRes = await fetchWithAuth('/api/pedidos/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

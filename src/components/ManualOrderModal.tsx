@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { supabase } from '@/lib/supabaseClient';
 import { buildManualOrderRequest, type ManualOrderRequest } from '@/lib/config/manualOrderContract';
 import { Search, Plus, Trash2, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import { fetchWithAuth } from '@/lib/fetchWithAuth';
 
 interface ManualOrderModalProps {
   open: boolean;
@@ -440,7 +441,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
-      const res = await fetch('/api/pedidos/manual', {
+      const res = await fetchWithAuth('/api/pedidos/manual', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

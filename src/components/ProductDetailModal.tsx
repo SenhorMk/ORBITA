@@ -24,6 +24,7 @@ import { ErrorLogModal } from './ErrorLogModal';
 import { Button } from '@/components/ui/button';
 import { validateProdutoForBling, sanitizeProductName } from '@/lib/utils';
 import { supabase } from '@/lib/supabaseClient';
+import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import {
   buildProdutoRequest,
   produtoFormatoSchema,
@@ -61,7 +62,7 @@ async function submitProdutoUpdate(payload: ProdutoUpdatePayload): Promise<Submi
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token;
 
-  const res = await fetch('/api/produtos/update', {
+  const res = await fetchWithAuth('/api/produtos/update', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -165,7 +166,7 @@ export function ProductDetailModal({
         try {
           const { data: { session } } = await supabase.auth.getSession();
           const token = session?.access_token;
-          const res = await fetch('/api/categorias/sync', {
+          const res = await fetchWithAuth('/api/categorias/sync', {
             headers: token ? { Authorization: `Bearer ${token}` } : {}
           });
           const data = (await res.json()) as { success?: boolean; data?: Categoria[] };

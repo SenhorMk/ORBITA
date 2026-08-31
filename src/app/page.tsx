@@ -78,6 +78,7 @@ import {
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { format, subDays, isAfter, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { fetchWithAuth } from '@/lib/fetchWithAuth';
 
 // Tipo de Usuário Logado
 interface UserSession {
@@ -335,29 +336,6 @@ export default function Home() {
   const [isChangingStatus, setIsChangingStatus] = useState(false);
 
   // Helper para fetch autenticado com Supabase JWT
-  const fetchWithAuth = useCallback(async (url: string, options: RequestInit = {}) => {
-    let token = '';
-
-    try {
-      const { data } = await supabase.auth.getSession();
-      token = data.session?.access_token || '';
-    } catch (error) {
-      console.error('Erro ao buscar token do supabase no fetchWithAuth:', error);
-    }
-
-    const headers: Record<string, string> = {
-      ...(options.headers as Record<string, string> | undefined),
-    };
-
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    return fetch(url, {
-      ...options,
-      headers,
-    });
-  }, []);
 
   // Resolver de imagem do produto
   const getProductImage = (produto: Produto): string | undefined => {
@@ -699,7 +677,7 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
-  }, [fetchWithAuth]);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
