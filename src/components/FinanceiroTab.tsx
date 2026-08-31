@@ -11,6 +11,7 @@ import { buildDespesaRequest } from '@/lib/config/despesaContract';
 import { NovaDespesaModal, type Fornecedor } from './NovaDespesaModal';
 import { NovoFornecedorModal, type DadosCNPJ } from './NovoFornecedorModal';
 import { descreverErro } from '@/lib/erroLegivel';
+import { executarSyncFinanceiro } from '@/lib/financeiroSync';
 
 const BRASILAPI_CNPJ_URL =
   process.env.NEXT_PUBLIC_BRASILAPI_CNPJ_URL || 'https://brasilapi.com.br/api/cnpj/v1';
@@ -376,25 +377,6 @@ async function submitNovaDespesa(
 }
 
 /** Carrega/sincroniza os títulos financeiros e deriva os dados agregados (resumo + série do gráfico). */
-/**
- * Dispara a sincronização e devolve o aviso a mostrar, ou string vazia.
- *
- * `fetchWithAuth` devolve a `Response` sem lançar em não-2xx, então 502 e
- * `200 { success: false }` seguiam o mesmo caminho do sucesso — a tela
- * recarregava dado velho como se estivesse em dia. O texto exibido é o que o
- * servidor montou, já genérico por construção (CWE-209).
- */
-async function executarSyncFinanceiro(
-  fetchWithAuth: FinanceiroTabProps['fetchWithAuth'],
-): Promise<string> {
-  const resposta = await fetchWithAuth('/api/financeiro/sync', { method: 'POST' });
-  const corpo = await resposta.json().catch(() => null) as { success?: boolean; error?: string } | null;
-
-  return !resposta.ok || corpo?.success === false
-    ? corpo?.error || 'Não foi possível concluir a sincronização.'
-    : '';
-}
-
 function useFinanceiroResumo(fetchWithAuth: FinanceiroTabProps['fetchWithAuth']) {
   const [titulos, setTitulos] = useState<TituloFinanceiro[]>([]);
   const [resumo, setResumo] = useState<ResumoFinanceiro>({ receitas: 0, despesas: 0, saldo: 0 });
