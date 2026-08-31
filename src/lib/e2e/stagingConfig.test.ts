@@ -140,3 +140,54 @@ describe('resolveStagingConfig', () => {
     }
   });
 });
+
+describe('host sem "staging" exige confirmação nominal, e não o atalho de teste', () => {
+  const base = {
+    SUPABASE_URL: 'https://etqjqeqqbjrzyyxodntv.supabase.co',
+    E2E_SUPABASE_REF: 'etqjqeqqbjrzyyxodntv',
+  };
+
+  it('recusa host de desenvolvimento sem confirmação, e diz o que escrever', () => {
+    // Não existe ambiente de staging separado: o alvo real é o host de
+    // desenvolvimento publicado. Afrouxar a regra seria abrir a porta para
+    // produção; a saída é a confirmação nominal.
+    expect(() => resolveStagingConfig({ ...base, STAGING_URL: 'https://orbita.mkautobots.site' }))
+      .toThrow(/E2E_HOST_CONFIRMADO="orbita\.mkautobots\.site"/u);
+  });
+
+  it('aceita quando o operador escreve o host exato', () => {
+    const config = resolveStagingConfig({
+      ...base,
+      STAGING_URL: 'https://orbita.mkautobots.site',
+      E2E_HOST_CONFIRMADO: 'orbita.mkautobots.site',
+    });
+
+    expect(config.baseURL).toBe('https://orbita.mkautobots.site/');
+  });
+
+  it('recusa quando a confirmação aponta para outro host', () => {
+    // O erro que a trava existe para pegar: confirmar um host e apontar para
+    // outro.
+    expect(() => resolveStagingConfig({
+      ...base,
+      STAGING_URL: 'https://orbita.mkautobots.site',
+      E2E_HOST_CONFIRMADO: 'staging.orbita.example.com',
+    })).toThrow(/não corresponde ao host/u);
+  });
+
+  it('host com "staging" continua passando sem confirmação', () => {
+    const config = resolveStagingConfig({ ...base, STAGING_URL: 'https://staging.orbita.example.com' });
+
+    expect(config.baseURL).toBe('https://staging.orbita.example.com/');
+  });
+
+  it('a confirmação do host não substitui a do projeto Supabase', () => {
+    // As duas travas são independentes: confirmar o ambiente não autoriza o
+    // projeto, e vice-versa.
+    expect(() => resolveStagingConfig({
+      STAGING_URL: 'https://orbita.mkautobots.site',
+      E2E_HOST_CONFIRMADO: 'orbita.mkautobots.site',
+      SUPABASE_URL: 'https://etqjqeqqbjrzyyxodntv.supabase.co',
+    })).toThrow(/E2E_SUPABASE_REF é obrigatória/u);
+  });
+});

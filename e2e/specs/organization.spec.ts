@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import { loadSeedManifest, persona } from '../fixtures/personas';
 import { LoginPage } from '../pages/LoginPage';
 import { OrganizationApi } from '../pages/OrganizationApi';
-import { requirePersonaUserId, type SeedManifest } from '../../src/lib/e2e/syntheticSeedData';
+import { requirePersonaUserId, slugDaOrganizacaoDaSpec, type SeedManifest } from '../../src/lib/e2e/syntheticSeedData';
 
 // Matrix: "organização: criação/seleção CAS, convite, papéis e revogação."
 //
@@ -26,7 +26,9 @@ test.describe('organização', () => {
     await loginPage.loginAndWaitForDashboard(owner.email, owner.password);
 
     const organizationApi = new OrganizationApi(page);
-    const slug = `${manifest.prefix}spec-created-org`;
+    // Mesmo texto que o plano do seed prevê, vindo da mesma constante: dois
+    // literais independentes deixariam o resíduo voltar numa renomeação.
+    const slug = slugDaOrganizacaoDaSpec(manifest.prefix);
     const createResponse = await organizationApi.createOrganization('ORBITA E2E Spec Org', slug);
     expect(createResponse.ok()).toBe(true);
     // A rota devolve { organizacao }, nao { id } solto. O spec foi escrito

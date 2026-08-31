@@ -1,89 +1,66 @@
 /**
- * Real, executable cleanup script paired with `run-seed.ts`. Reads back the
- * manifest a seed run wrote, re-reads the corresponding rows from staging,
- * filters them down with `filterSyntheticRecords` (prefix-based, never a
- * broad delete), and removes exactly those rows plus their auth users.
+ * Apaga o que uma execução de seed criou no ambiente compartilhado — e nada
+ * além.
  *
- * Not run as part of any gate in this ticket — same staging dependency as
- * `run-seed.ts`.
+ * A decisão de o que pode ser apagado mora em `src/lib/e2e/limpezaSegura.ts` e
+ * `orquestracao.ts`, cobertas por teste com falhas simuladas. Este arquivo só
+ * liga as peças e imprime.
  *
- * Usage once staging exists:
- *   STAGING_URL=... SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... \
- *   npm run e2e:cleanup -- e2e/.manifests/<runId>.json
+ * Uso:
+ *   npm run e2e:cleanup -- <runId> --simular   (não apaga nada)
+ *   npm run e2e:cleanup -- <runId>
  */
 import { readFileSync } from 'node:fs';
 
-import { createClient } from '@supabase/supabase-js';
+import { lerDiario } from '../../src/lib/e2e/execucaoSeed';
+import { executarLimpeza } from '../../src/lib/e2e/orquestracao';
 
-import { resolveStagingConfig } from '../../src/lib/e2e/stagingConfig';
-import { filterSyntheticRecords, type SeedManifest } from '../../src/lib/e2e/syntheticSeedData';
+import { caminhoDoDiario, resolverAmbiente } from './ambiente';
+import { criarPortaSupabase } from '../../src/lib/e2e/supabasePorta';
 
-function loadManifestFromArgv(): SeedManifest {
-  const manifestPath = process.argv[2];
-  if (!manifestPath) {
-    throw new Error('Uso: npm run e2e:cleanup -- <caminho-do-manifest.json>');
+function lerArgumentos(): { runId: string; simular: boolean } {
+  const args = process.argv.slice(2).filter((a) => a !== '--');
+  const runId = args.find((a) => !a.startsWith('--'));
+  if (!runId) {
+    throw new Error('Uso: npm run e2e:cleanup -- <runId> [--simular]');
   }
-  return JSON.parse(readFileSync(manifestPath, 'utf8')) as SeedManifest;
+  return { runId, simular: args.includes('--simular') };
 }
 
-async function cleanupStaging(manifest: SeedManifest): Promise<void> {
-  const stagingConfig = resolveStagingConfig(process.env);
-  if (!stagingConfig.supabaseUrl) {
-    throw new Error('SUPABASE_URL/NEXT_PUBLIC_SUPABASE_URL de staging é obrigatória para rodar o cleanup.');
-  }
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (!serviceRoleKey) {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY é obrigatória para rodar o cleanup (fail-closed, sem fallback).');
-  }
+async function main(): Promise<void> {
+  const { runId, simular } = lerArgumentos();
+  const { supabase, projetoRef } = resolverAmbiente();
 
-  const supabase = createClient(stagingConfig.supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-
-  const { data: organizationRows, error: organizationsError } = await supabase
-    .from('organizacoes')
-    .select('id, slug, nome')
-    .ilike('slug', `${manifest.prefix}%`);
-  if (organizationsError) {
-    throw new Error(`Falha ao ler organizações sintéticas para cleanup: ${organizationsError.message}.`);
+  const leitura = lerDiario(JSON.parse(readFileSync(caminhoDoDiario(runId), 'utf8')), { projetoRef, runId });
+  if (leitura._tag !== 'DiarioValido') {
+    throw new Error(
+      `Diário recusado (${leitura.motivo._tag}). A limpeza não age sobre um diário que não confere com o `
+        + `projeto autorizado (${projetoRef}) e a execução ${runId}.`,
+    );
   }
 
-  const syntheticOrganizations = filterSyntheticRecords(
-    (organizationRows ?? []) as Array<{ id: string; slug: string; nome: string }>,
-  );
+  const resultado = await executarLimpeza(criarPortaSupabase(supabase), leitura.diario, { simular });
 
-  for (const organization of syntheticOrganizations) {
-    const { error: deleteMembershipsError } = await supabase
-      .from('membros_organizacao')
-      .delete()
-      .eq('organizacao_id', organization.id);
-    if (deleteMembershipsError) {
-      throw new Error(
-        `Falha ao remover memberships da organização sintética ${organization.slug}: ${deleteMembershipsError.message}.`,
-      );
-    }
+  process.stdout.write(`${resultado.simulacao}\n`);
 
-    const { error: deleteOrgError } = await supabase.from('organizacoes').delete().eq('id', organization.id);
-    if (deleteOrgError) {
-      throw new Error(`Falha ao remover organização sintética ${organization.slug}: ${deleteOrgError.message}.`);
-    }
-  }
-
-  for (const personaEntry of manifest.personas) {
-    if (!personaEntry.userId) continue;
-    const { error: deleteUserError } = await supabase.auth.admin.deleteUser(personaEntry.userId);
-    if (deleteUserError) {
-      throw new Error(`Falha ao remover usuário sintético ${personaEntry.email}: ${deleteUserError.message}.`);
-    }
+  if (resultado.orfaos.length > 0) {
+    // Informativo por decisão: apagar por varredura é o que a conferência de
+    // identidade existe para impedir. Quem decide é quem está operando.
+    process.stdout.write(
+      `\nÓRFÃOS desta execução (${resultado.orfaos.length}) — informativo, nada será apagado:\n`
+        + resultado.orfaos.map((o) => `  ${o.identificador}  id=${o.id}`).join('\n') + '\n',
+    );
   }
 
   process.stdout.write(
-    `Cleanup concluído para o run ${manifest.runId}: ${syntheticOrganizations.length} organizações e ` +
-      `${manifest.personas.length} personas removidas.\n`,
+    resultado.simulado
+      ? '\nSimulação: nada foi apagado.\n'
+      : `\nLimpeza concluída: ${resultado.removidos} removido(s), `
+        + `${resultado.plano.jaRemovidas.length} já não existia(m).\n`,
   );
 }
 
-cleanupStaging(loadManifestFromArgv()).catch((error: unknown) => {
-  process.stderr.write(`Falha no cleanup de staging: ${error instanceof Error ? error.message : String(error)}\n`);
+main().catch((error: unknown) => {
+  process.stderr.write(`Falha na limpeza: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
 });

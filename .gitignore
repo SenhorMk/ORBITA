@@ -79,5 +79,9 @@ auditoria.txt
 # never committed; manifests may reference synthetic-but-real staging ids.
 /playwright-report/
 /test-results/
-/e2e/.manifests/
+/e2e/.manifests
+# Diario de execucao do seed: traz ids reais de usuarios e organizacoes
+# criados no projeto compartilhado. Fica em disco para a retomada e a limpeza,
+# nunca no repositorio.
+e2e/.diarios/
 e2e/.manifests/
