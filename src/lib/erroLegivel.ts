@@ -41,15 +41,41 @@ function texto(valor: unknown): string | undefined {
   return limpo.length > 0 ? limpo : undefined;
 }
 
+/**
+ * Formas de código que o ORBITA reconhece como **identificação técnica
+ * confiável**. Fora desta lista, o código não é impresso.
+ *
+ * O `code` de um erro é atributo de um objeto que veio de fora. Antes ele ia
+ * direto para dentro de `[...]`, e um authorization code do OAuth chega
+ * exatamente assim — num objeto lançado, no campo `code`. Redigir por padrão de
+ * segredo não bastava: o que não parece segredo passava mesmo sendo.
+ *
+ * A regra é inversa: só sai o que tem forma fechada e reconhecível.
+ */
+const CODIGOS_TECNICOS: ReadonlyArray<RegExp> = [
+  /^[0-9A-Z]{5}$/u, // SQLSTATE do Postgres: 42P10, 42501, 23505
+  /^PGRST\d{3}$/u, // PostgREST: PGRST201, PGRST116
+  /^E[A-Z]{2,15}$/u, // errno do Node: ECONNREFUSED, ETIMEDOUT
+];
+
+/** Código do erro, apenas quando tem forma técnica reconhecível. */
+function codigoTecnico(valor: unknown): string | undefined {
+  if (typeof valor !== 'string') return undefined;
+  const limpo = valor.trim();
+  return CODIGOS_TECNICOS.some((forma) => forma.test(limpo)) ? limpo : undefined;
+}
+
 export function descreverErro(err: unknown): string {
-  if (typeof err === 'string') return err;
+  // Texto cru tambem passa pela politica: quem lanca string em vez de Error
+  // contornava a redacao inteira por este ramo.
+  if (typeof err === 'string') return redactSensitiveText(err);
   if (err === null || err === undefined) return String(err);
 
   if (err instanceof Error) {
     // `in` estreita o tipo sem asserção: um Error pode carregar `code`
     // (o `errno` do Node, por exemplo) e a asserção dupla que estava aqui
     // desligava a checagem em vez de fazer a pergunta.
-    const codigo = 'code' in err ? texto(err.code) : undefined;
+    const codigo = 'code' in err ? codigoTecnico(err.code) : undefined;
     const mensagem = redactSensitiveText(err.message);
     return codigo ? `[${codigo}] ${mensagem}` : mensagem;
   }
@@ -57,7 +83,7 @@ export function descreverErro(err: unknown): string {
   if (typeof err === 'object') {
     const e = err as ErroPostgrest;
     const partes: string[] = [];
-    const codigo = texto(e.code);
+    const codigo = codigoTecnico(e.code);
     const mensagem = texto(e.message);
     const detalhes = texto(e.details);
     const dica = texto(e.hint);

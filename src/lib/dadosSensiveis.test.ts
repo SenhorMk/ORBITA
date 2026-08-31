@@ -165,3 +165,48 @@ describe('a política é uma só', () => {
     expect(declarantes, 'A política de redação vive só em src/lib/dadosSensiveis.ts.').toEqual([]);
   });
 });
+
+describe('os dois caminhos que contornavam a redação', () => {
+  it('erro recebido como string crua é sanitizado', () => {
+    // `descreverErro` devolvia a string intacta: quem lançasse texto em vez de
+    // Error passava por fora de toda a política.
+    const descrito = descreverErro(
+      'falha no refresh — Authorization: Bearer tok-sintetico-abcdefgh',
+    );
+
+    expect(descrito).not.toContain('tok-sintetico-abcdefgh');
+    expect(descrito).toContain('[REDACTED]');
+    expect(descrito).toContain('falha no refresh');
+  });
+
+  it('code arbitrário não é impresso — só código com identificação técnica confiável', () => {
+    // O `code` ia para dentro de `[...]` sem qualquer validação de forma. Um
+    // authorization code do OAuth chega exatamente assim, num objeto lançado.
+    const descrito = descreverErro({
+      code: '4/0AX4XfWh-oauth-code-sintetico',
+      message: 'troca de código falhou',
+    });
+
+    expect(descrito).not.toContain('4/0AX4XfWh-oauth-code-sintetico');
+    expect(descrito).toContain('troca de código falhou');
+  });
+
+  it.each([
+    ['SQLSTATE', '42P10'],
+    ['SQLSTATE de privilégio', '42501'],
+    ['PostgREST', 'PGRST201'],
+    ['errno do Node', 'ECONNREFUSED'],
+  ])('preserva código técnico reconhecível: %s', (_nome, codigo) => {
+    expect(descreverErro({ code: codigo, message: 'mensagem qualquer' })).toContain(codigo);
+  });
+
+  it('Error com code arbitrário também não imprime o code', () => {
+    const erro = new Error('falhou');
+    (erro as Error & { code: string }).code = 'ya29.token-sintetico-abcdefgh';
+
+    const descrito = descreverErro(erro);
+
+    expect(descrito).not.toContain('ya29.token-sintetico-abcdefgh');
+    expect(descrito).toContain('falhou');
+  });
+});
