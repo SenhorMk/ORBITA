@@ -155,6 +155,7 @@ function blingManualOrderAdapter(client: BlingPort): ManualOrderBlingPort {
     createContato: (input) => client.criarContatoParaVenda(input),
     createPedidoVenda: (payload) => client.criarPedidoVenda(payload),
     lancarEstoquePedido: (pedidoBlingId) => client.lancarEstoquePedidoVenda(pedidoBlingId),
+    cancelarPedidoVenda: (pedidoBlingId) => client.cancelarPedidoVenda(pedidoBlingId),
   };
 }
 

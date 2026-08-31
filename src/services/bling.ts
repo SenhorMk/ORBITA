@@ -827,6 +827,58 @@ export class BlingClient implements BlingPort {
    * soma à baixa que o próprio Bling faz quando a situação do pedido a
    * dispara. Este é o endpoint que o Bling documenta para a operação.
    */
+  /**
+   * Marca um pedido de venda como cancelado, com falha tipada.
+   *
+   * Serve de compensação: quando o Bling aceita a venda e o ORBITA não
+   * consegue gravá-la, é isto que impede o pedido de ficar órfão na conta do
+   * lojista. Cancelar em vez de apagar preserva o rastro de que a venda chegou
+   * a existir no ERP, e a sincronização traz o pedido cancelado para cá — os
+   * dois lados convergem.
+   *
+   * O id da situação é por conta, então precisa ser descoberto: o schema
+   * oficial de `/situacoes/modulos` expõe só `{ id, nome }`, sem o código
+   * numérico, então casar pelo nome é o único caminho que a API oferece.
+   */
+  async cancelarPedidoVenda(idPedido: string): Promise<BlingCallResult<void>> {
+    let situacoes: unknown;
+    try {
+      situacoes = await this.getSituacoesModulo(9);
+    } catch (erro: unknown) {
+      return blingFailure(
+        'RESOURCE_NOT_FOUND',
+        0,
+        `Não foi possível ler as situações de venda para cancelar: ${erro instanceof Error ? erro.message : String(erro)}`,
+      );
+    }
+
+    const lista = Array.isArray(situacoes) ? (situacoes as Array<{ id?: number; nome?: string }>) : [];
+    const cancelado = lista.find((s) => {
+      const nome = (s.nome ?? '').trim().toLowerCase();
+      return nome === 'cancelado' || nome === 'cancelada';
+    });
+
+    if (!cancelado?.id) {
+      return blingFailure(
+        'RESOURCE_NOT_FOUND',
+        0,
+        'A conta do Bling não tem uma situação de venda chamada "Cancelado".',
+      );
+    }
+
+    const url = `${this.baseUrl}/pedidos/vendas/${encodeURIComponent(idPedido)}/situacoes/${encodeURIComponent(String(cancelado.id))}`;
+    const response = await this.fetchWithAuth(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!response.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+    }
+
+    return { _tag: 'BlingOk', value: undefined };
+  }
+
   async lancarEstoquePedidoVenda(idPedido: string): Promise<BlingCallResult<void>> {
     const response = await this.fetchWithAuth(`${this.baseUrl}/pedidos/vendas/${encodeURIComponent(idPedido)}/lancar-estoque`, {
       method: 'POST',

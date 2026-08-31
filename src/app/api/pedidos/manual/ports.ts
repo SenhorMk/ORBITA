@@ -79,6 +79,16 @@ export interface ManualOrderBlingPort {
   createPedidoVenda(payload: PedidoVendaPayload): Promise<BlingCallResult<{ id: string; alertas: readonly string[] }>>;
   /** `POST /pedidos/vendas/{id}/lancar-estoque` — baixa vinculada ao pedido, no depósito padrão. */
   lancarEstoquePedido(pedidoBlingId: string): Promise<BlingCallResult<void>>;
+  /**
+   * Compensação: marca como cancelado um pedido que o Bling aceitou e o ORBITA
+   * não conseguiu gravar.
+   *
+   * Cancelar, e não apagar. Apagar destruiria o rastro de que a venda chegou a
+   * existir no ERP; cancelado é um estado legítimo que diz "isto não vale", e
+   * a sincronização traz o pedido cancelado para cá — os dois lados convergem
+   * em vez de um esquecer.
+   */
+  cancelarPedidoVenda(pedidoBlingId: string): Promise<BlingCallResult<void>>;
 }
 
 export interface ManualOrderAuthPort {
@@ -112,4 +122,15 @@ export interface ManualOrderResponseBody {
   readonly error?: string;
   /** `true` quando o Bling recusou por venda idêntica à última salva. */
   readonly vendaDuplicada?: boolean;
+  /**
+   * Só aparece quando a gravação local falhou depois de o Bling aceitar.
+   *
+   * `true`  — o pedido remoto foi cancelado; nada ficou pendente lá.
+   * `false` — o cancelamento também falhou e alguém precisa agir no Bling.
+   *
+   * A distinção é o que separa "pode tentar de novo" de "não tente de novo
+   * antes de limpar", e é a diferença entre uma retentativa segura e mais um
+   * pedido órfão na conta do lojista.
+   */
+  readonly compensado?: boolean;
 }

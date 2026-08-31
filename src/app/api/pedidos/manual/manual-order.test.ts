@@ -82,6 +82,8 @@ interface FakeBling extends ManualOrderBlingPort {
   readonly payloads: PedidoVendaPayload[];
   readonly estoqueLancado: string[];
   readonly contatosCriados: number;
+  /** Pedidos que a compensacao mandou cancelar no Bling. */
+  readonly cancelados: string[];
 }
 
 function fakeBling(options: {
@@ -89,14 +91,17 @@ function fakeBling(options: {
   estoqueFailure?: string;
   formaPagamentoFailure?: string;
   alertas?: string[];
+  cancelamentoFailure?: string;
 } = {}): FakeBling {
   const payloads: PedidoVendaPayload[] = [];
   const estoqueLancado: string[] = [];
+  const cancelados: string[] = [];
   let contatosCriados = 0;
 
   const port = {
     payloads,
     estoqueLancado,
+    cancelados,
     get contatosCriados() {
       return contatosCriados;
     },
@@ -131,6 +136,13 @@ function fakeBling(options: {
         return { _tag: 'BlingFailed' as const, failure: { _tag: 'BlingProviderFailure' as const, type: 'BAD_REQUEST', status: 400, message: options.estoqueFailure, duplicateSale: false } };
       }
       estoqueLancado.push(pedidoBlingId);
+      return { _tag: 'BlingOk' as const, value: undefined };
+    },
+    async cancelarPedidoVenda(pedidoBlingId: string) {
+      if (options.cancelamentoFailure) {
+        return { _tag: 'BlingFailed' as const, failure: { _tag: 'BlingProviderFailure' as const, type: 'BAD_REQUEST', status: 400, message: options.cancelamentoFailure, duplicateSale: false } };
+      }
+      cancelados.push(pedidoBlingId);
       return { _tag: 'BlingOk' as const, value: undefined };
     },
   };
@@ -377,16 +389,53 @@ describe('resultado real da venda', () => {
     expect(body.avisos?.join(' ')).toContain('Preço abaixo do mínimo');
   });
 
-  it('avisa que o pedido já existe no Bling quando a gravação local falha depois da criação', async () => {
-    const store = fakeStore({ persistError: new Error('null value in column "organizacao_id"') });
-    const handler = createManualOrderHandler(deps({ store }));
+  it('cancela o pedido no Bling quando a gravação local falha', async () => {
+    // O efeito remoto acontece antes da gravação local e não há como inverter
+    // a ordem: o `bling_id` só existe depois da criação. Sem compensar, cada
+    // tentativa deixa um pedido órfão na conta real do lojista — aconteceu
+    // com o pedido 26735607230 em 2026-08-30.
+    const store = fakeStore({ persistError: new Error('null value in column "user_id"') });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
 
     const response = await handler(requestWith(corpoValido()));
     const body = (await response.json()) as ManualOrderResponseBody;
 
     expect(response.status).toBe(500);
+    expect(bling.cancelados).toEqual(['918273']);
+    expect(body.compensado).toBe(true);
+    expect(body.error).toContain('cancelado no Bling');
+    expect(body.error).toContain('Pode tentar de novo');
+  });
+
+  it('quando o cancelamento também falha, diz o que precisa ser feito à mão', async () => {
+    const store = fakeStore({ persistError: new Error('null value in column "user_id"') });
+    const bling = fakeBling({ cancelamentoFailure: 'pedido já faturado' });
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+    const body = (await response.json()) as ManualOrderResponseBody;
+
+    expect(response.status).toBe(500);
+    expect(bling.cancelados).toEqual([]);
+    expect(body.compensado).toBe(false);
     expect(body.error).toContain('918273');
-    expect(body.error).toContain('JÁ FOI criado no Bling');
+    expect(body.error).toContain('pedido já faturado');
+    // A instrução precisa ser explícita: retentar sem limpar cria outro pedido.
+    expect(body.error).toContain('Cancele o pedido no Bling');
+  });
+
+  it('sem envio ao Bling não há o que compensar', async () => {
+    const store = fakeStore({ persistError: new Error('banco fora do ar') });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith({ ...corpoValido(), syncBling: false }));
+    const body = (await response.json()) as ManualOrderResponseBody;
+
+    expect(response.status).toBe(500);
+    expect(bling.cancelados).toEqual([]);
+    expect(body.compensado).toBeUndefined();
   });
 });
 
