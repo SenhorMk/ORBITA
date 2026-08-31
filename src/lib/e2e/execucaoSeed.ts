@@ -1,4 +1,4 @@
-import { SYNTHETIC_DATA_PREFIX, type SeedManifest } from './syntheticSeedData';
+import { SYNTHETIC_DATA_PREFIX, slugDaOrganizacaoDaSpec, SUFIXO_ORG_CRIADA_PELA_SPEC, type SeedManifest } from './syntheticSeedData';
 
 /**
  * Diário de execução do seed: o plano escrito **antes** de qualquer escrita, e
@@ -113,7 +113,9 @@ export function planejarExecucao(
     operacoes.push({
       tipo: 'organizacao',
       chave: `spec:${criadoPelaSpec}`,
-      identificador: `${manifest.prefix}${criadoPelaSpec}`,
+      identificador: criadoPelaSpec === SUFIXO_ORG_CRIADA_PELA_SPEC
+        ? slugDaOrganizacaoDaSpec(manifest.prefix)
+        : `${manifest.prefix}${criadoPelaSpec}`,
       criadoPor: 'spec',
     });
   }
@@ -128,7 +130,7 @@ export function planejarExecucao(
  * de a suíte rodar. Uma spec nova que criar registro precisa entrar aqui —
  * senão o resíduo volta.
  */
-const ORGANIZACOES_CRIADAS_PELAS_SPECS: readonly string[] = ['spec-created-org'];
+const ORGANIZACOES_CRIADAS_PELAS_SPECS: readonly string[] = [SUFIXO_ORG_CRIADA_PELA_SPEC];
 
 /** Diário zerado, pronto para a primeira escrita. */
 export function iniciarDiario(plano: PlanoDeExecucao): DiarioDeExecucao {
@@ -175,10 +177,44 @@ export interface DivergenciaDeReconciliacao {
   readonly idNoProjeto: string;
 }
 
+/** Conclusão que o diário afirma e o projeto não tem mais. */
+export interface ConclusaoAusente {
+  readonly chave: string;
+  readonly identificador: string;
+  readonly idNoDiario: string;
+  readonly tipo: TipoDeRegistro;
+}
+
+/** Adoção do id vindo do projeto, para operação que o diário não registrou. */
+export interface AdocaoPorIdentificador {
+  readonly chave: string;
+  readonly identificador: string;
+  readonly idAdotado: string;
+  readonly criadoPor: CriadoPor;
+}
+
+export interface OpcoesDeReconciliacao {
+  /**
+   * Adotar id de operação `criadoPor: 'seed'` que o diário não registrou.
+   *
+   * A prova nesses casos é o **identificador natural determinístico** — e-mail,
+   * slug —, e não um id previamente registrado. Isso é aceitável em dois
+   * estados conhecidos: recuperação de gravação que falhou depois da criação
+   * remota, e registros que a suíte cria por conta própria (`criadoPor: 'spec'`,
+   * sempre adotáveis, porque o seed nunca teria id deles).
+   *
+   * Fora desses, não se adota: seria apagar por parecença.
+   */
+  readonly adotarOperacoesDoSeed?: boolean;
+  readonly agora?: () => Date;
+}
+
 export interface ResultadoDaReconciliacao {
   readonly diario: DiarioDeExecucao;
   /** Operações que existiam no projeto e faltavam no diário. */
   readonly recuperadas: readonly OperacaoConcluida[];
+  /** Ids adotados pelo identificador natural, por não haver id no diário. */
+  readonly adotadas: readonly AdocaoPorIdentificador[];
   /**
    * Conclusões cujo id no diário **não** é o id que o projeto tem hoje.
    *
@@ -188,6 +224,16 @@ export interface ResultadoDaReconciliacao {
    * para organização de outra pessoa.
    */
   readonly divergentes: readonly DivergenciaDeReconciliacao[];
+  /**
+   * Conclusões que o diário afirma e o projeto não tem.
+   *
+   * **As duas políticas divergem aqui, e é de propósito.** Na limpeza isto é o
+   * caso normal: já foi removido. Na retomada é falha — o diário diz que criou,
+   * o projeto diz que não existe, e seguir em frente terminaria "com sucesso"
+   * deixando usuário ou organização faltando, ou criaria membership com um id
+   * que já não existe.
+   */
+  readonly ausentes: readonly ConclusaoAusente[];
 }
 
 /**
@@ -195,13 +241,13 @@ export interface ResultadoDaReconciliacao {
  * **confere** o que o diário já dava por concluído.
  *
  * O executor lê do projeto os registros da execução (filtrados pelo `runId`) e
- * entrega aqui. O que estiver no plano, existir lá e faltar no diário é marcado
- * como concluído — porque **existe**, e ignorá-lo criaria um órfão invisível.
+ * entrega aqui. O que estiver no plano, existir lá e faltar no diário é adotado
+ * pelo identificador natural — porque **existe**, e ignorá-lo criaria um órfão
+ * invisível.
  *
  * O que já estava no diário é conferido contra o projeto: id diferente vira
- * divergência. Confiar no id gravado sem olhar era o buraco — a retomada
- * reutilizava esse id para criar membership, e um id obsoleto aponta para
- * registro de outra pessoa.
+ * divergência, ausência vira `ausentes`. Confiar no id gravado sem olhar era o
+ * buraco — a retomada reutilizava esse id para criar membership.
  *
  * O que **não** faz, de propósito: não apaga, não inventa id, não reescreve
  * histórico, e não aceita registro fora do plano.
@@ -209,21 +255,31 @@ export interface ResultadoDaReconciliacao {
 export function reconciliar(
   diario: DiarioDeExecucao,
   encontrados: readonly RegistroEncontrado[],
-  agora: () => Date = () => new Date(),
+  opcoes: OpcoesDeReconciliacao = {},
 ): ResultadoDaReconciliacao {
+  const agora = opcoes.agora ?? (() => new Date());
+  const adotarDoSeed = opcoes.adotarOperacoesDoSeed ?? true;
+
   const porIdentificador = new Map(encontrados.map((e) => [e.identificador, e.id]));
   const concluidaPorChave = new Map(diario.concluidas.map((c) => [c.chave, c]));
   const recuperadas: OperacaoConcluida[] = [];
+  const adotadas: AdocaoPorIdentificador[] = [];
   const divergentes: DivergenciaDeReconciliacao[] = [];
+  const ausentes: ConclusaoAusente[] = [];
 
   for (const operacao of diario.plano.operacoes) {
     const idNoProjeto = porIdentificador.get(operacao.identificador);
     const concluida = concluidaPorChave.get(operacao.chave);
 
     if (concluida) {
-      // Ausente do projeto não é divergência: pode ter sido apagado, e a
-      // limpeza trata isso. Presente com outro id é.
-      if (idNoProjeto !== undefined && idNoProjeto !== concluida.idReal) {
+      if (idNoProjeto === undefined) {
+        ausentes.push({
+          chave: operacao.chave,
+          identificador: operacao.identificador,
+          idNoDiario: concluida.idReal,
+          tipo: operacao.tipo,
+        });
+      } else if (idNoProjeto !== concluida.idReal) {
         divergentes.push({
           chave: operacao.chave,
           identificador: operacao.identificador,
@@ -235,13 +291,23 @@ export function reconciliar(
     }
 
     if (idNoProjeto === undefined) continue;
+    if (operacao.criadoPor === 'seed' && !adotarDoSeed) continue;
+
     recuperadas.push({ chave: operacao.chave, idReal: idNoProjeto, concluidaEm: agora().toISOString() });
+    adotadas.push({
+      chave: operacao.chave,
+      identificador: operacao.identificador,
+      idAdotado: idNoProjeto,
+      criadoPor: operacao.criadoPor,
+    });
   }
 
   return {
     diario: { ...diario, concluidas: [...diario.concluidas, ...recuperadas] },
     recuperadas,
+    adotadas,
     divergentes,
+    ausentes,
   };
 }
 

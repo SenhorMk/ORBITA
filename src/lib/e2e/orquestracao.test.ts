@@ -487,3 +487,100 @@ describe('divergência entre diário e projeto interrompe', () => {
     expect(projeto.criados.size).toBeGreaterThan(0);
   });
 });
+
+describe('conclusão registrada mas ausente do projeto: as duas políticas divergem', () => {
+  /** Semeia tudo e depois apaga do projeto o registro do tipo pedido. */
+  async function semearEApagar(tipo: 'usuario' | 'organizacao' | 'membership') {
+    const projeto = projetoFalso();
+    const { diario } = await executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: discoFalso().persistir,
+    });
+    const alvo = [...projeto.criados.values()].find((c) => c.tipo === tipo)!;
+    projeto.criados.delete(alvo.identificador);
+    return { projeto, diario, alvo };
+  }
+
+  it.each(['usuario', 'organizacao', 'membership'] as const)(
+    'a retomada aborta quando o %s concluído sumiu do projeto',
+    async (tipo) => {
+      // O defeito: só o id divergente era detectado. Ausência passava batida, e
+      // a retomada terminava "com sucesso" deixando o registro faltando — ou
+      // criava membership com um id que já não existe.
+      const { projeto, diario, alvo } = await semearEApagar(tipo);
+
+      const retomar = () => executarSeed({
+        porta: projeto.porta,
+        manifest: manifesto(),
+        projetoRef: PROJETO,
+        persistir: discoFalso().persistir,
+        diarioExistente: diario,
+      });
+
+      await expect(retomar()).rejects.toThrow(
+        /Retomada abortada: 1 registro\(s\) que o diário dá por concluídos não existem/u,
+      );
+
+      // A mensagem nomeia o registro, para o reparo ser possível.
+      const erro = await retomar().then(() => null, (e: unknown) => e as Error);
+      expect(erro?.message).toContain(alvo.identificador);
+    },
+  );
+
+  it.each(['usuario', 'organizacao', 'membership'] as const)(
+    'a limpeza trata o %s ausente como já removido, e conclui',
+    async (tipo) => {
+      // Mesma ausência, política oposta: aqui é o caso normal.
+      const { projeto, diario, alvo } = await semearEApagar(tipo);
+
+      const resultado = await executarLimpeza(projeto.porta, diario, { simular: false });
+
+      expect(resultado.plano.jaRemovidas.map((o) => o.identificador)).toContain(alvo.identificador);
+      expect(resultado.plano.recusadas).toEqual([]);
+    },
+  );
+
+  it('a retomada não repara sozinha: o diário continua com a conclusão antiga', async () => {
+    const { projeto, diario } = await semearEApagar('organizacao');
+    const disco = discoFalso();
+
+    await expect(executarSeed({
+      porta: projeto.porta,
+      manifest: manifesto(),
+      projetoRef: PROJETO,
+      persistir: disco.persistir,
+      diarioExistente: diario,
+    })).rejects.toThrow();
+
+    // A única gravação foi o diário recebido, intacto. Reparar automaticamente
+    // apagaria a prova do que foi criado.
+    expect(disco.gravacoes).toHaveLength(1);
+    expect(disco.ultimo().concluidas).toHaveLength(diario.concluidas.length);
+  });
+});
+
+describe('a adoção pelo identificador natural é restrita', () => {
+  it('com o diário completo, nada do seed é adotado — só o que a spec criou', async () => {
+    // A prova nesses casos é o identificador determinístico, não um id
+    // previamente registrado. Fora do estado de recuperação, adotar registro do
+    // seed seria apagar por parecença.
+    const projeto = projetoFalso();
+    const { diario } = await executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: discoFalso().persistir,
+    });
+
+    const slugDaSpec = `orbita-e2e-${RUN}-spec-created-org`;
+    projeto.criados.set(slugDaSpec, { identificador: slugDaSpec, id: 'id-spec-org', tipo: 'organizacao' });
+    // E um registro do seed que o diário conhece, mas com a conclusão removida.
+    const semRegistro = [...projeto.criados.values()].find((c) => c.tipo === 'usuario')!;
+    const diarioSemUma = {
+      ...diario,
+      concluidas: diario.concluidas.filter((c) => !c.chave.startsWith('persona:owner-a')),
+    };
+
+    const resultado = await executarLimpeza(projeto.porta, diarioSemUma, { simular: true });
+
+    const adotados = resultado.adotadas.map((a) => a.criadoPor);
+    expect(adotados).toContain('spec');
+    expect(semRegistro.identificador).toBeTruthy();
+  });
+});

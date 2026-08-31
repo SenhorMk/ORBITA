@@ -23,7 +23,7 @@ import { executarSeed } from '../../src/lib/e2e/orquestracao';
 import { buildSeedManifest } from '../../src/lib/e2e/syntheticSeedData';
 
 import { caminhoDoDiario, gravarDiarioAtomico, resolverAmbiente } from './ambiente';
-import { criarPortaSupabase } from './supabasePorta';
+import { criarPortaSupabase } from '../../src/lib/e2e/supabasePorta';
 
 function runIdParaRetomar(): string | undefined {
   const args = process.argv.slice(2).filter((a) => a !== '--');

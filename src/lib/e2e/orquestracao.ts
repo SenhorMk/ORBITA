@@ -1,9 +1,11 @@
 import {
   iniciarDiario,
+  operacoesPendentes,
   planejarExecucao,
   reconciliar,
   registrarConclusao,
   type DiarioDeExecucao,
+  type ConclusaoAusente,
   type DivergenciaDeReconciliacao,
   type RegistroEncontrado,
 } from './execucaoSeed';
@@ -79,6 +81,32 @@ function exigirSemDivergencia(divergentes: readonly DivergenciaDeReconciliacao[]
   );
 }
 
+/**
+ * Interrompe a **retomada** quando o diário afirma uma conclusão que o projeto
+ * não tem.
+ *
+ * A política aqui é oposta à da limpeza, e de propósito. Para a limpeza,
+ * ausência é o caso normal — já foi removido. Para a retomada é falha: seguir
+ * em frente terminaria "com sucesso" deixando usuário ou organização faltando,
+ * ou criaria membership com um id que já não existe.
+ *
+ * O reparo é explícito: apagar o diário e semear de novo, ou remover a mão as
+ * conclusões que não valem mais. Nada disso é feito automaticamente — o diário
+ * é histórico.
+ */
+function exigirSemAusencia(ausentes: readonly ConclusaoAusente[]): void {
+  if (ausentes.length === 0) return;
+  const detalhe = ausentes
+    .map((a) => `  ${a.tipo.padEnd(12)} ${a.identificador}  id=${a.idNoDiario}`)
+    .join('\n');
+  throw new Error(
+    `Retomada abortada: ${ausentes.length} registro(s) que o diário dá por concluídos não existem no projeto.\n`
+      + `${detalhe}\n`
+      + 'Continuar terminaria com sucesso deixando esses registros faltando, ou criaria membership com id '
+      + 'inexistente. Repare explicitamente: recomece a execução, ou remova essas conclusões do diário.',
+  );
+}
+
 export interface ResultadoDoSeed {
   readonly diario: DiarioDeExecucao;
   readonly manifest: SeedManifest;
@@ -130,6 +158,7 @@ export async function executarSeed(opcoes: OpcoesDoSeed): Promise<ResultadoDoSee
     }
     const reconciliado = reconciliar(diario, leitura.registros);
     exigirSemDivergencia(reconciliado.divergentes, 'Retomada');
+    exigirSemAusencia(reconciliado.ausentes);
     recuperadas = reconciliado.recuperadas.length;
     diario = gravar(reconciliado.diario);
   }
@@ -183,6 +212,8 @@ export async function executarSeed(opcoes: OpcoesDoSeed): Promise<ResultadoDoSee
 
 export interface ResultadoDaLimpeza {
   readonly plano: PlanoDeLimpeza;
+  /** Ids adotados pelo identificador natural, por não haver id no diário. */
+  readonly adotadas: readonly { readonly identificador: string; readonly idAdotado: string; readonly criadoPor: string }[];
   readonly simulacao: string;
   readonly orfaos: readonly RegistroEncontrado[];
   readonly removidos: number;
@@ -214,7 +245,15 @@ export async function executarLimpeza(
   // diário não registrou — inclusive as organizações que as **specs** criam,
   // previstas no plano mas nunca escritas pelo seed. Sem isto elas ficavam no
   // projeto a cada execução.
-  const reconciliado = reconciliar(diario, leitura.registros);
+  // Na limpeza, ausência é o caso normal — já foi removido —, então
+  // `ausentes` não interrompe aqui. Divergência de id continua interrompendo.
+  //
+  // A adoção de id pelo identificador natural fica restrita ao que a precisa:
+  // registros que a **suíte** cria (`criadoPor: 'spec'`, dos quais o seed nunca
+  // teria id) e o estado de recuperação — diário incompleto, porque a gravação
+  // falhou depois da criação remota. Com o diário completo, nada é adotado.
+  const emRecuperacao = operacoesPendentes(diario).some((o) => o.criadoPor === 'seed');
+  const reconciliado = reconciliar(diario, leitura.registros, { adotarOperacoesDoSeed: emRecuperacao });
   exigirSemDivergencia(reconciliado.divergentes, 'Limpeza');
   const plano = planejarLimpeza(reconciliado.diario, leitura.registros);
   const orfaos = relatarOrfaos(leitura.registros, plano.runId, plano);
@@ -227,7 +266,7 @@ export async function executarLimpeza(
   }
 
   if (opcoes.simular) {
-    return { plano, simulacao, orfaos, removidos: 0, simulado: true };
+    return { plano, simulacao, orfaos, adotadas: reconciliado.adotadas, removidos: 0, simulado: true };
   }
 
   let removidos = 0;
@@ -247,5 +286,5 @@ export async function executarLimpeza(
     removidos += 1;
   }
 
-  return { plano, simulacao, orfaos, removidos, simulado: false };
+  return { plano, simulacao, orfaos, adotadas: reconciliado.adotadas, removidos, simulado: false };
 }

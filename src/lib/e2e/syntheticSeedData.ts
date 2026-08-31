@@ -13,6 +13,21 @@
 
 export const SYNTHETIC_DATA_PREFIX = 'orbita-e2e-';
 
+/**
+ * Sufixo do slug da organização que `organization.spec.ts` cria durante o teste.
+ *
+ * Mora aqui porque **duas** partes precisam do mesmo texto: a spec, que cria, e
+ * o plano do seed, que a prevê para a limpeza alcançá-la. Dois literais
+ * independentes deixariam o resíduo voltar numa renomeação, sem quebrar teste
+ * nenhum.
+ */
+export const SUFIXO_ORG_CRIADA_PELA_SPEC = 'spec-created-org';
+
+/** Slug completo da organização que a spec cria, para uma execução. */
+export function slugDaOrganizacaoDaSpec(prefix: string): string {
+  return `${prefix}${SUFIXO_ORG_CRIADA_PELA_SPEC}`;
+}
+
 export type SyntheticPersonaRole = 'owner' | 'admin' | 'member' | 'external';
 
 export interface SyntheticOrganization {

@@ -1,13 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import type { RegistroEncontrado } from '../../src/lib/e2e/execucaoSeed';
+import type { RegistroEncontrado } from './execucaoSeed';
 import type {
   EscritaNoProjeto,
   ExclusaoNoProjeto,
   LeituraDoProjeto,
   PapelDeMembership,
   PortaDoProjeto,
-} from '../../src/lib/e2e/portaDoProjeto';
+} from './portaDoProjeto';
 
 /**
  * Porta real do projeto Supabase.

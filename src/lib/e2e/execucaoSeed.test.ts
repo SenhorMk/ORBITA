@@ -150,7 +150,7 @@ describe('recuperação: a operação remota concluiu e o registro local falhou'
     const { diario: recuperado, recuperadas } = reconciliar(
       diario,
       [{ identificador: primeira.identificador, id: 'id-que-existe-la' }],
-      relogio('2026-08-31T13:00:00.000Z'),
+      { agora: relogio('2026-08-31T13:00:00.000Z') },
     );
 
     expect(recuperadas.map((r) => r.chave)).toEqual([primeira.chave]);

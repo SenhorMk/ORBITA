@@ -16,7 +16,7 @@ import { lerDiario } from '../../src/lib/e2e/execucaoSeed';
 import { executarLimpeza } from '../../src/lib/e2e/orquestracao';
 
 import { caminhoDoDiario, resolverAmbiente } from './ambiente';
-import { criarPortaSupabase } from './supabasePorta';
+import { criarPortaSupabase } from '../../src/lib/e2e/supabasePorta';
 
 function lerArgumentos(): { runId: string; simular: boolean } {
   const args = process.argv.slice(2).filter((a) => a !== '--');
