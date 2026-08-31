@@ -9,65 +9,15 @@ export interface LogContext {
   [key: string]: unknown;
 }
 
-const SENSITIVE_KEY_PATTERN = /(password|secret|token|authorization|cookie|apiKey|api_key|client_secret|access_token|refresh_token|card|cvv|cpf|cnpj|^state$|^code$|oauth_state|oauth_code)/i;
-
 /**
- * Sanitiza objetos recursivamente substituindo valores de campos sensíveis por '[REDACTED]'.
+ * A política de redação vive em `lib/dadosSensiveis.ts`, folha sem dependência.
+ * Estava duplicada aqui e no cofre de credenciais, com regras diferentes: a do
+ * cofre não cobria `cookie` nem variantes camelCase. Reexportado para os
+ * chamadores que já conheciam este módulo como origem.
  */
-export function redactSensitiveData(data: unknown, seen = new WeakSet()): unknown {
-  if (data === null || data === undefined) return data;
-  if (typeof data !== 'object') return data;
+export { redactSensitiveData, redactSensitiveText, chaveSensivel } from '../dadosSensiveis';
 
-  if (seen.has(data as object)) {
-    return '[CIRCULAR]';
-  }
-  seen.add(data as object);
-
-  if (Array.isArray(data)) {
-    return data.map((item) => redactSensitiveData(item, seen));
-  }
-
-  const redacted: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
-    if (SENSITIVE_KEY_PATTERN.test(key)) {
-      redacted[key] = '[REDACTED]';
-    } else if (typeof value === 'object' && value !== null) {
-      redacted[key] = redactSensitiveData(value, seen);
-    } else {
-      redacted[key] = value;
-    }
-  }
-
-  return redacted;
-}
-
-/**
- * Padrões de segredo que podem aparecer embutidos em texto livre (mensagens de erro
- * externas, corpos de exceção de bibliotecas/providers) fora da estrutura chave/valor
- * que `redactSensitiveData` cobre. Cada padrão redige apenas o valor sensível.
- */
-const INLINE_SECRET_PATTERNS: RegExp[] = [
-  // Authorization: Bearer/Basic <token>
-  /\b(Authorization\s*[:=]\s*(?:Bearer|Basic)\s+)([^\s,;]+)/gi,
-  // Set-Cookie / cookie: <valor>
-  /\b(Set-Cookie\s*[:=]\s*)([^\s,;]+)/gi,
-  // key=value ou key: value onde a key bate no padrão de campo sensível
-  /\b((?:password|secret|token|apiKey|api_key|client_secret|access_token|refresh_token|cvv|cpf|cnpj|oauth_state|oauth_code)\s*[:=]\s*)([^\s,;]+)/gi,
-];
-
-/**
- * Redige segredos embutidos em uma string livre (ex.: mensagem de `Error` de uma
- * biblioteca/provider externo que interpolou um header ou credencial no texto).
- * Não sanitiza o objeto/estrutura — usar `redactSensitiveData` para isso.
- */
-export function redactSensitiveText(text: string): string {
-  let result = text;
-  for (const pattern of INLINE_SECRET_PATTERNS) {
-    result = result.replace(pattern, (_match, prefix: string) => `${prefix}[REDACTED]`);
-  }
-  return result;
-}
-
+import { redactSensitiveData, redactSensitiveText } from '../dadosSensiveis';
 /**
  * Extrai de um valor lançado (Error ou não) apenas nome e mensagem redigida, para uso
  * seguro em log estruturado. Nunca inclui o stack trace cru, que pode conter caminhos de
