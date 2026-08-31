@@ -13,7 +13,29 @@ const SRC_DIR = path.join(ROOT_DIR, 'src');
  * 1. src/services e src/repositories NÃO devem importar diretamente 'next/server', 'next/navigation', 'next/headers', ou 'react'.
  * 2. src/repositories NÃO devem importar de src/services (camada inferior não depende da superior).
  * 3. Rotas em src/app/api NÃO devem importar internals não públicos de serviços quando existir API consolidada.
+ * 4. Rotas de organização/convite NÃO devem usar o atalho `verifySessionAndRole` (Ticket 20).
  */
+
+/**
+ * Rotas cuja resposta precisa distinguir "não sei quem você é" de "sei quem
+ * você é, e você não pode".
+ *
+ * `verifySessionAndRole` devolve `null` para os dois casos, e quem o consome
+ * transforma os dois em 401. Nessas rotas isso não é atalho: é resposta errada.
+ * A fronteira delas é `authorizeRequestOrganizationCapability`, que preserva a
+ * distinção — ou `resolveAuthenticatedIdentity`, onde não deve haver exigência
+ * de vínculo (Ticket 20).
+ */
+const ROTAS_COM_DISTINCAO_DE_AUTORIZACAO = [
+  'src/app/api/organizacoes/',
+  'src/app/api/convites/',
+];
+
+/** Uma linha de rota de organização/convite que reintroduz o atalho de sessão. */
+export function violaDistincaoDeAutorizacao(relativePath, line) {
+  const naFronteira = ROTAS_COM_DISTINCAO_DE_AUTORIZACAO.some((prefixo) => relativePath.startsWith(prefixo));
+  return naFronteira && /\bverifySessionAndRole\b/u.test(line);
+}
 
 export function checkModuleBoundaries(baseDir = SRC_DIR) {
   const violations = [];
@@ -73,6 +95,17 @@ export function checkModuleBoundaries(baseDir = SRC_DIR) {
             message: `Repositório não deve importar da camada de serviços: ${line.trim()}`,
           });
         }
+      }
+
+      // 4. Rotas de organização/convite não podem colapsar 401 e 403 (Ticket 20)
+      if (violaDistincaoDeAutorizacao(relativePath, line)) {
+        violations.push({
+          file: relativePath,
+          line: lineNum,
+          rule: 'authorization-distinction',
+          message:
+            'Rota de organização/convite não deve usar `verifySessionAndRole`: ele devolve `null` para "sem sessão" e para "sem vínculo", e as duas viram 401. Use `authorizeRequestOrganizationCapability` ou `resolveAuthenticatedIdentity`.',
+        });
       }
     });
   }

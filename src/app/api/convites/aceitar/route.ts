@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { verifySessionAndRole } from '@/lib/auth';
+import { resolveAuthenticatedIdentity } from '@/lib/auth';
 import { readBearerToken } from '@/lib/bearer-token';
 import { createActorScopedSupabaseClient } from '@/lib/supabaseActorClient';
 import { logger } from '@/lib/observability/logger';
@@ -23,10 +23,19 @@ export function createAcceptInviteHandler(
   setActiveOrganization: (organizacaoId: string) => Promise<void>,
 ) {
   return async function acceptInviteHandler(req: Request) {
+    // Só identidade, deliberadamente: quem aceita um convite ainda não é membro
+    // de organização nenhuma, então exigir vínculo aqui negaria exatamente o
+    // caso que a rota existe para atender. A autoridade sobre o convite é o
+    // token, conferido pela própria RPC. Até o Ticket 20 a rota passava pelo
+    // atalho de sessão, que exige vínculo e negava todo mundo com 401.
     const bearerResult = readBearerToken(req);
-    const session = await verifySessionAndRole(req);
-    if (!session || bearerResult._tag !== 'BearerTokenFound') {
-      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    const identity = await resolveAuthenticatedIdentity(req);
+    if (identity._tag !== 'IdentityVerified' || bearerResult._tag !== 'BearerTokenFound') {
+      const status = identity._tag === 'IdentityProviderUnavailable' ? 503 : 401;
+      return NextResponse.json(
+        { error: status === 503 ? 'Serviço de autenticação indisponível' : 'Não autorizado' },
+        { status },
+      );
     }
 
     // `aceitar_convite_organizacao` cria a membership para `auth.uid()`; com a

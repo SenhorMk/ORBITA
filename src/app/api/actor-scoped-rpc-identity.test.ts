@@ -74,11 +74,23 @@ async function supabaseHttpFake(input: RequestInfo | URL, init?: RequestInit): P
             id: subject,
             aud: 'authenticated',
             role: 'authenticated',
-            app_metadata: { role: 'dono' },
+            // O provedor real não devolve papel aqui; a autoridade sobre
+            // papel é a tabela de vínculos consultada abaixo (Ticket 20).
+            app_metadata: { provider: 'email', providers: ['email'] },
             user_metadata: {},
           },
           200,
         );
+  }
+
+  // Vínculo persistido: é daqui que sai o papel que autoriza a revogação
+  // (Ticket 20). O fake responde como o projeto real responderia para o dono.
+  // Leitura privilegiada, feita com a service_role key: ela não carrega
+  // sujeito, e não precisa — o par (organização, ator) vai no filtro.
+  if (path === '/rest/v1/membros_organizacao') {
+    return bearer === SERVICE_ROLE_KEY
+      ? jsonResponse({ papel: 'owner' }, 200)
+      : jsonResponse({ message: 'leitura de vínculo exige a chave de serviço' }, 401);
   }
 
   if (path.startsWith('/rest/v1/rpc/')) {

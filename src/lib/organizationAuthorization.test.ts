@@ -4,6 +4,7 @@ import type { AuthenticatedUser } from './auth';
 import {
   activeOrganizationSelection,
   parseOrganizationId,
+  organizationCapabilitiesForRole,
   resolveOrganizationContext,
   type MembershipLookupResult,
   type OrganizationActorId,
@@ -128,5 +129,25 @@ describe('canonical organization authorization', () => {
       verifyIdentity: async () => ({ _tag: 'IdentityVerified', user }),
       memberships: new FixedMemberships({ _tag: 'MembershipStoreUnavailable', cause: 'membership_query_failed' }),
     })).resolves.toEqual({ _tag: 'OrganizationStoreUnavailable', cause: 'membership_query_failed' });
+  });
+});
+
+describe('organizationCapabilitiesForRole', () => {
+  it('só concede gestão a owner e admin', () => {
+    expect([...organizationCapabilitiesForRole('owner')]).toEqual(
+      expect.arrayContaining(['organization:access', 'organization:manage']),
+    );
+    expect([...organizationCapabilitiesForRole('admin')]).toEqual(
+      expect.arrayContaining(['organization:access', 'organization:manage']),
+    );
+    expect([...organizationCapabilitiesForRole('member')]).toEqual(['organization:access']);
+  });
+
+  // Ticket 20 — o membro tem acesso, e é por isso que negar a ele a gestão não
+  // pode ser dito como "não sei quem você é". As duas coisas são distintas aqui.
+  it('mantém o membro reconhecido enquanto lhe nega a gestão', () => {
+    const capacidades = organizationCapabilitiesForRole('member');
+    expect(capacidades.has('organization:access')).toBe(true);
+    expect(capacidades.has('organization:manage')).toBe(false);
   });
 });
