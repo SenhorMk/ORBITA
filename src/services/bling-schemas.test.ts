@@ -43,7 +43,15 @@ const catalogo = JSON.parse(
   readFileSync(path.join(RAIZ, 'docs/integrations/bling-v3-schemas.json'), 'utf8'),
 ) as CatalogoDeSchemas;
 
-const fonteDosTipos = readFileSync(path.join(RAIZ, 'src/types/index.ts'), 'utf8');
+const FONTES: Readonly<Record<string, string>> = {
+  tipos: readFileSync(path.join(RAIZ, 'src/types/index.ts'), 'utf8'),
+  // O tipo de leitura do financeiro mora na porta da rota, e não em `types`.
+  // Ele precisa da mesma guarda: a fatia financeira acumulou correções feitas
+  // contra a documentação sem nunca ser confrontada com o spec.
+  financeiro: readFileSync(path.join(RAIZ, 'src/app/api/financeiro/sync/ports.ts'), 'utf8'),
+};
+
+const fonteDosTipos = FONTES.tipos!;
 
 /**
  * Campos de um bloco de interface, achatados por caminho.
@@ -123,6 +131,7 @@ export function tipoCompativel(tsDeclarado: string, oficial: CampoOficial): bool
  */
 const FRONTEIRAS = [
   { tipo: 'BlingPedido', prefixo: '', dtos: ['VendasDadosBaseDTO', 'VendasDadosDTO'] },
+  { tipo: 'ContaFinanceiraOficial', prefixo: '', dtos: ['ContasDadosBaseDTO', 'ContasReceberDadosListDTO'], fonte: 'financeiro' },
   { tipo: 'BlingPedido', prefixo: 'situacao', dtos: ['VendasSituacaoDTO'] },
   { tipo: 'BlingPedido', prefixo: 'contato', dtos: ['VendasContatoDTO'] },
   { tipo: 'BlingItemPedido', prefixo: '', dtos: ['VendasItemDTO'] },
@@ -141,7 +150,7 @@ function camposOficiais(dtos: readonly string[]): Record<string, CampoOficial> {
 
 describe('os tipos Bling* não podem divergir do schema oficial', () => {
   it('o catálogo oficial foi carregado', () => {
-    expect(Object.keys(catalogo.schemas).length).toBeGreaterThanOrEqual(6);
+    expect(Object.keys(catalogo.schemas).length).toBeGreaterThanOrEqual(8);
     expect(catalogo.schemas.VendasSituacaoDTO?.campos.valor?.tipo).toBe('integer');
   });
 
@@ -158,7 +167,8 @@ describe('os tipos Bling* não podem divergir do schema oficial', () => {
   it.each(FRONTEIRAS.map((f) => [`${f.tipo}${f.prefixo ? '.' + f.prefixo : ''} vs ${f.dtos.join(' + ')}`, f] as const))(
     '%s',
     (_rotulo, fronteira) => {
-      const declarados = camposDeclarados(fonteDosTipos, fronteira.tipo);
+      const fonte = FONTES[(fronteira as { fonte?: string }).fonte ?? 'tipos']!;
+      const declarados = camposDeclarados(fonte, fronteira.tipo);
       const oficiais = camposOficiais(fronteira.dtos);
 
       const nossos = [...declarados.entries()]

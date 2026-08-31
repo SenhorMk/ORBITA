@@ -1196,11 +1196,14 @@ export class BlingClient implements BlingPort {
       if (dataFinal) url.searchParams.append('dataVencimentoFinal', dataFinal);
 
       const response = await this.fetchWithAuth(url.toString());
-      if (!response.ok) return [];
+      if (!response.ok) {
+        throw new BlingLeituraError('contas a receber', response.status, await response.text());
+      }
       const data = await response.json();
       return (data.data && Array.isArray(data.data)) ? data.data : [];
-    } catch {
-      return [];
+    } catch (error: unknown) {
+      if (error instanceof BlingLeituraError) throw error;
+      throw new BlingLeituraError('contas a receber', 0, descreverErro(error));
     }
   }
 
@@ -1214,11 +1217,14 @@ export class BlingClient implements BlingPort {
       if (dataFinal) url.searchParams.append('dataVencimentoFinal', dataFinal);
 
       const response = await this.fetchWithAuth(url.toString());
-      if (!response.ok) return [];
+      if (!response.ok) {
+        throw new BlingLeituraError('contas a pagar', response.status, await response.text());
+      }
       const data = await response.json();
       return (data.data && Array.isArray(data.data)) ? data.data : [];
-    } catch {
-      return [];
+    } catch (error: unknown) {
+      if (error instanceof BlingLeituraError) throw error;
+      throw new BlingLeituraError('contas a pagar', 0, descreverErro(error));
     }
   }
 
