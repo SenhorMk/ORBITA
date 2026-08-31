@@ -613,27 +613,39 @@ export class BlingClient implements BlingPort {
 
   // Criar um novo contato no Bling ERP v3
   // Campos obrigatórios: nome, tipo, contribuinte
-  async createContato(payload: { nome: string; email?: string; telefone?: string; cnpj?: string; tipo?: string; contribuinte?: number; cep?: string; endereco?: string; numero?: string; bairro?: string; cidade?: string; uf?: string }): Promise<unknown> {
+  /**
+   * `POST /contatos`.
+   *
+   * Os nomes de campo aqui sao os do OpenAPI oficial: `telefone` e
+   * `indicadorIe`. Ate o ticket 06 este metodo mandava `fone` e `contribuinte`,
+   * que **nao existem** na API — o Bling aceitava a requisicao e descartava os
+   * dois em silencio, entao todo contato criado pela venda manual e pelo
+   * cadastro de fornecedor nascia sem telefone e sem indicador de IE. Havia
+   * ate um comentario no codigo afirmando que `fone` era o nome correto.
+   *
+   * O `ClienteEditModal` ja tinha sido corrigido; este caminho nao.
+   */
+  async createContato(payload: { nome: string; email?: string; telefone?: string; cnpj?: string; tipo?: string; indicadorIe?: number; cep?: string; endereco?: string; numero?: string; bairro?: string; cidade?: string; uf?: string }): Promise<unknown> {
     const url = `${this.baseUrl}/contatos`;
     const bodyPayload: Record<string, unknown> = {
       nome: payload.nome,
       situacao: 'A',
       tipo: payload.tipo || 'F',           // F = Pessoa Física (padrão)
-      contribuinte: payload.contribuinte !== undefined ? payload.contribuinte : 9,     // 9 = Não contribuinte ICMS (padrão seguro)
+      indicadorIe: payload.indicadorIe !== undefined ? payload.indicadorIe : 9,     // 9 = Não contribuinte ICMS (padrão seguro)
     };
 
     // Campos opcionais — só adicionar se tiverem valor
     if (payload.email) bodyPayload.email = payload.email;
-    if (payload.telefone) bodyPayload.fone = payload.telefone;  // Campo correto: "fone"
+    if (payload.telefone) bodyPayload.telefone = payload.telefone;
 
     if (payload.cnpj) {
       bodyPayload.numeroDocumento = payload.cnpj;
       // Se CNPJ tem 14 dígitos e UI não enviou explicitamente, inferir
-      if (!payload.tipo || payload.contribuinte === undefined) {
+      if (!payload.tipo || payload.indicadorIe === undefined) {
         const cleanDoc = payload.cnpj.replace(/\D/g, '');
         if (cleanDoc.length === 14) {
           if (!payload.tipo) bodyPayload.tipo = 'J';
-          if (payload.contribuinte === undefined) bodyPayload.contribuinte = 1; // Contribuinte ICMS
+          if (payload.indicadorIe === undefined) bodyPayload.indicadorIe = 1; // Contribuinte ICMS
         }
       }
     }
