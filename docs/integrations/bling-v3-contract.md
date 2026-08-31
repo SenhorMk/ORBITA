@@ -156,6 +156,35 @@ erro tipado `timeout` distinto de `network`.
   resposta processada, de forma que uma redelivery retorna sucesso/no-op
   sem repetir efeitos.
 
+## 8. Guarda de payload de escrita, e o que ela não alcança
+
+`src/services/bling-payload-escrita.test.ts` confere o corpo **capturado do
+fio** contra `docs/integrations/bling-v3-schemas.json`. Reprova campo
+inexistente, `readOnly` enviado, tipo divergente, `null` não declarado, elemento
+de lista inválido e obrigatório de envio ausente.
+
+**Obrigatórios:** `readOnly` sai da lista de envio por leitura do OpenAPI — uma
+propriedade `readOnly` marcada `required` obriga na resposta e não deve ser
+enviada. É o caso de `id` em `POST /contatos`. O que sobra é cobrado, inclusive
+em objeto aninhado, e as exceções são por operação e por campo, com evidência.
+
+### Limitação conhecida: `valorLista`
+
+O spec do Bling é internamente inconsistente em `VendasItemDTO`: lista
+`valorLista` em `required` e **não o declara** em `properties`.
+
+O campo é real — o contrato do ORBITA o envia (`pedidoVendaContract.ts`) e o
+pedido `26735988980` foi criado com ele na conta real. Por isso a guarda **não**
+o trata como campo inventado.
+
+Mas há um buraco, e ele é conhecido: **o tipo de `valorLista` não é conferido**,
+porque o spec não diz qual é. Um `valorLista: "dez"` passaria pela guarda.
+
+Fechar isso exigiria o Bling corrigir o spec, ou declararmos o tipo por conta
+própria — que seria adivinhação com cara de contrato. Enquanto isso, quem
+protege esse campo é o Zod de `pedidoVendaContract.ts`, que o exige
+`z.number().nonnegative()`.
+
 ## 7. Idempotência de sync
 
 Cada execução de sync deve ser seguramente reexecutável: checkpoint por
