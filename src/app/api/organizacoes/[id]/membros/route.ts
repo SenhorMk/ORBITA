@@ -56,7 +56,7 @@ export async function GET(
   // A lista inteira é parseada, e uma linha inválida derruba a resposta.
   //
   // Antes as linhas que falhavam no Zod eram descartadas em silêncio e a rota
-  // respondia 200. Isso era inerte enquanto a rota negava todo mundo com 401;
+  // respondia 200. Isso era inerte enquanto a rota negava o chamador com 401;
   // alcançável, é pior que uma falha: a tela conclui que o membro *não existe*
   // — some da lista, some da contagem, e a revogação parece já ter acontecido.
   // Um membro persistido que o servidor não sabe ler é falha do servidor, e é

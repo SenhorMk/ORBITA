@@ -28,7 +28,8 @@ export function createAcceptInviteHandler(
     // de organização nenhuma, então exigir vínculo aqui negaria exatamente o
     // caso que a rota existe para atender. A autoridade sobre o convite é o
     // token, conferido pela própria RPC. Até o Ticket 20 a rota passava pelo
-    // atalho de sessão, que exige vínculo e negava todo mundo com 401.
+    // atalho de sessão, que exige vínculo e negava com 401 os usuários criados
+    // pelos fluxos atuais.
     const bearerResult = readBearerToken(req);
     const identity = await resolveAuthenticatedIdentity(req);
     if (identity._tag !== 'IdentityVerified' || bearerResult._tag !== 'BearerTokenFound') {

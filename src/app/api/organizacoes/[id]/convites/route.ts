@@ -34,7 +34,8 @@ export async function GET(
 
   // A listagem privilegiada rodava sem nenhuma verificação de escopo: bastava
   // uma sessão para ler os convites de qualquer organização. Ninguém alcançou
-  // essa brecha porque o atalho de sessão negava todo mundo antes (Ticket 20).
+  // essa brecha porque o atalho de sessão já negava o chamador antes de chegar
+  // aqui (Ticket 20).
   const authorization = await authorizeRequestOrganizationCapability(req, orgId, 'organization:manage');
   if (authorization._tag !== 'OrganizationCapabilityAuthorized') {
     return authorizationFailureResponse(authorization.status);
