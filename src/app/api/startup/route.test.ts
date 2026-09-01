@@ -59,10 +59,21 @@ vi.mock('@/lib/supabaseServer', () => ({
 }));
 vi.mock('@/services/bling', () => ({
   bling: {
-    forVerifiedOrganization: () => ({ ping: mockPing, getClientes: mockGetClientes }),
+    forVerifiedOrganization: () => ({
+      ping: mockPing,
+      getClientes: mockGetClientes,
+      getProdutos: async () => [],
+      getEstoquesSaldos: async () => [],
+      getPedidos: async () => [],
+      getPedido: async () => null,
+    }),
   },
   extractBlingImageUrl: () => null,
 }));
+vi.mock('@/services/syncCheckpoint', async () => {
+  const real = await vi.importActual<typeof import('@/services/syncCheckpoint')>('@/services/syncCheckpoint');
+  return { ...real, touchSyncState: async () => {}, getLastSyncedAt: async () => null };
+});
 vi.mock('@/lib/crypto', () => ({
   checkEncryptionConfiguration: () => ({ _tag: 'ValidEncryptionConfiguration' }),
 }));
@@ -210,7 +221,7 @@ describe('POST /api/startup', () => {
     expect(resposta.status).toBe(503);
     expect(corpo.success).toBe(false);
     expect(corpo.error).toBe(
-      'A sincronização falhou e o resultado não pôde ser registrado. Tente novamente.',
+      'Não foi possível confirmar o resultado da sincronização. Tente novamente.',
     );
     expect(JSON.stringify(corpo)).not.toContain('já está rodando');
     // A mensagem pública continua sem diagnóstico.
@@ -232,6 +243,32 @@ describe('POST /api/startup', () => {
     expect(resposta.status).toBe(503);
     expect(corpo.success).toBe(false);
     expect(corpo.error).toContain('tente novamente');
+  });
+
+  // Todas as etapas terminam bem, e só a gravação de `completed` não responde.
+  // Antes, `completeJob(..., 'completed')` estava dentro do bloco das etapas: a
+  // rejeição caía no `catch`, que gravava `failed` por cima de um `completed`
+  // que pode ter sido aplicado. A rota não pode anunciar sucesso nem falha.
+  it('não anuncia sucesso quando a conclusão como `completed` não responde', async () => {
+    mockCompleteJob.mockRejectedValue(new Error('timeout na resposta'));
+    mockGetJobStatus.mockResolvedValue({
+      status: 'running',
+      progress: { clientes_processados: 0, produtos_processados: 0, pedidos_processados: 0 },
+    });
+    const { POST } = await import('./route');
+
+    const resposta = await POST(requisicao());
+    const corpo = await resposta.json();
+
+    expect(resposta.status).toBe(503);
+    expect(corpo.success).toBe(false);
+    expect(corpo.error).toBe(
+      'Não foi possível confirmar o resultado da sincronização. Tente novamente.',
+    );
+    // Nenhuma segunda gravação: seria a sobrescrita destrutiva.
+    expect(mockCompleteJob).toHaveBeenCalledTimes(1);
+    expect(mockCompleteJob.mock.calls.map((chamada) => chamada[2])).not.toContain('failed');
+    expect(JSON.stringify(corpo)).not.toContain('já está rodando');
   });
 
   it('anuncia sucesso apenas quando o job concluiu', async () => {

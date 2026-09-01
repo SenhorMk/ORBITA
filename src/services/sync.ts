@@ -144,7 +144,6 @@ export class SyncService {
         await advanceCheckpoint(scope, jobId, { ...progress });
       }
 
-      await completeJob(scope, jobId, 'completed');
     } catch (err: unknown) {
       registrarFalhaInterna('sync.processar', err, {
         organizacaoId: scope.organizationId,
@@ -161,6 +160,26 @@ export class SyncService {
         // ler esse `running` como "alguém está tocando" e anunciar sucesso.
         return { _tag: 'FinalizationFailed' };
       }
+      return { _tag: 'JobFinished' };
+    }
+
+    // A conclusão como `completed` fica **fora** do bloco das etapas, e isso é o
+    // ponto. Enquanto estava dentro, uma resposta perdida — timeout, queda de
+    // rede — depois de a RPC ter concluído o job no banco caía no `catch`, que
+    // entendia "o processamento falhou" e chamava `completeJob(..., 'failed')`.
+    // Como `concluir_job_sync` atualiza incondicionalmente por id, a segunda
+    // chamada **sobrescrevia `completed` por `failed`**, com todas as etapas
+    // tendo terminado bem.
+    try {
+      await completeJob(scope, jobId, 'completed');
+    } catch (erroAoConcluir: unknown) {
+      registrarFalhaInterna('sync.concluir_como_completo', erroAoConcluir, {
+        organizacaoId: scope.organizationId,
+      });
+      // Resultado **ambíguo**: não sabemos se `completed` foi aplicado do outro
+      // lado. Tentar gravar `failed` aqui seria justamente a sobrescrita
+      // destrutiva. O trabalho terminou; o que não dá para afirmar é o registro.
+      return { _tag: 'FinalizationFailed' };
     }
 
     return { _tag: 'JobFinished' };

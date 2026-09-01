@@ -33,9 +33,16 @@ export type SyncProcessOutcome =
   /** Outro processo detém a lease. */
   | { readonly _tag: 'LeaseHeldElsewhere' }
   /**
-   * Processou, falhou, e **não foi possível gravar estado terminal nenhum**.
-   * O registro fica `running` sem ninguém trabalhando nele — então o estado é
-   * mentira, e quem chama não pode inferir nada a partir dele.
+   * O desfecho **não pôde ser confirmado**. Cobre dois caminhos:
+   *
+   * - processou, falhou, e nem `failed` foi gravado — o registro fica `running`
+   *   sem ninguém trabalhando nele;
+   * - processou **até o fim**, e a gravação de `completed` não respondeu — pode
+   *   ter sido aplicada do outro lado, pode não ter sido.
+   *
+   * Nos dois casos o estado gravado não é conclusão confiável, e nos dois a
+   * saída é a mesma: não escrever mais nada. Insistir no segundo caminho
+   * sobrescreveria um `completed` legítimo por `failed`.
    */
   | { readonly _tag: 'FinalizationFailed' };
 

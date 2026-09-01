@@ -26,10 +26,30 @@ vi.mock('../repositories/syncJobRepository', () => ({
 }));
 
 vi.mock('../lib/supabaseServer', () => ({ supabaseServer: {} }));
-const { mockGetClientes } = vi.hoisted(() => ({ mockGetClientes: vi.fn() }));
+
+// Só os dois auxiliares que tocam o banco. `syncPaginatedEntities` continua
+// real, porque é ele que chama os métodos do Bling — e é por eles que os testes
+// abaixo provocam falha de etapa.
+vi.mock('./syncCheckpoint', async () => {
+  const real = await vi.importActual<typeof import('./syncCheckpoint')>('./syncCheckpoint');
+  return { ...real, touchSyncState: async () => {}, getLastSyncedAt: async () => null };
+});
+const { mockGetClientes, mockGetProdutos, mockGetPedidos } = vi.hoisted(() => ({
+  mockGetClientes: vi.fn(),
+  mockGetProdutos: vi.fn(),
+  mockGetPedidos: vi.fn(),
+}));
 
 vi.mock('./bling', () => ({
-  bling: { forVerifiedOrganization: () => ({ getClientes: mockGetClientes }) },
+  bling: {
+    forVerifiedOrganization: () => ({
+      getClientes: mockGetClientes,
+      getProdutos: mockGetProdutos,
+      getEstoquesSaldos: async () => [],
+      getPedidos: mockGetPedidos,
+      getPedido: async () => null,
+    }),
+  },
   extractBlingImageUrl: () => null,
 }));
 
@@ -66,6 +86,10 @@ describe('SyncService — falha segura', () => {
     mockReleaseExpiredLeases.mockResolvedValue(0);
     mockAcquireLease.mockResolvedValue(true);
     mockCompleteJob.mockResolvedValue(undefined);
+    // Por padrão o Bling não devolve nada: as etapas passam sem trabalho.
+    mockGetClientes.mockResolvedValue([]);
+    mockGetProdutos.mockResolvedValue([]);
+    mockGetPedidos.mockResolvedValue([]);
   });
 
   // `sync_jobs.last_error` sai pela resposta de `GET /api/sync/status`. Antes
@@ -170,6 +194,24 @@ describe('SyncService — falha segura', () => {
 
     await expect(service.processJob('job-1', ESCOPO)).resolves.toEqual({ _tag: 'FinalizationFailed' });
     expect(saidaDoLog.join('\n')).toContain('sync.concluir_apos_falha');
+  });
+
+  // Enquanto `completeJob(..., 'completed')` esteve dentro do bloco das etapas,
+  // uma resposta perdida depois de a RPC ter concluído o job no banco caía no
+  // `catch`, que chamava `completeJob(..., 'failed')`. Como `concluir_job_sync`
+  // atualiza incondicionalmente por id, isso **sobrescrevia um `completed`
+  // legítimo por `failed`**, com todas as etapas tendo terminado bem.
+  it('não tenta gravar `failed` quando a conclusão como `completed` não responde', async () => {
+    mockGetClientes.mockResolvedValue([]);
+    mockCompleteJob.mockRejectedValue(new Error('timeout na resposta'));
+    const service = new SyncService();
+
+    await expect(service.processJob('job-1', ESCOPO)).resolves.toEqual({ _tag: 'FinalizationFailed' });
+
+    expect(mockCompleteJob).toHaveBeenCalledTimes(1);
+    expect(mockCompleteJob).toHaveBeenCalledWith(ESCOPO, 'job-1', 'completed');
+    const tentativas = mockCompleteJob.mock.calls.map((chamada) => chamada[2]);
+    expect(tentativas).not.toContain('failed');
   });
 
   it('syncAll propaga a finalização falha sem consultar o estado do job', async () => {

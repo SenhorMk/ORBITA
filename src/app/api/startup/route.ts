@@ -57,14 +57,15 @@ function respostaDaSincronizacao(resultado: SyncAllResult): NextResponse {
     );
   }
 
-  // Rodou, falhou, e nem o desfecho foi gravado: o registro ficou `running` sem
-  // ninguém trabalhando nele. Quem olhar o job vai ver um estado que não
-  // descreve a realidade, então a rota diz o que sabe e pede nova tentativa.
+  // O desfecho não pôde ser confirmado. Cobre dois caminhos — processou e
+  // falhou sem conseguir gravar `failed`, ou processou até o fim e a gravação de
+  // `completed` não respondeu. **A mensagem não pode afirmar que falhou**: no
+  // segundo caminho o trabalho terminou, e só o registro é que ficou incerto.
   if (resultado.status === 'finalization_failed') {
     return NextResponse.json(
       {
         success: false,
-        error: 'A sincronização falhou e o resultado não pôde ser registrado. Tente novamente.',
+        error: 'Não foi possível confirmar o resultado da sincronização. Tente novamente.',
       },
       { status: 503 },
     );
