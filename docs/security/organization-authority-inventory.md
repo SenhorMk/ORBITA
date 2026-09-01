@@ -1,6 +1,6 @@
 # Inventário de autoridade organizacional
 
-Snapshot do Ticket 06. Os números de linha são verificáveis pelos comandos abaixo; alterações futuras devem regenerar este ledger.
+Snapshot do Ticket 06, atualizado na **fatia A do Ticket 22** (01/09/2026). Os números de linha são verificáveis pelos comandos abaixo; alterações futuras devem regenerar este ledger.
 
 ## Fontes canônicas
 
@@ -30,22 +30,38 @@ Snapshot do Ticket 06. Os números de linha são verificáveis pelos comandos ab
 | `src/app/api/organizacoes/[id]/lifecycle/route.ts:41-96` | path/body | ID candidato | residual: migrar para contexto/capability |
 | `src/app/api/organizacoes/[id]/membros/[userId]/route.ts:8-15` | path | IDs candidatos | residual: migrar para contexto/capability |
 
+## Migrado na fatia A do Ticket 22 (01/09/2026)
+
+Dez handlers deixaram de consultar `app_metadata`. O portão legado era
+redundância: cada rota já resolvia `resolveVerifiedOrganizationScope` logo
+abaixo, que responde 401/403/503 pela fonte canônica.
+
+| Rota | O que saiu |
+| --- | --- |
+| `bling/situacoes`, `financeiro`, `financeiro/fornecedores` (GET+POST) | portão puro |
+| `clientes/delete`, `produtos/delete`, `nfe` | `session.role !== 'dono'` → `escopoTemCapacidade(scope, 'organization:manage')` |
+| `pedidos/manual`, `pedidos/status`, `financeiro/sync` | `session.tenant.id` como ator → `scope.actorId` |
+
+**`src/app/api/config` foi apagada**, por decisão do proprietário. Lia
+`integracoes_bling` — tabela sem grants de `service_role` desde as migrations de
+endurecimento, que responde 403 — por `user_id` legado, e nenhum arquivo do
+`src/` a chamava. Isso encerra também o achado "GET /api/config expõe bloco
+Chatwoot legado via env vars globais", registrado como `needs-owner` nos
+documentos do Ticket 25: a rota não existe mais.
+
 ## Autoridade legada explicitamente não reutilizável
 
 | Local | Fonte problemática | Disposição |
 | --- | --- | --- |
 | `src/lib/auth.ts:136-147` | `app_metadata.role/tenant_id` | compatibilidade residual; proibido no contexto canônico |
-| `src/app/api/config/route.ts` (`GET`) | `verifySessionAndRole` + `session.tenant.id` | migrar por fatia; o `POST` que gravava credenciais foi removido no Ticket 28 e substituído por `POST /api/bling/connect`, que usa contexto de organização verificado |
 | `src/app/api/dashboard/route.ts:12,46` | tenant pessoal | migrar por fatia |
-| `src/app/api/nfe/route.ts:12,20,33,47,141` | tenant pessoal + body | migrar por fatia fiscal |
-| `src/app/api/pedidos/status/route.ts:10,15-16` | tenant pessoal + body | migrar por fatia comercial |
 | `src/repositories/clienteRepository.ts:3-61` | `resolveTenantOrgId` | adapter legado; não copiar |
 | `src/repositories/produtoRepository.ts:3-97` | `resolveTenantOrgId` | adapter legado; não copiar |
 | `src/repositories/pedidoRepository.ts:3-181` | `resolveTenantOrgId` | adapter legado; não copiar |
 | `src/repositories/financeiroRepository.ts:4-100` | `resolveTenantOrgId` | adapter legado; não copiar |
-| `src/app/api/{clientes,produtos}/(update|delete)` | `verifySessionAndRole` + body | migração residual catálogo/comercial |
-| `src/app/api/{financeiro,financeiro/fornecedores,financeiro/sync}` | `verifySessionAndRole` + query/body | migração residual financeiro |
-| `src/app/api/{sync,sync/status,startup,bling/situacoes}` | `verifySessionAndRole` | migração residual sync/startup |
+| `src/app/api/{clientes,produtos}/update` | `verifySessionAndRole` + body | conferir na fatia B |
+| `src/app/api/{sync,sync/status,startup}` | `verifySessionAndRole` passado inteiro ao `syncService` | **fatia B** — exige trocar o port do serviço, que hoje recebe `ActorContext` |
+| `src/app/api/bling/pedidos/[id]`, `src/app/api/categorias/sync` | `resolveActorContext` | **fatia B** — mesma fonte legada, que o inventário do Ticket 22 não via. `categorias/sync` ainda **escreve** `user_id: tenant.id` |
 
 ## Comandos reproduzíveis
 
