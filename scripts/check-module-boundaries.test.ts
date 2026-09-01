@@ -15,13 +15,31 @@ describe('checkModuleBoundaries script', () => {
 describe('guarda da distinção de autorização', () => {
   const importacao = "import { verifySessionAndRole } from '@/lib/auth';";
 
-  it('acusa o atalho em rota de organização e em rota de convite', () => {
+  it('acusa o atalho de sessão em qualquer rota', () => {
     expect(violaDistincaoDeAutorizacao('src/app/api/organizacoes/[id]/convites/route.ts', importacao)).toBe(true);
     expect(violaDistincaoDeAutorizacao('src/app/api/convites/aceitar/route.ts', importacao)).toBe(true);
+    expect(violaDistincaoDeAutorizacao('src/app/api/pedidos/manual/route.ts', importacao)).toBe(true);
     expect(
       violaDistincaoDeAutorizacao(
         'src/app/api/organizacoes/[id]/membros/route.ts',
         '  const session = await verifySessionAndRole(req);',
+      ),
+    ).toBe(true);
+  });
+
+  // Ticket 22 — `resolveActorContext` bebe da mesma fonte legada, e o
+  // inventário original do ticket não o via. A guarda cobre os dois.
+  it('acusa também `resolveActorContext`, o outro seam legado', () => {
+    expect(
+      violaDistincaoDeAutorizacao(
+        'src/app/api/categorias/sync/route.ts',
+        "import { resolveActorContext } from '@/lib/auth';",
+      ),
+    ).toBe(true);
+    expect(
+      violaDistincaoDeAutorizacao(
+        'src/app/api/bling/pedidos/[id]/route.ts',
+        '  resolveActor: resolveActorContext,',
       ),
     ).toBe(true);
   });
@@ -37,8 +55,11 @@ describe('guarda da distinção de autorização', () => {
     ).toBe(false);
   });
 
-  it('não alcança os chamadores legados fora dessa fronteira', () => {
-    expect(violaDistincaoDeAutorizacao('src/app/api/config/route.ts', importacao)).toBe(false);
+  // A regra é sobre rotas. `src/lib/auth.ts` ainda **define** os seams, e é
+  // onde eles morrem na fatia C — acusá-lo aqui só tornaria a guarda impossível
+  // de satisfazer antes da hora.
+  it('não alcança o módulo que define os seams', () => {
     expect(violaDistincaoDeAutorizacao('src/lib/auth.ts', importacao)).toBe(false);
+    expect(violaDistincaoDeAutorizacao('src/services/sync.ts', importacao)).toBe(false);
   });
 });

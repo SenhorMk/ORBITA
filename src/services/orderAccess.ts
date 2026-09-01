@@ -1,6 +1,6 @@
-import type { VerifiedTenant } from '../lib/auth';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
-/** Local order identity and value used to prove tenant ownership before provider access. */
+/** Local order identity and value used to prove organization ownership before provider access. */
 export interface OrderRecord {
   readonly externalId: string;
   readonly localValue: unknown;
@@ -9,11 +9,11 @@ export interface OrderRecord {
 /** Tenant-scoped persistence operations required by order access. */
 export interface OrderStore {
   readonly findByExternalId: (
-    tenant: VerifiedTenant,
+    scope: VerifiedOrganizationScope,
     externalId: string,
   ) => Promise<OrderRecord | null>;
   readonly deleteByExternalId: (
-    tenant: VerifiedTenant,
+    scope: VerifiedOrganizationScope,
     externalId: string,
   ) => Promise<void>;
 }
@@ -24,19 +24,19 @@ export type OrderProviderResult<T> =
   | { readonly _tag: 'OrderProviderNotFound' }
   | { readonly _tag: 'OrderProviderUnavailable' };
 
-/** External order operations required after local tenant ownership is proven. */
+/** External order operations required after local organization ownership is proven. */
 export interface OrderProvider {
   readonly read: (
-    tenant: VerifiedTenant,
+    scope: VerifiedOrganizationScope,
     externalId: string,
   ) => Promise<OrderProviderResult<unknown>>;
   readonly update: (
-    tenant: VerifiedTenant,
+    scope: VerifiedOrganizationScope,
     externalId: string,
     changes: Readonly<Record<string, unknown>>,
   ) => Promise<OrderProviderResult<unknown>>;
   readonly remove: (
-    tenant: VerifiedTenant,
+    scope: VerifiedOrganizationScope,
     externalId: string,
   ) => Promise<OrderProviderResult<void>>;
 }
@@ -48,11 +48,11 @@ export type OrderAccessResult<T> =
   | { readonly _tag: 'OrderAccessUnavailable' };
 
 /**
- * Prove local tenant ownership before reading or mutating an external order.
+ * Prove local organization ownership before reading or mutating an external order.
  *
  * Provider identifiers are never authority by themselves. Every operation
- * begins with the tenant-scoped store lookup and fails with the same not-found
- * outcome for absent and cross-tenant records.
+ * begins with the organization-scoped store lookup and fails with the same not-found
+ * outcome for absent and cross-organization records.
  */
 export class OrderAccess {
   constructor(
@@ -60,48 +60,48 @@ export class OrderAccess {
     private readonly provider: OrderProvider,
   ) {}
 
-  /** Read an order after proving it belongs to the verified tenant. */
-  async read(tenant: VerifiedTenant, externalId: string): Promise<OrderAccessResult<unknown>> {
-    const recordResult = await this.findRecord(tenant, externalId);
+  /** Read an order after proving it belongs to the verified organization. */
+  async read(scope: VerifiedOrganizationScope, externalId: string): Promise<OrderAccessResult<unknown>> {
+    const recordResult = await this.findRecord(scope, externalId);
     if (recordResult._tag !== 'OrderAccessSucceeded') return recordResult;
 
     if (externalId.startsWith('#MANUAL-')) {
       return { _tag: 'OrderAccessSucceeded', value: recordResult.value.localValue };
     }
 
-    return this.fromProvider(await this.provider.read(tenant, externalId));
+    return this.fromProvider(await this.provider.read(scope, externalId));
   }
 
-  /** Update an order after proving it belongs to the verified tenant. */
+  /** Update an order after proving it belongs to the verified organization. */
   async update(
-    tenant: VerifiedTenant,
+    scope: VerifiedOrganizationScope,
     externalId: string,
     changes: Readonly<Record<string, unknown>>,
   ): Promise<OrderAccessResult<unknown>> {
-    const recordResult = await this.findRecord(tenant, externalId);
+    const recordResult = await this.findRecord(scope, externalId);
     if (recordResult._tag !== 'OrderAccessSucceeded') return recordResult;
 
     if (externalId.startsWith('#MANUAL-')) {
       return { _tag: 'OrderAccessSucceeded', value: null };
     }
 
-    return this.fromProvider(await this.provider.update(tenant, externalId, changes));
+    return this.fromProvider(await this.provider.update(scope, externalId, changes));
   }
 
-  /** Remove an order locally and externally after proving tenant ownership. */
-  async remove(tenant: VerifiedTenant, externalId: string): Promise<OrderAccessResult<void>> {
-    const recordResult = await this.findRecord(tenant, externalId);
+  /** Remove an order locally and externally after proving organization ownership. */
+  async remove(scope: VerifiedOrganizationScope, externalId: string): Promise<OrderAccessResult<void>> {
+    const recordResult = await this.findRecord(scope, externalId);
     if (recordResult._tag !== 'OrderAccessSucceeded') return recordResult;
 
     if (!externalId.startsWith('#MANUAL-')) {
-      const providerResult = await this.provider.remove(tenant, externalId);
+      const providerResult = await this.provider.remove(scope, externalId);
       if (providerResult._tag === 'OrderProviderUnavailable') {
         return { _tag: 'OrderAccessUnavailable' };
       }
     }
 
     try {
-      await this.store.deleteByExternalId(tenant, externalId);
+      await this.store.deleteByExternalId(scope, externalId);
       return { _tag: 'OrderAccessSucceeded', value: undefined };
     } catch {
       return { _tag: 'OrderAccessUnavailable' };
@@ -109,11 +109,11 @@ export class OrderAccess {
   }
 
   private async findRecord(
-    tenant: VerifiedTenant,
+    scope: VerifiedOrganizationScope,
     externalId: string,
   ): Promise<OrderAccessResult<OrderRecord>> {
     try {
-      const record = await this.store.findByExternalId(tenant, externalId);
+      const record = await this.store.findByExternalId(scope, externalId);
       return record
         ? { _tag: 'OrderAccessSucceeded', value: record }
         : { _tag: 'OrderNotFound' };

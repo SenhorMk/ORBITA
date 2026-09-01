@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveActorContext, type AuthUserLookup } from '../../../../lib/auth';
+import { NextResponse } from 'next/server';
+
+import type { RequestOrganizationScopeResult } from '../../../../lib/requestOrganizationContext';
+import type { VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 import {
   CategoryCatalog,
   type CategoryRecord,
@@ -10,142 +13,146 @@ import {
 
 import { createCategoryHandlers } from './handlers';
 
-const COLLABORATOR_ID = '22222222-2222-4222-8222-222222222222';
-const TENANT_ID = '33333333-3333-4333-8333-333333333333';
-const OWNER_A_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const OWNER_B_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+/**
+ * Ticket 22 — este teste era escrito contra o modelo de tenancy por usuário:
+ * as personas eram `app_metadata: { role: 'dono' }` e o isolamento provado era
+ * entre *tenants pessoais*. Agora a autoridade é a organização verificada, que
+ * é a mesma do resto do aplicativo.
+ *
+ * A fiação real da rota (identidade + `membros_organizacao`) é coberta em
+ * `src/app/api/ticket-22-fronteira-das-rotas-migradas.test.ts`; aqui o escopo
+ * é injetado de propósito, porque o que se testa é a decisão do handler.
+ */
 
-const unusedAuthLookup: AuthUserLookup = {
-  async getUser() {
-    throw new Error('Anonymous requests must not consult the identity provider.');
+const ORG_A_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const ORG_B_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const ATOR_ID = '22222222-2222-4222-8222-222222222222';
+
+/** Constrói um escopo já verificado, como a fronteira HTTP entregaria. */
+function escopo(organizationId: string, role: 'owner' | 'admin' | 'member'): VerifiedOrganizationScope {
+  return { organizationId, actorId: ATOR_ID, role } as VerifiedOrganizationScope;
+}
+
+/** Resolvedor que lê o bearer só para escolher qual escopo devolver. */
+function resolvedorPorToken(
+  porToken: Readonly<Record<string, VerifiedOrganizationScope>>,
+): (request: Request) => Promise<RequestOrganizationScopeResult> {
+  return async (request: Request) => {
+    const token = /^Bearer\s+(.+)$/iu.exec(request.headers.get('Authorization') ?? '')?.[1];
+    const encontrado = token ? porToken[token] : undefined;
+    if (!encontrado) {
+      return {
+        _tag: 'RequestScopeDenied',
+        response: NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 }),
+      };
+    }
+    return { _tag: 'RequestScopeResolved', scope: encontrado };
+  };
+}
+
+const catalogoQueNuncaRoda = {
+  async list(): Promise<never> {
+    throw new Error('Requisição negada não deve listar categorias.');
   },
-};
-
-const collaboratorLookup: AuthUserLookup = {
-  async getUser() {
-    return {
-      data: {
-        user: {
-          id: COLLABORATOR_ID,
-          app_metadata: { role: 'colaborador', tenant_id: TENANT_ID },
-        },
-      },
-      error: null,
-    };
-  },
-};
-
-const ownerLookup: AuthUserLookup = {
-  async getUser(token) {
-    const id = token === 'owner-a-token' ? OWNER_A_ID : OWNER_B_ID;
-    return {
-      data: { user: { id, app_metadata: { role: 'dono' } } },
-      error: null,
-    };
+  async sync(): Promise<never> {
+    throw new Error('Requisição negada não deve sincronizar categorias.');
   },
 };
 
 describe('category HTTP handlers', () => {
-  it('denies anonymous category reads at the HTTP seam', async () => {
+  it('nega leitura anônima na fronteira HTTP', async () => {
     const handlers = createCategoryHandlers({
-      resolveActor(request, capability) {
-        return resolveActorContext(request, capability, unusedAuthLookup);
-      },
-      catalog: {
-        async list() {
-          throw new Error('Denied requests must not read categories.');
-        },
-        async sync() {
-          throw new Error('Denied requests must not sync categories.');
-        },
-      },
+      resolveScope: resolvedorPorToken({}),
+      catalog: catalogoQueNuncaRoda,
     });
 
-    const response = await handlers.GET(
-      new Request('https://orbita.test/api/categorias/sync'),
-    );
+    const response = await handlers.GET(new Request('https://orbita.test/api/categorias/sync'));
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({
-      success: false,
-      error: 'Não autorizado',
-    });
+    expect(await response.json()).toEqual({ success: false, error: 'Não autorizado' });
   });
 
-  it('denies category synchronization without the tenant management capability', async () => {
+  // Antes a exigência era a capacidade `tenant:manage`, derivada de
+  // `app_metadata`. Agora vem do papel na organização — e o membro é
+  // reconhecido, e negado, em vez de tratado como desconhecido.
+  it('nega a sincronização a quem não administra a organização', async () => {
     const handlers = createCategoryHandlers({
-      resolveActor(request, capability) {
-        return resolveActorContext(request, capability, collaboratorLookup);
-      },
-      catalog: {
-        async list() {
-          throw new Error('This test does not list categories.');
-        },
-        async sync() {
-          throw new Error('Denied requests must not sync categories.');
-        },
-      },
-    });
-    const request = new Request('https://orbita.test/api/categorias/sync', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer collaborator-token' },
+      resolveScope: resolvedorPorToken({ 'membro-token': escopo(ORG_A_ID, 'member') }),
+      catalog: catalogoQueNuncaRoda,
     });
 
-    const response = await handlers.POST(request);
+    const response = await handlers.POST(new Request('https://orbita.test/api/categorias/sync', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer membro-token' },
+    }));
 
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({
-      success: false,
-      error: 'Acesso negado',
-    });
+    expect(await response.json()).toEqual({ success: false, error: 'Acesso negado' });
   });
 
-  it('synchronizes and lists categories only inside the authorized tenant', async () => {
-    const categoriesByTenant = new Map<string, CategoryRecord[]>();
+  it('deixa o membro ler o catálogo, que é leitura', async () => {
+    const porOrganizacao = new Map<string, CategoryRecord[]>([
+      [ORG_A_ID, [{ id: '11111111-1111-4111-8111-111111111111', blingId: 'category-1', description: 'Categoria A', parentBlingId: null }]],
+    ]);
+    const store: CategoryStore = {
+      async list(scope) {
+        return porOrganizacao.get(scope.organizationId) ?? [];
+      },
+      async upsertAll() {
+        throw new Error('A leitura não grava.');
+      },
+    };
+    const handlers = createCategoryHandlers({
+      resolveScope: resolvedorPorToken({ 'membro-token': escopo(ORG_A_ID, 'member') }),
+      catalog: new CategoryCatalog({ async fetchPage() { return []; } }, store),
+    });
+
+    const response = await handlers.GET(new Request('https://orbita.test/api/categorias/sync', {
+      headers: { Authorization: 'Bearer membro-token' },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ success: true, data: [{ bling_id: 'category-1' }] });
+  });
+
+  it('sincroniza e lista apenas dentro da organização autorizada', async () => {
+    const porOrganizacao = new Map<string, CategoryRecord[]>();
     const source: CategorySource = {
-      async fetchPage(tenant, page) {
-        if (tenant.id !== OWNER_A_ID || page > 1) return [];
-        return [{
-          blingId: 'category-1',
-          description: 'Categoria privada A',
-          parentBlingId: null,
-        }];
+      async fetchPage(scope, page) {
+        if (scope.organizationId !== ORG_A_ID || page > 1) return [];
+        return [{ blingId: 'category-1', description: 'Categoria privada A', parentBlingId: null }];
       },
     };
     const store: CategoryStore = {
-      async list(tenant) {
-        return categoriesByTenant.get(tenant.id) ?? [];
+      async list(scope) {
+        return porOrganizacao.get(scope.organizationId) ?? [];
       },
-      async upsertAll(tenant, categories) {
-        categoriesByTenant.set(tenant.id, [...categories]);
+      async upsertAll(scope, categories) {
+        porOrganizacao.set(scope.organizationId, [...categories]);
       },
     };
     const handlers = createCategoryHandlers({
-      resolveActor(request, capability) {
-        return resolveActorContext(request, capability, ownerLookup);
-      },
+      resolveScope: resolvedorPorToken({
+        'owner-a-token': escopo(ORG_A_ID, 'owner'),
+        'owner-b-token': escopo(ORG_B_ID, 'owner'),
+      }),
       catalog: new CategoryCatalog(source, store),
     });
 
-    const syncResponse = await handlers.POST(new Request(
-      'https://orbita.test/api/categorias/sync',
-      {
-        method: 'POST',
-        headers: { Authorization: 'Bearer owner-a-token' },
-      },
-    ));
-    const tenantAResponse = await handlers.GET(new Request(
-      'https://orbita.test/api/categorias/sync',
-      { headers: { Authorization: 'Bearer owner-a-token' } },
-    ));
-    const tenantBResponse = await handlers.GET(new Request(
-      'https://orbita.test/api/categorias/sync',
-      { headers: { Authorization: 'Bearer owner-b-token' } },
-    ));
+    const syncResponse = await handlers.POST(new Request('https://orbita.test/api/categorias/sync', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer owner-a-token' },
+    }));
+    const respostaOrgA = await handlers.GET(new Request('https://orbita.test/api/categorias/sync', {
+      headers: { Authorization: 'Bearer owner-a-token' },
+    }));
+    const respostaOrgB = await handlers.GET(new Request('https://orbita.test/api/categorias/sync', {
+      headers: { Authorization: 'Bearer owner-b-token' },
+    }));
 
     expect(syncResponse.status).toBe(200);
     expect(await syncResponse.json()).toMatchObject({ success: true, count: 1 });
-    expect(await tenantAResponse.json()).toEqual({
+    expect(await respostaOrgA.json()).toEqual({
       success: true,
       data: [{
         bling_id: 'category-1',
@@ -153,6 +160,8 @@ describe('category HTTP handlers', () => {
         categoria_pai_id: null,
       }],
     });
-    expect(await tenantBResponse.json()).toEqual({ success: true, data: [] });
+    // A organização B não enxerga nada da A — o isolamento é pela organização,
+    // não mais pelo tenant pessoal.
+    expect(await respostaOrgB.json()).toEqual({ success: true, data: [] });
   });
 });

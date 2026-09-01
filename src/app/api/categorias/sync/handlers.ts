@@ -1,55 +1,42 @@
-import {
-  actorContextDenialStatus,
-  type ActorCapability,
-  type ActorContextResult,
-  type VerifiedTenant,
-} from '../../../../lib/auth';
+import type { RequestOrganizationScopeResult } from '../../../../lib/requestOrganizationContext';
+import { escopoTemCapacidade, type VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 import type {
   CategoryListResult,
   CategorySyncResult,
 } from '../../../../services/categoryCatalog';
 
-/** Category operations required by the HTTP adapter. */
+/**
+ * Category operations required by the HTTP adapter.
+ *
+ * Ticket 22 — o port recebia `VerifiedTenant`, o tenant do modelo por usuário,
+ * resolvido de `app_metadata`. Passou a receber a organização verificada, que é
+ * a mesma autoridade que o resto do aplicativo usa.
+ */
 export interface CategoryCatalogPort {
-  /** List categories visible to one verified tenant. */
-  readonly list: (tenant: VerifiedTenant) => Promise<CategoryListResult>;
-  /** Synchronize categories for one verified tenant. */
-  readonly sync: (tenant: VerifiedTenant) => Promise<CategorySyncResult>;
+  /** List categories visible to one verified organization. */
+  readonly list: (scope: VerifiedOrganizationScope) => Promise<CategoryListResult>;
+  /** Synchronize categories for one verified organization. */
+  readonly sync: (scope: VerifiedOrganizationScope) => Promise<CategorySyncResult>;
 }
 
-/** Server-side actor resolver required by protected category handlers. */
-export type CategoryActorResolver = (
-  request: Request,
-  capability: ActorCapability,
-) => Promise<ActorContextResult>;
+/** Server-side organization resolver required by protected category handlers. */
+export type CategoryScopeResolver = (request: Request) => Promise<RequestOrganizationScopeResult>;
 
 /** Dependencies accepted by the category HTTP adapter. */
 export interface CategoryHandlerDependencies {
-  readonly resolveActor: CategoryActorResolver;
+  readonly resolveScope: CategoryScopeResolver;
   readonly catalog: CategoryCatalogPort;
-}
-
-function authorizationDenial(result: Exclude<ActorContextResult, { _tag: 'ActorContextResolved' }>) {
-  const status = actorContextDenialStatus(result);
-  return Response.json(
-    {
-      success: false,
-      error: status === 401 ? 'Não autorizado' : 'Acesso negado',
-    },
-    { status },
-  );
 }
 
 /** Create protected category HTTP handlers over an injected catalog module. */
 export function createCategoryHandlers(dependencies: CategoryHandlerDependencies) {
   return {
     async GET(request: Request): Promise<Response> {
-      const actorResult = await dependencies.resolveActor(request, 'app:access');
-      if (actorResult._tag !== 'ActorContextResolved') {
-        return authorizationDenial(actorResult);
-      }
+      // Ler o catálogo é leitura: basta pertencer à organização.
+      const scopeResult = await dependencies.resolveScope(request);
+      if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
 
-      const result = await dependencies.catalog.list(actorResult.context.tenant);
+      const result = await dependencies.catalog.list(scopeResult.scope);
       if (result._tag === 'CategoryCatalogUnavailable') {
         return Response.json(
           { success: false, error: 'Falha ao carregar categorias' },
@@ -69,12 +56,16 @@ export function createCategoryHandlers(dependencies: CategoryHandlerDependencies
     },
 
     async POST(request: Request): Promise<Response> {
-      const actorResult = await dependencies.resolveActor(request, 'tenant:manage');
-      if (actorResult._tag !== 'ActorContextResolved') {
-        return authorizationDenial(actorResult);
+      const scopeResult = await dependencies.resolveScope(request);
+      if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+
+      // Sincronizar escreve o catálogo inteiro: é gestão. A capacidade
+      // substitui o antigo `tenant:manage`, que vinha de `app_metadata`.
+      if (!escopoTemCapacidade(scopeResult.scope, 'organization:manage')) {
+        return Response.json({ success: false, error: 'Acesso negado' }, { status: 403 });
       }
 
-      const result = await dependencies.catalog.sync(actorResult.context.tenant);
+      const result = await dependencies.catalog.sync(scopeResult.scope);
       if (result._tag === 'CategoryCatalogUnavailable') {
         return Response.json(
           { success: false, error: 'Falha ao sincronizar categorias' },

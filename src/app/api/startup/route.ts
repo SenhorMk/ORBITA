@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
-import { syncService, SyncAuthorizationStoreUnavailableError, SyncScopeDeniedError } from '@/services/sync';
-import { verifySessionAndRole } from '@/lib/auth';
-import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { syncService } from '@/services/sync';
+import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import { checkEncryptionConfiguration } from '@/lib/crypto';
 import { descreverErro } from '@/lib/erroLegivel';
 
@@ -10,14 +10,20 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-    }
-
+    // Ticket 22 — o portão legado saiu; a resolução de escopo logo abaixo já
+    // fazia a mesma pergunta pela fonte certa.
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
+
+    // A sincronização inicial escreve o catálogo inteiro da organização; é ação
+    // de gestão, como `POST /api/sync`, e não leitura.
+    if (!escopoTemCapacidade(scope, 'organization:manage')) {
+      return NextResponse.json(
+        { success: false, error: 'Acesso negado: apenas quem administra a organização pode sincronizar' },
+        { status: 403 },
+      );
+    }
 
     const encryptionConfiguration = checkEncryptionConfiguration();
     if (encryptionConfiguration._tag === 'InvalidEncryptionConfiguration') {
@@ -58,7 +64,7 @@ export async function POST(request: Request) {
     }
 
     // 3. Executar o sync completo (Produtos, Clientes, Pedidos)
-    const syncResult = await syncService.syncAll(session);
+    const syncResult = await syncService.syncAll(scope);
 
     return NextResponse.json({
       success: true,
@@ -66,13 +72,7 @@ export async function POST(request: Request) {
       stats: syncResult.stats
     });
   } catch (error: unknown) {
-    if (error instanceof SyncScopeDeniedError) {
-      return NextResponse.json({ success: false, error: 'Escopo organizacional inválido' }, { status: 403 });
-    }
-    if (error instanceof SyncAuthorizationStoreUnavailableError) {
-      return NextResponse.json({ success: false, error: 'Serviço de autorização indisponível' }, { status: 503 });
-    }
-    console.error('Erro interno no startup sync.');
+    registrarFalhaInterna('startup.sync', error);
     const errorMsg = descreverErro(error);
     if (errorMsg.includes('em execução')) {
       return NextResponse.json({

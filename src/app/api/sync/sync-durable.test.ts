@@ -3,6 +3,17 @@
  * Ticket 34: Testes de integração dos endpoints de sync durável.
  * Cobre: POST retorna 202 + jobId, GET /status retorna estado correto,
  * idempotência (job existente), 401/403/400/404.
+ *
+ * Ticket 22 — a sessão deixou de ser fabricada. Antes o teste substituía
+ * `verifySessionAndRole` por um retorno pronto com `role: 'dono'`, papel que o
+ * provedor de identidade nunca emite para contas criadas pelos fluxos atuais;
+ * assim ele ficava verde sobre uma autorização que ninguém exercitava. Agora o
+ * provedor de identidade e `membros_organizacao` são dublês fiéis à forma real.
+ *
+ * As negações que o serviço sinalizava por exceção (`SyncScopeDeniedError` e
+ * `SyncAuthorizationStoreUnavailableError`) passaram a nascer na fronteira, que
+ * é onde a autorização acontece — então os testes que as injetavam foram
+ * reescritos para negar pela mesma via que a produção nega.
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
@@ -22,23 +33,30 @@ const {
   JOB_ID_EXISTENTE,
   ORG_ID,
   USER_ID,
-  mockVerifySessionAndRole,
+  mockGetUser,
+  mockContextoAtivo,
+  mockVinculo,
   mockEnqueueSync,
   mockProcessJob,
   mockGetJobStatus,
   mockAfter,
 } = vi.hoisted(() => {
-  const JOB_ID_NOVO = 'aaaaaaaa-0000-0000-0000-000000000001';
-  const JOB_ID_EXISTENTE = 'bbbbbbbb-0000-0000-0000-000000000002';
-  const ORG_ID = 'cccccccc-0000-0000-0000-000000000003';
-  const USER_ID = 'dddddddd-0000-0000-0000-000000000004';
+  // UUIDs válidos de verdade (versão 4, variante 8). Os anteriores tinham a
+  // forma certa e a versão errada, e nunca foram validados porque a sessão era
+  // fabricada — a autorização real os recusa, e recusaria em produção também.
+  const JOB_ID_NOVO = 'aaaaaaaa-0000-4000-8000-000000000001';
+  const JOB_ID_EXISTENTE = 'bbbbbbbb-0000-4000-8000-000000000002';
+  const ORG_ID = 'cccccccc-0000-4000-8000-000000000003';
+  const USER_ID = 'dddddddd-0000-4000-8000-000000000004';
 
   return {
     JOB_ID_NOVO,
     JOB_ID_EXISTENTE,
     ORG_ID,
     USER_ID,
-    mockVerifySessionAndRole: vi.fn(),
+    mockGetUser: vi.fn(),
+    mockContextoAtivo: vi.fn(),
+    mockVinculo: vi.fn(),
     mockEnqueueSync: vi.fn(),
     mockProcessJob: vi.fn(),
     mockGetJobStatus: vi.fn(),
@@ -50,13 +68,28 @@ const {
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('../../../lib/auth', () => ({
-  verifySessionAndRole: (...args: unknown[]) => mockVerifySessionAndRole(...args),
+/** Dublê do PostgREST no formato que `SupabaseOrganizationMemberships` usa. */
+vi.mock('../../../lib/supabaseServer', () => ({
+  supabaseServer: {
+    auth: { getUser: (...args: unknown[]) => mockGetUser(...args) },
+    from: (tabela: string) => ({
+      select: () => {
+        if (tabela === 'contextos_organizacao_ativos') {
+          return { eq: () => ({ maybeSingle: mockContextoAtivo }) };
+        }
+        const alvo = {
+          eq: () => alvo,
+          order: () => alvo,
+          limit: () => alvo,
+          maybeSingle: mockVinculo,
+        };
+        return alvo;
+      },
+    }),
+  },
 }));
 
 vi.mock('../../../services/sync', () => ({
-  SyncScopeDeniedError: class SyncScopeDeniedError extends Error {},
-  SyncAuthorizationStoreUnavailableError: class SyncAuthorizationStoreUnavailableError extends Error {},
   syncService: {
     enqueueSync: (...args: unknown[]) => mockEnqueueSync(...args),
     processJob: (...args: unknown[]) => mockProcessJob(...args),
@@ -78,15 +111,59 @@ vi.mock('next/server', async (importOriginal) => {
 
 import { POST as syncPost } from './route';
 import { GET as syncStatusGet } from './status/route';
-import { SyncAuthorizationStoreUnavailableError, SyncScopeDeniedError } from '../../../services/sync';
+
+/** Sessao real: o `app_metadata` que o Supabase emite nao carrega papel. */
+function comSessao(): void {
+  mockGetUser.mockResolvedValue({
+    data: { user: { id: USER_ID, app_metadata: { provider: 'email', providers: ['email'] } } },
+    error: null,
+  });
+}
+
+/**
+ * Requisicao com credencial. Antes o teste nao mandava `Authorization` nenhum e
+ * passava assim mesmo, porque a sessao era fabricada; agora o bearer e a unica
+ * porta de entrada, como em producao.
+ */
+function requisicao(url: string, init: { method?: string } = {}): NextRequest {
+  return new NextRequest(url, {
+    method: init.method,
+    headers: { Authorization: 'Bearer token-de-sessao' },
+  });
+}
+
+function semSessao(): void {
+  mockGetUser.mockResolvedValue({ data: { user: null }, error: { message: 'invalid', status: 401 } });
+}
+
+/** Vinculo persistido -- a autoridade sobre papel. */
+function comVinculo(papel: 'owner' | 'admin' | 'member' | null): void {
+  mockContextoAtivo.mockResolvedValue({ data: null, error: null });
+  mockVinculo.mockResolvedValue({
+    data: papel === null ? null : {
+      papel,
+      organizacao_id: ORG_ID,
+      organizacoes: {
+        id: ORG_ID,
+        nome: 'Organizacao de teste',
+        slug: 'org-teste',
+        created_at: '2026-08-20T18:00:00Z',
+        updated_at: '2026-08-20T18:00:00Z',
+      },
+    },
+    error: null,
+  });
+}
+
+function comFalhaNoDepositoDeVinculos(mensagem: string, codigo: string): void {
+  mockContextoAtivo.mockResolvedValue({ data: null, error: null });
+  mockVinculo.mockResolvedValue({ data: null, error: { message: mensagem, code: codigo } });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockVerifySessionAndRole.mockResolvedValue({
-    id: USER_ID,
-    role: 'dono',
-    tenant: { id: USER_ID, organizacao_id: ORG_ID },
-  });
+  comSessao();
+  comVinculo('owner');
   mockEnqueueSync.mockResolvedValue({
     jobId: JOB_ID_NOVO,
     status: 'queued',
@@ -117,7 +194,7 @@ describe('POST /api/sync — Jobs duráveis', () => {
       isNew: true,
     });
 
-    const req = new NextRequest('http://localhost/api/sync', { method: 'POST' });
+    const req = requisicao('http://localhost/api/sync', { method: 'POST' });
     const res = await syncPost(req);
 
     expect(res.status).toBe(202);
@@ -135,7 +212,7 @@ describe('POST /api/sync — Jobs duráveis', () => {
       isNew: false,
     });
 
-    const req = new NextRequest('http://localhost/api/sync', { method: 'POST' });
+    const req = requisicao('http://localhost/api/sync', { method: 'POST' });
     const res = await syncPost(req);
 
     expect(res.status).toBe(202);
@@ -146,35 +223,33 @@ describe('POST /api/sync — Jobs duráveis', () => {
   });
 
   it('retorna 401 para requisição não autenticada', async () => {
-    mockVerifySessionAndRole.mockResolvedValueOnce(null);
+    semSessao();
 
-    const req = new NextRequest('http://localhost/api/sync', { method: 'POST' });
+    const req = requisicao('http://localhost/api/sync', { method: 'POST' });
     const res = await syncPost(req);
     expect(res.status).toBe(401);
+    expect(mockEnqueueSync).not.toHaveBeenCalled();
   });
 
-  it('retorna 403 para usuário sem papel dono', async () => {
-    mockVerifySessionAndRole.mockResolvedValueOnce({
-      id: USER_ID,
-      role: 'membro',
-      tenant: { id: USER_ID, organizacao_id: ORG_ID },
-    });
+  it('retorna 403 para membro sem capacidade de gestão', async () => {
+    comVinculo('member');
 
-    const req = new NextRequest('http://localhost/api/sync', { method: 'POST' });
+    const req = requisicao('http://localhost/api/sync', { method: 'POST' });
     const res = await syncPost(req);
     expect(res.status).toBe(403);
+    expect(mockEnqueueSync).not.toHaveBeenCalled();
   });
 
-  it('retorna 403 quando o escopo persistido foi revogado', async () => {
-    mockEnqueueSync.mockRejectedValueOnce(new SyncScopeDeniedError());
-    const res = await syncPost(new NextRequest('http://localhost/api/sync', { method: 'POST' }));
+  it('retorna 403 quando o vínculo persistido foi revogado', async () => {
+    comVinculo(null);
+    const res = await syncPost(requisicao('http://localhost/api/sync', { method: 'POST' }));
     expect(res.status).toBe(403);
-    await expect(res.json()).resolves.toMatchObject({ error: 'Escopo organizacional inválido' });
+    expect(mockEnqueueSync).not.toHaveBeenCalled();
   });
 
   it('retorna 503 sem expor diagnóstico quando o authorization store está indisponível', async () => {
-    mockEnqueueSync.mockRejectedValueOnce(new SyncAuthorizationStoreUnavailableError());
-    const res = await syncPost(new NextRequest('http://localhost/api/sync', { method: 'POST' }));
+    comFalhaNoDepositoDeVinculos('postgres detail', '08006');
+    const res = await syncPost(requisicao('http://localhost/api/sync', { method: 'POST' }));
     expect(res.status).toBe(503);
     const body = await res.json();
     expect(body.error).toBe('Serviço de autorização indisponível');
@@ -183,7 +258,7 @@ describe('POST /api/sync — Jobs duráveis', () => {
 
   it('mascara erros internos desconhecidos', async () => {
     mockEnqueueSync.mockRejectedValueOnce(new Error('password authentication failed for postgres'));
-    const res = await syncPost(new NextRequest('http://localhost/api/sync', { method: 'POST' }));
+    const res = await syncPost(requisicao('http://localhost/api/sync', { method: 'POST' }));
     expect(res.status).toBe(500);
     const body = await res.json();
     expect(body.error).toBe('Erro interno na sincronização');
@@ -209,7 +284,7 @@ describe('GET /api/sync/status — Estado observável', () => {
     };
     mockGetJobStatus.mockResolvedValueOnce(jobData);
 
-    const req = new NextRequest(`http://localhost/api/sync/status?job_id=${JOB_ID_NOVO}`);
+    const req = requisicao(`http://localhost/api/sync/status?job_id=${JOB_ID_NOVO}`);
     const res = await syncStatusGet(req);
 
     expect(res.status).toBe(200);
@@ -222,23 +297,43 @@ describe('GET /api/sync/status — Estado observável', () => {
   it('retorna 404 quando job não existe ou não pertence à organização', async () => {
     mockGetJobStatus.mockResolvedValueOnce(null);
 
-    const req = new NextRequest(`http://localhost/api/sync/status?job_id=nao-existe`);
+    const req = requisicao(`http://localhost/api/sync/status?job_id=nao-existe`);
     const res = await syncStatusGet(req);
     expect(res.status).toBe(404);
   });
 
   it('retorna 400 quando job_id não é fornecido', async () => {
-    const req = new NextRequest('http://localhost/api/sync/status');
+    const req = requisicao('http://localhost/api/sync/status');
     const res = await syncStatusGet(req);
     expect(res.status).toBe(400);
   });
 
   it('retorna 401 para requisição não autenticada', async () => {
-    mockVerifySessionAndRole.mockResolvedValueOnce(null);
+    semSessao();
 
-    const req = new NextRequest(`http://localhost/api/sync/status?job_id=${JOB_ID_NOVO}`);
+    const req = requisicao(`http://localhost/api/sync/status?job_id=${JOB_ID_NOVO}`);
     const res = await syncStatusGet(req);
     expect(res.status).toBe(401);
+    expect(mockGetJobStatus).not.toHaveBeenCalled();
+  });
+
+  // Ler o andamento é leitura: o membro pode, e é por isso que a capacidade de
+  // gestão não é exigida aqui, ao contrário do POST que dispara a sincronização.
+  it('responde ao membro, que não precisa de gestão para acompanhar o job', async () => {
+    comVinculo('member');
+    mockGetJobStatus.mockResolvedValueOnce({
+      id: JOB_ID_NOVO,
+      organizacao_id: ORG_ID,
+      status: 'running',
+      progress: { etapa_atual: 'clientes' },
+      last_error: null,
+      created_at: '2026-08-20T18:00:00Z',
+      updated_at: '2026-08-20T18:01:00Z',
+      completed_at: null,
+    });
+
+    const req = requisicao(`http://localhost/api/sync/status?job_id=${JOB_ID_NOVO}`);
+    expect((await syncStatusGet(req)).status).toBe(200);
   });
 
   it('retorna estado completed quando job foi concluído com sucesso', async () => {
@@ -259,7 +354,7 @@ describe('GET /api/sync/status — Estado observável', () => {
     };
     mockGetJobStatus.mockResolvedValueOnce(jobData);
 
-    const req = new NextRequest(`http://localhost/api/sync/status?job_id=${JOB_ID_NOVO}`);
+    const req = requisicao(`http://localhost/api/sync/status?job_id=${JOB_ID_NOVO}`);
     const res = await syncStatusGet(req);
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -268,8 +363,8 @@ describe('GET /api/sync/status — Estado observável', () => {
   });
 
   it('retorna 503 sanitizado quando o authorization store falha', async () => {
-    mockGetJobStatus.mockRejectedValueOnce(new SyncAuthorizationStoreUnavailableError());
-    const req = new NextRequest(`http://localhost/api/sync/status?job_id=${JOB_ID_NOVO}`);
+    comFalhaNoDepositoDeVinculos('relation missing', '42P01');
+    const req = requisicao(`http://localhost/api/sync/status?job_id=${JOB_ID_NOVO}`);
     const res = await syncStatusGet(req);
     expect(res.status).toBe(503);
     const body = await res.json();

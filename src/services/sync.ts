@@ -5,10 +5,8 @@ import { produtoRepository } from '../repositories/produtoRepository';
 import { pedidoRepository } from '../repositories/pedidoRepository';
 import { Cliente, Produto, Pedido, ItemPedido } from '../types';
 import { descreverErro } from '../lib/erroLegivel';
-import { supabaseServer } from '../lib/supabaseServer';
 import { mapBlingStatus, normalizeToE164 } from '../lib/utils';
-import type { ActorContext, VerifiedTenant } from '../lib/auth';
-import { verifyOrganizationScope, type VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import {
   enqueueJob,
   acquireLease,
@@ -19,13 +17,6 @@ import {
   type SyncJobProgress,
   type SyncJob,
 } from '../repositories/syncJobRepository';
-
-import { resolveTenantOrgId } from '../lib/organizationContext';
-// resolveTenantOrgId is used only to resolve the ActorContext's organization
-// membership when constructing the VerifiedOrganizationScope in
-// resolveScope() below. Every DB read/write in this service uses the
-// resulting verified scope (scope.organizationId), never the primitive
-// tenant/user id as authority.
 
 import {
   getBlingDateTime,
@@ -49,24 +40,21 @@ export interface SyncAllResult {
   };
 }
 
+/**
+ * Sincronização durável, escopada por uma organização **já verificada**.
+ *
+ * Ticket 22 — o serviço resolvia o escopo sozinho, a partir de um `ActorContext`
+ * cujo `tenant` vinha de `app_metadata`, e traduzia a negação em exceção
+ * (`SyncScopeDeniedError`) para a rota transformar em status. Eram duas
+ * autorizações para a mesma pergunta, e a de baixo lia a fonte errada.
+ *
+ * Agora a autorização acontece uma vez só, na fronteira HTTP, que já sabe
+ * responder 401/403/503. O serviço recebe o escopo pronto e não decide mais
+ * quem pode o quê.
+ */
 export class SyncService {
-  private async resolveScope(context: ActorContext): Promise<VerifiedOrganizationScope> {
-    const organizationId = await resolveTenantOrgId(supabaseServer, context.tenant);
-    const result = await verifyOrganizationScope(supabaseServer, {
-      organizationId,
-      actorId: context.actorId,
-    });
-    if (result._tag === 'OrganizationScopeDenied') {
-      throw new SyncScopeDeniedError();
-    }
-    if (result._tag === 'OrganizationScopeStoreUnavailable') {
-      throw new SyncAuthorizationStoreUnavailableError();
-    }
-    return result.scope;
-  }
-
-  async enqueueSync(context: ActorContext): Promise<EnqueueSyncResult> {
-    return enqueueJob(await this.resolveScope(context));
+  async enqueueSync(scope: VerifiedOrganizationScope): Promise<EnqueueSyncResult> {
+    return enqueueJob(scope);
   }
 
   /**
@@ -79,18 +67,7 @@ export class SyncService {
    * era consultado por "alterados desde o momento da falha" e respondia zero —
    * corretamente. Sem uma sincronização completa não havia como sair disso.
    */
-  async processJob(jobId: string, context: ActorContext, opcoes: { completa?: boolean } = {}): Promise<void> {
-    let scope: VerifiedOrganizationScope;
-    try {
-      scope = await this.resolveScope(context);
-    } catch (error: unknown) {
-      if (error instanceof SyncScopeDeniedError || error instanceof SyncAuthorizationStoreUnavailableError) {
-        console.error('Sincronização não iniciada: escopo organizacional indisponível ou revogado.');
-        return;
-      }
-      throw error;
-    }
-    const tenant = context.tenant;
+  async processJob(jobId: string, scope: VerifiedOrganizationScope, opcoes: { completa?: boolean } = {}): Promise<void> {
     await releaseExpiredLeases();
 
     const leaseAcquired = await acquireLease(scope, jobId);
@@ -119,19 +96,19 @@ export class SyncService {
           etapa: 'clientes',
           proxima: 'produtos',
           field: 'clientes_processados',
-          action: () => this._syncClientes(scope, jobId, tenant, blingClient, progress),
+          action: () => this._syncClientes(scope, jobId, blingClient, progress),
         },
         {
           etapa: 'produtos',
           proxima: 'pedidos',
           field: 'produtos_processados',
-          action: () => this._syncProdutos(scope, jobId, tenant, blingClient, progress, opcoes.completa === true),
+          action: () => this._syncProdutos(scope, jobId, blingClient, progress, opcoes.completa === true),
         },
         {
           etapa: 'pedidos',
           proxima: 'concluido',
           field: 'pedidos_processados',
-          action: () => this._syncPedidos(scope, jobId, tenant, blingClient, progress, opcoes.completa === true),
+          action: () => this._syncPedidos(scope, jobId, blingClient, progress, opcoes.completa === true),
         },
       ];
 
@@ -155,14 +132,14 @@ export class SyncService {
     }
   }
 
-  async getJobStatus(jobId: string, context: ActorContext): Promise<SyncJob | null> {
-    return getJobStatus(await this.resolveScope(context), jobId);
+  async getJobStatus(jobId: string, scope: VerifiedOrganizationScope): Promise<SyncJob | null> {
+    return getJobStatus(scope, jobId);
   }
 
-  async syncAll(context: ActorContext): Promise<SyncAllResult> {
-    const { jobId } = await this.enqueueSync(context);
-    await this.processJob(jobId, context);
-    const status = await this.getJobStatus(jobId, context);
+  async syncAll(scope: VerifiedOrganizationScope): Promise<SyncAllResult> {
+    const { jobId } = await this.enqueueSync(scope);
+    await this.processJob(jobId, scope);
+    const status = await this.getJobStatus(jobId, scope);
 
     return {
       success: status?.status === 'completed',
@@ -183,7 +160,6 @@ export class SyncService {
   private async _syncClientes(
     scope: VerifiedOrganizationScope,
     jobId: string,
-    tenant: VerifiedTenant,
     blingClient: BlingPort,
     progress: SyncJobProgress,
   ): Promise<number> {
@@ -209,7 +185,7 @@ export class SyncService {
         },
       );
 
-      await touchSyncState(scope.organizationId, tenant.id, 'clientes');
+      await touchSyncState(scope.organizationId, scope.actorId, 'clientes');
       return total;
     } catch (err: unknown) {
       // A etapa NAO devolve 0 numa falha. Devolver zero fazia o job
@@ -223,7 +199,6 @@ export class SyncService {
   private async _syncProdutos(
     scope: VerifiedOrganizationScope,
     jobId: string,
-    tenant: VerifiedTenant,
     blingClient: BlingPort,
     progress: SyncJobProgress,
     completa = false,
@@ -286,7 +261,7 @@ export class SyncService {
         },
       );
 
-      await touchSyncState(scope.organizationId, tenant.id, 'produtos');
+      await touchSyncState(scope.organizationId, scope.actorId, 'produtos');
       return total;
     } catch (err: unknown) {
       // A etapa NAO devolve 0 numa falha. Devolver zero fazia o job
@@ -300,7 +275,6 @@ export class SyncService {
   private async _syncPedidos(
     scope: VerifiedOrganizationScope,
     jobId: string,
-    tenant: VerifiedTenant,
     blingClient: BlingPort,
     progress: SyncJobProgress,
     completa = false,
@@ -370,7 +344,7 @@ export class SyncService {
         },
       );
 
-      await touchSyncState(scope.organizationId, tenant.id, 'pedidos');
+      await touchSyncState(scope.organizationId, scope.actorId, 'pedidos');
       return total;
     } catch (err: unknown) {
       // A etapa NAO devolve 0 numa falha. Devolver zero fazia o job
@@ -382,20 +356,10 @@ export class SyncService {
   }
 }
 
-export class SyncScopeDeniedError extends Error {
-  readonly _tag = 'SyncScopeDeniedError';
-  constructor() {
-    super('Escopo organizacional não verificado.');
-    this.name = 'SyncScopeDeniedError';
-  }
-}
-
-export class SyncAuthorizationStoreUnavailableError extends Error {
-  readonly _tag = 'SyncAuthorizationStoreUnavailableError';
-  constructor() {
-    super('Serviço de autorização temporariamente indisponível.');
-    this.name = 'SyncAuthorizationStoreUnavailableError';
-  }
-}
+// `SyncScopeDeniedError` e `SyncAuthorizationStoreUnavailableError` foram
+// removidas no Ticket 22. Elas existiam para o serviço contar à rota uma
+// negação de autorização por exceção; agora a autorização acontece antes, na
+// fronteira HTTP, que responde 403 e 503 direto. Um erro que sai daqui é falha
+// de sincronização, não de permissão — e a rota não precisa mais distinguir.
 
 export const syncService = new SyncService();

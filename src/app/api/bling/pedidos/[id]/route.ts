@@ -1,5 +1,4 @@
-import { resolveActorContext } from '@/lib/auth';
-import { toVerifiedOrganizationScope } from '@/lib/verifiedScopeFromTenant';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { bling } from '@/services/bling';
 import {
@@ -29,33 +28,28 @@ async function callProvider<T>(operation: () => Promise<T>): Promise<OrderProvid
 
 
 const orderStore: OrderStore = {
-  async findByExternalId(tenant, externalId) {
-    const scope = await toVerifiedOrganizationScope(tenant);
+  async findByExternalId(scope, externalId) {
     const pedido = await pedidoRepository.getByBlingId(scope, externalId);
     return pedido
       ? { externalId: pedido.bling_id, localValue: pedido }
       : null;
   },
-  async deleteByExternalId(tenant, externalId) {
-    const scope = await toVerifiedOrganizationScope(tenant);
+  async deleteByExternalId(scope, externalId) {
     await pedidoRepository.deleteByBlingId(scope, externalId);
   },
 };
 
 const orderProvider: OrderProvider = {
-  async read(tenant, externalId) {
-    const scope = await toVerifiedOrganizationScope(tenant);
+  async read(scope, externalId) {
     const result = await callProvider(() => bling.forVerifiedOrganization(scope).getPedido(externalId));
     return result._tag === 'OrderProviderSucceeded' && result.value === null
       ? { _tag: 'OrderProviderNotFound' }
       : result;
   },
-  async update(tenant, externalId, changes) {
-    const scope = await toVerifiedOrganizationScope(tenant);
+  async update(scope, externalId, changes) {
     return callProvider(() => bling.forVerifiedOrganization(scope).updatePedido(externalId, changes));
   },
-  async remove(tenant, externalId) {
-    const scope = await toVerifiedOrganizationScope(tenant);
+  async remove(scope, externalId) {
     const result = await callProvider(() => bling.forVerifiedOrganization(scope).deletePedido(externalId));
     return result._tag === 'OrderProviderSucceeded'
       ? { _tag: 'OrderProviderSucceeded', value: undefined }
@@ -64,9 +58,7 @@ const orderProvider: OrderProvider = {
 };
 
 const handlers = createOrderByIdHandlers({
-  resolveActor(request, capability) {
-    return resolveActorContext(request, capability);
-  },
+  resolveScope: resolveVerifiedOrganizationScope,
   orders: new OrderAccess(orderStore, orderProvider),
 });
 

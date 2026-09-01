@@ -1,9 +1,8 @@
 import { z } from 'zod';
 
-import { resolveActorContext } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { bling } from '@/services/bling';
-import { toVerifiedOrganizationScope } from '@/lib/verifiedScopeFromTenant';
+import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import {
   CategoryCatalog,
   type CategorySource,
@@ -20,8 +19,7 @@ const categoryRowsSchema = z.array(z.object({
 }));
 
 const categorySource: CategorySource = {
-  async fetchPage(tenant, page, pageSize) {
-    const scope = await toVerifiedOrganizationScope(tenant);
+  async fetchPage(scope, page, pageSize) {
     const categories = await bling.forVerifiedOrganization(scope).getCategoriasProdutos(page, pageSize);
     return categories.map((category) => ({
       blingId: String(category.id),
@@ -34,11 +32,11 @@ const categorySource: CategorySource = {
 };
 
 const categoryStore: CategoryStore = {
-  async list(tenant) {
+  async list(scope) {
     const { data, error } = await supabaseServer
       .from('categorias')
       .select('id, bling_id, descricao, categoria_pai_id')
-      .eq('user_id', tenant.id)
+      .eq('organizacao_id', scope.organizationId)
       .order('descricao', { ascending: true });
 
     if (error) throw error;
@@ -51,23 +49,27 @@ const categoryStore: CategoryStore = {
     }));
   },
 
-  async upsertAll(tenant, categories) {
+  async upsertAll(scope, categories) {
+    // Ticket 22 — era `user_id: tenant.id` com `onConflict: 'user_id, bling_id'`:
+    // o modelo de tenancy por usuário, vivo num caminho de **escrita**. A chave
+    // passa a ser a organização, que é o que `uq_categorias_org_bling` indexa —
+    // e a guarda `upsert-conflito-inferivel` confere os dois lados.
     const payload = categories.map((category) => ({
-      user_id: tenant.id,
+      organizacao_id: scope.organizationId,
       bling_id: category.blingId,
       descricao: category.description,
       categoria_pai_id: category.parentBlingId,
     }));
     const { error } = await supabaseServer
       .from('categorias')
-      .upsert(payload, { onConflict: 'user_id, bling_id' });
+      .upsert(payload, { onConflict: 'organizacao_id, bling_id' });
 
     if (error) throw error;
   },
 };
 
 const handlers = createCategoryHandlers({
-  resolveActor: resolveActorContext,
+  resolveScope: resolveVerifiedOrganizationScope,
   catalog: new CategoryCatalog(categorySource, categoryStore),
 });
 

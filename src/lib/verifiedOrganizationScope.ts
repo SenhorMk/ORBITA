@@ -1,6 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
-import type { OrganizationContext } from './organizationAuthorization';
+import {
+  organizationCapabilitiesForRole,
+  type OrganizationCapability,
+  type OrganizationContext,
+} from './organizationAuthorization';
 
 const verifiedOrganizationScopeBrand: unique symbol = Symbol('VerifiedOrganizationScope');
 const organizationActorSchema = z.object({
@@ -65,4 +69,23 @@ export async function verifyOrganizationScope(
       [verifiedOrganizationScopeBrand]: true,
     },
   };
+}
+
+/**
+ * A capacidade que o papel do escopo já verificado concede.
+ *
+ * Existe para as rotas que faziam `session.role !== 'dono'`: aquele papel vinha
+ * de `app_metadata`, do modelo antigo de tenancy por usuário, e não dizia nada
+ * sobre o papel da pessoa *na organização*. A pergunta certa é sobre a
+ * capacidade, e a fonte certa é o vínculo persistido (Ticket 22).
+ *
+ * Mora aqui, e não em `requestOrganizationContext`, porque aquele módulo
+ * constrói o cliente Supabase no load: um adaptador HTTP não deve carregar
+ * conexão de banco só para perguntar o que um papel pode fazer.
+ */
+export function escopoTemCapacidade(
+  scope: VerifiedOrganizationScope,
+  capability: OrganizationCapability,
+): boolean {
+  return organizationCapabilitiesForRole(scope.role).has(capability);
 }
