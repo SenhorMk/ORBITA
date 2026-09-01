@@ -3,27 +3,35 @@ import { produtoRepository } from '@/repositories/produtoRepository';
 import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
 import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
-import { descreverErro } from '@/lib/erroLegivel';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 
-/** Best-effort remote delete: local deletion must proceed even if the Bling side fails. */
+/**
+ * Exclusão remota best-effort: a exclusão local segue mesmo se o Bling falhar.
+ *
+ * Devolve **se falhou**, e não *por que* falhou: o motivo ia parar em `logs`,
+ * que volta ao cliente numa resposta 200.
+ */
 async function attemptBlingProductDelete(
   blingClient: BlingPort,
   blingId: string | undefined,
   logEntries: string[],
-): Promise<string | null> {
+): Promise<boolean> {
   if (!blingId || !/^\d+$/.test(blingId)) {
     logEntries.push(`[${new Date().toISOString()}] ℹ️ O produto não possuía um ID numérico no Bling, exclusão remota ignorada.`);
-    return null;
+    return false;
   }
   logEntries.push(`[${new Date().toISOString()}] 🔄 Deletando produto no Bling ERP v3...`);
   try {
     await blingClient.deleteProduto(blingId);
     logEntries.push(`[${new Date().toISOString()}] ✅ Produto deletado no Bling ERP com sucesso!`);
-    return null;
+    return false;
   } catch (deleteErr: unknown) {
-    const blingError = descreverErro(deleteErr);
-    logEntries.push(`[${new Date().toISOString()}] ⚠️ Falha ao deletar no Bling (pode já ter sido excluído): ${blingError}`);
-    return blingError;
+    // Mesmo vazamento do `clientes/delete`, e no mesmo formato: `logs` volta ao
+    // cliente numa resposta 200, e esta linha levava a causa dentro. O que sai
+    // é que falhou; o porquê fica no log.
+    registrarFalhaInterna('produtos.delete.bling', deleteErr);
+    logEntries.push(`[${new Date().toISOString()}] ⚠️ Falha ao deletar no Bling (pode já ter sido excluído).`);
+    return true;
   }
 }
 
@@ -54,7 +62,7 @@ export async function POST(request: Request) {
     logEntries.push(`[${timestamp}] 🗑️ Processando exclusão do produto: "${nome || id}" (ID Bling: ${bling_id || 'N/A'})`);
 
     // 1. Tentar deletar no Bling ERP v3 (se tiver um bling_id numérico válido)
-    const blingError = await attemptBlingProductDelete(blingClient, bling_id, logEntries);
+    const falhouNoBling = await attemptBlingProductDelete(blingClient, bling_id, logEntries);
 
     // 2. Deletar do banco Supabase
     logEntries.push(`[${new Date().toISOString()}] 💾 Excluindo registro do banco Supabase...`);
@@ -62,26 +70,23 @@ export async function POST(request: Request) {
       await produtoRepository.delete(scope, id);
       logEntries.push(`[${new Date().toISOString()}] ✅ Registro excluído do Supabase!`);
     } catch (dbErr: unknown) {
-      const dbErrMsg = descreverErro(dbErr);
-      logEntries.push(`[${new Date().toISOString()}] ❌ ERRO SUPABASE: ${dbErrMsg}`);
+      logEntries.push(`[${new Date().toISOString()}] ❌ Falha ao excluir o registro no Supabase.`);
+      // Ticket 22, critério 13 — `details` e `logs` levavam o diagnóstico do
+      // banco ao cliente (CWE-209), e eram inertes atrás do 401 legado.
+      registrarFalhaInterna('produtos.delete.supabase', dbErr, { organizacaoId: scope.organizationId });
       return NextResponse.json(
-        {
-          success: false,
-          error: 'Falha ao deletar no banco de dados Supabase.',
-          details: dbErrMsg,
-          logs: logEntries,
-        },
+        { success: false, error: 'Falha ao deletar no banco de dados Supabase.' },
         { status: 500 }
       );
     }
 
-    if (blingError) {
+    if (falhouNoBling) {
+      // O aviso continua: o produto saiu daqui e não de lá, e quem chamou
+      // precisa saber. O que sai é o fato, não o texto do erro.
       return NextResponse.json({
         success: true,
         warning: true,
         error: 'Produto excluído localmente, mas falhou ao tentar deletar na API do Bling ERP.',
-        details: blingError,
-        logs: logEntries,
       });
     }
 
@@ -91,15 +96,10 @@ export async function POST(request: Request) {
       logs: logEntries,
     });
   } catch (err: unknown) {
-    const errMessage = descreverErro(err);
-    logEntries.push(`[${new Date().toISOString()}] 💥 ERRO CRÍTICO NA API DE EXCLUSÃO DE PRODUTOS: ${errMessage}`);
+    logEntries.push(`[${new Date().toISOString()}] 💥 Erro crítico ao processar a exclusão do produto.`);
+    registrarFalhaInterna('produtos.delete', err);
     return NextResponse.json(
-      {
-        success: false,
-        error: 'Erro crítico interno ao processar a exclusão do produto.',
-        details: errMessage,
-        logs: logEntries,
-      },
+      { success: false, error: MENSAGEM_PUBLICA_DE_FALHA },
       { status: 500 }
     );
   }

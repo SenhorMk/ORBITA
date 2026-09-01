@@ -5,7 +5,8 @@ import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
-import { descreverErro } from '@/lib/erroLegivel';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
+import { logger } from '@/lib/observability/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +39,11 @@ async function emitNfeWithLock(
     .maybeSingle();
 
   if (nfeError) {
-    return NextResponse.json({ success: false, error: nfeError.message }, { status: 500 });
+    // Ticket 22, critério 13 — `nfeError` é um `PostgrestError`, e `message`
+    // carrega texto do Postgres: nome de constraint, e num conflito de
+    // unicidade o próprio valor da linha. Ia inteiro para o cliente.
+    registrarFalhaInterna('nfe.consultar_documento', nfeError, { organizacaoId: scope.organizationId });
+    return NextResponse.json({ success: false, error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 
   if (nfeExistente) {
@@ -59,11 +64,38 @@ async function emitNfeWithLock(
   const nfeStatus = nfeData.status ?? nfeData.situacao ?? 'Emitida';
 
   if (!nfeBlingId || !nfeNumero) {
-    console.error('[nfe] Resposta do Bling sem identificador/numero esperados:', JSON.stringify(nfeResult));
+    // Ticket 22, critério 13 — aqui saíam **duas** cópias do documento fiscal:
+    // `JSON.stringify(nfeResult)` no log e `raw: nfeResult` na resposta. É o
+    // corpo de uma NF-e: destinatário, itens, valores. Nada disso é
+    // diagnóstico, e nada disso pode sair — nem ao cliente, nem ao log.
+    //
+    // O que ajuda a diagnosticar é **qual campo faltou**, e é a única coisa que
+    // fica: os nomes das chaves que vieram, sem um único valor.
+    // Indicadores **fechados**, dos campos que este código espera — e nada
+    // derivado da resposta.
+    //
+    // A primeira correção registrava `Object.keys(...)` da resposta, o que
+    // parecia seguro por não ter valores. Não é: nome de propriedade também é
+    // dado que vem de fora, e um provedor que devolva um objeto com chaves
+    // dinâmicas colocaria conteúdo arbitrário no log por essa porta. O que sai
+    // é uma lista de booleanos escrita aqui.
+    logger.error('nfe.resposta_do_bling_sem_identificador', {
+      subsystem: 'app',
+      provider: 'bling',
+      organizacaoId: scope.organizationId,
+      envelopadoEmData: nfeData !== nfeResult,
+      temIdentificador: nfeBlingId.length > 0,
+      temNumero: String(nfeNumero).length > 0,
+      temChave: nfeChave !== null,
+      temStatus: nfeStatus !== 'Emitida',
+    });
+    // A resposta diz o que aconteceu e onde procurar. O pedido no Bling é o que
+    // permite achar a nota — e ele veio do próprio chamador.
     return NextResponse.json({
       success: false,
-      error: 'NF-e emitida no Bling, mas resposta inválida. Reconciliação manual necessária.',
-      raw: nfeResult,
+      error: 'NF-e emitida no Bling, mas a resposta não trouxe número ou identificador. Reconciliação manual necessária.',
+      compensation_required: true,
+      bling_pedido_id: blingPedidoId,
     }, { status: 502 });
   }
 
@@ -89,8 +121,14 @@ async function emitNfeWithLock(
 
     return NextResponse.json({ success: true, data: nfeCache });
   } catch (dbError: unknown) {
-    const dbErrMsg = descreverErro(dbError);
-    console.error('❌ CRÍTICO: NF-e emitida com sucesso no Bling, mas ocorreu uma falha ao atualizar o banco local!', dbError);
+    // A nota existe no Bling e não existe aqui: é o único caminho que exige
+    // ação humana, e por isso ele continua dizendo **o quê e onde** — número,
+    // chave e id da nota são o que permite reconciliar.
+    //
+    // Ticket 22, critério 13 — o que sai é `db_error`: a mensagem do banco não
+    // ajuda a reconciliar nada e é diagnóstico interno (CWE-209). Ela passa a
+    // ficar só no log.
+    registrarFalhaInterna('nfe.persistir', dbError, { organizacaoId: scope.organizationId });
     return NextResponse.json({
       success: false,
       error: 'Nota fiscal foi gerada com sucesso no ERP Bling, porém ocorreu um erro ao salvar o registro no banco local. Pendente reconciliação manual.',
@@ -98,7 +136,6 @@ async function emitNfeWithLock(
       bling_nfe_id: nfeBlingId,
       numero: String(nfeNumero),
       chave: nfeChave,
-      db_error: dbErrMsg
     }, { status: 500 });
   }
 }
@@ -142,10 +179,10 @@ export async function POST(request: Request) {
         const blingClient = bling.forVerifiedOrganization(scope);
         return await emitNfeWithLock(scope, pedidoId, blingPedidoId, blingClient);
       } catch (error: unknown) {
-        console.error('Erro na emissão de NF-e:', error);
-        const errMsg = error instanceof Error ? error.message : 'Falha ao emitir nota fiscal no ERP';
+        // Ticket 22, critério 13 — CWE-209 inerte atrás do 401 legado.
+        registrarFalhaInterna('nfe.emitir', error, { organizacaoId: scope.organizationId });
         return NextResponse.json(
-          { success: false, error: errMsg },
+          { success: false, error: 'Falha ao emitir nota fiscal no ERP' },
           { status: 500 }
         );
       } finally {
@@ -159,10 +196,9 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: true, data: { status: 'mock' } });
     }
   } catch (error: unknown) {
-    console.error('Erro na emissão de NF-e:', error);
-    const errMsg = error instanceof Error ? error.message : 'Falha ao processar solicitação';
+    registrarFalhaInterna('nfe.processar', error);
     return NextResponse.json(
-      { success: false, error: errMsg },
+      { success: false, error: MENSAGEM_PUBLICA_DE_FALHA },
       { status: 500 }
     );
   }

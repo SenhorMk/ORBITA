@@ -14,6 +14,7 @@ const SRC_DIR = path.join(ROOT_DIR, 'src');
  * 2. src/repositories NÃO devem importar de src/services (camada inferior não depende da superior).
  * 3. Rotas em src/app/api NÃO devem importar internals não públicos de serviços quando existir API consolidada.
  * 4. Nenhuma rota deve usar os seams de tenancy por usuário (Tickets 20 e 22).
+ * 5. Nenhum código de produção deve chamar `resolveTenantOrgId` (Ticket 22, fatia C).
  */
 
 /**
@@ -28,12 +29,7 @@ const SRC_DIR = path.join(ROOT_DIR, 'src');
  * `authorizeRequestOrganizationCapability` quando a organização vem da URL, ou
  * `resolveAuthenticatedIdentity` onde não deve haver exigência de vínculo.
  */
-const ROTAS_COM_DISTINCAO_DE_AUTORIZACAO = [
-  // Ticket 22, fatia B: nenhuma rota consome mais os seams legados, então a
-  // regra passou a cobrir `src/app/api/` inteiro em vez de uma lista que
-  // crescia a cada fatia.
-  'src/app/api/',
-];
+const ROTAS_COM_DISTINCAO_DE_AUTORIZACAO = ['src/app/api/'];
 
 /** Os dois seams que resolvem papel por `app_metadata` (Tickets 20 e 22). */
 const SEAMS_LEGADOS = /\b(?:verifySessionAndRole|resolveActorContext)\b/u;
@@ -42,6 +38,85 @@ const SEAMS_LEGADOS = /\b(?:verifySessionAndRole|resolveActorContext)\b/u;
 export function violaDistincaoDeAutorizacao(relativePath, line) {
   const naFronteira = ROTAS_COM_DISTINCAO_DE_AUTORIZACAO.some((prefixo) => relativePath.startsWith(prefixo));
   return naFronteira && SEAMS_LEGADOS.test(line);
+}
+
+/**
+ * `resolveTenantOrgId` ainda devolve o `userId` como organização quando não acha
+ * vínculo — é a última linha do modelo de tenancy por usuário. Ela sobreviveu à
+ * fatia C do Ticket 22 por decisão de revisão, com zero chamadores de produção,
+ * e o destino dela é o ticket 25.
+ *
+ * Enquanto existir, não pode ganhar chamador novo. Só o próprio arquivo que a
+ * define pode nomeá-la; testes ficam livres, porque são eles que decidem o
+ * destino dela.
+ */
+const ARQUIVO_QUE_DEFINE_O_RESOLVEDOR_LEGADO = 'src/lib/organizationContext.ts';
+
+/** Uma linha de produção que ganharia um chamador novo do resolvedor legado. */
+export function violaResolvedorLegado(relativePath, line) {
+  if (relativePath === ARQUIVO_QUE_DEFINE_O_RESOLVEDOR_LEGADO) return false;
+  return /\bresolveTenantOrgId\b/u.test(line);
+}
+
+/**
+ * Todas as regras de linha, num lugar só.
+ *
+ * Elas moram aqui, e não dentro do varredor, por um motivo que esta série já
+ * pagou caro: uma regra exportada e provada linha a linha **não prova nada sobre
+ * o portão**. `violaResolvedorLegado` era assim — cinco asserções verdes, e o
+ * verificador nunca a chamava. Com as regras reunidas num ponto só, esquecer de
+ * ligar uma passa a ser visível, e a ligação fica testável sem tocar no disco.
+ *
+ * @returns As violações desta linha, cada uma com a regra e a mensagem.
+ */
+export function violacoesDaLinha(relativePath, line) {
+  const violacoes = [];
+  const isService = relativePath.startsWith('src/services/');
+  const isRepository = relativePath.startsWith('src/repositories/');
+
+  // 1. Repositories e Services não devem importar Next.js/React framework internals
+  if (isService || isRepository) {
+    if (/import\s+.*from\s+['"]next\/(server|navigation|headers)['"]/u.test(line)) {
+      violacoes.push({
+        rule: 'domain-isolation',
+        message: `Serviço/Repositório não deve depender de internals do Next.js: ${line.trim()}`,
+      });
+    }
+    if (/import\s+.*from\s+['"]react['"]/u.test(line)) {
+      violacoes.push({
+        rule: 'domain-isolation',
+        message: `Serviço/Repositório não deve depender de React: ${line.trim()}`,
+      });
+    }
+  }
+
+  // 2. Repositories não devem importar Services (inversão de camada)
+  if (isRepository && /import\s+.*from\s+['"]@\/services/u.test(line)) {
+    violacoes.push({
+      rule: 'layer-inversion',
+      message: `Repositório não deve importar da camada de serviços: ${line.trim()}`,
+    });
+  }
+
+  // 4. Nenhuma rota pode voltar aos seams de tenancy por usuário (20 e 22)
+  if (violaDistincaoDeAutorizacao(relativePath, line)) {
+    violacoes.push({
+      rule: 'authorization-distinction',
+      message:
+        'Rota não deve usar `verifySessionAndRole` nem `resolveActorContext`: os dois resolvem papel por `app_metadata`, que nenhum fluxo atual escreve — e o primeiro devolve `null` tanto para "sem sessão" quanto para "sem vínculo", colapsando 403 em 401. Use `resolveVerifiedOrganizationScope` ou `authorizeRequestOrganizationCapability`.',
+    });
+  }
+
+  // 5. `resolveTenantOrgId` não pode ganhar chamador novo (22, fatia C)
+  if (violaResolvedorLegado(relativePath, line)) {
+    violacoes.push({
+      rule: 'tenancy-legacy-resolver',
+      message:
+        'Nenhum código de produção deve chamar `resolveTenantOrgId`: sem vínculo ela devolve o próprio `userId` como organização — a última linha do modelo de tenancy por usuário. Use `resolveVerifiedOrganizationScope` ou `authorizeRequestOrganizationCapability`. O destino dela é o ticket 25.',
+    });
+  }
+
+  return violacoes;
 }
 
 export function checkModuleBoundaries(baseDir = SRC_DIR) {
@@ -63,56 +138,11 @@ export function checkModuleBoundaries(baseDir = SRC_DIR) {
 
   function checkFile(filePath) {
     const relativePath = path.relative(ROOT_DIR, filePath).replace(/\\/g, '/');
-    const content = fs.readFileSync(filePath, 'utf8');
-    const lines = content.split('\n');
-
-    const isService = relativePath.startsWith('src/services/');
-    const isRepository = relativePath.startsWith('src/repositories/');
+    const lines = fs.readFileSync(filePath, 'utf8').split('\n');
 
     lines.forEach((line, index) => {
-      const lineNum = index + 1;
-
-      // 1. Repositories e Services não devem importar Next.js/React framework internals
-      if (isService || isRepository) {
-        if (/import\s+.*from\s+['"]next\/(server|navigation|headers)['"]/u.test(line)) {
-          violations.push({
-            file: relativePath,
-            line: lineNum,
-            rule: 'domain-isolation',
-            message: `Serviço/Repositório não deve depender de internals do Next.js: ${line.trim()}`,
-          });
-        }
-        if (/import\s+.*from\s+['"]react['"]/u.test(line)) {
-          violations.push({
-            file: relativePath,
-            line: lineNum,
-            rule: 'domain-isolation',
-            message: `Serviço/Repositório não deve depender de React: ${line.trim()}`,
-          });
-        }
-      }
-
-      // 2. Repositories não devem importar Services (inversão de camada)
-      if (isRepository) {
-        if (/import\s+.*from\s+['"]@\/services/u.test(line)) {
-          violations.push({
-            file: relativePath,
-            line: lineNum,
-            rule: 'layer-inversion',
-            message: `Repositório não deve importar da camada de serviços: ${line.trim()}`,
-          });
-        }
-      }
-
-      // 4. Nenhuma rota pode voltar aos seams de tenancy por usuário (20 e 22)
-      if (violaDistincaoDeAutorizacao(relativePath, line)) {
-        violations.push({
-          file: relativePath,
-          line: lineNum,
-          rule: 'authorization-distinction',
-          message:
-            'Rota não deve usar `verifySessionAndRole` nem `resolveActorContext`: os dois resolvem papel por `app_metadata`, que nenhum fluxo atual escreve — e o primeiro devolve `null` tanto para "sem sessão" quanto para "sem vínculo", colapsando 403 em 401. Use `resolveVerifiedOrganizationScope` ou `authorizeRequestOrganizationCapability`.',
-        });
+      for (const violacao of violacoesDaLinha(relativePath, line)) {
+        violations.push({ file: relativePath, line: index + 1, ...violacao });
       }
     });
   }

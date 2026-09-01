@@ -13,6 +13,8 @@ import { TituloFinanceiro } from '@/types';
 import { organizationContextToScope } from '@/lib/verifiedOrganizationScope';
 import type { BlingCallResult } from '@/lib/integrations/bling/pedidoVendaContract';
 
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
+
 import {
   createDespesaHandler,
   type DespesaAuthPort,
@@ -55,10 +57,12 @@ export async function GET(request: Request) {
     });
 
   } catch (error: unknown) {
-    console.error('Erro no GET /api/financeiro:', error);
-    const errMsg = error instanceof Error ? error.message : 'Erro interno';
+    // Ticket 22, critério 13 — inerte atrás do 401 legado, devolvia a mensagem
+    // do erro ao cliente (CWE-209). Diagnóstico no log, frase pública fixa na
+    // resposta.
+    registrarFalhaInterna('financeiro.listar', error);
     return NextResponse.json(
-      { success: false, error: errMsg },
+      { success: false, error: MENSAGEM_PUBLICA_DE_FALHA },
       { status: 500 }
     );
   }

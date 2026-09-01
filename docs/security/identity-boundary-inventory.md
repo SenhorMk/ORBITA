@@ -1,5 +1,24 @@
 # Inventário de fronteiras de identidade (Ticket 07)
 
+
+> **Superado em partes pelo Ticket 22, fatia C (01/09/2026).**
+>
+> `verifySessionAndRole`, `resolveActorContext`, `actorContextDenialStatus`,
+> `resolveLegacyMembership` e os tipos `ActorContext`/`ActorCapability`/
+> `ActorRole`/`AuthSession` **não existem mais**: resolviam papel a partir de
+> `app_metadata.role`, campo que nenhum fluxo escreve, e foram removidos depois
+> que as 19 fronteiras migraram para `membros_organizacao`. Onde este documento
+> os descreve como ativos, o texto é **snapshot histórico**.
+>
+> A autoridade atual é `resolveVerifiedOrganizationScope` /
+> `authorizeRequestOrganizationCapability`, com `resolveAuthenticatedIdentity`
+> apenas para identidade. A guarda `authorization-distinction` do
+> `boundaries:check` cobre `src/app/api/` inteiro.
+>
+> Ressalva: `resolveTenantOrgId` continua existindo e ainda devolve o `userId`
+> como organização quando não acha vínculo. Tem zero chamadores de produção, e a
+> regra `tenancy-legacy-resolver` impede que ganhe algum. Destino no ticket 25.
+
 Levantado por busca reproduzível (`rg`) sobre `verifySessionAndRole`, `resolveAuthenticatedIdentity`,
 `resolveActorContext`, `resolveActiveRequestOrganizationContext`, `resolveRequestOrganizationContext`,
 `app_metadata`, `getSession`, `getUser`, cookies, `redirect` e state OAuth, em 2026-08-27.

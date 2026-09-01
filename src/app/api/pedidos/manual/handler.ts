@@ -7,7 +7,7 @@ import {
 } from '@/lib/config/manualOrderContract';
 import { pedidoVendaPayloadSchema, type PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
-import { descreverErro } from '@/lib/erroLegivel';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 
 import type {
   ManualOrderCliente,
@@ -280,10 +280,16 @@ async function compensarNoBling(
   error: unknown,
   deps: ManualOrderDependencies,
 ): Promise<NextResponse> {
-  const causa = descreverErro(error);
+  // Ticket 22, critério 13 — `causa` é `descreverErro` do erro do banco, e ela
+  // ia inteira para o cliente. Não ajuda a reconciliar nada e é diagnóstico
+  // interno (CWE-209): passa a ficar só no log. O que permite agir — o id do
+  // pedido no Bling e a instrução — continua na resposta.
+  registrarFalhaInterna('pedidos.manual.registrar', error);
 
   if (blingPedidoId === null) {
-    return fail(`Falha ao registrar a venda no ORBITA: ${causa}.`, 500, { blingPedidoId });
+    // Nada foi criado no Bling: não há o que reconciliar, e não há o que dizer
+    // além de que falhou.
+    return fail(MENSAGEM_PUBLICA_DE_FALHA, 500, { blingPedidoId });
   }
 
   const compensacao = await deps.bling.cancelarPedidoVenda(blingPedidoId);
@@ -291,7 +297,11 @@ async function compensarNoBling(
     // As duas metades falharam. É o único caminho que exige ação humana, e por
     // isso ele diz exatamente o quê, onde e por quê.
     return fail(
-      `Falha ao registrar a venda no ORBITA: ${causa}. O pedido ${blingPedidoId} foi criado no Bling e o `
+      `Falha ao registrar a venda no ORBITA. O pedido ${blingPedidoId} foi criado no Bling e o `
+        // A razão vem do **Bling**, não daqui: é ela que diz por que o
+        // cancelamento automático não funcionou, e é o que a pessoa precisa
+        // saber para resolver à mão. Mensagem de provedor externo não é
+        // diagnóstico interno, e sai de propósito.
         + `cancelamento automático também falhou (${compensacao.failure.message}). `
         + 'Cancele o pedido no Bling antes de tentar de novo, senão a próxima tentativa cria outro.',
       500,
@@ -300,7 +310,7 @@ async function compensarNoBling(
   }
 
   return fail(
-    `Falha ao registrar a venda no ORBITA: ${causa}. O pedido ${blingPedidoId} foi cancelado no Bling `
+    `Falha ao registrar a venda no ORBITA. O pedido ${blingPedidoId} foi cancelado no Bling `
       + 'automaticamente, então nada ficou pendente lá. Pode tentar de novo.',
     500,
     { blingPedidoId, compensado: true },

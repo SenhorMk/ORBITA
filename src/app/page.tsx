@@ -79,24 +79,33 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { format, subDays, isAfter, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
+import {
+  usePapelNaOrganizacaoAtiva,
+  type SelecaoDeOrganizacao,
+} from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
+import { useStartupPorOrganizacao } from '@/components/organizacao/useStartupPorOrganizacao';
 import { descreverErro } from '@/lib/erroLegivel';
 
-// Tipo de Usuário Logado
+/**
+ * Identidade do usuário logado — **e nada além disso**.
+ *
+ * Ticket 22, fatia C: este tipo carregava um `role` que a própria tela inventava,
+ * a partir de `app_metadata.role`, da substring `dono` no e-mail, do e-mail fixo
+ * `admin@haux.com.br` e do que estivesse no `localStorage`. Nenhuma dessas
+ * fontes é autoridade, e as três primeiras davam aparência de proprietário a
+ * quem não é. O papel agora vem do vínculo persistido, por
+ * `usePapelNaOrganizacaoAtiva`.
+ */
 interface UserSession {
   email: string;
-  role: 'dono' | 'colaborador';
   name: string;
 }
 
-/** Deriva a sessão de usuário Orbita a partir de um usuário autenticado do Supabase. */
+/** Deriva a identidade Orbita a partir de um usuário autenticado do Supabase. */
 function deriveUserSession(user: SupabaseUser): UserSession {
-  const isOwner = user.app_metadata?.role === 'dono' ||
-    user.email?.includes('dono') ||
-    user.email === 'admin@haux.com.br';
   return {
     email: user.email || '',
     name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'Usuário',
-    role: isOwner ? 'dono' : 'colaborador',
   };
 }
 
@@ -248,7 +257,21 @@ export default function Home() {
     }
     return null;
   });
-  const isOwner = session?.role === 'dono';
+  // Organização ativa (Ticket 24b): resolvida pelo servidor via OrganizationPanel,
+  // nunca escolhida localmente. Escopa a leitura de plano/limites — e, desde a
+  // revisão do #66, também invalida a autoridade visual sobre papel na troca.
+  const [selecaoDeOrganizacao, setSelecaoDeOrganizacao] = useState<SelecaoDeOrganizacao | null>(null);
+  const activeOrganizacaoId = selecaoDeOrganizacao?.id ?? null;
+
+  // Autoridade única sobre papel: o vínculo persistido, lido do servidor, para
+  // o par (sessão, organização ativa). Trocar qualquer um dos dois invalida o
+  // papel anterior antes de a resposta nova chegar.
+  const { podeGerir, organizacaoId: organizacaoConfirmada } = usePapelNaOrganizacaoAtiva(
+    fetchWithAuth,
+    session?.email ?? null,
+    selecaoDeOrganizacao,
+  );
+  const isOwner = podeGerir;
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -258,8 +281,13 @@ export default function Home() {
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [selectedClienteModal, setSelectedClienteModal] = useState<Cliente | null>(null);
   const [isClienteModalOpen, setIsClienteModalOpen] = useState(false);
-  const [showStartupLoader, setShowStartupLoader] = useState(false);
-  const [hasStartedUp, setHasStartedUp] = useState(false);
+  // A inicialização é **por organização confirmada**, e só de quem administra.
+  // Era um booleano global ao lado de um papel que só conhecia a sessão: quem
+  // iniciava em A e trocava para B nunca via a inicialização de B, porque o
+  // estado de A continuava valendo (revisão do #66).
+  const { mostrarCarregador: showStartupLoader, encerrar: encerrarStartup } =
+    useStartupPorOrganizacao(podeGerir, organizacaoConfirmada);
+
 
   const handleOpenProductModal = (produto: Produto) => {
     setSelectedProdutoModal(produto);
@@ -270,10 +298,6 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<
     'dashboard' | 'sales' | 'inventory' | 'contacts' | 'finance' | 'sac' | 'organization' | 'integrations' | 'billing'
   >('dashboard');
-
-  // Organização ativa (Ticket 24b): resolvida pelo servidor via OrganizationPanel,
-  // nunca escolhida localmente. Usada apenas para escopar a leitura de plano/limites.
-  const [activeOrganizacaoId, setActiveOrganizacaoId] = useState<string | null>(null);
 
   // Estados para filtros e ordenação na aba Vendas
   const [filterDays, setFilterDays] = useState<string>('all');
@@ -680,6 +704,20 @@ export default function Home() {
     }
   }, []);
 
+  // Identidade estável, e não funções inline. O `StartupLoader` já não reinicia
+  // por causa dos desfechos — ele os guarda numa referência —, mas passar função
+  // nova a cada render o re-renderizaria à toa, e devolveria ao componente a
+  // responsabilidade de se defender sozinho (revisão do head `d5a17c0`).
+  const concluirStartup = useCallback(() => {
+    encerrarStartup();
+    void loadDashboardData();
+  }, [encerrarStartup, loadDashboardData]);
+
+  const reautenticarBling = useCallback(() => {
+    encerrarStartup();
+    setActiveTab('integrations');
+  }, [encerrarStartup]);
+
   useEffect(() => {
     let isMounted = true;
     void (async () => {
@@ -698,16 +736,6 @@ export default function Home() {
     };
   }, [session, loadDashboardData]);
 
-  useEffect(() => {
-    if (session?.role === 'dono' && !hasStartedUp) {
-      const timer = setTimeout(() => {
-        setShowStartupLoader(true);
-        setHasStartedUp(true);
-      }, 0);
-      return () => clearTimeout(timer);
-    }
-  }, [session, hasStartedUp]);
-
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
@@ -721,10 +749,12 @@ export default function Home() {
                           process.env.NEXT_PUBLIC_SUPABASE_URL?.includes('placeholder');
 
     if (isDevelopment && emailTrim === 'admin' && passwordTrim === 'admin0') {
+      // Sessão local de desenvolvimento: identidade sem vínculo, e portanto sem
+      // controles de gestão. Ela nunca teve sessão real no Supabase, então as
+      // APIs já a negavam — o que mudou é a tela parar de fingir o contrário.
       const devSession: UserSession = {
         email: 'admin@haux.com.br',
         name: 'Desenvolvedor ORBITA',
-        role: 'dono'
       };
       setSession(devSession);
       localStorage.setItem('haux_session', JSON.stringify(devSession));
@@ -736,7 +766,6 @@ export default function Home() {
       const workerSession: UserSession = {
         email: 'colaborador@haux.com.br',
         name: 'Colaborador Portal do Haux',
-        role: 'colaborador'
       };
       setSession(workerSession);
       localStorage.setItem('haux_session', JSON.stringify(workerSession));
@@ -753,14 +782,7 @@ export default function Home() {
       if (error) throw error;
 
       if (authData.user) {
-        const isOwner = authData.user.app_metadata?.role === 'dono' ||
-                        authData.user.email?.includes('dono') ||
-                        authData.user.email === 'admin@haux.com.br';
-        const userDetails: UserSession = {
-          email: authData.user.email || '',
-          name: authData.user.user_metadata?.full_name || authData.user.email?.split('@')[0] || 'Usuário',
-          role: isOwner ? 'dono' : 'colaborador'
-        };
+        const userDetails: UserSession = deriveUserSession(authData.user);
         setSession(userDetails);
         localStorage.setItem('haux_session', JSON.stringify(userDetails));
       }
@@ -789,8 +811,8 @@ export default function Home() {
    * desde o mesmo ticket, não tinha nenhum chamador.
    */
   const handleSync = async (completa = false) => {
-    if (session?.role !== 'dono') {
-      alert('Acesso negado: Somente o dono da loja pode sincronizar dados do ERP.');
+    if (!podeGerir) {
+      alert('Acesso negado: Somente quem administra a organização pode sincronizar dados do ERP.');
       return;
     }
     setIsSyncing(true);
@@ -828,7 +850,7 @@ export default function Home() {
   };
 
   const handleEmitNfe = async (pedidoId: string, blingPedidoId: string) => {
-    if (session?.role !== 'dono') {
+    if (!podeGerir) {
       alert('Acesso negado: Colaboradores não têm permissão para faturamento.');
       return;
     }
@@ -1090,15 +1112,15 @@ export default function Home() {
     <div className="min-h-screen flex font-sans select-none bg-[#0d0818] text-slate-100">
 
       <StartupLoader
+        // A chave é a organização: trocar de organização **desmonta** o
+        // carregador da anterior, então nenhum trabalho em curso dela chega
+        // atrasado para decidir a tela da nova. O `encerrar` já recusa a
+        // chamada de fora da organização atual; a chave fecha o caminho antes
+        // dele (revisão do head `2d1795a`).
+        key={organizacaoConfirmada ?? 'sem-organizacao'}
         isVisible={showStartupLoader}
-        onComplete={() => {
-          setShowStartupLoader(false);
-          loadDashboardData();
-        }}
-        onNeedsAuth={() => {
-          setShowStartupLoader(false);
-          setActiveTab('integrations');
-        }}
+        onComplete={concluirStartup}
+        onNeedsAuth={reautenticarBling}
         fetchWithAuth={fetchWithAuth}
       />
 
@@ -1307,7 +1329,7 @@ export default function Home() {
 
         {/* TAB ORGANIZAÇÃO & MEMBROS (Ticket 24b) */}
         <div className={activeTab === 'organization' ? 'block' : 'hidden'}>
-          <OrganizationPanel fetchWithAuth={fetchWithAuth} onActiveOrgChange={setActiveOrganizacaoId} />
+          <OrganizationPanel fetchWithAuth={fetchWithAuth} onActiveOrgChange={setSelecaoDeOrganizacao} />
         </div>
 
         {/* TAB INTEGRAÇÕES: Bling / Chatwoot (Ticket 24b) */}
