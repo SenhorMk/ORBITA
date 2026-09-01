@@ -1,12 +1,46 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
-import { syncService } from '@/services/sync';
+import { syncService, type SyncAllResult } from '@/services/sync';
 import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import { checkEncryptionConfiguration } from '@/lib/crypto';
 import { descreverErro } from '@/lib/erroLegivel';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * Traduz o resultado da sincronização inicial em resposta HTTP.
+ *
+ * A rota anunciava `success: true` sem olhar para `syncResult.success`.
+ * Enquanto o serviço rejeitava em qualquer falha isso era quase inofensivo —
+ * mas desde que ele passou a encerrar o job em vez de rejeitar, "falhou" e
+ * "concluiu" chegavam aqui iguais, e a tela dizia que a sincronização inicial
+ * tinha dado certo, com zero registros (Ticket 22).
+ */
+function respostaDaSincronizacao(resultado: SyncAllResult): NextResponse {
+  if (resultado.success) {
+    return NextResponse.json({
+      success: true,
+      message: 'Sincronização inicial concluída com sucesso.',
+      stats: resultado.stats,
+    });
+  }
+
+  // "Já estava rodando" não é falha: o job existe, tem dono, e a tela deve
+  // acompanhar em vez de mostrar erro.
+  if (resultado.status === 'running' || resultado.status === 'queued') {
+    return NextResponse.json({
+      success: true,
+      message: 'A sincronização já está rodando em segundo plano.',
+      stats: null,
+    });
+  }
+
+  return NextResponse.json(
+    { success: false, error: 'Erro interno durante sincronização inicial' },
+    { status: 500 },
+  );
+}
 
 export async function POST(request: Request) {
   try {
@@ -64,13 +98,7 @@ export async function POST(request: Request) {
     }
 
     // 3. Executar o sync completo (Produtos, Clientes, Pedidos)
-    const syncResult = await syncService.syncAll(scope);
-
-    return NextResponse.json({
-      success: true,
-      message: 'Sincronização inicial concluída com sucesso.',
-      stats: syncResult.stats
-    });
+    return respostaDaSincronizacao(await syncService.syncAll(scope));
   } catch (error: unknown) {
     registrarFalhaInterna('startup.sync', error);
     const errorMsg = descreverErro(error);

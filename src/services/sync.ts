@@ -5,6 +5,7 @@ import { produtoRepository } from '../repositories/produtoRepository';
 import { pedidoRepository } from '../repositories/pedidoRepository';
 import { Cliente, Produto, Pedido, ItemPedido } from '../types';
 import { descreverErro } from '../lib/erroLegivel';
+import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 import { mapBlingStatus, normalizeToE164 } from '../lib/utils';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import {
@@ -33,12 +34,29 @@ export interface EnqueueSyncResult {
 
 export interface SyncAllResult {
   success: boolean;
+  /**
+   * Estado terminal observado do job. Existe para o chamador distinguir
+   * "falhou" de "já estava rodando" — as duas devolviam `success: false`, e o
+   * `/api/startup` anunciava sucesso nas duas.
+   */
+  status: SyncJob['status'] | 'unknown';
   stats: {
     clientes: number;
     produtos: number;
     pedidos: number;
   };
 }
+
+/**
+ * Diagnóstico público e estável gravado em `sync_jobs.last_error`.
+ *
+ * Aquele campo sai pela resposta de `GET /api/sync/status`. Antes ele guardava
+ * `descreverErro(err)` com uma redação por padrão que só cobria `Bearer …` e
+ * `key=…` — então nome de constraint, `details`, `hint` e valor de linha
+ * (`Key (email)=(alguem@empresa.com) already exists`) chegavam ao cliente.
+ * O diagnóstico técnico vive no log; aqui fica um código fixo (CWE-209).
+ */
+export const FALHA_PUBLICA_DE_SINCRONIZACAO = 'SYNC_FAILED';
 
 /**
  * Sincronização durável, escopada por uma organização **já verificada**.
@@ -68,9 +86,33 @@ export class SyncService {
    * corretamente. Sem uma sincronização completa não havia como sair disso.
    */
   async processJob(jobId: string, scope: VerifiedOrganizationScope, opcoes: { completa?: boolean } = {}): Promise<void> {
-    await releaseExpiredLeases();
+    // A preparação ficava fora do `try`. Em `POST /api/sync` este método roda
+    // dentro de `after()`, depois da resposta 202 já ter saído: uma rejeição
+    // aqui virava promise não observada, e o job ficava `queued` para sempre,
+    // com a tela consultando um estado que nunca mudava.
+    let leaseAcquired: boolean;
+    try {
+      await releaseExpiredLeases();
+      leaseAcquired = await acquireLease(scope, jobId);
+    } catch (err: unknown) {
+      registrarFalhaInterna('sync.preparar', err, {
+        organizacaoId: scope.organizationId,
+        atorId: scope.actorId,
+      });
+      // Estado terminal quando possível: a RPC da lease não relatou aquisição,
+      // então ninguém está processando este job em nosso nome. Marcá-lo falho é
+      // melhor que deixá-lo `queued` sem nada acontecendo — e a marcação também
+      // não pode rejeitar, pelo mesmo motivo que trouxe este `try`.
+      try {
+        await completeJob(scope, jobId, 'failed', FALHA_PUBLICA_DE_SINCRONIZACAO);
+      } catch (erroAoConcluir: unknown) {
+        registrarFalhaInterna('sync.concluir_apos_falha_de_preparo', erroAoConcluir, {
+          organizacaoId: scope.organizationId,
+        });
+      }
+      return;
+    }
 
-    const leaseAcquired = await acquireLease(scope, jobId);
     if (!leaseAcquired) {
       return;
     }
@@ -123,12 +165,17 @@ export class SyncService {
 
       await completeJob(scope, jobId, 'completed');
     } catch (err: unknown) {
-      const msg = descreverErro(err);
-      const redacted = msg
-        .replace(/Bearer\s+\S+/gi, '[REDACTED]')
-        .replace(/key=[^&\s]*/gi, 'key=[REDACTED]');
-      console.error('❌ Sincronização Orbita: Job falhou.', { jobId, error: redacted });
-      await completeJob(scope, jobId, 'failed', redacted);
+      registrarFalhaInterna('sync.processar', err, {
+        organizacaoId: scope.organizationId,
+        atorId: scope.actorId,
+      });
+      try {
+        await completeJob(scope, jobId, 'failed', FALHA_PUBLICA_DE_SINCRONIZACAO);
+      } catch (erroAoConcluir: unknown) {
+        registrarFalhaInterna('sync.concluir_apos_falha', erroAoConcluir, {
+          organizacaoId: scope.organizationId,
+        });
+      }
     }
   }
 
@@ -143,6 +190,7 @@ export class SyncService {
 
     return {
       success: status?.status === 'completed',
+      status: status?.status ?? 'unknown',
       stats: {
         clientes: status?.progress.clientes_processados ?? 0,
         produtos: status?.progress.produtos_processados ?? 0,

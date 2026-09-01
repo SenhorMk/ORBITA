@@ -247,6 +247,35 @@ describe('POST /api/sync — Jobs duráveis', () => {
     expect(mockEnqueueSync).not.toHaveBeenCalled();
   });
 
+  // Ticket 22 — política fixada em teste: a autorização acontece antes do 202,
+  // e o `after()` recebe o escopo já verificado. Um job validamente enfileirado
+  // continua mesmo que o vínculo do ator seja revogado depois — o job é da
+  // organização, não da pessoa. O que a revogação impede é enfileirar de novo.
+  it('agenda o processamento com o escopo verificado antes da resposta, e não reautoriza', async () => {
+    const req = requisicao('http://localhost/api/sync', { method: 'POST' });
+    const res = await syncPost(req);
+    expect(res.status).toBe(202);
+
+    expect(mockAfter).toHaveBeenCalledTimes(1);
+    const callback = mockAfter.mock.calls[0]![0] as () => Promise<void>;
+
+    // A revogação chega depois do 202: a partir daqui, ninguém tem vínculo.
+    comVinculo(null);
+    await callback();
+
+    // O job segue com o escopo que foi verificado antes, e a organização dele é
+    // a mesma — a callback não consulta o vínculo de novo.
+    expect(mockProcessJob).toHaveBeenCalledTimes(1);
+    expect(mockProcessJob.mock.calls[0]![1]).toMatchObject({ organizationId: ORG_ID });
+  });
+
+  it('nega o enfileiramento seguinte, depois que o vínculo é revogado', async () => {
+    comVinculo(null);
+    const res = await syncPost(requisicao('http://localhost/api/sync', { method: 'POST' }));
+    expect(res.status).toBe(403);
+    expect(mockEnqueueSync).not.toHaveBeenCalled();
+  });
+
   it('retorna 503 sem expor diagnóstico quando o authorization store está indisponível', async () => {
     comFalhaNoDepositoDeVinculos('postgres detail', '08006');
     const res = await syncPost(requisicao('http://localhost/api/sync', { method: 'POST' }));
