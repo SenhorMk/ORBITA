@@ -99,17 +99,19 @@ export class SyncService {
         organizacaoId: scope.organizationId,
         atorId: scope.actorId,
       });
-      // Estado terminal quando possível: a RPC da lease não relatou aquisição,
-      // então ninguém está processando este job em nosso nome. Marcá-lo falho é
-      // melhor que deixá-lo `queued` sem nada acontecendo — e a marcação também
-      // não pode rejeitar, pelo mesmo motivo que trouxe este `try`.
-      try {
-        await completeJob(scope, jobId, 'failed', FALHA_PUBLICA_DE_SINCRONIZACAO);
-      } catch (erroAoConcluir: unknown) {
-        registrarFalhaInterna('sync.concluir_apos_falha_de_preparo', erroAoConcluir, {
-          organizacaoId: scope.organizationId,
-        });
-      }
+      // **Não** encerra o job aqui, e isto é deliberado. Uma rejeição de
+      // `acquireLease` é resultado *ambíguo*: a RPC pode ter concedido a lease
+      // e a resposta ter se perdido, e pode haver outra callback processando
+      // este mesmo job agora. `concluir_job_sync` atualiza incondicionalmente
+      // por id e limpa a lease — então marcar falho aqui derrubaria o job que
+      // outra execução está tocando, liberaria a restrição de job ativo e
+      // abriria caminho para duas sincronizações concorrentes.
+      //
+      // Encerrar com segurança exigiria identidade de lease (`lease_owner`) e
+      // compare-and-set no banco, o que é migration própria. Sem isso, quem
+      // decide é o TTL da lease: `releaseExpiredLeases` a libera, e a próxima
+      // execução retoma. O job fica `queued`, que é verdade, em vez de `failed`,
+      // que seria mentira sobre um trabalho possivelmente em andamento.
       return;
     }
 

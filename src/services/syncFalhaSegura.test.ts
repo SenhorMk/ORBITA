@@ -119,13 +119,31 @@ describe('SyncService — falha segura', () => {
 
   // `processJob` roda dentro de `after()`, depois do 202 já ter saído: uma
   // rejeição aqui vira promise não observada e o job fica `queued` para sempre.
-  it('não rejeita quando `acquireLease` lança, e leva o job a estado terminal', async () => {
+  it('não rejeita quando `acquireLease` lança', async () => {
+    mockAcquireLease.mockRejectedValue(new Error('Falha ao adquirir lease do job job-1: timeout'));
+    const service = new SyncService();
+
+    await expect(service.processJob('job-1', ESCOPO)).resolves.toBeUndefined();
+  });
+
+  // Uma rejeição de `acquireLease` é resultado **ambíguo**: a RPC pode ter
+  // concedido a lease e a resposta ter se perdido, e pode haver outra callback
+  // processando o mesmo job agora. `concluir_job_sync` atualiza
+  // incondicionalmente por id e limpa a lease — encerrar aqui derrubaria o job
+  // que a outra execução está tocando e abriria caminho para concorrência.
+  it('não encerra o job quando a aquisição da lease é ambígua, mesmo com outro processo rodando', async () => {
+    mockGetJobStatus.mockResolvedValue({
+      status: 'running',
+      progress: { clientes_processados: 12, produtos_processados: 0, pedidos_processados: 0 },
+    });
     mockAcquireLease.mockRejectedValue(new Error('Falha ao adquirir lease do job job-1: timeout'));
     const service = new SyncService();
 
     await expect(service.processJob('job-1', ESCOPO)).resolves.toBeUndefined();
 
-    expect(mockCompleteJob).toHaveBeenCalledWith(ESCOPO, 'job-1', 'failed', FALHA_PUBLICA_DE_SINCRONIZACAO);
+    expect(mockCompleteJob).not.toHaveBeenCalled();
+    // A falha fica registrada; quem decide o destino do job é o TTL da lease.
+    expect(saidaDoLog.join('\n')).toContain('sync.preparar');
   });
 
   it('não rejeita quando `releaseExpiredLeases` lança', async () => {
@@ -139,12 +157,12 @@ describe('SyncService — falha segura', () => {
   // Se marcar como falho também falhar, não há mais nada a fazer — mas ainda
   // assim não se pode rejeitar, pelo mesmo motivo.
   it('não rejeita quando até a conclusão do job falha', async () => {
-    mockAcquireLease.mockRejectedValue(new Error('timeout'));
+    mockGetClientes.mockRejectedValue(new Error('etapa quebrou'));
     mockCompleteJob.mockRejectedValue(new Error('banco fora do ar'));
     const service = new SyncService();
 
     await expect(service.processJob('job-1', ESCOPO)).resolves.toBeUndefined();
-    expect(saidaDoLog.join('\n')).toContain('sync.concluir_apos_falha_de_preparo');
+    expect(saidaDoLog.join('\n')).toContain('sync.concluir_apos_falha');
   });
 
   it('não marca falho o job cuja lease pertence a outro processo', async () => {

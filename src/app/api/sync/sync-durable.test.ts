@@ -90,6 +90,7 @@ vi.mock('../../../lib/supabaseServer', () => ({
 }));
 
 vi.mock('../../../services/sync', () => ({
+  FALHA_PUBLICA_DE_SINCRONIZACAO: 'SYNC_FAILED',
   syncService: {
     enqueueSync: (...args: unknown[]) => mockEnqueueSync(...args),
     processJob: (...args: unknown[]) => mockProcessJob(...args),
@@ -389,6 +390,51 @@ describe('GET /api/sync/status — Estado observável', () => {
     const body = await res.json();
     expect(body.job.status).toBe('completed');
     expect(body.job.completed_at).toBeTruthy();
+  });
+
+  // A fronteira não confia no que está persistido. O produtor atual só grava
+  // `SYNC_FAILED`, mas linhas antigas — e qualquer outro produtor — podem
+  // carregar o texto do Postgres: nome de constraint, `details`, `hint` e valor
+  // de linha. Qualquer `last_error` não nulo sai como o mesmo código público.
+  it('não devolve o last_error de um job legado, mesmo com valor de linha dentro', async () => {
+    mockGetJobStatus.mockResolvedValueOnce({
+      id: JOB_ID_NOVO,
+      organizacao_id: ORG_ID,
+      status: 'failed',
+      progress: { etapa_atual: 'clientes' },
+      last_error: 'Etapa clientes falhou: [23505] duplicate key value violates unique constraint "clientes_email_key" — Key (email)=(alguem@empresa.com) already exists.',
+      created_at: '2026-08-20T18:00:00Z',
+      updated_at: '2026-08-20T18:01:00Z',
+      completed_at: null,
+    });
+
+    const res = await syncStatusGet(requisicao(`http://localhost/api/sync/status?job_id=${JOB_ID_NOVO}`));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.job.status).toBe('failed');
+    expect(body.job.last_error).toBe('SYNC_FAILED');
+    const bruto = JSON.stringify(body);
+    expect(bruto).not.toContain('alguem@empresa.com');
+    expect(bruto).not.toContain('clientes_email_key');
+    expect(bruto).not.toContain('Key (email)');
+    expect(bruto).not.toContain('23505');
+  });
+
+  it('mantém `last_error` nulo quando o job não falhou', async () => {
+    mockGetJobStatus.mockResolvedValueOnce({
+      id: JOB_ID_NOVO,
+      organizacao_id: ORG_ID,
+      status: 'completed',
+      progress: { etapa_atual: 'concluido' },
+      last_error: null,
+      created_at: '2026-08-20T18:00:00Z',
+      updated_at: '2026-08-20T18:05:00Z',
+      completed_at: '2026-08-20T18:05:00Z',
+    });
+
+    const body = await (await syncStatusGet(requisicao(`http://localhost/api/sync/status?job_id=${JOB_ID_NOVO}`))).json();
+    expect(body.job.last_error).toBeNull();
   });
 
   it('retorna 503 sanitizado quando o authorization store falha', async () => {

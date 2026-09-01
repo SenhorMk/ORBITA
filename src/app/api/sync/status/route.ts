@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { syncService } from '../../../../services/sync';
+import { syncService, FALHA_PUBLICA_DE_SINCRONIZACAO } from '../../../../services/sync';
 import { resolveVerifiedOrganizationScope } from '../../../../lib/requestOrganizationContext';
 import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '../../../../lib/observability/falhaInterna';
 
@@ -43,7 +43,14 @@ export async function GET(request: Request) {
         id: job.id,
         status: job.status,
         progress: job.progress,
-        last_error: job.last_error,
+        // A fronteira não confia no que está persistido. O produtor atual só
+        // grava `SYNC_FAILED`, mas linhas antigas — e qualquer outro produtor —
+        // podem carregar o texto do Postgres, com nome de constraint, `details`,
+        // `hint` e valor de linha. Qualquer `last_error` não nulo sai como o
+        // mesmo código público, independentemente do conteúdo (CWE-209).
+        last_error: job.last_error === null || job.last_error === undefined
+          ? null
+          : FALHA_PUBLICA_DE_SINCRONIZACAO,
         created_at: job.created_at,
         updated_at: job.updated_at,
         completed_at: job.completed_at,
