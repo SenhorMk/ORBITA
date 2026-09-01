@@ -28,12 +28,7 @@ const SRC_DIR = path.join(ROOT_DIR, 'src');
  * `authorizeRequestOrganizationCapability` quando a organização vem da URL, ou
  * `resolveAuthenticatedIdentity` onde não deve haver exigência de vínculo.
  */
-const ROTAS_COM_DISTINCAO_DE_AUTORIZACAO = [
-  // Ticket 22, fatia B: nenhuma rota consome mais os seams legados, então a
-  // regra passou a cobrir `src/app/api/` inteiro em vez de uma lista que
-  // crescia a cada fatia.
-  'src/app/api/',
-];
+const ROTAS_COM_DISTINCAO_DE_AUTORIZACAO = ['src/app/api/'];
 
 /** Os dois seams que resolvem papel por `app_metadata` (Tickets 20 e 22). */
 const SEAMS_LEGADOS = /\b(?:verifySessionAndRole|resolveActorContext)\b/u;

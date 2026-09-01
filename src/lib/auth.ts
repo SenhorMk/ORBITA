@@ -3,16 +3,25 @@ import { z } from 'zod';
 
 import { readBearerToken } from './bearer-token';
 
-const actorIdSchema = z.uuid().brand<'ActorId'>();
+/**
+ * Identidade e autorização de serviço.
+ *
+ * O modelo de tenancy **por usuário** foi removido daqui no Ticket 22, fatia C:
+ * `resolveLegacyMembership`, `resolveActorContext`, `actorContextDenialStatus`,
+ * `verifySessionAndRole`, `ActorContext`, `ActorCapability`, `ActorRole` e
+ * `AuthSession`. Eles liam papel de `app_metadata.role`, campo que nenhum fluxo
+ * deste sistema escreve, e ficaram sem chamador quando as 19 fronteiras
+ * migraram para `membros_organizacao`.
+ *
+ * O que resta tem duas responsabilidades, e nenhuma delas decide papel:
+ *
+ * - **identidade** — `resolveAuthenticatedIdentity` verifica o bearer e para
+ *   por aí; quem decide vínculo e capacidade é `requestOrganizationContext`;
+ * - **autorização de serviço** — `authorizeSignedServiceTenant` prova a origem
+ *   de um webhook por HMAC contra segredos do servidor.
+ */
+
 const tenantIdSchema = z.uuid().brand<'TenantId'>();
-const ownerMembershipSchema = z.object({
-  role: z.literal('dono'),
-  tenant_id: tenantIdSchema.optional(),
-});
-const collaboratorMembershipSchema = z.object({
-  role: z.literal('colaborador'),
-  tenant_id: tenantIdSchema,
-});
 const signedTenantCandidateSchema = z.object({
   tenantId: tenantIdSchema,
   secret: z.string().min(1),
@@ -44,41 +53,18 @@ export type AuthenticatedIdentityResult =
   | { readonly _tag: 'SessionInvalid' }
   | { readonly _tag: 'IdentityProviderUnavailable'; readonly cause: string };
 
-/** Capabilities understood by the temporary user-owned tenancy model. */
-export type ActorCapability = 'app:access' | 'tenant:manage';
-
-/** Role asserted by trusted server-controlled membership metadata. */
-export type ActorRole = 'dono' | 'colaborador';
-
-/** Tenant scope that can only be created after a trusted authorization check. */
+/**
+ * Escopo de tenant que só pode ser construído depois de uma verificação confiável.
+ *
+ * **Não é o modelo antigo.** Sobrou de propósito porque o webhook do Bling o usa:
+ * `authorizeSignedServiceTenant` prova a origem por HMAC contra segredos que o
+ * servidor possui, e devolve a organização daquela conexão. Nada disso passa por
+ * `app_metadata` — a autoridade é a assinatura, não um metadado do usuário.
+ */
 export interface VerifiedTenant {
   readonly id: z.infer<typeof tenantIdSchema>;
   readonly [verifiedTenantBrand]: true;
 }
-
-/** Verified actor, membership, capabilities, and tenant for one server operation. */
-export interface ActorContext {
-  readonly actorId: z.infer<typeof actorIdSchema>;
-  readonly user: AuthenticatedUser;
-  readonly role: ActorRole;
-  readonly capabilities: ReadonlySet<ActorCapability>;
-  readonly tenant: VerifiedTenant;
-}
-
-/** Safe, tagged outcome of resolving the authenticated actor and authorized tenant. */
-export type ActorContextResult =
-  | { readonly _tag: 'ActorContextResolved'; readonly context: ActorContext }
-  | { readonly _tag: 'SessionMissing' }
-  | { readonly _tag: 'SessionInvalid' }
-  | { readonly _tag: 'IdentityProviderUnavailable'; readonly cause: string }
-  | { readonly _tag: 'MembershipMissing' }
-  | { readonly _tag: 'CapabilityDenied'; readonly capability: ActorCapability };
-
-/** A typed authorization denial without the successful context variant. */
-export type ActorContextDenial = Exclude<
-  ActorContextResult,
-  { readonly _tag: 'ActorContextResolved' }
->;
 
 /** Server-owned mapping from a tenant to the secret that signs its webhooks. */
 export interface SignedTenantCandidate {
@@ -90,9 +76,6 @@ export interface SignedTenantCandidate {
 export type ServiceTenantAuthorizationResult =
   | { readonly _tag: 'ServiceTenantAuthorized'; readonly tenant: VerifiedTenant }
   | { readonly _tag: 'ServiceTenantDenied' };
-
-/** Compatibility alias for callers that have not yet adopted the tagged result. */
-export type AuthSession = ActorContext;
 
 const defaultAuthUserLookup: AuthUserLookup = {
   async getUser(token) {
@@ -122,86 +105,6 @@ export async function resolveAuthenticatedIdentity(
   } catch {
     return { _tag: 'IdentityProviderUnavailable', cause: 'auth_provider_unreachable' };
   }
-}
-
-function capabilitiesFor(role: ActorRole): ReadonlySet<ActorCapability> {
-  return role === 'dono'
-    ? new Set(['app:access', 'tenant:manage'])
-    : new Set(['app:access']);
-}
-
-function resolveLegacyMembership(
-  user: AuthenticatedUser,
-): Pick<ActorContext, 'actorId' | 'role' | 'capabilities' | 'tenant'> | null {
-  const actorIdResult = actorIdSchema.safeParse(user.id);
-  if (!actorIdResult.success) {
-    return null;
-  }
-
-  const ownerResult = ownerMembershipSchema.safeParse(user.app_metadata);
-  if (ownerResult.success) {
-    const tenantId = ownerResult.data.tenant_id ?? tenantIdSchema.parse(actorIdResult.data);
-    return {
-      actorId: actorIdResult.data,
-      role: 'dono',
-      capabilities: capabilitiesFor('dono'),
-      tenant: { id: tenantId, [verifiedTenantBrand]: true },
-    };
-  }
-
-  const collaboratorResult = collaboratorMembershipSchema.safeParse(user.app_metadata);
-  if (!collaboratorResult.success) {
-    return null;
-  }
-
-  return {
-    actorId: actorIdResult.data,
-    role: 'colaborador',
-    capabilities: capabilitiesFor('colaborador'),
-    tenant: { id: collaboratorResult.data.tenant_id, [verifiedTenantBrand]: true },
-  };
-}
-
-/**
- * Resolve a request into an actor and tenant using only a verified bearer session.
- *
- * During P0 containment, membership comes from server-controlled app metadata.
- * Ticket 24 can replace this adapter with persisted organization memberships
- * without changing this public authorization seam.
- */
-export async function resolveActorContext(
-  request: Request,
-  requiredCapability: ActorCapability,
-  authUserLookup: AuthUserLookup = defaultAuthUserLookup,
-): Promise<ActorContextResult> {
-  const identity = await resolveAuthenticatedIdentity(request, authUserLookup);
-  if (identity._tag !== 'IdentityVerified') return identity;
-
-  try {
-    const membership = resolveLegacyMembership(identity.user);
-    if (!membership) {
-      return { _tag: 'MembershipMissing' };
-    }
-
-    if (!membership.capabilities.has(requiredCapability)) {
-      return { _tag: 'CapabilityDenied', capability: requiredCapability };
-    }
-
-    return {
-      _tag: 'ActorContextResolved',
-      context: { ...membership, user: identity.user },
-    };
-  } catch {
-    return { _tag: 'SessionInvalid' };
-  }
-}
-
-/** Map a typed actor-context denial to its safe HTTP authorization status. */
-export function actorContextDenialStatus(denial: ActorContextDenial): 401 | 403 | 503 {
-  if (denial._tag === 'IdentityProviderUnavailable') return 503;
-  return denial._tag === 'SessionMissing' || denial._tag === 'SessionInvalid'
-    ? 401
-    : 403;
 }
 
 /**
@@ -242,16 +145,4 @@ export function authorizeSignedServiceTenant(
   }
 
   return { _tag: 'ServiceTenantDenied' };
-}
-
-/**
- * Verify the default application-access capability for legacy route callers.
- * New routes should consume `resolveActorContext` to preserve typed denials.
- */
-export async function verifySessionAndRole(
-  request: Request,
-  authUserLookup: AuthUserLookup = defaultAuthUserLookup,
-): Promise<AuthSession | null> {
-  const result = await resolveActorContext(request, 'app:access', authUserLookup);
-  return result._tag === 'ActorContextResolved' ? result.context : null;
 }
