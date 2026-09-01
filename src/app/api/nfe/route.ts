@@ -2,9 +2,8 @@ import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
-import { verifySessionAndRole } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabaseServer';
-import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { descreverErro } from '@/lib/erroLegivel';
 
@@ -106,18 +105,16 @@ async function emitNfeWithLock(
 
 export async function POST(request: Request) {
   try {
-    // 0. Validação de Sessão e Role
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-    }
-    if (session.role !== 'dono') {
-      return NextResponse.json({ success: false, error: 'Acesso negado: Somente o dono da loja pode faturar pedidos.' }, { status: 403 });
-    }
-
+    // Ticket 22 — o portão de sessão legado saiu, e o `session.role !== 'dono'`
+    // com ele: aquele papel vinha de `app_metadata`, do modelo de tenancy por
+    // usuário, e não dizia nada sobre o papel da pessoa *nesta organização*. A
+    // pergunta certa é a capacidade, e a fonte é o vínculo persistido.
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
+    if (!escopoTemCapacidade(scope, 'organization:manage')) {
+      return NextResponse.json({ success: false, error: 'Acesso negado: somente quem administra a organização pode faturar pedidos.' }, { status: 403 });
+    }
 
     const { pedidoId, blingPedidoId } = await request.json();
 

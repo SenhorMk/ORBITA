@@ -1,15 +1,13 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
-import { verifySessionAndRole } from '@/lib/auth';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
 export async function GET(request: Request) {
   try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
-    }
-
+    // Ticket 22 — o portão de sessão legado saiu daqui. Ele lia o papel de
+    // `app_metadata`, que só os usuários históricos têm, e era redundante: o
+    // escopo de organização abaixo já resolve identidade e vínculo, e já
+    // distingue 401 (sem sessão), 403 (sem vínculo) e 503 (indisponível).
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
-import { verifySessionAndRole } from '@/lib/auth';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 
 export const dynamic = 'force-dynamic';
@@ -32,10 +31,10 @@ interface FornecedorRequestBody {
 
 export async function GET(request: Request) {
   try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-    }
+    // Ticket 22 — o portão de sessão legado saiu daqui. Ele lia o papel de
+    // `app_metadata`, que só os usuários históricos têm, e era redundante: o
+    // escopo de organização abaixo já resolve identidade e vínculo, e já
+    // distingue 401 (sem sessão), 403 (sem vínculo) e 503 (indisponível).
 
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
@@ -70,10 +69,10 @@ export async function GET(request: Request) {
 // POST: Cria um novo fornecedor real no Bling com dados da BrasilAPI
 export async function POST(request: Request) {
   try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-    }
+    // Ticket 22 — o portão de sessão legado saiu daqui. Ele lia o papel de
+    // `app_metadata`, que só os usuários históricos têm, e era redundante: o
+    // escopo de organização abaixo já resolve identidade e vínculo, e já
+    // distingue 401 (sem sessão), 403 (sem vínculo) e 503 (indisponível).
 
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;

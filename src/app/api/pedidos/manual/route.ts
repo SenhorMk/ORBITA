@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
-import { verifySessionAndRole } from '@/lib/auth';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { bling } from '@/services/bling';
@@ -172,11 +171,10 @@ function authFor(actorId: string, scope: VerifiedOrganizationScope): ManualOrder
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
-  const session = await verifySessionAndRole(request);
-  if (!session?.tenant.id) {
-    return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-  }
-
+  // Ticket 22 — o portão de sessão legado saiu. Ele usava o id do *tenant* como
+  // id do *ator*, e os dois só coincidiam porque um `dono` sem `tenant_id` caía
+  // em `tenantId = actorId`. O ator verdadeiro vem do vínculo persistido, em
+  // `scope.actorId`.
   // O escopo é resolvido aqui, uma vez, porque desde o Ticket 10b o cliente do
   // Bling exige a organização verificada. O handler recebe o mesmo escopo já
   // provado, em vez de resolvê-lo de novo.
@@ -185,7 +183,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const { scope } = scopeResult;
 
   const handler = createManualOrderHandler({
-    auth: authFor(session.tenant.id, scope),
+    auth: authFor(scope.actorId, scope),
     store: supabaseManualOrderStore(),
     bling: blingManualOrderAdapter(bling.forVerifiedOrganization(scope)),
     now: () => new Date(),

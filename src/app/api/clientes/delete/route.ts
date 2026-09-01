@@ -1,23 +1,22 @@
 import { NextResponse } from 'next/server';
 import { clienteRepository } from '@/repositories/clienteRepository';
 import { bling } from '@/services/bling';
-import { verifySessionAndRole } from '@/lib/auth';
-import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { descreverErro } from '@/lib/erroLegivel';
 
 export async function POST(request: Request) {
   const logEntries: string[] = [];
   try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-    }
-    if (session.role !== 'dono') {
-      return NextResponse.json({ success: false, error: 'Acesso negado: apenas o dono pode realizar esta ação.' }, { status: 403 });
-    }
+    // Ticket 22 — o portão de sessão legado saiu, e o `session.role !== 'dono'`
+    // com ele: aquele papel vinha de `app_metadata`, do modelo de tenancy por
+    // usuário, e não dizia nada sobre o papel da pessoa *nesta organização*. A
+    // pergunta certa é a capacidade, e a fonte é o vínculo persistido.
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
+    if (!escopoTemCapacidade(scope, 'organization:manage')) {
+      return NextResponse.json({ success: false, error: 'Acesso negado: apenas quem administra a organização pode realizar esta ação.' }, { status: 403 });
+    }
 
     const body = await request.json();
     const { id, bling_id } = body;

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 
-import { verifySessionAndRole } from '@/lib/auth';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { supabaseServer } from '@/lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
@@ -80,17 +79,16 @@ function authFor(actorId: string, scope: VerifiedOrganizationScope): FinanceiroS
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
-  const session = await verifySessionAndRole(request);
-  if (!session?.tenant.id) {
-    return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-  }
-
+  // Ticket 22 — o portão de sessão legado saiu. Ele usava o id do *tenant* como
+  // id do *ator*, e os dois só coincidiam porque um `dono` sem `tenant_id` caía
+  // em `tenantId = actorId`. O ator verdadeiro vem do vínculo persistido, em
+  // `scope.actorId`.
   const scopeResult = await resolveVerifiedOrganizationScope(request);
   if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
   const { scope } = scopeResult;
 
   const handler = createFinanceiroSyncHandler({
-    auth: authFor(session.tenant.id, scope),
+    auth: authFor(scope.actorId, scope),
     store: supabaseFinanceiroSyncStore(),
     bling: blingFinanceiroSyncAdapter(bling.forVerifiedOrganization(scope)),
   });

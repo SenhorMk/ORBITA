@@ -29,6 +29,14 @@ const SRC_DIR = path.join(ROOT_DIR, 'src');
 const ROTAS_COM_DISTINCAO_DE_AUTORIZACAO = [
   'src/app/api/organizacoes/',
   'src/app/api/convites/',
+  // Migradas na fatia A do Ticket 22. A lista cresce a cada fatia, e quando a
+  // última entrar ela vira `src/app/api/` inteiro e o atalho é apagado.
+  'src/app/api/bling/situacoes/',
+  'src/app/api/clientes/delete/',
+  'src/app/api/financeiro/',
+  'src/app/api/nfe/',
+  'src/app/api/pedidos/',
+  'src/app/api/produtos/delete/',
 ];
 
 /** Uma linha de rota de organização/convite que reintroduz o atalho de sessão. */
