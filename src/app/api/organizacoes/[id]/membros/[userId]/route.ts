@@ -55,6 +55,11 @@ export async function DELETE(
     return NextResponse.json({ success });
   } catch (error: unknown) {
     // CWE-209: a RPC recusa com texto do Postgres, que carrega valor de linha.
+    //
+    // DÍVIDA (preservada): a recusa legítima — "só o dono revoga o dono" — fica
+    // indistinguível de falha de infraestrutura para quem está na tela. Mesmo
+    // conserto do `convites/aceitar`: classificar as recusas em erros de
+    // domínio tipados.
     registrarFalhaInterna('organizacoes.membros.revogar', error, {
       organizacaoId: authorization.scope.organizationId,
       atorId: authorization.scope.actorId,

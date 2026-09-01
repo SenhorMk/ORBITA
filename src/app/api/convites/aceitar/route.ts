@@ -74,6 +74,12 @@ export function createAcceptInviteHandler(
       // Postgres, que carrega valor de linha em vários casos, e ainda diria a
       // quem tenta um token qualquer *por que* aquele token não serve. As duas
       // coisas são vazamento, então a resposta é uma só (CWE-209, Ticket 20).
+      //
+      // DÍVIDA (preservada): quem tinha um convite legítimo e expirado também
+      // deixa de saber que ele expirou. Recuperar essa informação sem devolver
+      // o oráculo exige classificar as recusas da RPC em erros de domínio
+      // tipados, com mensagem escrita pelo aplicativo — como
+      // `EntitlementDeniedError` já é. É trabalho próprio, e não deste PR.
       registrarFalhaInterna('convites.aceitar', error, { atorId: identity.user.id });
       return NextResponse.json({ error: 'Não foi possível aceitar o convite' }, { status: 400 });
     }
