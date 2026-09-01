@@ -19,10 +19,13 @@ export async function GET(request: Request) {
 
     return NextResponse.json(situacoes);
   } catch (error: unknown) {
-    console.error('Erro ao buscar situações no Bling:', error);
     // Ticket 22, critério 13 — este `catch` era inerte atrás do 401 legado, e
-    // devolvia a mensagem do erro ao cliente (CWE-209). O diagnóstico fica no
-    // log; a resposta é a frase pública fixa.
+    // devolvia a mensagem do erro ao cliente (CWE-209).
+    //
+    // O `console.error` que estava aqui **contornava a política inteira**: ele
+    // imprimia o erro cru, com `message`, `details` e `hint` dentro. Num erro do
+    // Postgres esses campos carregam valor de linha, e a redação de
+    // `registrarFalhaInterna` não alcança o que não passa por ela.
     registrarFalhaInterna('bling.situacoes.listar', error);
     return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }

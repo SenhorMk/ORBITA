@@ -113,3 +113,95 @@ describe('useStartupPorOrganizacao', () => {
     expect(result.current.mostrarCarregador).toBe(false);
   });
 });
+
+/**
+ * A corrida de verdade — revisão do head `2d1795a`.
+ *
+ * Os casos acima encerravam o carregador **antes** de trocar de organização, e
+ * por isso nunca exercitaram o que acontece com uma inicialização **em curso**.
+ * É essa a situação real: a pessoa troca de organização com o carregador de A
+ * ainda na tela.
+ */
+describe('useStartupPorOrganizacao — troca com a inicialização em curso', () => {
+  it('A → B com o carregador de A aberto: ele some no mesmo quadro', async () => {
+    const { result, rerender } = renderizar({ podeGerir: true, organizacaoId: 'org-a' });
+    await waitFor(() => expect(result.current.mostrarCarregador).toBe(true));
+
+    // Sem encerrar: a inicialização de A está em curso.
+    rerender({ podeGerir: true, organizacaoId: 'org-b' });
+
+    // Sem esperar coisa alguma: o carregador de A não fica sobre a tela de B.
+    expect(result.current.mostrarCarregador).toBe(false);
+  });
+
+  it('A → B com o carregador de A aberto: B inicializa por conta própria', async () => {
+    const { result, rerender } = renderizar({ podeGerir: true, organizacaoId: 'org-a' });
+    await waitFor(() => expect(result.current.mostrarCarregador).toBe(true));
+
+    rerender({ podeGerir: true, organizacaoId: 'org-b' });
+
+    await waitFor(() => expect(result.current.mostrarCarregador).toBe(true));
+  });
+
+  // O desfecho de A chega depois da troca. Fechar o carregador de B por causa
+  // dele é a mesma classe de erro do papel: um resultado de outro contexto
+  // decidindo a tela atual — e aqui ele ainda dispararia o que vem depois do
+  // fechamento.
+  it('o desfecho tardio de A não encerra o carregador de B', async () => {
+    const { result, rerender } = renderizar({ podeGerir: true, organizacaoId: 'org-a' });
+    await waitFor(() => expect(result.current.mostrarCarregador).toBe(true));
+
+    // Guarda o encerrar que A entregou, antes da troca.
+    const encerrarDeA = result.current.encerrar;
+
+    rerender({ podeGerir: true, organizacaoId: 'org-b' });
+    await waitFor(() => expect(result.current.mostrarCarregador).toBe(true));
+
+    // A responde agora, com o encerrar que era dele.
+    encerrarDeA();
+
+    await new Promise((resolver) => setTimeout(resolver, 10));
+    expect(result.current.mostrarCarregador).toBe(true);
+  });
+
+  it('perder a capacidade com o carregador aberto fecha na hora', async () => {
+    const { result, rerender } = renderizar({ podeGerir: true, organizacaoId: 'org-a' });
+    await waitFor(() => expect(result.current.mostrarCarregador).toBe(true));
+
+    // O papel foi revogado no servidor e a tela releu: mesma organização, sem
+    // capacidade. O carregador de uma ação de gestão não pode continuar.
+    rerender({ podeGerir: false, organizacaoId: 'org-a' });
+
+    expect(result.current.mostrarCarregador).toBe(false);
+  });
+
+  // Durante a troca o papel é invalidado antes de a organização nova responder,
+  // então a sequência real passa por `(false, null)`.
+  it('a janela da troca, com o carregador aberto, não deixa nada na tela', async () => {
+    const { result, rerender } = renderizar({ podeGerir: true, organizacaoId: 'org-a' });
+    await waitFor(() => expect(result.current.mostrarCarregador).toBe(true));
+
+    rerender({ podeGerir: false, organizacaoId: null });
+    expect(result.current.mostrarCarregador).toBe(false);
+
+    await new Promise((resolver) => setTimeout(resolver, 10));
+    expect(result.current.mostrarCarregador).toBe(false);
+  });
+
+  // Interromper a inicialização de A trocando de organização não a marca como
+  // "por fazer de novo": ela já disparou nesta visita.
+  it('voltar para A depois de interromper não reabre o carregador de A', async () => {
+    const { result, rerender } = renderizar({ podeGerir: true, organizacaoId: 'org-a' });
+    await waitFor(() => expect(result.current.mostrarCarregador).toBe(true));
+
+    rerender({ podeGerir: true, organizacaoId: 'org-b' });
+    await waitFor(() => expect(result.current.mostrarCarregador).toBe(true));
+    result.current.encerrar();
+    await waitFor(() => expect(result.current.mostrarCarregador).toBe(false));
+
+    rerender({ podeGerir: true, organizacaoId: 'org-a' });
+
+    await new Promise((resolver) => setTimeout(resolver, 10));
+    expect(result.current.mostrarCarregador).toBe(false);
+  });
+});

@@ -6,6 +6,7 @@ import { supabaseServer } from '@/lib/supabaseServer';
 import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
+import { logger } from '@/lib/observability/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +39,11 @@ async function emitNfeWithLock(
     .maybeSingle();
 
   if (nfeError) {
-    return NextResponse.json({ success: false, error: nfeError.message }, { status: 500 });
+    // Ticket 22, critério 13 — `nfeError` é um `PostgrestError`, e `message`
+    // carrega texto do Postgres: nome de constraint, e num conflito de
+    // unicidade o próprio valor da linha. Ia inteiro para o cliente.
+    registrarFalhaInterna('nfe.consultar_documento', nfeError, { organizacaoId: scope.organizationId });
+    return NextResponse.json({ success: false, error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 
   if (nfeExistente) {
@@ -59,11 +64,29 @@ async function emitNfeWithLock(
   const nfeStatus = nfeData.status ?? nfeData.situacao ?? 'Emitida';
 
   if (!nfeBlingId || !nfeNumero) {
-    console.error('[nfe] Resposta do Bling sem identificador/numero esperados:', JSON.stringify(nfeResult));
+    // Ticket 22, critério 13 — aqui saíam **duas** cópias do documento fiscal:
+    // `JSON.stringify(nfeResult)` no log e `raw: nfeResult` na resposta. É o
+    // corpo de uma NF-e: destinatário, itens, valores. Nada disso é
+    // diagnóstico, e nada disso pode sair — nem ao cliente, nem ao log.
+    //
+    // O que ajuda a diagnosticar é **qual campo faltou**, e é a única coisa que
+    // fica: os nomes das chaves que vieram, sem um único valor.
+    logger.error('nfe.resposta_do_bling_sem_identificador', {
+      subsystem: 'app',
+      provider: 'bling',
+      organizacaoId: scope.organizationId,
+      camposRecebidos: Object.keys((nfeResult ?? {}) as Record<string, unknown>).sort(),
+      camposEmData: Object.keys((nfeResult?.data ?? {}) as Record<string, unknown>).sort(),
+      temIdentificador: nfeBlingId.length > 0,
+      temNumero: String(nfeNumero).length > 0,
+    });
+    // A resposta diz o que aconteceu e onde procurar. O pedido no Bling é o que
+    // permite achar a nota — e ele veio do próprio chamador.
     return NextResponse.json({
       success: false,
-      error: 'NF-e emitida no Bling, mas resposta inválida. Reconciliação manual necessária.',
-      raw: nfeResult,
+      error: 'NF-e emitida no Bling, mas a resposta não trouxe número nem identificador. Reconciliação manual necessária.',
+      compensation_required: true,
+      bling_pedido_id: blingPedidoId,
     }, { status: 502 });
   }
 

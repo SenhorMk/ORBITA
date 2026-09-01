@@ -1097,6 +1097,12 @@ export default function Home() {
     <div className="min-h-screen flex font-sans select-none bg-[#0d0818] text-slate-100">
 
       <StartupLoader
+        // A chave é a organização: trocar de organização **desmonta** o
+        // carregador da anterior, então nenhum trabalho em curso dela chega
+        // atrasado para decidir a tela da nova. O `encerrar` já recusa a
+        // chamada de fora da organização atual; a chave fecha o caminho antes
+        // dele (revisão do head `2d1795a`).
+        key={organizacaoConfirmada ?? 'sem-organizacao'}
         isVisible={showStartupLoader}
         onComplete={() => {
           encerrarStartup();

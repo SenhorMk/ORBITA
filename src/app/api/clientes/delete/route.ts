@@ -3,7 +3,6 @@ import { clienteRepository } from '@/repositories/clienteRepository';
 import { bling } from '@/services/bling';
 import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
-import { descreverErro } from '@/lib/erroLegivel';
 
 export async function POST(request: Request) {
   const logEntries: string[] = [];
@@ -39,8 +38,13 @@ export async function POST(request: Request) {
         await blingClient.deleteContato(bling_id);
         logEntries.push(`[${new Date().toISOString()}] ✅ Contato deletado no Bling com sucesso.`);
       } catch (err: unknown) {
-        const errMsg = descreverErro(err);
-        logEntries.push(`[${new Date().toISOString()}] ⚠️ Erro ao deletar no Bling: ${errMsg}. Continuando para excluir no cache local.`);
+        // Ticket 22, critério 13 — `logs` volta ao cliente **numa resposta
+        // 200**, e esta linha levava `descreverErro` inteiro dentro dela. Era o
+        // mesmo vazamento das respostas de falha, num caminho de sucesso: o
+        // cliente local foi excluído e o remoto não. O fato fica; a causa vai
+        // para o log do servidor.
+        registrarFalhaInterna('clientes.delete.bling', err, { organizacaoId: scope.organizationId });
+        logEntries.push(`[${new Date().toISOString()}] ⚠️ Falha ao deletar o contato no Bling. Continuando para excluir no cache local.`);
       }
     }
 
