@@ -79,6 +79,10 @@ export function useOrganizationsList(fetchWithAuth: AuthenticatedFetch) {
   return {
     organizacoes,
     activeOrg,
+    // A versão da seleção sai daqui porque a tela precisa dela: trocar de
+    // organização e voltar para a mesma são seleções diferentes, e é a versão
+    // que separa uma da outra.
+    selectionVersion,
     isLoading,
     error,
     switchingOrgId,

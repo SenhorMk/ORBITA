@@ -6,13 +6,21 @@ import { CreateOrganizationForm } from './CreateOrganizationForm';
 import { InviteMemberForm } from './InviteMemberForm';
 import { AcceptInviteForm } from './AcceptInviteForm';
 import { MembersList } from './MembersList';
+import type { SelecaoDeOrganizacao } from './usePapelNaOrganizacaoAtiva';
 import { useOrganizationPanel, type AuthenticatedFetch } from './useOrganizationPanel';
 
 export interface OrganizationPanelProps {
   /** Authenticated fetch boundary (Supabase bearer token attached by the caller). */
   fetchWithAuth: AuthenticatedFetch;
-  /** Notified whenever the server-confirmed active organization changes, so sibling panels (billing, integrations) can scope their own requests. */
-  onActiveOrgChange?: (organizacaoId: string | null) => void;
+  /**
+   * Notified whenever the server-confirmed active organization changes, so
+   * sibling panels (billing, integrations) can scope their own requests — and
+   * so the screen's own authority over role can be invalidated at the switch.
+   *
+   * Carries the selection **version** alongside the id: switching away and back
+   * are different selections, and only the version tells them apart.
+   */
+  onActiveOrgChange?: (selecao: SelecaoDeOrganizacao | null) => void;
 }
 
 /**

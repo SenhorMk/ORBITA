@@ -79,7 +79,11 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { format, subDays, isAfter, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
-import { usePapelNaOrganizacaoAtiva } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
+import {
+  usePapelNaOrganizacaoAtiva,
+  type SelecaoDeOrganizacao,
+} from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
+import { useStartupPorOrganizacao } from '@/components/organizacao/useStartupPorOrganizacao';
 import { descreverErro } from '@/lib/erroLegivel';
 
 /**
@@ -253,8 +257,20 @@ export default function Home() {
     }
     return null;
   });
-  // Autoridade única sobre papel: o vínculo persistido, lido do servidor.
-  const { podeGerir } = usePapelNaOrganizacaoAtiva(fetchWithAuth, session?.email ?? null);
+  // Organização ativa (Ticket 24b): resolvida pelo servidor via OrganizationPanel,
+  // nunca escolhida localmente. Escopa a leitura de plano/limites — e, desde a
+  // revisão do #66, também invalida a autoridade visual sobre papel na troca.
+  const [selecaoDeOrganizacao, setSelecaoDeOrganizacao] = useState<SelecaoDeOrganizacao | null>(null);
+  const activeOrganizacaoId = selecaoDeOrganizacao?.id ?? null;
+
+  // Autoridade única sobre papel: o vínculo persistido, lido do servidor, para
+  // o par (sessão, organização ativa). Trocar qualquer um dos dois invalida o
+  // papel anterior antes de a resposta nova chegar.
+  const { podeGerir, organizacaoId: organizacaoConfirmada } = usePapelNaOrganizacaoAtiva(
+    fetchWithAuth,
+    session?.email ?? null,
+    selecaoDeOrganizacao,
+  );
   const isOwner = podeGerir;
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -265,8 +281,12 @@ export default function Home() {
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [selectedClienteModal, setSelectedClienteModal] = useState<Cliente | null>(null);
   const [isClienteModalOpen, setIsClienteModalOpen] = useState(false);
-  const [showStartupLoader, setShowStartupLoader] = useState(false);
-  const [hasStartedUp, setHasStartedUp] = useState(false);
+  // A inicialização é **por organização confirmada**, e só de quem administra.
+  // Era um booleano global ao lado de um papel que só conhecia a sessão: quem
+  // iniciava em A e trocava para B nunca via a inicialização de B, porque o
+  // estado de A continuava valendo (revisão do #66).
+  const { mostrarCarregador: showStartupLoader, encerrar: encerrarStartup } =
+    useStartupPorOrganizacao(podeGerir, organizacaoConfirmada);
 
   const handleOpenProductModal = (produto: Produto) => {
     setSelectedProdutoModal(produto);
@@ -277,10 +297,6 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<
     'dashboard' | 'sales' | 'inventory' | 'contacts' | 'finance' | 'sac' | 'organization' | 'integrations' | 'billing'
   >('dashboard');
-
-  // Organização ativa (Ticket 24b): resolvida pelo servidor via OrganizationPanel,
-  // nunca escolhida localmente. Usada apenas para escopar a leitura de plano/limites.
-  const [activeOrganizacaoId, setActiveOrganizacaoId] = useState<string | null>(null);
 
   // Estados para filtros e ordenação na aba Vendas
   const [filterDays, setFilterDays] = useState<string>('all');
@@ -705,16 +721,6 @@ export default function Home() {
     };
   }, [session, loadDashboardData]);
 
-  useEffect(() => {
-    if (podeGerir && !hasStartedUp) {
-      const timer = setTimeout(() => {
-        setShowStartupLoader(true);
-        setHasStartedUp(true);
-      }, 0);
-      return () => clearTimeout(timer);
-    }
-  }, [podeGerir, hasStartedUp]);
-
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
@@ -1093,11 +1099,11 @@ export default function Home() {
       <StartupLoader
         isVisible={showStartupLoader}
         onComplete={() => {
-          setShowStartupLoader(false);
+          encerrarStartup();
           loadDashboardData();
         }}
         onNeedsAuth={() => {
-          setShowStartupLoader(false);
+          encerrarStartup();
           setActiveTab('integrations');
         }}
         fetchWithAuth={fetchWithAuth}
@@ -1308,7 +1314,7 @@ export default function Home() {
 
         {/* TAB ORGANIZAÇÃO & MEMBROS (Ticket 24b) */}
         <div className={activeTab === 'organization' ? 'block' : 'hidden'}>
-          <OrganizationPanel fetchWithAuth={fetchWithAuth} onActiveOrgChange={setActiveOrganizacaoId} />
+          <OrganizationPanel fetchWithAuth={fetchWithAuth} onActiveOrgChange={setSelecaoDeOrganizacao} />
         </div>
 
         {/* TAB INTEGRAÇÕES: Bling / Chatwoot (Ticket 24b) */}
