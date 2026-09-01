@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 
 export async function GET(request: Request) {
   try {
@@ -19,7 +20,10 @@ export async function GET(request: Request) {
     return NextResponse.json(situacoes);
   } catch (error: unknown) {
     console.error('Erro ao buscar situações no Bling:', error);
-    const errMsg = error instanceof Error ? error.message : 'Erro ao buscar situações no Bling';
-    return NextResponse.json({ error: errMsg }, { status: 500 });
+    // Ticket 22, critério 13 — este `catch` era inerte atrás do 401 legado, e
+    // devolvia a mensagem do erro ao cliente (CWE-209). O diagnóstico fica no
+    // log; a resposta é a frase pública fixa.
+    registrarFalhaInterna('bling.situacoes.listar', error);
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }

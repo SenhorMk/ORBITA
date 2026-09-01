@@ -5,7 +5,7 @@ import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
-import { descreverErro } from '@/lib/erroLegivel';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 
 export const dynamic = 'force-dynamic';
 
@@ -89,8 +89,14 @@ async function emitNfeWithLock(
 
     return NextResponse.json({ success: true, data: nfeCache });
   } catch (dbError: unknown) {
-    const dbErrMsg = descreverErro(dbError);
-    console.error('❌ CRÍTICO: NF-e emitida com sucesso no Bling, mas ocorreu uma falha ao atualizar o banco local!', dbError);
+    // A nota existe no Bling e não existe aqui: é o único caminho que exige
+    // ação humana, e por isso ele continua dizendo **o quê e onde** — número,
+    // chave e id da nota são o que permite reconciliar.
+    //
+    // Ticket 22, critério 13 — o que sai é `db_error`: a mensagem do banco não
+    // ajuda a reconciliar nada e é diagnóstico interno (CWE-209). Ela passa a
+    // ficar só no log.
+    registrarFalhaInterna('nfe.persistir', dbError, { organizacaoId: scope.organizationId });
     return NextResponse.json({
       success: false,
       error: 'Nota fiscal foi gerada com sucesso no ERP Bling, porém ocorreu um erro ao salvar o registro no banco local. Pendente reconciliação manual.',
@@ -98,7 +104,6 @@ async function emitNfeWithLock(
       bling_nfe_id: nfeBlingId,
       numero: String(nfeNumero),
       chave: nfeChave,
-      db_error: dbErrMsg
     }, { status: 500 });
   }
 }
@@ -142,10 +147,10 @@ export async function POST(request: Request) {
         const blingClient = bling.forVerifiedOrganization(scope);
         return await emitNfeWithLock(scope, pedidoId, blingPedidoId, blingClient);
       } catch (error: unknown) {
-        console.error('Erro na emissão de NF-e:', error);
-        const errMsg = error instanceof Error ? error.message : 'Falha ao emitir nota fiscal no ERP';
+        // Ticket 22, critério 13 — CWE-209 inerte atrás do 401 legado.
+        registrarFalhaInterna('nfe.emitir', error, { organizacaoId: scope.organizationId });
         return NextResponse.json(
-          { success: false, error: errMsg },
+          { success: false, error: 'Falha ao emitir nota fiscal no ERP' },
           { status: 500 }
         );
       } finally {
@@ -159,10 +164,9 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: true, data: { status: 'mock' } });
     }
   } catch (error: unknown) {
-    console.error('Erro na emissão de NF-e:', error);
-    const errMsg = error instanceof Error ? error.message : 'Falha ao processar solicitação';
+    registrarFalhaInterna('nfe.processar', error);
     return NextResponse.json(
-      { success: false, error: errMsg },
+      { success: false, error: MENSAGEM_PUBLICA_DE_FALHA },
       { status: 500 }
     );
   }

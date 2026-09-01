@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { clienteRepository } from '@/repositories/clienteRepository';
 import { bling } from '@/services/bling';
 import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 import { descreverErro } from '@/lib/erroLegivel';
 
 export async function POST(request: Request) {
@@ -49,20 +50,22 @@ export async function POST(request: Request) {
       await clienteRepository.delete(scope, id);
       logEntries.push(`[${new Date().toISOString()}] ✅ Cliente removido do Supabase com sucesso.`);
     } catch (err: unknown) {
-      const errMsg = descreverErro(err);
-      logEntries.push(`[${new Date().toISOString()}] ❌ Erro ao deletar no Supabase: ${errMsg}`);
+      // Ticket 22, critério 13 — `details` levava a mensagem do banco ao
+      // cliente, e `logs` levava junto tudo o que este handler escreveu no
+      // caminho. Os dois eram inertes atrás do 401 legado. O diagnóstico fica
+      // no log do servidor; a resposta diz só que falhou.
+      registrarFalhaInterna('clientes.delete.supabase', err, { organizacaoId: scope.organizationId });
       return NextResponse.json(
-        { success: false, error: 'Falha ao deletar do banco de dados local.', details: errMsg, logs: logEntries },
+        { success: false, error: 'Falha ao deletar do banco de dados local.' },
         { status: 500 }
       );
     }
 
     return NextResponse.json({ success: true, logs: logEntries });
   } catch (err: unknown) {
-    const errMsg = descreverErro(err);
-    logEntries.push(`[${new Date().toISOString()}] 💥 Erro crítico ao processar exclusão: ${errMsg}`);
+    registrarFalhaInterna('clientes.delete', err);
     return NextResponse.json(
-      { success: false, error: 'Erro interno.', details: errMsg, logs: logEntries },
+      { success: false, error: MENSAGEM_PUBLICA_DE_FALHA },
       { status: 500 }
     );
   }

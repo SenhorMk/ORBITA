@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { bling } from '@/services/bling';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 
 export const dynamic = 'force-dynamic';
 
@@ -60,9 +61,9 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ success: true, data: fornecedores });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Erro ao buscar fornecedores';
-    console.error('Erro ao buscar fornecedores:', message);
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    // Ticket 22, critério 13 — CWE-209 que o 401 legado mantinha inerte.
+    registrarFalhaInterna('financeiro.fornecedores.listar', error);
+    return NextResponse.json({ success: false, error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }
 
@@ -102,8 +103,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, data: fornecedorCriado });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Erro interno ao criar fornecedor';
-    console.error('Erro ao criar fornecedor:', message);
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    // Ticket 22, critério 13 — o POST tem o próprio `catch`, e a decisão dele é
+    // própria: a mesma frase pública, sem a mensagem do erro.
+    registrarFalhaInterna('financeiro.fornecedores.criar', error);
+    return NextResponse.json({ success: false, error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }

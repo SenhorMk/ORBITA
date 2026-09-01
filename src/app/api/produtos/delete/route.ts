@@ -3,6 +3,7 @@ import { produtoRepository } from '@/repositories/produtoRepository';
 import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
 import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 import { descreverErro } from '@/lib/erroLegivel';
 
 /** Best-effort remote delete: local deletion must proceed even if the Bling side fails. */
@@ -64,24 +65,22 @@ export async function POST(request: Request) {
     } catch (dbErr: unknown) {
       const dbErrMsg = descreverErro(dbErr);
       logEntries.push(`[${new Date().toISOString()}] ❌ ERRO SUPABASE: ${dbErrMsg}`);
+      // Ticket 22, critério 13 — `details` e `logs` levavam o diagnóstico do
+      // banco ao cliente (CWE-209), e eram inertes atrás do 401 legado.
+      registrarFalhaInterna('produtos.delete.supabase', dbErr, { organizacaoId: scope.organizationId });
       return NextResponse.json(
-        {
-          success: false,
-          error: 'Falha ao deletar no banco de dados Supabase.',
-          details: dbErrMsg,
-          logs: logEntries,
-        },
+        { success: false, error: 'Falha ao deletar no banco de dados Supabase.' },
         { status: 500 }
       );
     }
 
     if (blingError) {
+      // O aviso continua: o produto saiu daqui e não de lá, e quem chamou
+      // precisa saber. O que sai é o fato, não o texto do erro.
       return NextResponse.json({
         success: true,
         warning: true,
         error: 'Produto excluído localmente, mas falhou ao tentar deletar na API do Bling ERP.',
-        details: blingError,
-        logs: logEntries,
       });
     }
 
@@ -93,13 +92,9 @@ export async function POST(request: Request) {
   } catch (err: unknown) {
     const errMessage = descreverErro(err);
     logEntries.push(`[${new Date().toISOString()}] 💥 ERRO CRÍTICO NA API DE EXCLUSÃO DE PRODUTOS: ${errMessage}`);
+    registrarFalhaInterna('produtos.delete', err);
     return NextResponse.json(
-      {
-        success: false,
-        error: 'Erro crítico interno ao processar a exclusão do produto.',
-        details: errMessage,
-        logs: logEntries,
-      },
+      { success: false, error: MENSAGEM_PUBLICA_DE_FALHA },
       { status: 500 }
     );
   }
