@@ -5,10 +5,22 @@ import { produtoRepository } from '../repositories/produtoRepository';
 import { pedidoRepository } from '../repositories/pedidoRepository';
 import { Cliente, Produto, Pedido, ItemPedido } from '../types';
 import { descreverErro } from '../lib/erroLegivel';
-import { supabaseServer } from '../lib/supabaseServer';
+import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 import { mapBlingStatus, normalizeToE164 } from '../lib/utils';
-import type { ActorContext, VerifiedTenant } from '../lib/auth';
-import { verifyOrganizationScope, type VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
+import {
+  FALHA_PUBLICA_DE_SINCRONIZACAO,
+  type EnqueueSyncResult,
+  type SyncAllResult,
+  type SyncProcessOutcome,
+} from './syncContrato';
+
+export {
+  FALHA_PUBLICA_DE_SINCRONIZACAO,
+  type EnqueueSyncResult,
+  type SyncAllResult,
+  type SyncProcessOutcome,
+};
 import {
   enqueueJob,
   acquireLease,
@@ -20,13 +32,6 @@ import {
   type SyncJob,
 } from '../repositories/syncJobRepository';
 
-import { resolveTenantOrgId } from '../lib/organizationContext';
-// resolveTenantOrgId is used only to resolve the ActorContext's organization
-// membership when constructing the VerifiedOrganizationScope in
-// resolveScope() below. Every DB read/write in this service uses the
-// resulting verified scope (scope.organizationId), never the primitive
-// tenant/user id as authority.
-
 import {
   getBlingDateTime,
   getLastSyncedAt,
@@ -34,39 +39,9 @@ import {
   touchSyncState,
 } from './syncCheckpoint';
 
-export interface EnqueueSyncResult {
-  jobId: string;
-  status: string;
-  isNew: boolean;
-}
-
-export interface SyncAllResult {
-  success: boolean;
-  stats: {
-    clientes: number;
-    produtos: number;
-    pedidos: number;
-  };
-}
-
 export class SyncService {
-  private async resolveScope(context: ActorContext): Promise<VerifiedOrganizationScope> {
-    const organizationId = await resolveTenantOrgId(supabaseServer, context.tenant);
-    const result = await verifyOrganizationScope(supabaseServer, {
-      organizationId,
-      actorId: context.actorId,
-    });
-    if (result._tag === 'OrganizationScopeDenied') {
-      throw new SyncScopeDeniedError();
-    }
-    if (result._tag === 'OrganizationScopeStoreUnavailable') {
-      throw new SyncAuthorizationStoreUnavailableError();
-    }
-    return result.scope;
-  }
-
-  async enqueueSync(context: ActorContext): Promise<EnqueueSyncResult> {
-    return enqueueJob(await this.resolveScope(context));
+  async enqueueSync(scope: VerifiedOrganizationScope): Promise<EnqueueSyncResult> {
+    return enqueueJob(scope);
   }
 
   /**
@@ -79,23 +54,48 @@ export class SyncService {
    * era consultado por "alterados desde o momento da falha" e respondia zero —
    * corretamente. Sem uma sincronização completa não havia como sair disso.
    */
-  async processJob(jobId: string, context: ActorContext, opcoes: { completa?: boolean } = {}): Promise<void> {
-    let scope: VerifiedOrganizationScope;
+  async processJob(
+    jobId: string,
+    scope: VerifiedOrganizationScope,
+    opcoes: { completa?: boolean } = {},
+  ): Promise<SyncProcessOutcome> {
+    // A preparação ficava fora do `try`. Em `POST /api/sync` este método roda
+    // dentro de `after()`, depois da resposta 202 já ter saído: uma rejeição
+    // aqui virava promise não observada, e o job ficava `queued` para sempre,
+    // com a tela consultando um estado que nunca mudava.
+    let leaseAcquired: boolean;
     try {
-      scope = await this.resolveScope(context);
-    } catch (error: unknown) {
-      if (error instanceof SyncScopeDeniedError || error instanceof SyncAuthorizationStoreUnavailableError) {
-        console.error('Sincronização não iniciada: escopo organizacional indisponível ou revogado.');
-        return;
-      }
-      throw error;
+      await releaseExpiredLeases();
+      leaseAcquired = await acquireLease(scope, jobId);
+    } catch (err: unknown) {
+      registrarFalhaInterna('sync.preparar', err, {
+        organizacaoId: scope.organizationId,
+        atorId: scope.actorId,
+      });
+      // **Não** encerra o job aqui, e isto é deliberado. Uma rejeição de
+      // `acquireLease` é resultado *ambíguo*: a RPC pode ter concedido a lease
+      // e a resposta ter se perdido, e pode haver outra callback processando
+      // este mesmo job agora. `concluir_job_sync` atualiza incondicionalmente
+      // por id e limpa a lease — então marcar falho aqui derrubaria o job que
+      // outra execução está tocando, liberaria a restrição de job ativo e
+      // abriria caminho para duas sincronizações concorrentes.
+      //
+      // Encerrar com segurança exigiria identidade de lease (`lease_owner`) e
+      // compare-and-set no banco, o que é migration própria. Sem isso, quem
+      // decide é a próxima execução. O job fica `queued`, que é verdade, em vez
+      // de `failed`, que seria mentira sobre um trabalho possivelmente em
+      // andamento.
+      //
+      // **O TTL não cobre este caso.** Ele só resolve quando a aquisição foi
+      // confirmada remotamente e a resposta se perdeu: aí existe uma lease para
+      // expirar, e `releaseExpiredLeases` a libera. Se a RPC falhou **antes** de
+      // conceder, não há lease nenhuma, e o job permanece `queued` até que
+      // alguém chame de novo.
+      return { _tag: 'PreparationFailed' };
     }
-    const tenant = context.tenant;
-    await releaseExpiredLeases();
 
-    const leaseAcquired = await acquireLease(scope, jobId);
     if (!leaseAcquired) {
-      return;
+      return { _tag: 'LeaseHeldElsewhere' };
     }
 
     const progress: SyncJobProgress = {
@@ -119,19 +119,19 @@ export class SyncService {
           etapa: 'clientes',
           proxima: 'produtos',
           field: 'clientes_processados',
-          action: () => this._syncClientes(scope, jobId, tenant, blingClient, progress),
+          action: () => this._syncClientes(scope, jobId, blingClient, progress),
         },
         {
           etapa: 'produtos',
           proxima: 'pedidos',
           field: 'produtos_processados',
-          action: () => this._syncProdutos(scope, jobId, tenant, blingClient, progress, opcoes.completa === true),
+          action: () => this._syncProdutos(scope, jobId, blingClient, progress, opcoes.completa === true),
         },
         {
           etapa: 'pedidos',
           proxima: 'concluido',
           field: 'pedidos_processados',
-          action: () => this._syncPedidos(scope, jobId, tenant, blingClient, progress, opcoes.completa === true),
+          action: () => this._syncPedidos(scope, jobId, blingClient, progress, opcoes.completa === true),
         },
       ];
 
@@ -144,28 +144,71 @@ export class SyncService {
         await advanceCheckpoint(scope, jobId, { ...progress });
       }
 
-      await completeJob(scope, jobId, 'completed');
     } catch (err: unknown) {
-      const msg = descreverErro(err);
-      const redacted = msg
-        .replace(/Bearer\s+\S+/gi, '[REDACTED]')
-        .replace(/key=[^&\s]*/gi, 'key=[REDACTED]');
-      console.error('❌ Sincronização Orbita: Job falhou.', { jobId, error: redacted });
-      await completeJob(scope, jobId, 'failed', redacted);
+      registrarFalhaInterna('sync.processar', err, {
+        organizacaoId: scope.organizationId,
+        atorId: scope.actorId,
+      });
+      try {
+        await completeJob(scope, jobId, 'failed', FALHA_PUBLICA_DE_SINCRONIZACAO);
+      } catch (erroAoConcluir: unknown) {
+        registrarFalhaInterna('sync.concluir_apos_falha', erroAoConcluir, {
+          organizacaoId: scope.organizationId,
+        });
+        // Nem o estado terminal foi gravado. O registro fica `running` sem
+        // ninguém trabalhando nele — dizer `JobFinished` aqui faria o chamador
+        // ler esse `running` como "alguém está tocando" e anunciar sucesso.
+        return { _tag: 'FinalizationFailed' };
+      }
+      return { _tag: 'JobFinished' };
     }
+
+    // A conclusão como `completed` fica **fora** do bloco das etapas, e isso é o
+    // ponto. Enquanto estava dentro, uma resposta perdida — timeout, queda de
+    // rede — depois de a RPC ter concluído o job no banco caía no `catch`, que
+    // entendia "o processamento falhou" e chamava `completeJob(..., 'failed')`.
+    // Como `concluir_job_sync` atualiza incondicionalmente por id, a segunda
+    // chamada **sobrescrevia `completed` por `failed`**, com todas as etapas
+    // tendo terminado bem.
+    try {
+      await completeJob(scope, jobId, 'completed');
+    } catch (erroAoConcluir: unknown) {
+      registrarFalhaInterna('sync.concluir_como_completo', erroAoConcluir, {
+        organizacaoId: scope.organizationId,
+      });
+      // Resultado **ambíguo**: não sabemos se `completed` foi aplicado do outro
+      // lado. Tentar gravar `failed` aqui seria justamente a sobrescrita
+      // destrutiva. O trabalho terminou; o que não dá para afirmar é o registro.
+      return { _tag: 'FinalizationFailed' };
+    }
+
+    return { _tag: 'JobFinished' };
   }
 
-  async getJobStatus(jobId: string, context: ActorContext): Promise<SyncJob | null> {
-    return getJobStatus(await this.resolveScope(context), jobId);
+  async getJobStatus(jobId: string, scope: VerifiedOrganizationScope): Promise<SyncJob | null> {
+    return getJobStatus(scope, jobId);
   }
 
-  async syncAll(context: ActorContext): Promise<SyncAllResult> {
-    const { jobId } = await this.enqueueSync(context);
-    await this.processJob(jobId, context);
-    const status = await this.getJobStatus(jobId, context);
+  async syncAll(scope: VerifiedOrganizationScope): Promise<SyncAllResult> {
+    const { jobId } = await this.enqueueSync(scope);
+    const outcome = await this.processJob(jobId, scope);
+
+    // A tentativa de processar tem resposta própria. Nestes dois ramos o estado
+    // gravado **não** descreve a realidade — `queued` sem ninguém tentando, ou
+    // `running` de um worker que já desistiu — então ele não é consultado.
+    if (outcome._tag === 'PreparationFailed' || outcome._tag === 'FinalizationFailed') {
+      return {
+        success: false,
+        status: outcome._tag === 'PreparationFailed' ? 'preparation_failed' : 'finalization_failed',
+        stats: { clientes: 0, produtos: 0, pedidos: 0 },
+      };
+    }
+
+    const status = await this.getJobStatus(jobId, scope);
 
     return {
       success: status?.status === 'completed',
+      status: status?.status ?? 'unknown',
       stats: {
         clientes: status?.progress.clientes_processados ?? 0,
         produtos: status?.progress.produtos_processados ?? 0,
@@ -183,7 +226,6 @@ export class SyncService {
   private async _syncClientes(
     scope: VerifiedOrganizationScope,
     jobId: string,
-    tenant: VerifiedTenant,
     blingClient: BlingPort,
     progress: SyncJobProgress,
   ): Promise<number> {
@@ -209,7 +251,7 @@ export class SyncService {
         },
       );
 
-      await touchSyncState(scope.organizationId, tenant.id, 'clientes');
+      await touchSyncState(scope.organizationId, scope.actorId, 'clientes');
       return total;
     } catch (err: unknown) {
       // A etapa NAO devolve 0 numa falha. Devolver zero fazia o job
@@ -223,7 +265,6 @@ export class SyncService {
   private async _syncProdutos(
     scope: VerifiedOrganizationScope,
     jobId: string,
-    tenant: VerifiedTenant,
     blingClient: BlingPort,
     progress: SyncJobProgress,
     completa = false,
@@ -286,7 +327,7 @@ export class SyncService {
         },
       );
 
-      await touchSyncState(scope.organizationId, tenant.id, 'produtos');
+      await touchSyncState(scope.organizationId, scope.actorId, 'produtos');
       return total;
     } catch (err: unknown) {
       // A etapa NAO devolve 0 numa falha. Devolver zero fazia o job
@@ -300,7 +341,6 @@ export class SyncService {
   private async _syncPedidos(
     scope: VerifiedOrganizationScope,
     jobId: string,
-    tenant: VerifiedTenant,
     blingClient: BlingPort,
     progress: SyncJobProgress,
     completa = false,
@@ -370,7 +410,7 @@ export class SyncService {
         },
       );
 
-      await touchSyncState(scope.organizationId, tenant.id, 'pedidos');
+      await touchSyncState(scope.organizationId, scope.actorId, 'pedidos');
       return total;
     } catch (err: unknown) {
       // A etapa NAO devolve 0 numa falha. Devolver zero fazia o job
@@ -382,20 +422,10 @@ export class SyncService {
   }
 }
 
-export class SyncScopeDeniedError extends Error {
-  readonly _tag = 'SyncScopeDeniedError';
-  constructor() {
-    super('Escopo organizacional não verificado.');
-    this.name = 'SyncScopeDeniedError';
-  }
-}
-
-export class SyncAuthorizationStoreUnavailableError extends Error {
-  readonly _tag = 'SyncAuthorizationStoreUnavailableError';
-  constructor() {
-    super('Serviço de autorização temporariamente indisponível.');
-    this.name = 'SyncAuthorizationStoreUnavailableError';
-  }
-}
+// `SyncScopeDeniedError` e `SyncAuthorizationStoreUnavailableError` foram
+// removidas no Ticket 22. Elas existiam para o serviço contar à rota uma
+// negação de autorização por exceção; agora a autorização acontece antes, na
+// fronteira HTTP, que responde 403 e 503 direto. Um erro que sai daqui é falha
+// de sincronização, não de permissão — e a rota não precisa mais distinguir.
 
 export const syncService = new SyncService();

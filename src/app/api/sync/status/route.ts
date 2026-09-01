@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { syncService, SyncAuthorizationStoreUnavailableError, SyncScopeDeniedError } from '../../../../services/sync';
-import { verifySessionAndRole } from '../../../../lib/auth';
+import { syncService, FALHA_PUBLICA_DE_SINCRONIZACAO } from '../../../../services/sync';
+import { resolveVerifiedOrganizationScope } from '../../../../lib/requestOrganizationContext';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '../../../../lib/observability/falhaInterna';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,10 +11,12 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(request: Request) {
   try {
-    const session = await verifySessionAndRole(request);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 });
-    }
+    // Ticket 22 — a autorização acontece aqui, uma vez. Antes o portão legado
+    // perguntava por `app_metadata` e o serviço perguntava de novo, por outra
+    // fonte, devolvendo a negação como exceção para a rota traduzir em status.
+    const scopeResult = await resolveVerifiedOrganizationScope(request);
+    if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+    const scope = scopeResult.scope;
 
     const { searchParams } = new URL(request.url);
     const jobId = searchParams.get('job_id');
@@ -25,7 +28,7 @@ export async function GET(request: Request) {
       );
     }
 
-    const job = await syncService.getJobStatus(jobId, session);
+    const job = await syncService.getJobStatus(jobId, scope);
 
     if (!job) {
       return NextResponse.json(
@@ -40,20 +43,21 @@ export async function GET(request: Request) {
         id: job.id,
         status: job.status,
         progress: job.progress,
-        last_error: job.last_error,
+        // A fronteira não confia no que está persistido. O produtor atual só
+        // grava `SYNC_FAILED`, mas linhas antigas — e qualquer outro produtor —
+        // podem carregar o texto do Postgres, com nome de constraint, `details`,
+        // `hint` e valor de linha. Qualquer `last_error` não nulo sai como o
+        // mesmo código público, independentemente do conteúdo (CWE-209).
+        last_error: job.last_error === null || job.last_error === undefined
+          ? null
+          : FALHA_PUBLICA_DE_SINCRONIZACAO,
         created_at: job.created_at,
         updated_at: job.updated_at,
         completed_at: job.completed_at,
       },
     });
   } catch (error: unknown) {
-    if (error instanceof SyncScopeDeniedError) {
-      return NextResponse.json({ success: false, error: 'Escopo organizacional inválido' }, { status: 403 });
-    }
-    if (error instanceof SyncAuthorizationStoreUnavailableError) {
-      return NextResponse.json({ success: false, error: 'Serviço de autorização indisponível' }, { status: 503 });
-    }
-    console.error('❌ /api/sync/status GET: falha interna não classificada');
-    return NextResponse.json({ success: false, error: 'Erro interno' }, { status: 500 });
+    registrarFalhaInterna('sync.status.consultar', error);
+    return NextResponse.json({ success: false, error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }

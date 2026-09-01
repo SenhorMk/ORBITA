@@ -15,6 +15,12 @@ import {
   verifyOrganizationScope,
   type VerifiedOrganizationScope,
 } from './verifiedOrganizationScope';
+
+// Reexportado por conveniência das rotas, que já importam deste módulo. A
+// definição vive em `verifiedOrganizationScope`, que é puro — este módulo
+// constrói o cliente Supabase no load, e um adaptador HTTP não deve carregar
+// isso só para perguntar o que um papel pode fazer (Ticket 22).
+export { escopoTemCapacidade } from './verifiedOrganizationScope';
 import { SupabaseOrganizationMemberships } from '@/repositories/organizationMembershipRepository';
 
 const memberships = new SupabaseOrganizationMemberships(supabaseServer);
@@ -119,19 +125,4 @@ export async function authorizeRequestOrganizationCapability(
   }
 
   return { _tag: 'OrganizationCapabilityAuthorized', scope: scopeResult.scope };
-}
-
-/**
- * A capacidade que o papel do escopo já verificado concede.
- *
- * Existe para as rotas que faziam `session.role !== 'dono'`: aquele papel vinha
- * de `app_metadata`, do modelo antigo de tenancy por usuário, e não tem relação
- * com o papel que a pessoa tem *na organização*. A pergunta certa é sobre a
- * capacidade, e a fonte certa é o vínculo persistido (Ticket 22).
- */
-export function escopoTemCapacidade(
-  scope: VerifiedOrganizationScope,
-  capability: OrganizationCapability,
-): boolean {
-  return organizationCapabilitiesForRole(scope.role).has(capability);
 }

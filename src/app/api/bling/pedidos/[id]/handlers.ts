@@ -1,37 +1,37 @@
 import { z } from 'zod';
 
-import {
-  actorContextDenialStatus,
-  type ActorCapability,
-  type ActorContextResult,
-} from '../../../../../lib/auth';
+import type { RequestOrganizationScopeResult } from '../../../../../lib/requestOrganizationContext';
+import { escopoTemCapacidade, type VerifiedOrganizationScope } from '../../../../../lib/verifiedOrganizationScope';
 import type { OrderAccessResult } from '../../../../../services/orderAccess';
 
 const orderIdentifierSchema = z.string().trim().min(1).max(160);
 const orderChangesSchema = z.record(z.string(), z.unknown());
 
-/** Order operations consumed by the HTTP adapter. */
+/**
+ * Order operations consumed by the HTTP adapter.
+ *
+ * Ticket 22 — o port recebia o `tenant` do `ActorContext`, resolvido de
+ * `app_metadata`, e cada adaptador o convertia em organização por conta
+ * própria. Passou a receber a organização já verificada.
+ */
 export interface OrderAccessPort {
   readonly read: (
-    tenant: Extract<ActorContextResult, { _tag: 'ActorContextResolved' }>['context']['tenant'],
+    scope: VerifiedOrganizationScope,
     externalId: string,
   ) => Promise<OrderAccessResult<unknown>>;
   readonly update: (
-    tenant: Extract<ActorContextResult, { _tag: 'ActorContextResolved' }>['context']['tenant'],
+    scope: VerifiedOrganizationScope,
     externalId: string,
     changes: Readonly<Record<string, unknown>>,
   ) => Promise<OrderAccessResult<unknown>>;
   readonly remove: (
-    tenant: Extract<ActorContextResult, { _tag: 'ActorContextResolved' }>['context']['tenant'],
+    scope: VerifiedOrganizationScope,
     externalId: string,
   ) => Promise<OrderAccessResult<void>>;
 }
 
-/** Server-side actor resolver required by protected order handlers. */
-export type OrderActorResolver = (
-  request: Request,
-  capability: ActorCapability,
-) => Promise<ActorContextResult>;
+/** Server-side organization resolver required by protected order handlers. */
+export type OrderScopeResolver = (request: Request) => Promise<RequestOrganizationScopeResult>;
 
 /** Next.js route context accepted by order-by-ID handlers. */
 export interface OrderByIdRouteContext {
@@ -40,19 +40,13 @@ export interface OrderByIdRouteContext {
 
 /** Dependencies accepted by the order-by-ID HTTP adapter. */
 export interface OrderByIdHandlerDependencies {
-  readonly resolveActor: OrderActorResolver;
+  readonly resolveScope: OrderScopeResolver;
   readonly orders: OrderAccessPort;
 }
 
-function authorizationDenial(result: Exclude<ActorContextResult, { _tag: 'ActorContextResolved' }>) {
-  const status = actorContextDenialStatus(result);
-  return Response.json(
-    {
-      success: false,
-      error: status === 401 ? 'Não autorizado' : 'Acesso negado',
-    },
-    { status },
-  );
+/** Negação por falta de capacidade de gestão, com o mesmo corpo de antes. */
+function gestaoNegada(): Response {
+  return Response.json({ success: false, error: 'Acesso negado' }, { status: 403 });
 }
 
 async function parseIdentifier(context: OrderByIdRouteContext): Promise<string | null> {
@@ -85,10 +79,8 @@ function orderResultResponse<T>(result: OrderAccessResult<T>): Response {
 export function createOrderByIdHandlers(dependencies: OrderByIdHandlerDependencies) {
   return {
     async GET(request: Request, context: OrderByIdRouteContext): Promise<Response> {
-      const actorResult = await dependencies.resolveActor(request, 'app:access');
-      if (actorResult._tag !== 'ActorContextResolved') {
-        return authorizationDenial(actorResult);
-      }
+      const scopeResult = await dependencies.resolveScope(request);
+      if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
 
       const externalId = await parseIdentifier(context);
       if (!externalId) {
@@ -99,15 +91,14 @@ export function createOrderByIdHandlers(dependencies: OrderByIdHandlerDependenci
       }
 
       return orderResultResponse(
-        await dependencies.orders.read(actorResult.context.tenant, externalId),
+        await dependencies.orders.read(scopeResult.scope, externalId),
       );
     },
 
     async DELETE(request: Request, context: OrderByIdRouteContext): Promise<Response> {
-      const actorResult = await dependencies.resolveActor(request, 'tenant:manage');
-      if (actorResult._tag !== 'ActorContextResolved') {
-        return authorizationDenial(actorResult);
-      }
+      const scopeResult = await dependencies.resolveScope(request);
+      if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+      if (!escopoTemCapacidade(scopeResult.scope, 'organization:manage')) return gestaoNegada();
 
       const externalId = await parseIdentifier(context);
       if (!externalId) {
@@ -117,17 +108,16 @@ export function createOrderByIdHandlers(dependencies: OrderByIdHandlerDependenci
         );
       }
 
-      const result = await dependencies.orders.remove(actorResult.context.tenant, externalId);
+      const result = await dependencies.orders.remove(scopeResult.scope, externalId);
       if (result._tag !== 'OrderAccessSucceeded') return orderResultResponse(result);
 
       return Response.json({ success: true, message: 'Pedido apagado com sucesso' });
     },
 
     async PUT(request: Request, context: OrderByIdRouteContext): Promise<Response> {
-      const actorResult = await dependencies.resolveActor(request, 'tenant:manage');
-      if (actorResult._tag !== 'ActorContextResolved') {
-        return authorizationDenial(actorResult);
-      }
+      const scopeResult = await dependencies.resolveScope(request);
+      if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
+      if (!escopoTemCapacidade(scopeResult.scope, 'organization:manage')) return gestaoNegada();
 
       const externalId = await parseIdentifier(context);
       if (!externalId) {
@@ -157,7 +147,7 @@ export function createOrderByIdHandlers(dependencies: OrderByIdHandlerDependenci
 
       return orderResultResponse(
         await dependencies.orders.update(
-          actorResult.context.tenant,
+          scopeResult.scope,
           externalId,
           changesResult.data,
         ),

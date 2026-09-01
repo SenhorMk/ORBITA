@@ -1,4 +1,4 @@
-import type { VerifiedTenant } from '../lib/auth';
+import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
 /** Tenant-owned category represented independently from provider and database field names. */
 export interface CategoryRecord {
@@ -8,38 +8,38 @@ export interface CategoryRecord {
   readonly parentBlingId: string | null;
 }
 
-/** Provider port used to fetch tenant categories one page at a time. */
+/** Provider port used to fetch organization categories one page at a time. */
 export interface CategorySource {
   readonly fetchPage: (
-    tenant: VerifiedTenant,
+    scope: VerifiedOrganizationScope,
     page: number,
     pageSize: number,
   ) => Promise<readonly CategoryRecord[]>;
 }
 
-/** Persistence port that always requires a verified tenant. */
+/** Persistence port that always requires a verified organization. */
 export interface CategoryStore {
-  readonly list: (tenant: VerifiedTenant) => Promise<readonly CategoryRecord[]>;
+  readonly list: (scope: VerifiedOrganizationScope) => Promise<readonly CategoryRecord[]>;
   readonly upsertAll: (
-    tenant: VerifiedTenant,
+    scope: VerifiedOrganizationScope,
     categories: readonly CategoryRecord[],
   ) => Promise<void>;
 }
 
-/** Result returned when listing tenant categories. */
+/** Result returned when listing organization categories. */
 export type CategoryListResult =
   | { readonly _tag: 'CategoryListSucceeded'; readonly categories: readonly CategoryRecord[] }
   | { readonly _tag: 'CategoryCatalogUnavailable' };
 
-/** Result returned after synchronizing tenant categories. */
+/** Result returned after synchronizing organization categories. */
 export type CategorySyncResult =
   | { readonly _tag: 'CategorySyncSucceeded'; readonly count: number }
   | { readonly _tag: 'CategoryCatalogUnavailable' };
 
 /**
- * Coordinate tenant-scoped category reads and provider synchronization.
+ * Coordinate organization-scoped category reads and provider synchronization.
  *
- * The verified tenant is passed to both provider and persistence adapters so
+ * The verified organization scope is passed to both provider and persistence adapters so
  * neither boundary can silently fall back to a global operation.
  */
 export class CategoryCatalog {
@@ -48,30 +48,30 @@ export class CategoryCatalog {
     private readonly store: CategoryStore,
   ) {}
 
-  /** List categories visible to one verified tenant. */
-  async list(tenant: VerifiedTenant): Promise<CategoryListResult> {
+  /** List categories visible to one verified organization. */
+  async list(scope: VerifiedOrganizationScope): Promise<CategoryListResult> {
     try {
       return {
         _tag: 'CategoryListSucceeded',
-        categories: await this.store.list(tenant),
+        categories: await this.store.list(scope),
       };
     } catch {
       return { _tag: 'CategoryCatalogUnavailable' };
     }
   }
 
-  /** Fetch every provider page and persist each category inside one tenant. */
-  async sync(tenant: VerifiedTenant): Promise<CategorySyncResult> {
+  /** Fetch every provider page and persist each category inside one organization. */
+  async sync(scope: VerifiedOrganizationScope): Promise<CategorySyncResult> {
     const pageSize = 100;
     let page = 1;
     let count = 0;
 
     try {
       while (true) {
-        const categories = await this.source.fetchPage(tenant, page, pageSize);
+        const categories = await this.source.fetchPage(scope, page, pageSize);
         if (categories.length === 0) break;
 
-        await this.store.upsertAll(tenant, categories);
+        await this.store.upsertAll(scope, categories);
         count += categories.length;
 
         if (categories.length < pageSize) break;

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveActorContext, type AuthUserLookup } from '../../../../../lib/auth';
+import { NextResponse } from 'next/server';
+
+import type { RequestOrganizationScopeResult } from '../../../../../lib/requestOrganizationContext';
+import type { VerifiedOrganizationScope } from '../../../../../lib/verifiedOrganizationScope';
 import {
   OrderAccess,
   type OrderProvider,
@@ -10,50 +13,59 @@ import {
 
 import { createOrderByIdHandlers } from './handlers';
 
-const OWNER_A_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const OWNER_B_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-const COLLABORATOR_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+/**
+ * Ticket 22 — o isolamento provado aqui era entre *tenants pessoais*, com as
+ * personas vindo de `app_metadata`. Passou a ser entre **organizações**, que é
+ * a autoridade que o resto do aplicativo usa. O que o teste garante não mudou:
+ * pedido de outra organização responde 404, igual a pedido inexistente, e a
+ * mutação sem capacidade de gestão responde 403.
+ */
+
+const ORG_A_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const ORG_B_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const ATOR_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const TENANT_B_ORDER_ID = 'bling-order-b';
 
-const ownerLookup: AuthUserLookup = {
-  async getUser(token) {
-    if (token === 'collaborator-token') {
-      return {
-        data: {
-          user: {
-            id: COLLABORATOR_ID,
-            app_metadata: { role: 'colaborador', tenant_id: OWNER_A_ID },
-          },
-        },
-        error: null,
-      };
-    }
-    const id = token === 'owner-a-token' ? OWNER_A_ID : OWNER_B_ID;
+function escopo(organizationId: string, role: 'owner' | 'admin' | 'member'): VerifiedOrganizationScope {
+  return { organizationId, actorId: ATOR_ID, role } as VerifiedOrganizationScope;
+}
+
+/** Resolvedor que lê o bearer só para escolher qual escopo devolver. */
+const resolveScope = async (request: Request): Promise<RequestOrganizationScopeResult> => {
+  const token = /^Bearer\s+(.+)$/iu.exec(request.headers.get('Authorization') ?? '')?.[1];
+  const porToken: Readonly<Record<string, VerifiedOrganizationScope>> = {
+    'owner-a-token': escopo(ORG_A_ID, 'owner'),
+    'owner-b-token': escopo(ORG_B_ID, 'owner'),
+    'collaborator-token': escopo(ORG_A_ID, 'member'),
+  };
+  const encontrado = token ? porToken[token] : undefined;
+  if (!encontrado) {
     return {
-      data: { user: { id, app_metadata: { role: 'dono' } } },
-      error: null,
+      _tag: 'RequestScopeDenied',
+      response: NextResponse.json({ success: false, error: 'Não autorizado' }, { status: 401 }),
     };
-  },
+  }
+  return { _tag: 'RequestScopeResolved', scope: encontrado };
 };
 
 describe('order-by-id HTTP handlers', () => {
-  it('returns the same not-found response for a cross-tenant delete and preserves the order', async () => {
-    const recordsByTenant = new Map<string, Map<string, OrderRecord>>([
-      [OWNER_B_ID, new Map([[
+  it('returns the same not-found response for a cross-organization delete and preserves the order', async () => {
+    const registrosPorOrganizacao = new Map<string, Map<string, OrderRecord>>([
+      [ORG_B_ID, new Map([[
         TENANT_B_ORDER_ID,
         { externalId: TENANT_B_ORDER_ID, localValue: { numero: 'B-001' } },
       ]])],
     ]);
     const store: OrderStore = {
-      async findByExternalId(tenant, externalId) {
-        return recordsByTenant.get(tenant.id)?.get(externalId) ?? null;
+      async findByExternalId(scope, externalId) {
+        return registrosPorOrganizacao.get(scope.organizationId)?.get(externalId) ?? null;
       },
-      async deleteByExternalId(tenant, externalId) {
-        recordsByTenant.get(tenant.id)?.delete(externalId);
+      async deleteByExternalId(scope, externalId) {
+        registrosPorOrganizacao.get(scope.organizationId)?.delete(externalId);
       },
     };
     const provider: OrderProvider = {
-      async read(_tenant, externalId) {
+      async read(_scope, externalId) {
         return {
           _tag: 'OrderProviderSucceeded',
           value: { id: externalId, numero: 'B-001' },
@@ -67,16 +79,14 @@ describe('order-by-id HTTP handlers', () => {
       },
     };
     const handlers = createOrderByIdHandlers({
-      resolveActor(request, capability) {
-        return resolveActorContext(request, capability, ownerLookup);
-      },
+      resolveScope,
       orders: new OrderAccess(store, provider),
     });
     const routeContext = {
       params: Promise.resolve({ id: TENANT_B_ORDER_ID }),
     };
 
-    const crossTenantReadResponse = await handlers.GET(new Request(
+    const respostaLeituraCruzada = await handlers.GET(new Request(
       `https://orbita.test/api/bling/pedidos/${TENANT_B_ORDER_ID}`,
       { headers: { Authorization: 'Bearer owner-a-token' } },
     ), routeContext);
@@ -88,13 +98,13 @@ describe('order-by-id HTTP handlers', () => {
         headers: { Authorization: 'Bearer owner-a-token' },
       },
     ), routeContext);
-    const tenantBReadResponse = await handlers.GET(new Request(
+    const respostaOrgB = await handlers.GET(new Request(
       `https://orbita.test/api/bling/pedidos/${TENANT_B_ORDER_ID}`,
       { headers: { Authorization: 'Bearer owner-b-token' } },
     ), routeContext);
 
-    expect(crossTenantReadResponse.status).toBe(404);
-    expect(await crossTenantReadResponse.json()).toEqual({
+    expect(respostaLeituraCruzada.status).toBe(404);
+    expect(await respostaLeituraCruzada.json()).toEqual({
       success: false,
       error: 'Pedido não encontrado',
     });
@@ -103,8 +113,8 @@ describe('order-by-id HTTP handlers', () => {
       success: false,
       error: 'Pedido não encontrado',
     });
-    expect(tenantBReadResponse.status).toBe(200);
-    expect(await tenantBReadResponse.json()).toEqual({
+    expect(respostaOrgB.status).toBe(200);
+    expect(await respostaOrgB.json()).toEqual({
       success: true,
       data: { id: TENANT_B_ORDER_ID, numero: 'B-001' },
     });
@@ -123,9 +133,7 @@ describe('order-by-id HTTP handlers', () => {
       },
     };
     const handlers = createOrderByIdHandlers({
-      resolveActor(request, capability) {
-        return resolveActorContext(request, capability, ownerLookup);
-      },
+      resolveScope,
       orders: unavailableOrders,
     });
 
@@ -140,17 +148,17 @@ describe('order-by-id HTTP handlers', () => {
     });
   });
 
-  it('returns the same not-found response for a cross-tenant update and preserves the order', async () => {
-    const recordsByTenant = new Map<string, Map<string, OrderRecord>>([
-      [OWNER_B_ID, new Map([[
+  it('returns the same not-found response for a cross-organization update and preserves the order', async () => {
+    const registrosPorOrganizacao = new Map<string, Map<string, OrderRecord>>([
+      [ORG_B_ID, new Map([[
         TENANT_B_ORDER_ID,
         { externalId: TENANT_B_ORDER_ID, localValue: { numero: 'B-001' } },
       ]])],
     ]);
     let providerValue: unknown = { id: TENANT_B_ORDER_ID, numero: 'B-001' };
     const store: OrderStore = {
-      async findByExternalId(tenant, externalId) {
-        return recordsByTenant.get(tenant.id)?.get(externalId) ?? null;
+      async findByExternalId(scope, externalId) {
+        return registrosPorOrganizacao.get(scope.organizationId)?.get(externalId) ?? null;
       },
       async deleteByExternalId() {
         throw new Error('This test does not delete orders.');
@@ -160,7 +168,7 @@ describe('order-by-id HTTP handlers', () => {
       async read() {
         return { _tag: 'OrderProviderSucceeded', value: providerValue };
       },
-      async update(_tenant, _externalId, changes) {
+      async update(_scope, _externalId, changes) {
         providerValue = changes;
         return { _tag: 'OrderProviderSucceeded', value: providerValue };
       },
@@ -169,9 +177,7 @@ describe('order-by-id HTTP handlers', () => {
       },
     };
     const handlers = createOrderByIdHandlers({
-      resolveActor(request, capability) {
-        return resolveActorContext(request, capability, ownerLookup);
-      },
+      resolveScope,
       orders: new OrderAccess(store, provider),
     });
     const routeContext = { params: Promise.resolve({ id: TENANT_B_ORDER_ID }) };
@@ -187,7 +193,7 @@ describe('order-by-id HTTP handlers', () => {
         body: JSON.stringify({ situacao: { id: 9 } }),
       },
     ), routeContext);
-    const tenantBReadResponse = await handlers.GET(new Request(
+    const respostaOrgB = await handlers.GET(new Request(
       `https://orbita.test/api/bling/pedidos/${TENANT_B_ORDER_ID}`,
       { headers: { Authorization: 'Bearer owner-b-token' } },
     ), routeContext);
@@ -197,13 +203,13 @@ describe('order-by-id HTTP handlers', () => {
       success: false,
       error: 'Pedido não encontrado',
     });
-    expect(await tenantBReadResponse.json()).toEqual({
+    expect(await respostaOrgB.json()).toEqual({
       success: true,
       data: { id: TENANT_B_ORDER_ID, numero: 'B-001' },
     });
   });
 
-  it('denies order mutations without the tenant management capability', async () => {
+  it('denies order mutations without the organization management capability', async () => {
     const unavailableOrders = {
       async read() {
         throw new Error('This test does not read orders.');
@@ -216,9 +222,7 @@ describe('order-by-id HTTP handlers', () => {
       },
     };
     const handlers = createOrderByIdHandlers({
-      resolveActor(request, capability) {
-        return resolveActorContext(request, capability, ownerLookup);
-      },
+      resolveScope,
       orders: unavailableOrders,
     });
 
@@ -237,7 +241,7 @@ describe('order-by-id HTTP handlers', () => {
     });
   });
 
-  it('allows an owner to update and delete an order inside the authorized tenant', async () => {
+  it('allows an owner to update and delete an order inside the authorized organization', async () => {
     const ownedOrderId = 'owned-order';
     const records = new Map<string, OrderRecord>([[
       ownedOrderId,
@@ -245,10 +249,10 @@ describe('order-by-id HTTP handlers', () => {
     ]]);
     let providerValue: unknown = { id: ownedOrderId, numero: 'A-001' };
     const store: OrderStore = {
-      async findByExternalId(tenant, externalId) {
-        return tenant.id === OWNER_A_ID ? records.get(externalId) ?? null : null;
+      async findByExternalId(scope, externalId) {
+        return scope.organizationId === ORG_A_ID ? records.get(externalId) ?? null : null;
       },
-      async deleteByExternalId(_tenant, externalId) {
+      async deleteByExternalId(_scope, externalId) {
         records.delete(externalId);
       },
     };
@@ -256,7 +260,7 @@ describe('order-by-id HTTP handlers', () => {
       async read() {
         return { _tag: 'OrderProviderSucceeded', value: providerValue };
       },
-      async update(_tenant, _externalId, changes) {
+      async update(_scope, _externalId, changes) {
         providerValue = { id: ownedOrderId, ...changes };
         return { _tag: 'OrderProviderSucceeded', value: providerValue };
       },
@@ -265,9 +269,7 @@ describe('order-by-id HTTP handlers', () => {
       },
     };
     const handlers = createOrderByIdHandlers({
-      resolveActor(request, capability) {
-        return resolveActorContext(request, capability, ownerLookup);
-      },
+      resolveScope,
       orders: new OrderAccess(store, provider),
     });
     const routeContext = { params: Promise.resolve({ id: ownedOrderId }) };

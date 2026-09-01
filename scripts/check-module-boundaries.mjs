@@ -13,36 +13,35 @@ const SRC_DIR = path.join(ROOT_DIR, 'src');
  * 1. src/services e src/repositories NÃO devem importar diretamente 'next/server', 'next/navigation', 'next/headers', ou 'react'.
  * 2. src/repositories NÃO devem importar de src/services (camada inferior não depende da superior).
  * 3. Rotas em src/app/api NÃO devem importar internals não públicos de serviços quando existir API consolidada.
- * 4. Rotas de organização/convite NÃO devem usar o atalho `verifySessionAndRole` (Ticket 20).
+ * 4. Nenhuma rota deve usar os seams de tenancy por usuário (Tickets 20 e 22).
  */
 
 /**
- * Rotas cuja resposta precisa distinguir "não sei quem você é" de "sei quem
- * você é, e você não pode".
+ * Rotas cuja autorização precisa vir do vínculo persistido.
  *
- * `verifySessionAndRole` devolve `null` para os dois casos, e quem o consome
- * transforma os dois em 401. Nessas rotas isso não é atalho: é resposta errada.
- * A fronteira delas é `authorizeRequestOrganizationCapability`, que preserva a
- * distinção — ou `resolveAuthenticatedIdentity`, onde não deve haver exigência
- * de vínculo (Ticket 20).
+ * Os dois seams legados resolvem papel por `app_metadata`, campo que nenhum
+ * fluxo atual escreve. `verifySessionAndRole` ainda devolve `null` tanto para
+ * "sem sessão" quanto para "sem vínculo", colapsando 403 em 401 — para quem
+ * acabou de provar quem é, a resposta vira "não sei quem você é".
+ *
+ * A fronteira certa é `resolveVerifiedOrganizationScope`, ou
+ * `authorizeRequestOrganizationCapability` quando a organização vem da URL, ou
+ * `resolveAuthenticatedIdentity` onde não deve haver exigência de vínculo.
  */
 const ROTAS_COM_DISTINCAO_DE_AUTORIZACAO = [
-  'src/app/api/organizacoes/',
-  'src/app/api/convites/',
-  // Migradas na fatia A do Ticket 22. A lista cresce a cada fatia, e quando a
-  // última entrar ela vira `src/app/api/` inteiro e o atalho é apagado.
-  'src/app/api/bling/situacoes/',
-  'src/app/api/clientes/delete/',
-  'src/app/api/financeiro/',
-  'src/app/api/nfe/',
-  'src/app/api/pedidos/',
-  'src/app/api/produtos/delete/',
+  // Ticket 22, fatia B: nenhuma rota consome mais os seams legados, então a
+  // regra passou a cobrir `src/app/api/` inteiro em vez de uma lista que
+  // crescia a cada fatia.
+  'src/app/api/',
 ];
 
-/** Uma linha de rota de organização/convite que reintroduz o atalho de sessão. */
+/** Os dois seams que resolvem papel por `app_metadata` (Tickets 20 e 22). */
+const SEAMS_LEGADOS = /\b(?:verifySessionAndRole|resolveActorContext)\b/u;
+
+/** Uma linha de rota que reintroduz um dos seams de tenancy por usuário. */
 export function violaDistincaoDeAutorizacao(relativePath, line) {
   const naFronteira = ROTAS_COM_DISTINCAO_DE_AUTORIZACAO.some((prefixo) => relativePath.startsWith(prefixo));
-  return naFronteira && /\bverifySessionAndRole\b/u.test(line);
+  return naFronteira && SEAMS_LEGADOS.test(line);
 }
 
 export function checkModuleBoundaries(baseDir = SRC_DIR) {
@@ -105,14 +104,14 @@ export function checkModuleBoundaries(baseDir = SRC_DIR) {
         }
       }
 
-      // 4. Rotas de organização/convite não podem colapsar 401 e 403 (Ticket 20)
+      // 4. Nenhuma rota pode voltar aos seams de tenancy por usuário (20 e 22)
       if (violaDistincaoDeAutorizacao(relativePath, line)) {
         violations.push({
           file: relativePath,
           line: lineNum,
           rule: 'authorization-distinction',
           message:
-            'Rota de organização/convite não deve usar `verifySessionAndRole`: ele devolve `null` para "sem sessão" e para "sem vínculo", e as duas viram 401. Use `authorizeRequestOrganizationCapability` ou `resolveAuthenticatedIdentity`.',
+            'Rota não deve usar `verifySessionAndRole` nem `resolveActorContext`: os dois resolvem papel por `app_metadata`, que nenhum fluxo atual escreve — e o primeiro devolve `null` tanto para "sem sessão" quanto para "sem vínculo", colapsando 403 em 401. Use `resolveVerifiedOrganizationScope` ou `authorizeRequestOrganizationCapability`.',
         });
       }
     });
