@@ -19,15 +19,25 @@ export interface EnqueueSyncResult {
  * O que aconteceu com **a tentativa de processar**, que não é a mesma coisa que
  * o estado do job.
  *
- * `queued` não prova que outro worker pegou o trabalho: pode ser que ninguém
- * tenha conseguido nem tentar. Sem esta distinção, o `/api/startup` lia `queued`
- * e anunciava "já está rodando" — sucesso falso, e derivado justamente da
- * correção que deixou de encerrar o job em falha ambígua.
+ * O estado do registro não responde por si. `queued` não prova que outro worker
+ * pegou o trabalho: pode ser que ninguém tenha conseguido nem tentar. E
+ * `running` não prova que alguém está tocando: pode ser um worker que já
+ * desistiu e não conseguiu gravar o desfecho. As duas leituras viraram sucesso
+ * falso no `/api/startup`, uma depois da outra.
  */
 export type SyncProcessOutcome =
+  /** Rodou até o fim, e o desfecho — sucesso ou falha — está gravado. */
   | { readonly _tag: 'JobFinished' }
+  /** Não deu para nem tentar: o registro segue como estava. */
   | { readonly _tag: 'PreparationFailed' }
-  | { readonly _tag: 'LeaseHeldElsewhere' };
+  /** Outro processo detém a lease. */
+  | { readonly _tag: 'LeaseHeldElsewhere' }
+  /**
+   * Processou, falhou, e **não foi possível gravar estado terminal nenhum**.
+   * O registro fica `running` sem ninguém trabalhando nele — então o estado é
+   * mentira, e quem chama não pode inferir nada a partir dele.
+   */
+  | { readonly _tag: 'FinalizationFailed' };
 
 export interface SyncAllResult {
   success: boolean;
@@ -36,7 +46,7 @@ export interface SyncAllResult {
    * "falhou" de "já estava rodando" — as duas devolviam `success: false`, e o
    * `/api/startup` anunciava sucesso nas duas.
    */
-  status: SyncJob['status'] | 'unknown' | 'preparation_failed';
+  status: SyncJob['status'] | 'unknown' | 'preparation_failed' | 'finalization_failed';
   stats: {
     clientes: number;
     produtos: number;

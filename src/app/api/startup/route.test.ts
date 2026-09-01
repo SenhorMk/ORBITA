@@ -180,10 +180,42 @@ describe('POST /api/startup', () => {
 
     expect(resposta.status).toBe(503);
     expect(corpo.success).toBe(false);
-    expect(corpo.error).toContain('pendente');
+    // A orientação é a verdadeira: não há retomada automática quando a falha
+    // acontece antes da lease — não existe lease para expirar. Quem precisa
+    // agir é quem chamou.
+    expect(corpo.error).toBe(
+      'Não foi possível iniciar a sincronização agora. O trabalho segue pendente; tente novamente.',
+    );
     expect(JSON.stringify(corpo)).not.toContain('já está rodando');
+    expect(JSON.stringify(corpo)).not.toContain('será retomado');
     // O job não foi encerrado: pode pertencer a outro worker.
     expect(mockCompleteJob).not.toHaveBeenCalled();
+  });
+
+  // Ponta a ponta: o processamento falha, gravar `failed` também falha, o
+  // registro fica `running` — e a rota não pode ler esse `running` como
+  // "alguém está tocando".
+  it('não anuncia sucesso quando nem o desfecho do job pôde ser gravado', async () => {
+    mockGetClientes.mockRejectedValue(new Error('Bling fora do ar'));
+    mockCompleteJob.mockRejectedValue(new Error('banco fora do ar'));
+    mockGetJobStatus.mockResolvedValue({
+      status: 'running',
+      progress: { clientes_processados: 0, produtos_processados: 0, pedidos_processados: 0 },
+    });
+    const { POST } = await import('./route');
+
+    const resposta = await POST(requisicao());
+    const corpo = await resposta.json();
+
+    expect(resposta.status).toBe(503);
+    expect(corpo.success).toBe(false);
+    expect(corpo.error).toBe(
+      'A sincronização falhou e o resultado não pôde ser registrado. Tente novamente.',
+    );
+    expect(JSON.stringify(corpo)).not.toContain('já está rodando');
+    // A mensagem pública continua sem diagnóstico.
+    expect(JSON.stringify(corpo)).not.toContain('Bling fora do ar');
+    expect(JSON.stringify(corpo)).not.toContain('banco fora do ar');
   });
 
   // Mesmo sem falha de preparação, `queued` continua não sendo prova de nada.
@@ -196,8 +228,10 @@ describe('POST /api/startup', () => {
     const { POST } = await import('./route');
 
     const resposta = await POST(requisicao());
+    const corpo = await resposta.json();
     expect(resposta.status).toBe(503);
-    expect((await resposta.json()).success).toBe(false);
+    expect(corpo.success).toBe(false);
+    expect(corpo.error).toContain('tente novamente');
   });
 
   it('anuncia sucesso apenas quando o job concluiu', async () => {

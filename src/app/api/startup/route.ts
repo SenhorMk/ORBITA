@@ -42,11 +42,29 @@ function respostaDaSincronizacao(resultado: SyncAllResult): NextResponse {
   // Nada foi executado, e o job continua pendente. A resposta é não bem-sucedida
   // de propósito: 202 seria lida como "aceito e em andamento" por qualquer
   // cliente que olhe só o status, e não é isso que aconteceu.
+  //
+  // A mensagem não promete retomada. Quando a falha acontece antes da lease, não
+  // há lease para expirar e **não existe recuperação automática**: o trabalho
+  // fica pendente até alguém chamar de novo. Dizer "será retomado" seria a mesma
+  // classe de mentira que o "já está rodando" que esta rota acabou de perder.
   if (resultado.status === 'preparation_failed' || resultado.status === 'queued') {
     return NextResponse.json(
       {
         success: false,
-        error: 'Não foi possível iniciar a sincronização agora. O trabalho segue pendente e será retomado.',
+        error: 'Não foi possível iniciar a sincronização agora. O trabalho segue pendente; tente novamente.',
+      },
+      { status: 503 },
+    );
+  }
+
+  // Rodou, falhou, e nem o desfecho foi gravado: o registro ficou `running` sem
+  // ninguém trabalhando nele. Quem olhar o job vai ver um estado que não
+  // descreve a realidade, então a rota diz o que sabe e pede nova tentativa.
+  if (resultado.status === 'finalization_failed') {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'A sincronização falhou e o resultado não pôde ser registrado. Tente novamente.',
       },
       { status: 503 },
     );

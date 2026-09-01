@@ -144,7 +144,9 @@ describe('SyncService — falha segura', () => {
     await expect(service.processJob('job-1', ESCOPO)).resolves.toEqual({ _tag: 'PreparationFailed' });
 
     expect(mockCompleteJob).not.toHaveBeenCalled();
-    // A falha fica registrada; quem decide o destino do job é o TTL da lease.
+    // A falha fica registrada, e nada mais acontece sozinho. O TTL **não**
+    // socorre este ramo: se a RPC falhou antes de conceder, não existe lease
+    // para expirar, e o job segue `queued` até alguém chamar de novo.
     expect(saidaDoLog.join('\n')).toContain('sync.preparar');
   });
 
@@ -158,13 +160,29 @@ describe('SyncService — falha segura', () => {
 
   // Se marcar como falho também falhar, não há mais nada a fazer — mas ainda
   // assim não se pode rejeitar, pelo mesmo motivo.
-  it('não rejeita quando até a conclusão do job falha', async () => {
+  // E não se pode dizer `JobFinished`: o registro fica `running` sem ninguém
+  // trabalhando nele, e quem chamar leria esse `running` como "alguém está
+  // tocando". Foi assim que o sucesso falso voltou pela terceira vez.
+  it('devolve FinalizationFailed quando nem o estado terminal pôde ser gravado', async () => {
     mockGetClientes.mockRejectedValue(new Error('etapa quebrou'));
     mockCompleteJob.mockRejectedValue(new Error('banco fora do ar'));
     const service = new SyncService();
 
-    await expect(service.processJob('job-1', ESCOPO)).resolves.toEqual({ _tag: 'JobFinished' });
+    await expect(service.processJob('job-1', ESCOPO)).resolves.toEqual({ _tag: 'FinalizationFailed' });
     expect(saidaDoLog.join('\n')).toContain('sync.concluir_apos_falha');
+  });
+
+  it('syncAll propaga a finalização falha sem consultar o estado do job', async () => {
+    mockEnqueueJob.mockResolvedValue({ jobId: 'job-1', status: 'queued', isNew: true });
+    mockGetClientes.mockRejectedValue(new Error('etapa quebrou'));
+    mockCompleteJob.mockRejectedValue(new Error('banco fora do ar'));
+
+    await expect(new SyncService().syncAll(ESCOPO)).resolves.toMatchObject({
+      success: false,
+      status: 'finalization_failed',
+    });
+    // O estado gravado é `running` e não descreve a realidade: não é consultado.
+    expect(mockGetJobStatus).not.toHaveBeenCalled();
   });
 
   it('não marca falho o job cuja lease pertence a outro processo', async () => {

@@ -156,6 +156,10 @@ export class SyncService {
         registrarFalhaInterna('sync.concluir_apos_falha', erroAoConcluir, {
           organizacaoId: scope.organizationId,
         });
+        // Nem o estado terminal foi gravado. O registro fica `running` sem
+        // ninguém trabalhando nele — dizer `JobFinished` aqui faria o chamador
+        // ler esse `running` como "alguém está tocando" e anunciar sucesso.
+        return { _tag: 'FinalizationFailed' };
       }
     }
 
@@ -170,12 +174,13 @@ export class SyncService {
     const { jobId } = await this.enqueueSync(scope);
     const outcome = await this.processJob(jobId, scope);
 
-    // A tentativa de processar tem resposta própria. Ler só o estado do job
-    // confundiria "ninguém conseguiu começar" com "alguém está tocando".
-    if (outcome._tag === 'PreparationFailed') {
+    // A tentativa de processar tem resposta própria. Nestes dois ramos o estado
+    // gravado **não** descreve a realidade — `queued` sem ninguém tentando, ou
+    // `running` de um worker que já desistiu — então ele não é consultado.
+    if (outcome._tag === 'PreparationFailed' || outcome._tag === 'FinalizationFailed') {
       return {
         success: false,
-        status: 'preparation_failed',
+        status: outcome._tag === 'PreparationFailed' ? 'preparation_failed' : 'finalization_failed',
         stats: { clientes: 0, produtos: 0, pedidos: 0 },
       };
     }
