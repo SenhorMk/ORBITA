@@ -87,7 +87,14 @@ export interface OrganizationAuthorizationDependencies {
   readonly memberships: OrganizationMembershipPort;
 }
 
-function capabilitiesForRole(role: PapelMembro): ReadonlySet<OrganizationCapability> {
+/**
+ * Capabilities granted by one persisted organization role.
+ *
+ * Exported so that boundaries authorizing an organization named in the URL —
+ * and not the actor's active one — derive capabilities from the same table as
+ * `resolveOrganizationContext`, instead of re-deciding what a role may do.
+ */
+export function organizationCapabilitiesForRole(role: PapelMembro): ReadonlySet<OrganizationCapability> {
   return role === 'member'
     ? new Set(['organization:access'])
     : new Set(['organization:access', 'organization:manage']);
@@ -138,7 +145,7 @@ export async function resolveOrganizationContext(
       organizationId: membership.organizationId,
       organization: membership.organization,
       role: membership.role,
-      capabilities: capabilitiesForRole(membership.role),
+      capabilities: organizationCapabilitiesForRole(membership.role),
       selectionVersion: membership.selectionVersion,
       [contextBrand]: true,
     },

@@ -1,40 +1,56 @@
 import { NextResponse } from 'next/server';
-import { verifySessionAndRole } from '@/lib/auth';
 import { readBearerToken } from '@/lib/bearer-token';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { createActorScopedSupabaseClient } from '@/lib/supabaseActorClient';
 import { logger } from '@/lib/observability/logger';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 import {
   createInviteInputSchema,
   createOrgInvite,
   listOrgInvites,
 } from '@/lib/invitationService';
-import { verifyOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { authorizeRequestOrganizationCapability } from '@/lib/requestOrganizationContext';
 import { EntitlementDeniedError } from '@/services/authorizeEntitlement';
 
-function organizationScopeFailureResponse(unavailable: boolean) {
-  return NextResponse.json(
-    { error: unavailable ? 'Servico de autorizacao indisponivel' : 'Acesso nao autorizado a organizacao' },
-    { status: unavailable ? 503 : 403 },
-  );
+/**
+ * Convites são a superfície administrativa da organização: quem os lê e quem os
+ * cria precisa de `organization:manage`. A tela já só mostra o formulário para
+ * owner/admin, e a listagem falha em silêncio para quem não pode vê-la.
+ */
+function authorizationFailureResponse(status: 401 | 403 | 503) {
+  const error = status === 503
+    ? 'Servico de autorizacao indisponivel'
+    : status === 401
+      ? 'Não autorizado'
+      : 'Acesso nao autorizado a organizacao';
+  return NextResponse.json({ error }, { status });
 }
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await verifySessionAndRole(req);
-  if (!session) {
-    return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+  const { id: orgId } = await params;
+
+  // A listagem privilegiada rodava sem nenhuma verificação de escopo: bastava
+  // uma sessão para ler os convites de qualquer organização. Ninguém alcançou
+  // essa brecha porque o atalho de sessão já negava o chamador antes de chegar
+  // aqui (Ticket 20).
+  const authorization = await authorizeRequestOrganizationCapability(req, orgId, 'organization:manage');
+  if (authorization._tag !== 'OrganizationCapabilityAuthorized') {
+    return authorizationFailureResponse(authorization.status);
   }
 
-  const { id: orgId } = await params;
   try {
-    const convites = await listOrgInvites(supabaseServer, orgId);
+    const convites = await listOrgInvites(supabaseServer, authorization.scope.organizationId);
     return NextResponse.json({ convites });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Erro ao listar convites';
-    return NextResponse.json({ error: message }, { status: 500 });
+    // CWE-209: o diagnóstico fica no servidor; o cliente recebe a frase fixa.
+    registrarFalhaInterna('organizacoes.convites.listar', error, {
+      organizacaoId: authorization.scope.organizationId,
+      atorId: authorization.scope.actorId,
+    });
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }
 
@@ -42,9 +58,15 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id: orgId } = await params;
+
+  const authorization = await authorizeRequestOrganizationCapability(req, orgId, 'organization:manage');
+  if (authorization._tag !== 'OrganizationCapabilityAuthorized') {
+    return authorizationFailureResponse(authorization.status);
+  }
+
   const bearerResult = readBearerToken(req);
-  const session = await verifySessionAndRole(req);
-  if (!session || bearerResult._tag !== 'BearerTokenFound') {
+  if (bearerResult._tag !== 'BearerTokenFound') {
     return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
   }
 
@@ -60,7 +82,6 @@ export async function POST(
     return NextResponse.json({ error: 'Serviço de autenticação indisponível' }, { status: 503 });
   }
 
-  const { id: orgId } = await params;
   try {
     const rawBody = await req.json();
     const validatedInput = createInviteInputSchema.safeParse(rawBody);
@@ -71,17 +92,9 @@ export async function POST(
       );
     }
 
-    const scopeResult = await verifyOrganizationScope(supabaseServer, {
-      organizationId: orgId,
-      actorId: session.actorId,
-    });
-    if (scopeResult._tag !== 'OrganizationScopeVerified') {
-      return organizationScopeFailureResponse(scopeResult._tag === 'OrganizationScopeStoreUnavailable');
-    }
-
     const inviteResult = await createOrgInvite(
       { privileged: supabaseServer, actor: actorClientResult.client },
-      scopeResult.scope,
+      authorization.scope,
       validatedInput.data,
     );
     return NextResponse.json({ convite: inviteResult }, { status: 201 });
@@ -92,7 +105,10 @@ export async function POST(
         { status: 403 },
       );
     }
-    const message = error instanceof Error ? error.message : 'Erro ao criar convite';
-    return NextResponse.json({ error: message }, { status: 500 });
+    registrarFalhaInterna('organizacoes.convites.criar', error, {
+      organizacaoId: authorization.scope.organizationId,
+      atorId: authorization.scope.actorId,
+    });
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }

@@ -1,14 +1,16 @@
 import { NextResponse } from 'next/server';
-import { verifySessionAndRole } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabaseServer';
-import { verifyOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { authorizeRequestOrganizationCapability } from '@/lib/requestOrganizationContext';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 import { getOrganizationEntitlements } from '@/services/entitlementsService';
 
-function organizationScopeFailureResponse(unavailable: boolean) {
-  return NextResponse.json(
-    { error: unavailable ? 'Servico de autorizacao indisponivel' : 'Acesso nao autorizado a organizacao' },
-    { status: unavailable ? 503 : 403 },
-  );
+function authorizationFailureResponse(status: 401 | 403 | 503) {
+  const error = status === 503
+    ? 'Servico de autorizacao indisponivel'
+    : status === 401
+      ? 'Não autorizado'
+      : 'Acesso nao autorizado a organizacao';
+  return NextResponse.json({ error }, { status });
 }
 
 /**
@@ -21,26 +23,23 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const session = await verifySessionAndRole(req);
-  if (!session) {
-    return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
-  }
-
   const { id: orgId } = await params;
 
-  const scopeResult = await verifyOrganizationScope(supabaseServer, {
-    organizationId: orgId,
-    actorId: session.actorId,
-  });
-  if (scopeResult._tag !== 'OrganizationScopeVerified') {
-    return organizationScopeFailureResponse(scopeResult._tag === 'OrganizationScopeStoreUnavailable');
+  // Ticket 20 — o atalho de sessão negava com 401 até quem era dono da
+  // organização. Ler o plano exige vínculo, e nada além dele.
+  const authorization = await authorizeRequestOrganizationCapability(req, orgId, 'organization:access');
+  if (authorization._tag !== 'OrganizationCapabilityAuthorized') {
+    return authorizationFailureResponse(authorization.status);
   }
 
   try {
-    const entitlements = await getOrganizationEntitlements(supabaseServer, scopeResult.scope.organizationId);
+    const entitlements = await getOrganizationEntitlements(supabaseServer, authorization.scope.organizationId);
     return NextResponse.json({ entitlements });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Erro ao consultar plano da organização';
-    return NextResponse.json({ error: message }, { status: 500 });
+    registrarFalhaInterna('organizacoes.entitlements.consultar', error, {
+      organizacaoId: authorization.scope.organizationId,
+      atorId: authorization.scope.actorId,
+    });
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }

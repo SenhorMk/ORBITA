@@ -1,20 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { supabaseServer } from '@/lib/supabaseServer';
-import { verifySessionAndRole } from '@/lib/auth';
 import {
   suspendOrganization,
   reactivateOrganization,
   scheduleOrganizationDeletion,
   cancelOrganizationDeletion,
 } from '@/services/organizationLifecycleService';
-import { verifyOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { authorizeRequestOrganizationCapability } from '@/lib/requestOrganizationContext';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 
-function organizationScopeFailureResponse(unavailable: boolean) {
-  return NextResponse.json(
-    { error: unavailable ? 'Servico de autorizacao indisponivel' : 'Acesso nao autorizado a organizacao' },
-    { status: unavailable ? 503 : 403 },
-  );
+function authorizationFailureResponse(status: 401 | 403 | 503) {
+  const error = status === 503
+    ? 'Servico de autorizacao indisponivel'
+    : status === 401
+      ? 'Nao autenticado'
+      : 'Acesso nao autorizado a organizacao';
+  return NextResponse.json({ error }, { status });
 }
 
 const lifecycleActionSchema = z.discriminatedUnion('action', [
@@ -41,18 +43,13 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const session = await verifySessionAndRole(req);
-    if (!session) {
-      return NextResponse.json({ error: 'Nao autenticado' }, { status: 401 });
-    }
     const { id: orgId } = await params;
 
-    const scopeResult = await verifyOrganizationScope(supabaseServer, {
-      organizationId: orgId,
-      actorId: session.actorId,
-    });
-    if (scopeResult._tag !== 'OrganizationScopeVerified') {
-      return organizationScopeFailureResponse(scopeResult._tag === 'OrganizationScopeStoreUnavailable');
+    // Ticket 20 — o vínculo é a exigência de entrada; as ações abaixo mantêm
+    // cada uma a sua própria exigência de papel, mais estreita que esta.
+    const authorization = await authorizeRequestOrganizationCapability(req, orgId, 'organization:access');
+    if (authorization._tag !== 'OrganizationCapabilityAuthorized') {
+      return authorizationFailureResponse(authorization.status);
     }
 
     const { data: org, error: orgErr } = await supabaseServer
@@ -77,8 +74,9 @@ export async function GET(
       history: historico || [],
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Erro interno ao consultar ciclo de vida';
-    return NextResponse.json({ error: message }, { status: 500 });
+    // CWE-209: o diagnóstico fica no servidor; o cliente recebe a frase fixa.
+    registrarFalhaInterna('organizacoes.lifecycle.consultar', err);
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }
 
@@ -87,11 +85,12 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const session = await verifySessionAndRole(req);
-    if (!session) {
-      return NextResponse.json({ error: 'Nao autenticado' }, { status: 401 });
-    }
     const { id: orgId } = await params;
+
+    const authorization = await authorizeRequestOrganizationCapability(req, orgId, 'organization:access');
+    if (authorization._tag !== 'OrganizationCapabilityAuthorized') {
+      return authorizationFailureResponse(authorization.status);
+    }
 
     const body = await req.json();
     const parsed = lifecycleActionSchema.safeParse(body);
@@ -103,16 +102,8 @@ export async function POST(
       );
     }
 
-    const scopeResult = await verifyOrganizationScope(supabaseServer, {
-      organizationId: orgId,
-      actorId: session.actorId,
-    });
-    if (scopeResult._tag !== 'OrganizationScopeVerified') {
-      return organizationScopeFailureResponse(scopeResult._tag === 'OrganizationScopeStoreUnavailable');
-    }
-
     const actionData = parsed.data;
-    const scope = scopeResult.scope;
+    const scope = authorization.scope;
     const userRole = scope.role;
 
     if (actionData.action === 'suspend') {
@@ -154,7 +145,7 @@ export async function POST(
 
     return NextResponse.json({ error: 'Acao desconhecida' }, { status: 400 });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Erro ao processar ciclo de vida';
-    return NextResponse.json({ error: message }, { status: 500 });
+    registrarFalhaInterna('organizacoes.lifecycle.executar', err);
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 }
