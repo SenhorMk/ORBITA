@@ -71,20 +71,29 @@ async function emitNfeWithLock(
     //
     // O que ajuda a diagnosticar é **qual campo faltou**, e é a única coisa que
     // fica: os nomes das chaves que vieram, sem um único valor.
+    // Indicadores **fechados**, dos campos que este código espera — e nada
+    // derivado da resposta.
+    //
+    // A primeira correção registrava `Object.keys(...)` da resposta, o que
+    // parecia seguro por não ter valores. Não é: nome de propriedade também é
+    // dado que vem de fora, e um provedor que devolva um objeto com chaves
+    // dinâmicas colocaria conteúdo arbitrário no log por essa porta. O que sai
+    // é uma lista de booleanos escrita aqui.
     logger.error('nfe.resposta_do_bling_sem_identificador', {
       subsystem: 'app',
       provider: 'bling',
       organizacaoId: scope.organizationId,
-      camposRecebidos: Object.keys((nfeResult ?? {}) as Record<string, unknown>).sort(),
-      camposEmData: Object.keys((nfeResult?.data ?? {}) as Record<string, unknown>).sort(),
+      envelopadoEmData: nfeData !== nfeResult,
       temIdentificador: nfeBlingId.length > 0,
       temNumero: String(nfeNumero).length > 0,
+      temChave: nfeChave !== null,
+      temStatus: nfeStatus !== 'Emitida',
     });
     // A resposta diz o que aconteceu e onde procurar. O pedido no Bling é o que
     // permite achar a nota — e ele veio do próprio chamador.
     return NextResponse.json({
       success: false,
-      error: 'NF-e emitida no Bling, mas a resposta não trouxe número nem identificador. Reconciliação manual necessária.',
+      error: 'NF-e emitida no Bling, mas a resposta não trouxe número ou identificador. Reconciliação manual necessária.',
       compensation_required: true,
       bling_pedido_id: blingPedidoId,
     }, { status: 502 });

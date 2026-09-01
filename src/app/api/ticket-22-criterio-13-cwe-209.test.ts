@@ -21,7 +21,7 @@
  * Bling é o que a pessoa precisa para resolver à mão — e o teste da venda
  * manual já cobra isso. O que saiu de lá foi o erro do banco.
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import {
   FronteiraDeAutorizacao,
@@ -159,6 +159,11 @@ async function cenarioLimpo(): Promise<void> {
 
 describe('critério 13 — nenhuma rota migrada devolve diagnóstico interno', () => {
   beforeEach(cenarioLimpo);
+  // Restaura as espionagens **mesmo quando uma asserção falha antes do
+  // `mockRestore()`**. Sem isto, um caso vermelho deixaria `console.error`
+  // espionado para os seguintes — e dependência de ordem foi exatamente o
+  // defeito que esta suíte já teve uma vez.
+  afterEach(() => vi.restoreAllMocks());
 
   it('GET /api/bling/situacoes', async () => {
     getSituacoesModuloMock.mockRejectedValue(falharCom);
@@ -295,6 +300,11 @@ describe('critério 13 — nenhuma rota migrada devolve diagnóstico interno', (
  */
 describe('critério 13 — os ramos que a primeira auditoria não olhou', () => {
   beforeEach(cenarioLimpo);
+  // Restaura as espionagens **mesmo quando uma asserção falha antes do
+  // `mockRestore()`**. Sem isto, um caso vermelho deixaria `console.error`
+  // espionado para os seguintes — e dependência de ordem foi exatamente o
+  // defeito que esta suíte já teve uma vez.
+  afterEach(() => vi.restoreAllMocks());
 
   it('GET /api/bling/situacoes não imprime o erro cru no console', async () => {
     const console_error = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -310,7 +320,6 @@ describe('critério 13 — os ramos que a primeira auditoria não olhou', () => 
     expect(impresso).toContain('bling.situacoes.listar');
     expect(impresso).not.toContain('duplicate key');
     expect(impresso).not.toContain('produtos_bling_id_key');
-    console_error.mockRestore();
   });
 
   // Resposta **200**: a exclusão local funcionou, a remota não. O `logs` que
@@ -403,9 +412,13 @@ describe('critério 13 — os ramos que a primeira auditoria não olhou', () => 
       expect(corpo).not.toContain(dado);
       expect(registrado).not.toContain(dado);
     }
-    // O que fica é o **nome** dos campos, que diagnostica sem expor nada.
-    expect(registrado).toContain('camposEmData');
-    expect(registrado).toContain('destinatario');
-    console_error.mockRestore();
+    // Nome de propriedade também vem de fora: nenhum deles pode aparecer.
+    for (const chave of ['destinatario', 'itens', 'cpfCnpj', 'descricao']) {
+      expect(registrado).not.toContain(chave);
+    }
+    // O que fica são indicadores **fechados**, escritos no próprio código.
+    expect(registrado).toContain('temIdentificador');
+    expect(registrado).toContain('temNumero');
+    expect(registrado).toContain('nfe.resposta_do_bling_sem_identificador');
   });
 });

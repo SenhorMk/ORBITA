@@ -288,6 +288,7 @@ export default function Home() {
   const { mostrarCarregador: showStartupLoader, encerrar: encerrarStartup } =
     useStartupPorOrganizacao(podeGerir, organizacaoConfirmada);
 
+
   const handleOpenProductModal = (produto: Produto) => {
     setSelectedProdutoModal(produto);
     setIsProductModalOpen(true);
@@ -703,6 +704,20 @@ export default function Home() {
     }
   }, []);
 
+  // Identidade estável, e não funções inline. O `StartupLoader` já não reinicia
+  // por causa dos desfechos — ele os guarda numa referência —, mas passar função
+  // nova a cada render o re-renderizaria à toa, e devolveria ao componente a
+  // responsabilidade de se defender sozinho (revisão do head `d5a17c0`).
+  const concluirStartup = useCallback(() => {
+    encerrarStartup();
+    void loadDashboardData();
+  }, [encerrarStartup, loadDashboardData]);
+
+  const reautenticarBling = useCallback(() => {
+    encerrarStartup();
+    setActiveTab('integrations');
+  }, [encerrarStartup]);
+
   useEffect(() => {
     let isMounted = true;
     void (async () => {
@@ -1104,14 +1119,8 @@ export default function Home() {
         // dele (revisão do head `2d1795a`).
         key={organizacaoConfirmada ?? 'sem-organizacao'}
         isVisible={showStartupLoader}
-        onComplete={() => {
-          encerrarStartup();
-          loadDashboardData();
-        }}
-        onNeedsAuth={() => {
-          encerrarStartup();
-          setActiveTab('integrations');
-        }}
+        onComplete={concluirStartup}
+        onNeedsAuth={reautenticarBling}
         fetchWithAuth={fetchWithAuth}
       />
 

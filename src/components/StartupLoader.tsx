@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, AlertTriangle, RefreshCw } from "lucide-react";
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from './ui/button';
@@ -63,6 +63,29 @@ export function StartupLoader({ onComplete, onNeedsAuth, fetchWithAuth, isVisibl
   const [progressText, setProgressText] = useState('Verificando integridade do Token...');
   const [errorMessage, setErrorMessage] = useState('');
 
+  /**
+   * Os desfechos, fora das dependências da operação.
+   *
+   * Revisão do head `d5a17c0` — `onComplete` estava na lista de dependências do
+   * efeito, e chega como função inline do pai. Toda re-renderização da página
+   * criava outra identidade, o efeito rodava de novo, e saía **mais um**
+   * `POST /api/startup` com o carregador já na tela. O `useStartupPorOrganizacao`
+   * garante que o carregador **abre** uma vez por organização; isso nunca disse
+   * nada sobre quantas vezes a requisição sai.
+   *
+   * A referência é atualizada a cada render, então o efeito sempre chama o
+   * desfecho mais recente — e não reinicia por causa dele. Quem decide reiniciar
+   * é `isVisible`, e só ele.
+   */
+  const desfechos = useRef({ onComplete, onNeedsAuth });
+  // Sincronizada depois do render, e não durante — escrever numa ref no corpo do
+  // componente quebra a garantia de render puro, e o lint cobra isso. Este
+  // efeito é declarado **antes** do da inicialização, então a referência já está
+  // atualizada quando ele roda.
+  useEffect(() => {
+    desfechos.current = { onComplete, onNeedsAuth };
+  });
+
   useEffect(() => {
     if (!isVisible) return;
 
@@ -72,13 +95,15 @@ export function StartupLoader({ onComplete, onNeedsAuth, fetchWithAuth, isVisibl
       setStatus,
       setProgressText,
       setErrorMessage,
-      onComplete,
+      onComplete: () => desfechos.current.onComplete(),
     });
 
     return () => {
       mounted = false;
     };
-  }, [isVisible, fetchWithAuth, onComplete]);
+    // `fetchWithAuth` é o módulo importado, e não muda. Os desfechos ficam de
+    // fora de propósito: eles não são motivo para reexecutar a inicialização.
+  }, [isVisible, fetchWithAuth]);
 
   if (!isVisible) return null;
 
@@ -137,7 +162,7 @@ export function StartupLoader({ onComplete, onNeedsAuth, fetchWithAuth, isVisibl
               <Button
                 variant="outline"
                 className="flex-1 bg-white/5 border-white/10 hover:bg-white/10"
-                onClick={() => onComplete()}
+                onClick={() => desfechos.current.onComplete()}
               >
                 Ignorar (Modo Offline)
               </Button>
@@ -145,7 +170,7 @@ export function StartupLoader({ onComplete, onNeedsAuth, fetchWithAuth, isVisibl
                 <Button
                   className="flex-1 glass-button-primary"
                   onClick={() => {
-                    onNeedsAuth();
+                    desfechos.current.onNeedsAuth();
                   }}
                 >
                   Conectar Bling
