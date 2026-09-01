@@ -79,24 +79,29 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { format, subDays, isAfter, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
+import { usePapelNaOrganizacaoAtiva } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
 import { descreverErro } from '@/lib/erroLegivel';
 
-// Tipo de Usuário Logado
+/**
+ * Identidade do usuário logado — **e nada além disso**.
+ *
+ * Ticket 22, fatia C: este tipo carregava um `role` que a própria tela inventava,
+ * a partir de `app_metadata.role`, da substring `dono` no e-mail, do e-mail fixo
+ * `admin@haux.com.br` e do que estivesse no `localStorage`. Nenhuma dessas
+ * fontes é autoridade, e as três primeiras davam aparência de proprietário a
+ * quem não é. O papel agora vem do vínculo persistido, por
+ * `usePapelNaOrganizacaoAtiva`.
+ */
 interface UserSession {
   email: string;
-  role: 'dono' | 'colaborador';
   name: string;
 }
 
-/** Deriva a sessão de usuário Orbita a partir de um usuário autenticado do Supabase. */
+/** Deriva a identidade Orbita a partir de um usuário autenticado do Supabase. */
 function deriveUserSession(user: SupabaseUser): UserSession {
-  const isOwner = user.app_metadata?.role === 'dono' ||
-    user.email?.includes('dono') ||
-    user.email === 'admin@haux.com.br';
   return {
     email: user.email || '',
     name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'Usuário',
-    role: isOwner ? 'dono' : 'colaborador',
   };
 }
 
@@ -248,7 +253,9 @@ export default function Home() {
     }
     return null;
   });
-  const isOwner = session?.role === 'dono';
+  // Autoridade única sobre papel: o vínculo persistido, lido do servidor.
+  const { podeGerir } = usePapelNaOrganizacaoAtiva(fetchWithAuth, session?.email ?? null);
+  const isOwner = podeGerir;
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -699,14 +706,14 @@ export default function Home() {
   }, [session, loadDashboardData]);
 
   useEffect(() => {
-    if (session?.role === 'dono' && !hasStartedUp) {
+    if (podeGerir && !hasStartedUp) {
       const timer = setTimeout(() => {
         setShowStartupLoader(true);
         setHasStartedUp(true);
       }, 0);
       return () => clearTimeout(timer);
     }
-  }, [session, hasStartedUp]);
+  }, [podeGerir, hasStartedUp]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -721,10 +728,12 @@ export default function Home() {
                           process.env.NEXT_PUBLIC_SUPABASE_URL?.includes('placeholder');
 
     if (isDevelopment && emailTrim === 'admin' && passwordTrim === 'admin0') {
+      // Sessão local de desenvolvimento: identidade sem vínculo, e portanto sem
+      // controles de gestão. Ela nunca teve sessão real no Supabase, então as
+      // APIs já a negavam — o que mudou é a tela parar de fingir o contrário.
       const devSession: UserSession = {
         email: 'admin@haux.com.br',
         name: 'Desenvolvedor ORBITA',
-        role: 'dono'
       };
       setSession(devSession);
       localStorage.setItem('haux_session', JSON.stringify(devSession));
@@ -736,7 +745,6 @@ export default function Home() {
       const workerSession: UserSession = {
         email: 'colaborador@haux.com.br',
         name: 'Colaborador Portal do Haux',
-        role: 'colaborador'
       };
       setSession(workerSession);
       localStorage.setItem('haux_session', JSON.stringify(workerSession));
@@ -753,14 +761,7 @@ export default function Home() {
       if (error) throw error;
 
       if (authData.user) {
-        const isOwner = authData.user.app_metadata?.role === 'dono' ||
-                        authData.user.email?.includes('dono') ||
-                        authData.user.email === 'admin@haux.com.br';
-        const userDetails: UserSession = {
-          email: authData.user.email || '',
-          name: authData.user.user_metadata?.full_name || authData.user.email?.split('@')[0] || 'Usuário',
-          role: isOwner ? 'dono' : 'colaborador'
-        };
+        const userDetails: UserSession = deriveUserSession(authData.user);
         setSession(userDetails);
         localStorage.setItem('haux_session', JSON.stringify(userDetails));
       }
@@ -789,8 +790,8 @@ export default function Home() {
    * desde o mesmo ticket, não tinha nenhum chamador.
    */
   const handleSync = async (completa = false) => {
-    if (session?.role !== 'dono') {
-      alert('Acesso negado: Somente o dono da loja pode sincronizar dados do ERP.');
+    if (!podeGerir) {
+      alert('Acesso negado: Somente quem administra a organização pode sincronizar dados do ERP.');
       return;
     }
     setIsSyncing(true);
@@ -828,7 +829,7 @@ export default function Home() {
   };
 
   const handleEmitNfe = async (pedidoId: string, blingPedidoId: string) => {
-    if (session?.role !== 'dono') {
+    if (!podeGerir) {
       alert('Acesso negado: Colaboradores não têm permissão para faturamento.');
       return;
     }

@@ -39,6 +39,24 @@ export function violaDistincaoDeAutorizacao(relativePath, line) {
   return naFronteira && SEAMS_LEGADOS.test(line);
 }
 
+/**
+ * `resolveTenantOrgId` ainda devolve o `userId` como organização quando não acha
+ * vínculo — é a última linha do modelo de tenancy por usuário. Ela sobreviveu à
+ * fatia C do Ticket 22 por decisão de revisão, com zero chamadores de produção,
+ * e o destino dela é o ticket 25.
+ *
+ * Enquanto existir, não pode ganhar chamador novo. Só o próprio arquivo que a
+ * define pode nomeá-la; testes ficam livres, porque são eles que decidem o
+ * destino dela.
+ */
+const ARQUIVO_QUE_DEFINE_O_RESOLVEDOR_LEGADO = 'src/lib/organizationContext.ts';
+
+/** Uma linha de produção que ganharia um chamador novo do resolvedor legado. */
+export function violaResolvedorLegado(relativePath, line) {
+  if (relativePath === ARQUIVO_QUE_DEFINE_O_RESOLVEDOR_LEGADO) return false;
+  return /\bresolveTenantOrgId\b/u.test(line);
+}
+
 export function checkModuleBoundaries(baseDir = SRC_DIR) {
   const violations = [];
 

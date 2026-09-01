@@ -27,9 +27,10 @@ export type TabType =
   | 'integrations'
   | 'billing';
 
+/** Identidade do usuário logado. O papel não entra aqui: a barra lateral não o
+ * usava, e mantê-lo declarado convidava a decidir capacidade por ele. */
 interface UserSession {
   email: string;
-  role: 'dono' | 'colaborador';
   name: string;
 }
 

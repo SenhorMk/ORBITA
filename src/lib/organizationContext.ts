@@ -157,7 +157,20 @@ export async function createOrganizationAtomic(
 }
 
 /**
- * Resolve organizacao_id for a given VerifiedTenant or userId.
+ * Resolve `organizacao_id` a partir de um tenant ou userId.
+ *
+ * **Esta função ainda contém o modelo por usuário**, e é importante dizê-lo:
+ * quando não acha vínculo, ela devolve o próprio `userId` como se fosse a
+ * organização — a mesma equivalência "tenant = usuário" que o Ticket 22 removeu
+ * de `auth.ts`. Ou seja, a fatia C removeu os **caminhos de produção** do modelo
+ * antigo, não a última linha dele.
+ *
+ * Ela ficou de propósito, por decisão de revisão: tem **zero chamadores de
+ * produção** (medido em 01/09/2026) mas é exercitada por testes, e decidir o
+ * destino dela e deles é assunto próprio — ver o ticket 25.
+ *
+ * Enquanto existir, a regra `tenancy-legacy-resolver` do `boundaries:check`
+ * impede que ela ganhe chamador novo em código de produção.
  */
 export async function resolveTenantOrgId(
   supabase: SupabaseClient,
@@ -173,5 +186,7 @@ export async function resolveTenantOrgId(
     .limit(1)
     .maybeSingle();
 
+  // O fallback é o modelo antigo em uma linha: sem vínculo, o usuário *é* a
+  // organização. Nenhum caminho de produção passa por aqui.
   return data?.organizacao_id ?? userId;
 }

@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const ORG_ID = '20000000-0000-4000-8000-000000000001';
 const ACTOR_ID = '30000000-0000-4000-8000-000000000001';
 const OUTRO_ID = '30000000-0000-4000-8000-000000000002';
+const OUTRA_ORG_ID = '20000000-0000-4000-8000-000000000002';
 
 const getUserMock = vi.fn();
 const maybeSingleMock = vi.fn();
@@ -130,6 +131,31 @@ describe('GET /api/organizacoes/[id]/membros', () => {
     expect(body.error).toBe('Erro interno');
     expect(JSON.stringify(body)).not.toContain('permission denied');
     expect(JSON.stringify(body)).not.toContain('42501');
+  });
+
+  // Isolamento cross-tenant de verdade: não é "externo sem vínculo nenhum", é um
+  // membro **legítimo da organização A** pedindo a organização B. É este o caso
+  // que o `verifyOrganizationScope` filtra pelo par (organização, ator), e a
+  // negação é indistinguível de "a organização B não existe".
+  it('nega ao membro da organização A o acesso à organização B', async () => {
+    sessionOf(ACTOR_ID);
+    // O ator tem vínculo — mas não com a organização pedida na URL. O filtro é
+    // pelo par, então a consulta não acha linha.
+    membershipOf(null);
+    const { GET } = await import('./route');
+
+    const resposta = await GET(
+      new Request(`https://orbita.test/api/organizacoes/${OUTRA_ORG_ID}/membros`, {
+        method: 'GET',
+        headers: { Authorization: 'Bearer token-de-sessao' },
+      }),
+      { params: Promise.resolve({ id: OUTRA_ORG_ID }) },
+    );
+
+    expect(resposta.status).toBe(403);
+    expect(orderMock).not.toHaveBeenCalled();
+    // A resposta não diz se a organização B existe.
+    expect(JSON.stringify(await resposta.json())).not.toContain(OUTRA_ORG_ID);
   });
 
   it('devolve 503 quando o depósito de vínculos está indisponível', async () => {

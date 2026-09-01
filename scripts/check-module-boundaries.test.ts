@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { checkModuleBoundaries, violaDistincaoDeAutorizacao } from './check-module-boundaries.mjs';
+import {
+  checkModuleBoundaries,
+  violaDistincaoDeAutorizacao,
+  violaResolvedorLegado,
+} from './check-module-boundaries.mjs';
 
 describe('checkModuleBoundaries script', () => {
   it('valida a estrutura atual do codebase sem violar limites de domínio ou inversão de camada', () => {
@@ -61,5 +65,31 @@ describe('guarda da distinção de autorização', () => {
   it('não alcança o módulo que define os seams', () => {
     expect(violaDistincaoDeAutorizacao('src/lib/auth.ts', importacao)).toBe(false);
     expect(violaDistincaoDeAutorizacao('src/services/sync.ts', importacao)).toBe(false);
+  });
+});
+
+// Ticket 22, fatia C — `resolveTenantOrgId` ficou de propósito, com zero
+// chamadores de produção, mas ainda devolve o `userId` como organização quando
+// não acha vínculo. A guarda impede que ela ganhe chamador novo enquanto existe.
+describe('guarda do resolvedor de tenancy legado', () => {
+  const chamada = '  const orgId = await resolveTenantOrgId(supabaseServer, tenant);';
+
+  it('acusa um chamador novo em código de produção', () => {
+    expect(violaResolvedorLegado('src/app/api/pedidos/manual/route.ts', chamada)).toBe(true);
+    expect(violaResolvedorLegado('src/services/sync.ts', chamada)).toBe(true);
+    expect(violaResolvedorLegado('src/repositories/produtoRepository.ts', chamada)).toBe(true);
+  });
+
+  it('não acusa o arquivo que define a função', () => {
+    expect(violaResolvedorLegado('src/lib/organizationContext.ts', chamada)).toBe(false);
+    expect(
+      violaResolvedorLegado('src/lib/organizationContext.ts', 'export async function resolveTenantOrgId('),
+    ).toBe(false);
+  });
+
+  it('não acusa linha que não menciona a função', () => {
+    expect(
+      violaResolvedorLegado('src/services/sync.ts', '  const escopo = await resolveVerifiedOrganizationScope(request);'),
+    ).toBe(false);
   });
 });
