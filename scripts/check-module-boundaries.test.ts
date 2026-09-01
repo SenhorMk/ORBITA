@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   checkModuleBoundaries,
   violaDistincaoDeAutorizacao,
   violaResolvedorLegado,
+  violacoesDaLinha,
 } from './check-module-boundaries.mjs';
 
 describe('checkModuleBoundaries script', () => {
@@ -91,5 +95,66 @@ describe('guarda do resolvedor de tenancy legado', () => {
     expect(
       violaResolvedorLegado('src/services/sync.ts', '  const escopo = await resolveVerifiedOrganizationScope(request);'),
     ).toBe(false);
+  });
+});
+
+// A regra existir não é a regra rodar. `violaResolvedorLegado` já vinha
+// exportada e provada linha a linha, mas `checkModuleBoundaries` não a chamava —
+// então o portão passava por cima de um chamador novo sem dizer nada, enquanto
+// três documentos afirmavam que ele guardava. É a família 1 desta série:
+// fronteira testada de um lado só. Este teste exercita a **ligação**, não o
+// predicado: ele roda o verificador de verdade sobre um arquivo que viola.
+describe('as quatro regras estão ligadas ao agregador', () => {
+  // Cada linha aqui viola exatamente uma regra. Se alguém acrescentar uma regra
+  // e esquecer de ligá-la, o caso dela nasce faltando nesta tabela — que é o
+  // ponto: a omissão fica visível, em vez de virar guarda silenciosa.
+  const casos: ReadonlyArray<readonly [string, string, string]> = [
+    ['domain-isolation', 'src/services/sync.ts', "import { NextResponse } from 'next/server';"],
+    ['layer-inversion', 'src/repositories/produtoRepository.ts', "import { sync } from '@/services/sync';"],
+    ['authorization-distinction', 'src/app/api/nfe/route.ts', "import { verifySessionAndRole } from '@/lib/auth';"],
+    ['tenancy-legacy-resolver', 'src/services/sync.ts', '  const orgId = await resolveTenantOrgId(db, userId);'],
+  ];
+
+  it.each(casos)('aplica a regra `%s`', (regra, arquivo, linha) => {
+    expect(violacoesDaLinha(arquivo, linha).map((v: { rule: string }) => v.rule)).toContain(regra);
+  });
+
+  it('não acusa uma linha que não viola nada', () => {
+    expect(violacoesDaLinha('src/services/sync.ts', "import { z } from 'zod';")).toEqual([]);
+  });
+});
+
+describe('a guarda do resolvedor legado está ligada ao verificador', () => {
+  it('reporta `tenancy-legacy-resolver` ao varrer um chamador de produção', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'orbita-boundaries-'));
+    try {
+      fs.writeFileSync(
+        path.join(base, 'chamadorNovo.ts'),
+        'const orgId = await resolveTenantOrgId(supabaseServer, userId);',
+        'utf8',
+      );
+
+      const resultado = checkModuleBoundaries(base);
+
+      expect(resultado.valid).toBe(false);
+      expect(resultado.violations.map((v) => v.rule)).toContain('tenancy-legacy-resolver');
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('não reporta nada quando o arquivo varrido não chama a função', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'orbita-boundaries-'));
+    try {
+      fs.writeFileSync(
+        path.join(base, 'fronteiraCerta.ts'),
+        'const escopo = await resolveVerifiedOrganizationScope(request);',
+        'utf8',
+      );
+
+      expect(checkModuleBoundaries(base)).toEqual({ valid: true, violations: [] });
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
   });
 });
