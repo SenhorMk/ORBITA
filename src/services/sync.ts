@@ -9,6 +9,19 @@ import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 import { mapBlingStatus, normalizeToE164 } from '../lib/utils';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import {
+  FALHA_PUBLICA_DE_SINCRONIZACAO,
+  type EnqueueSyncResult,
+  type SyncAllResult,
+  type SyncProcessOutcome,
+} from './syncContrato';
+
+export {
+  FALHA_PUBLICA_DE_SINCRONIZACAO,
+  type EnqueueSyncResult,
+  type SyncAllResult,
+  type SyncProcessOutcome,
+};
+import {
   enqueueJob,
   acquireLease,
   advanceCheckpoint,
@@ -26,50 +39,6 @@ import {
   touchSyncState,
 } from './syncCheckpoint';
 
-export interface EnqueueSyncResult {
-  jobId: string;
-  status: string;
-  isNew: boolean;
-}
-
-export interface SyncAllResult {
-  success: boolean;
-  /**
-   * Estado terminal observado do job. Existe para o chamador distinguir
-   * "falhou" de "já estava rodando" — as duas devolviam `success: false`, e o
-   * `/api/startup` anunciava sucesso nas duas.
-   */
-  status: SyncJob['status'] | 'unknown';
-  stats: {
-    clientes: number;
-    produtos: number;
-    pedidos: number;
-  };
-}
-
-/**
- * Diagnóstico público e estável gravado em `sync_jobs.last_error`.
- *
- * Aquele campo sai pela resposta de `GET /api/sync/status`. Antes ele guardava
- * `descreverErro(err)` com uma redação por padrão que só cobria `Bearer …` e
- * `key=…` — então nome de constraint, `details`, `hint` e valor de linha
- * (`Key (email)=(alguem@empresa.com) already exists`) chegavam ao cliente.
- * O diagnóstico técnico vive no log; aqui fica um código fixo (CWE-209).
- */
-export const FALHA_PUBLICA_DE_SINCRONIZACAO = 'SYNC_FAILED';
-
-/**
- * Sincronização durável, escopada por uma organização **já verificada**.
- *
- * Ticket 22 — o serviço resolvia o escopo sozinho, a partir de um `ActorContext`
- * cujo `tenant` vinha de `app_metadata`, e traduzia a negação em exceção
- * (`SyncScopeDeniedError`) para a rota transformar em status. Eram duas
- * autorizações para a mesma pergunta, e a de baixo lia a fonte errada.
- *
- * Agora a autorização acontece uma vez só, na fronteira HTTP, que já sabe
- * responder 401/403/503. O serviço recebe o escopo pronto e não decide mais
- * quem pode o quê.
- */
 export class SyncService {
   async enqueueSync(scope: VerifiedOrganizationScope): Promise<EnqueueSyncResult> {
     return enqueueJob(scope);
@@ -85,7 +54,11 @@ export class SyncService {
    * era consultado por "alterados desde o momento da falha" e respondia zero —
    * corretamente. Sem uma sincronização completa não havia como sair disso.
    */
-  async processJob(jobId: string, scope: VerifiedOrganizationScope, opcoes: { completa?: boolean } = {}): Promise<void> {
+  async processJob(
+    jobId: string,
+    scope: VerifiedOrganizationScope,
+    opcoes: { completa?: boolean } = {},
+  ): Promise<SyncProcessOutcome> {
     // A preparação ficava fora do `try`. Em `POST /api/sync` este método roda
     // dentro de `after()`, depois da resposta 202 já ter saído: uma rejeição
     // aqui virava promise não observada, e o job ficava `queued` para sempre,
@@ -109,14 +82,20 @@ export class SyncService {
       //
       // Encerrar com segurança exigiria identidade de lease (`lease_owner`) e
       // compare-and-set no banco, o que é migration própria. Sem isso, quem
-      // decide é o TTL da lease: `releaseExpiredLeases` a libera, e a próxima
-      // execução retoma. O job fica `queued`, que é verdade, em vez de `failed`,
-      // que seria mentira sobre um trabalho possivelmente em andamento.
-      return;
+      // decide é a próxima execução. O job fica `queued`, que é verdade, em vez
+      // de `failed`, que seria mentira sobre um trabalho possivelmente em
+      // andamento.
+      //
+      // **O TTL não cobre este caso.** Ele só resolve quando a aquisição foi
+      // confirmada remotamente e a resposta se perdeu: aí existe uma lease para
+      // expirar, e `releaseExpiredLeases` a libera. Se a RPC falhou **antes** de
+      // conceder, não há lease nenhuma, e o job permanece `queued` até que
+      // alguém chame de novo.
+      return { _tag: 'PreparationFailed' };
     }
 
     if (!leaseAcquired) {
-      return;
+      return { _tag: 'LeaseHeldElsewhere' };
     }
 
     const progress: SyncJobProgress = {
@@ -179,6 +158,8 @@ export class SyncService {
         });
       }
     }
+
+    return { _tag: 'JobFinished' };
   }
 
   async getJobStatus(jobId: string, scope: VerifiedOrganizationScope): Promise<SyncJob | null> {
@@ -187,7 +168,18 @@ export class SyncService {
 
   async syncAll(scope: VerifiedOrganizationScope): Promise<SyncAllResult> {
     const { jobId } = await this.enqueueSync(scope);
-    await this.processJob(jobId, scope);
+    const outcome = await this.processJob(jobId, scope);
+
+    // A tentativa de processar tem resposta própria. Ler só o estado do job
+    // confundiria "ninguém conseguiu começar" com "alguém está tocando".
+    if (outcome._tag === 'PreparationFailed') {
+      return {
+        success: false,
+        status: 'preparation_failed',
+        stats: { clientes: 0, produtos: 0, pedidos: 0 },
+      };
+    }
+
     const status = await this.getJobStatus(jobId, scope);
 
     return {

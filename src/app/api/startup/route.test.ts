@@ -147,6 +147,7 @@ describe('POST /api/startup', () => {
     expect(JSON.stringify(corpo)).not.toContain('Bling fora do ar');
   });
 
+  // `running` é o único estado que prova que alguém pegou o trabalho.
   it('trata "já estava rodando" como sucesso, e não como falha', async () => {
     mockAcquireLease.mockResolvedValue(false);
     mockGetJobStatus.mockResolvedValue({
@@ -160,6 +161,43 @@ describe('POST /api/startup', () => {
 
     expect(resposta.status).toBe(200);
     expect(corpo).toMatchObject({ success: true, stats: null });
+  });
+
+  // O bloqueante que a correção da lease criou: `acquireLease` rejeita, o job
+  // não é encerrado (correto — pode pertencer a outro worker), fica `queued`, e
+  // a rota lia `queued` como "já está rodando". `queued` não prova que alguém
+  // pegou o trabalho; pode ser que ninguém tenha conseguido nem tentar.
+  it('não anuncia sucesso quando a preparação falhou e o job segue pendente', async () => {
+    mockAcquireLease.mockRejectedValue(new Error('Falha ao adquirir lease: timeout'));
+    mockGetJobStatus.mockResolvedValue({
+      status: 'queued',
+      progress: { clientes_processados: 0, produtos_processados: 0, pedidos_processados: 0 },
+    });
+    const { POST } = await import('./route');
+
+    const resposta = await POST(requisicao());
+    const corpo = await resposta.json();
+
+    expect(resposta.status).toBe(503);
+    expect(corpo.success).toBe(false);
+    expect(corpo.error).toContain('pendente');
+    expect(JSON.stringify(corpo)).not.toContain('já está rodando');
+    // O job não foi encerrado: pode pertencer a outro worker.
+    expect(mockCompleteJob).not.toHaveBeenCalled();
+  });
+
+  // Mesmo sem falha de preparação, `queued` continua não sendo prova de nada.
+  it('não anuncia sucesso quando o job ficou apenas enfileirado', async () => {
+    mockAcquireLease.mockResolvedValue(false);
+    mockGetJobStatus.mockResolvedValue({
+      status: 'queued',
+      progress: { clientes_processados: 0, produtos_processados: 0, pedidos_processados: 0 },
+    });
+    const { POST } = await import('./route');
+
+    const resposta = await POST(requisicao());
+    expect(resposta.status).toBe(503);
+    expect((await resposta.json()).success).toBe(false);
   });
 
   it('anuncia sucesso apenas quando o job concluiu', async () => {

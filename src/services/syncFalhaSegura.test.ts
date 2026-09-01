@@ -123,7 +123,7 @@ describe('SyncService — falha segura', () => {
     mockAcquireLease.mockRejectedValue(new Error('Falha ao adquirir lease do job job-1: timeout'));
     const service = new SyncService();
 
-    await expect(service.processJob('job-1', ESCOPO)).resolves.toBeUndefined();
+    await expect(service.processJob('job-1', ESCOPO)).resolves.toEqual({ _tag: 'PreparationFailed' });
   });
 
   // Uma rejeição de `acquireLease` é resultado **ambíguo**: a RPC pode ter
@@ -139,7 +139,9 @@ describe('SyncService — falha segura', () => {
     mockAcquireLease.mockRejectedValue(new Error('Falha ao adquirir lease do job job-1: timeout'));
     const service = new SyncService();
 
-    await expect(service.processJob('job-1', ESCOPO)).resolves.toBeUndefined();
+    // O resultado da tentativa é explícito: nada foi executado. Sem isso, quem
+    // chama confundiria "ninguém conseguiu começar" com "alguém está tocando".
+    await expect(service.processJob('job-1', ESCOPO)).resolves.toEqual({ _tag: 'PreparationFailed' });
 
     expect(mockCompleteJob).not.toHaveBeenCalled();
     // A falha fica registrada; quem decide o destino do job é o TTL da lease.
@@ -150,7 +152,7 @@ describe('SyncService — falha segura', () => {
     mockReleaseExpiredLeases.mockRejectedValue(new Error('rpc indisponível'));
     const service = new SyncService();
 
-    await expect(service.processJob('job-1', ESCOPO)).resolves.toBeUndefined();
+    await expect(service.processJob('job-1', ESCOPO)).resolves.toEqual({ _tag: 'PreparationFailed' });
     expect(mockAcquireLease).not.toHaveBeenCalled();
   });
 
@@ -161,7 +163,7 @@ describe('SyncService — falha segura', () => {
     mockCompleteJob.mockRejectedValue(new Error('banco fora do ar'));
     const service = new SyncService();
 
-    await expect(service.processJob('job-1', ESCOPO)).resolves.toBeUndefined();
+    await expect(service.processJob('job-1', ESCOPO)).resolves.toEqual({ _tag: 'JobFinished' });
     expect(saidaDoLog.join('\n')).toContain('sync.concluir_apos_falha');
   });
 

@@ -82,6 +82,6 @@ describe('SyncService authorization boundary', () => {
     mockAcquireLease.mockResolvedValue(false);
     const service = new SyncService();
 
-    await expect(service.processJob('job-1', ESCOPO)).resolves.toBeUndefined();
+    await expect(service.processJob('job-1', ESCOPO)).resolves.toEqual({ _tag: 'LeaseHeldElsewhere' });
   });
 });

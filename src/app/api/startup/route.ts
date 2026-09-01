@@ -26,14 +26,30 @@ function respostaDaSincronizacao(resultado: SyncAllResult): NextResponse {
     });
   }
 
-  // "Já estava rodando" não é falha: o job existe, tem dono, e a tela deve
-  // acompanhar em vez de mostrar erro.
-  if (resultado.status === 'running' || resultado.status === 'queued') {
+  // "Já estava rodando" só vale para `running`, que é o único estado que prova
+  // que alguém pegou o trabalho. `queued` **não prova nada**: pode ser que
+  // ninguém tenha conseguido nem tentar — foi assim que esta rota voltou a
+  // anunciar sucesso falso depois que `processJob` deixou de encerrar o job em
+  // falha ambígua de aquisição de lease.
+  if (resultado.status === 'running') {
     return NextResponse.json({
       success: true,
       message: 'A sincronização já está rodando em segundo plano.',
       stats: null,
     });
+  }
+
+  // Nada foi executado, e o job continua pendente. A resposta é não bem-sucedida
+  // de propósito: 202 seria lida como "aceito e em andamento" por qualquer
+  // cliente que olhe só o status, e não é isso que aconteceu.
+  if (resultado.status === 'preparation_failed' || resultado.status === 'queued') {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Não foi possível iniciar a sincronização agora. O trabalho segue pendente e será retomado.',
+      },
+      { status: 503 },
+    );
   }
 
   return NextResponse.json(
