@@ -12,12 +12,25 @@ import { cabecalhosAutenticados } from './sessaoAutenticada';
  *
  * The real, verifiable trust boundary for the organization matrix
  * (`organização: criação/seleção CAS, convite, papéis e revogação`) is the
- * authenticated browser session itself: the Supabase auth cookie the login
- * spec establishes, replayed through `page.request` (which shares cookies
- * with the `Page` it comes from). That is still the actual browser's
- * network stack, not a Vitest mock — it exercises the same route handlers,
- * session verification (`resolveAuthenticatedIdentity`/
- * `verifySessionAndRole`), and RLS-backed repositories a UI click would.
+ * authenticated browser session itself, replayed through `page.request` — the
+ * actual browser's network stack, not a Vitest mock. It exercises the same
+ * route handlers, the same identity verification
+ * (`resolveAuthenticatedIdentity`) and the same RLS-backed repositories a UI
+ * click would.
+ *
+ * **The credential is a bearer token in the `Authorization` header, never a
+ * cookie.** This comment used to say the opposite — that `page.request` carries
+ * the session because it shares cookies with its `Page`. It does share cookies,
+ * and that buys nothing: `readBearerToken` reads the token exclusively from the
+ * `Authorization` header and never looks at a cookie. The comment was written
+ * before the suite had ever run, and it is what made two calls in
+ * `organization.spec.ts` go out raw and collect a `401` (ticket 24).
+ *
+ * So every method here builds its headers with `cabecalhosAutenticados`, which
+ * reads the token from where `supabase-js` keeps it in the browser. **Specs must
+ * not call `page.request` directly** — a guard in
+ * `src/lib/e2e/chamadasAutenticadasNasSpecs.test.ts` fails, with file and line,
+ * if one does.
  *
  * Route shapes mirror the real handlers under `src/app/api/organizacoes/`:
  * - `POST /api/organizacoes` — { nome, slug } -> { id, ... }
