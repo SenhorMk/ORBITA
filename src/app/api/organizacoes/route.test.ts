@@ -27,6 +27,13 @@ const SERVICE_ROLE_KEY = 'service-role-staging-fake-123456789';
 const USER_ACCESS_TOKEN = 'user-jwt-access-token-fake-123456789';
 const USER_ID = '95000000-0000-4000-8000-000000000002';
 const CREATED_ORG_ID = '95000000-0000-4000-8000-000000000001';
+const ORG_DO_USUARIO = {
+  id: '95000000-0000-4000-8000-000000000003',
+  nome: 'Organização do Usuário',
+  slug: 'org-do-usuario',
+  created_at: '2026-09-01T00:00:00Z',
+  updated_at: '2026-09-01T00:00:00Z',
+};
 
 process.env.NEXT_PUBLIC_SUPABASE_URL = SUPABASE_URL;
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = ANON_KEY;
@@ -101,6 +108,24 @@ async function supabaseHttpFake(input: RequestInfo | URL, init?: RequestInit): P
       : jsonResponse(CREATED_ORG_ID, 200);
   }
 
+  // Leituras do PostgREST que o `GET` faz. Elas não decidem identidade — quem
+  // decide é `/auth/v1/user`, acima —, então aqui só devolvem forma válida.
+  if (path === '/rest/v1/membros_organizacao') {
+    return jsonResponse(
+      [
+        {
+          papel: 'owner',
+          organizacao_id: ORG_DO_USUARIO.id,
+          organizacoes: ORG_DO_USUARIO,
+        },
+      ],
+      200,
+    );
+  }
+  if (path === '/rest/v1/contextos_organizacao_ativos') {
+    return jsonResponse(null, 200);
+  }
+
   return jsonResponse({ message: `rota Supabase inesperada no teste: ${path}` }, 500);
 }
 
@@ -169,5 +194,67 @@ describe('POST /api/organizacoes', () => {
 
     expect(response.status).toBe(401);
     expect(recordedCalls.some((call) => call.path.startsWith('/rest/v1/rpc/'))).toBe(false);
+  });
+});
+
+/**
+ * Ticket 24 — o mecanismo em que a spec de organização tropeçou.
+ *
+ * A autenticação deste aplicativo é por **bearer**: `readBearerToken` lê o token
+ * exclusivamente do header `Authorization`. `page.request`, do Playwright,
+ * compartilha os **cookies** da página — e cookie aqui não vale nada.
+ *
+ * Duas chamadas da spec iam cruas, sem header, e recebiam 401. A spec quebrava
+ * antes da revogação que ela existe para testar, e a asserção seguinte lia o
+ * corpo de um 401 e concluía que a organização tinha sumido da lista.
+ *
+ * Os dois casos abaixo fixam a assimetria que causou isso, na rota de verdade.
+ */
+describe('GET /api/organizacoes — a credencial vem do header, não do cookie', () => {
+  beforeEach(() => {
+    recordedCalls = [];
+    vi.stubGlobal('fetch', supabaseHttpFake);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('devolve 401 sem o header `Authorization`, e não consulta o PostgREST', async () => {
+    const { GET } = await import('./route');
+
+    const response = await GET(new Request('https://orbita.test/api/organizacoes'));
+
+    expect(response.status).toBe(401);
+    expect(recordedCalls.some((call) => call.path.startsWith('/rest/v1/'))).toBe(false);
+  });
+
+  // O ponto exato: **um cookie de sessão não autentica nada.** Era a premissa
+  // da spec, e do comentário que a acompanhava.
+  it('devolve 401 com cookie de sessão e sem header', async () => {
+    const { GET } = await import('./route');
+
+    const response = await GET(
+      new Request('https://orbita.test/api/organizacoes', {
+        headers: { cookie: `sb-access-token=${USER_ACCESS_TOKEN}; sb-refresh-token=qualquer` },
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(recordedCalls.some((call) => call.path.startsWith('/rest/v1/'))).toBe(false);
+  });
+
+  it('devolve 200 com o header, para a mesma sessão', async () => {
+    const { GET } = await import('./route');
+
+    const response = await GET(
+      new Request('https://orbita.test/api/organizacoes', {
+        headers: { Authorization: `Bearer ${USER_ACCESS_TOKEN}` },
+      }),
+    );
+    const corpo = (await response.json()) as { organizacoes: { id: string }[] };
+
+    expect(response.status).toBe(200);
+    expect(corpo.organizacoes.map((o) => o.id)).toEqual([ORG_DO_USUARIO.id]);
   });
 });

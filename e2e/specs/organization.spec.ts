@@ -129,13 +129,21 @@ test.describe('organização', () => {
     const memberLogin = new LoginPage(memberPage);
     await memberLogin.goto();
     await memberLogin.loginAndWaitForDashboard(memberToRevoke.email, memberToRevoke.password);
-    const memberBeforeRevocation = await memberPage.request.get('/api/organizacoes');
+    // Ticket 24 — esta chamada ia crua, sem `Authorization`. A autenticação é
+    // por bearer, e `page.request` só compartilha cookie: a rota respondia 401,
+    // e a spec quebrava aqui, antes da revogação que ela existe para testar.
+    const memberOrgApi = new OrganizationApi(memberPage);
+    const memberBeforeRevocation = await memberOrgApi.listOrganizations();
     expect(memberBeforeRevocation.ok()).toBe(true);
 
     const revokeResponse = await ownerOrgApi.revokeMember(orgId, requirePersonaUserId(memberToRevoke));
     expect(revokeResponse.ok()).toBe(true);
 
-    const memberAfterRevocation = await memberPage.request.get('/api/organizacoes');
+    const memberAfterRevocation = await memberOrgApi.listOrganizations();
+    // Sem esta linha, um 401 passaria por prova: o corpo de uma negação também
+    // não traz a organização, e a asserção de baixo ficaria verde pelo motivo
+    // errado. É o que acontecia antes do ticket 24.
+    expect(memberAfterRevocation.ok()).toBe(true);
     const afterBody = (await memberAfterRevocation.json()) as {
       organizacoes: Array<{ id: string }>;
     };
