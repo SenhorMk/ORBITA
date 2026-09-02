@@ -8,9 +8,21 @@ import { requirePersonaUserId, slugDaOrganizacaoDaSpec, type SeedManifest } from
 // Matrix: "organização: criação/seleção CAS, convite, papéis e revogação."
 //
 // There is no organization UI in `src/app/page.tsx` to click through (see
-// `e2e/pages/OrganizationApi.ts` for why). Every request below rides the
-// real authenticated browser session's cookies via `page.request`, which is
-// the actual trust boundary a UI widget would also cross if one existed.
+// `e2e/pages/OrganizationApi.ts` for why). Every request below goes through
+// `OrganizationApi`, which is the suite's single authenticated path — the same
+// route handlers, identity verification and RLS-backed repositories a UI click
+// would cross.
+//
+// **The credential is a bearer token, never a cookie.** This comment used to
+// say the requests rode "the authenticated browser session's cookies". They do
+// carry cookies, and that buys nothing: `readBearerToken` reads the token
+// exclusively from the `Authorization` header. Two calls here went out raw on
+// that premise and collected a `401` — the spec broke before the revocation it
+// exists to test (ticket 24).
+//
+// A guard in `src/lib/e2e/chamadasAutenticadasNasSpecs.test.ts` fails, with
+// file and line, if a spec ever talks to a route through a page's own request
+// context again.
 
 let manifest: SeedManifest;
 
