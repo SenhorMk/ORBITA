@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { FilaDeRequisicoes, PortaDaFila, esperar } from './filaDeRequisicoes';
+import { FilaDeRequisicoes, esperar } from './filaDeRequisicoes';
 
 /**
  * Ticket 31 — a fila de requisições.
@@ -10,9 +10,15 @@ import { FilaDeRequisicoes, PortaDaFila, esperar } from './filaDeRequisicoes';
  * ficava verde com a regressão reintroduzida: o espaçamento observado vinha do
  * relógio, não da porta, e era idêntico nos dois casos.
  *
- * Aqui o relógio e a espera são injetados, então não há tempo de parede em
- * nenhuma asserção: a máquina lenta não reprova o certo, nem a rápida aprova o
- * errado.
+ * Aqui o relógio e a espera são injetados, então **nesta suíte** nenhuma
+ * asserção depende de tempo de parede: a máquina lenta não reprova o certo, nem
+ * a rápida aprova o errado.
+ *
+ * A afirmação vale só para este arquivo. `bling-fila-e-prazo.test.ts` continua
+ * com esperas reais, porque lá o assunto é o cliente HTTP inteiro e o que se
+ * observa é trabalho de fundo assentando — dizer que a suíte toda está livre de
+ * tempo de parede seria repetir o erro que esta série vem cometendo: afirmar
+ * cobertura maior do que a que existe.
  */
 
 /** Espera controlada: cada chamada fica pendente até o teste soltá-la. */
@@ -21,16 +27,32 @@ function esperaControlada() {
 
   const dormir = (ms: number, signal?: AbortSignal): Promise<void> =>
     new Promise<void>((resolve, rejeitar) => {
-      const entrada = { ms, signal, resolve, rejeitar };
-      pendentes.push(entrada);
-      signal?.addEventListener('abort', () => {
-        // Sai da lista: uma espera abortada não pode ser "concluída" depois e
-        // roubar o lugar da próxima — foi assim que a primeira versão deste
-        // helper travou um teste.
+      const sair = () => {
+        // Sai da lista: uma espera concluída ou abortada não pode ser
+        // "concluída" de novo e roubar o lugar da próxima — foi assim que a
+        // primeira versão deste helper travou um teste.
         const i = pendentes.indexOf(entrada);
         if (i >= 0) pendentes.splice(i, 1);
-        rejeitar(signal.reason);
-      }, { once: true });
+        signal?.removeEventListener('abort', aoAbortar);
+      };
+
+      const aoAbortar = () => {
+        sair();
+        rejeitar(signal?.reason);
+      };
+
+      const entrada = {
+        ms,
+        signal,
+        // O listener é removido nos **dois** desfechos. Um dublê que vaza
+        // listener é o tipo de coisa que só aparece como lentidão inexplicável
+        // muitas suítes depois.
+        resolve: () => { sair(); resolve(); },
+        rejeitar,
+      };
+
+      pendentes.push(entrada);
+      signal?.addEventListener('abort', aoAbortar, { once: true });
     });
 
   return {
@@ -38,7 +60,7 @@ function esperaControlada() {
     pendentes,
     /** Conclui a espera mais antiga ainda pendente. */
     concluirPrimeira(): void {
-      const primeira = pendentes.shift();
+      const primeira = pendentes[0];
       if (!primeira) throw new Error('nenhuma espera pendente');
       primeira.resolve();
     },
@@ -53,42 +75,6 @@ function relogio(inicial = 10_000) {
 
 /** Deixa a microtask queue drenar, sem depender de tempo. */
 const assentar = () => new Promise((r) => setImmediate(r));
-
-describe('PortaDaFila', () => {
-  it('liberar() abre na hora', async () => {
-    const porta = new PortaDaFila();
-    let aberta = false;
-    void porta.aberta.then(() => { aberta = true; });
-
-    porta.liberar();
-    await porta.aberta;
-
-    expect(aberta).toBe(true);
-  });
-
-  it('encadearEm() não abre enquanto o predecessor não termina', async () => {
-    let liberarA = (): void => {};
-    const a = new Promise<void>((resolve) => { liberarA = resolve; });
-
-    const porta = new PortaDaFila();
-    let aberta = false;
-    void porta.aberta.then(() => { aberta = true; });
-
-    porta.encadearEm(a);
-    await assentar();
-    expect(aberta).toBe(false);
-
-    liberarA();
-    await porta.aberta;
-    expect(aberta).toBe(true);
-  });
-
-  it('encadearEm() abre também quando o predecessor falha', async () => {
-    const porta = new PortaDaFila();
-    porta.encadearEm(Promise.reject(new Error('o predecessor falhou')));
-    await expect(porta.aberta).resolves.toBeUndefined();
-  });
-});
 
 describe('FilaDeRequisicoes — a ordem quando alguém desiste', () => {
   it('A → B → C: B que desiste esperando A não solta C antes de A', async () => {
@@ -177,36 +163,41 @@ describe('FilaDeRequisicoes — a ordem quando alguém desiste', () => {
 });
 
 describe('FilaDeRequisicoes — o relógio', () => {
-  it('a vez usada avança o relógio, e o próximo espera o intervalo', async () => {
+  it('a vez usada avança o relógio, e o próximo espera só o que falta', async () => {
     const espera = esperaControlada();
     const tempo = relogio();
     const fila = new FilaDeRequisicoes({ agora: tempo.agora, dormir: espera.dormir, intervaloMs: 340 });
 
-    // Primeira: não há nada antes, então não espera intervalo nenhum.
+    // Primeira: não há vez anterior, então não espera intervalo nenhum.
     await fila.aguardarVez();
-    expect(fila.vezUsadaEm).toBe(tempo.agora());
+    expect(espera.pendentes).toHaveLength(0);
 
-    // Segunda, 100 ms depois: deve esperar os 240 ms que faltam.
+    // Segunda, 100 ms depois: espera os 240 que faltam — e é a **duração da
+    // espera** que revela o relógio, sem precisar expor o campo.
     tempo.avancar(100);
     const segunda = fila.aguardarVez();
     await assentar();
-
-    expect(espera.pendentes).toHaveLength(1);
-    expect(espera.pendentes[0]?.ms).toBe(240);
+    expect(espera.pendentes.map((p) => p.ms)).toEqual([240]);
 
     tempo.avancar(240);
     espera.concluirPrimeira();
     await segunda;
-    expect(fila.vezUsadaEm).toBe(tempo.agora());
+
+    // Terceira, imediatamente depois: o relógio avançou na segunda, então ela
+    // espera o intervalo inteiro.
+    const terceira = fila.aguardarVez();
+    await assentar();
+    expect(espera.pendentes.map((p) => p.ms)).toEqual([340]);
+    espera.concluirPrimeira();
+    await terceira;
   });
 
   it('quem desiste ANTES da vez não avança o relógio', async () => {
     // Se avançasse, empurraria a janela da requisição seguinte sem ter feito
-    // requisição nenhuma. É a asserção que faltava: a anterior expirava antes
-    // de o rate limiter ser alcançado, e nunca chegava a olhar para isto.
+    // requisição nenhuma. Observável pela duração que o sucessor espera.
     const espera = esperaControlada();
     const tempo = relogio();
-    const fila = new FilaDeRequisicoes({ agora: tempo.agora, dormir: espera.dormir });
+    const fila = new FilaDeRequisicoes({ agora: tempo.agora, dormir: espera.dormir, intervaloMs: 340 });
 
     await fila.aguardarVez();
     const a = fila.aguardarVez();
@@ -216,15 +207,21 @@ describe('FilaDeRequisicoes — o relógio', () => {
     const b = fila.aguardarVez(controle.signal).catch(() => 'desistiu');
     await assentar();
 
-    const relogioAntes = fila.vezUsadaEm;
+    // Passa muito tempo, e B desiste no meio dele.
     tempo.avancar(5_000);
     controle.abort(new Error('prazo'));
     await b;
 
-    expect(fila.vezUsadaEm).toBe(relogioAntes);
-
+    // A conclui. Se a desistência de B tivesse avançado o relógio, o próximo
+    // esperaria menos — ou nada.
     espera.concluirPrimeira();
     await a;
+
+    const proxima = fila.aguardarVez();
+    await assentar();
+    expect(espera.pendentes.map((p) => p.ms)).toEqual([340]);
+    espera.concluirPrimeira();
+    await proxima;
   });
 
   it('quem desiste DEPOIS de tomar a vez libera o sucessor na hora', async () => {
@@ -239,7 +236,6 @@ describe('FilaDeRequisicoes — o relógio', () => {
     const controle = new AbortController();
     const b = fila.aguardarVez(controle.signal).catch(() => 'desistiu');
     await assentar();
-    // B já tomou a vez: está dormindo o intervalo.
     expect(espera.pendentes).toHaveLength(1);
 
     controle.abort(new Error('prazo'));
@@ -248,10 +244,24 @@ describe('FilaDeRequisicoes — o relógio', () => {
     let cPronta = false;
     const c = fila.aguardarVez().then(() => { cPronta = true; });
     await assentar();
-    // C não fica preso a B: só depende do próprio intervalo.
     espera.concluirPrimeira();
     await c;
     expect(cPronta).toBe(true);
+  });
+
+  it('o padrão observa o prazo mesmo sem injeção nenhuma', async () => {
+    // A classe promete observar o aborto. Se o `dormir` padrão ignorasse o
+    // signal, ela estaria errada para todo mundo que a usa sem injetar peça —
+    // e o teste com dublê nunca perceberia.
+    const fila = new FilaDeRequisicoes({ intervaloMs: 60_000 });
+    await fila.aguardarVez();
+
+    const controle = new AbortController();
+    const segunda = fila.aguardarVez(controle.signal);
+    const motivo = new Error('prazo');
+    controle.abort(motivo);
+
+    await expect(segunda).rejects.toBe(motivo);
   });
 });
 

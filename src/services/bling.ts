@@ -25,8 +25,44 @@ import {
   type Situacao,
 } from '../lib/integrations/bling/situacoesContract';
 import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
-import { FilaDeRequisicoes, esperar } from './filaDeRequisicoes';
+import { FilaDeRequisicoes, esperar, type Dormir } from './filaDeRequisicoes';
 
+
+/**
+ * As peças externas que o cliente usa antes de falar HTTP com o Bling.
+ *
+ * Existe para que os testes possam exercitar o `getAccessToken` **real** sem
+ * mock de módulo — a convenção deste repositório é porta injetada, como
+ * `BlingPort` e `ManualOrderStorePort`. Sem isto, provar o caminho do token
+ * exigia dublar o próprio método, e a prova desviava justamente da linha em
+ * questão.
+ */
+export interface PortasDoClienteBling {
+  /** Espera cancelável usada no backoff de 429. */
+  readonly dormir: Dormir;
+  /** Id da conexão Bling da organização, ou `null` quando não há. */
+  readonly acharConexaoId: (organizacaoId: string) => Promise<string | null>;
+  /** Credenciais decifradas da conexão. */
+  readonly lerCredenciais: (
+    organizacaoId: string,
+    conexaoId: string,
+  ) => Promise<Record<string, unknown> | null>;
+}
+
+const PORTAS_REAIS: PortasDoClienteBling = {
+  dormir: esperar,
+  acharConexaoId: async (organizacaoId) => {
+    const { data } = await supabaseServer
+      .from('conexoes_integracao')
+      .select('id')
+      .eq('organizacao_id', organizacaoId)
+      .eq('provedor', 'bling')
+      .maybeSingle();
+    return data?.id ?? null;
+  },
+  lerCredenciais: (organizacaoId, conexaoId) =>
+    credentialsVault.getDecryptedCredentials(organizacaoId, conexaoId) as Promise<Record<string, unknown> | null>,
+};
 
 const orgClientCache = new Map<string, BlingClient>();
 
@@ -127,14 +163,28 @@ export class BlingClient implements BlingPort {
   private oauthUrl = process.env.BLING_OAUTH_URL || 'https://www.bling.com.br/Api/v3/oauth/token';
 
   private refreshTokenPromise: Promise<string> | null = null;
-  private readonly fila = new FilaDeRequisicoes({ dormir: esperar });
+  private readonly fila: FilaDeRequisicoes;
 
   private readonly organizacaoId?: string;
   private conexaoId?: string;
+  private readonly portas: PortasDoClienteBling;
 
-  private constructor(organizacaoId?: string, conexaoId?: string) {
+  private constructor(organizacaoId?: string, conexaoId?: string, portas: PortasDoClienteBling = PORTAS_REAIS) {
     this.organizacaoId = organizacaoId;
     this.conexaoId = conexaoId;
+    this.portas = portas;
+    this.fila = new FilaDeRequisicoes({ dormir: portas.dormir });
+  }
+
+  /**
+   * Cliente com portas trocadas, **sem cache**.
+   *
+   * O cache existe para reaproveitar token entre chamadas da mesma organização;
+   * um cliente com portas próprias não é o mesmo cliente, e guardá-lo lá
+   * contaminaria quem pedisse o normal depois.
+   */
+  static comPortas(organizacaoId: string, portas: Partial<PortasDoClienteBling>): BlingClient {
+    return new BlingClient(organizacaoId, undefined, { ...PORTAS_REAIS, ...portas });
   }
 
   /**
@@ -282,23 +332,19 @@ export class BlingClient implements BlingPort {
     }
 
     if (!this.conexaoId) {
-      const { data: conn } = await supabaseServer
-        .from('conexoes_integracao')
-        .select('id')
-        .eq('organizacao_id', this.organizacaoId)
-        .eq('provedor', 'bling')
-        .maybeSingle();
-
-      if (conn?.id) {
-        this.conexaoId = conn.id;
-      }
+      this.conexaoId = (await this.portas.acharConexaoId(this.organizacaoId)) ?? undefined;
     }
 
     if (!this.conexaoId) {
       throw new Error('Bling nao conectado para esta organizacao. Conclua os passos 1 e 2 em Integracoes.');
     }
 
-    const creds = await credentialsVault.getDecryptedCredentials(this.organizacaoId, this.conexaoId);
+    // A consulta da conexão acima também consome tempo, e pode ter estourado o
+    // orçamento sozinha. Sem esta conferência, a leitura do cofre — outra ida à
+    // rede — começaria já fora do prazo.
+    signal?.throwIfAborted();
+
+    const creds = await this.portas.lerCredenciais(this.organizacaoId, this.conexaoId);
     if (!creds?.access_token) {
       throw new Error('Bling nao conectado para esta organizacao. Conclua os passos 1 e 2 em Integracoes.');
     }
@@ -360,7 +406,7 @@ export class BlingClient implements BlingPort {
         retries++;
         const retryAfter = parseInt(response.headers.get('Retry-After') || '1', 10);
         console.warn(`⚠️ Rate Limit atingido (HTTP 429). Aguardando retry com backoff...`);
-        await esperar(retryAfter * 1000 * Math.pow(2, retries - 1), options.signal ?? undefined);
+        await this.portas.dormir(retryAfter * 1000 * Math.pow(2, retries - 1), options.signal ?? undefined);
         continue;
       }
 

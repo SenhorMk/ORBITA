@@ -11,6 +11,11 @@
  * O relógio e a espera são injetáveis porque **as duas coisas que esta classe
  * promete são temporais**. Testá-las com tempo de parede transforma a prova em
  * aposta: uma máquina lenta reprova o certo, uma rápida aprova o errado.
+ *
+ * A superfície pública é só `aguardarVez`. A porta, o encadeamento e o relógio
+ * interno são detalhes: expô-los para facilitar teste transformaria decisões
+ * internas em contrato, e o que precisa ser provado dá para provar pelo que
+ * `aguardarVez` faz — quantas esperas abre, de quanto tempo, e em que ordem.
  */
 
 /** Espera cancelável, na forma que a fila consome. */
@@ -28,7 +33,7 @@ export type Dormir = (ms: number, signal?: AbortSignal) => Promise<void>;
  * A distinção existe porque abrir a porta na desistência deixa o sucessor
  * ultrapassar um predecessor que ainda não terminou.
  */
-export class PortaDaFila {
+class PortaDaFila {
   private abrir: () => void = () => {};
   readonly aberta: Promise<void>;
 
@@ -64,12 +69,11 @@ export class FilaDeRequisicoes {
   constructor(opcoes: OpcoesDaFila = {}) {
     this.intervaloMs = opcoes.intervaloMs ?? 340;
     this.agora = opcoes.agora ?? Date.now;
-    this.dormir = opcoes.dormir ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-  }
-
-  /** Instante em que a última vez foi **efetivamente usada**. */
-  get vezUsadaEm(): number {
-    return this.ultimaVezUsadaEm;
+    // O padrão é a espera **cancelável**. Um `setTimeout` cru aqui tornaria a
+    // classe errada sem a injeção certa: ela promete observar o prazo, e a
+    // promessa não pode depender de quem a constrói lembrar de passar a peça
+    // que a cumpre.
+    this.dormir = opcoes.dormir ?? esperar;
   }
 
   /**
@@ -123,7 +127,7 @@ export class FilaDeRequisicoes {
  * Isto só solta quem estava esperando: a vez do predecessor não é cancelável,
  * mas ninguém precisa ficar preso a ela depois do prazo.
  */
-export function esperarOuDesistir<T>(promessa: Promise<T>, signal?: AbortSignal): Promise<T> {
+function esperarOuDesistir<T>(promessa: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promessa;
 
   const prazo = signal;
