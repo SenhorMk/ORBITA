@@ -37,6 +37,7 @@ function projetoFalso(falhas: FalhasSimuladas = {}) {
   const contadores = { usuario: 0, organizacao: 0, membership: 0 };
   let exclusoes = 0;
   let proximoId = 1;
+  const ordemDeExclusao: string[] = [];
 
   for (const existente of falhas.jaExistentes ?? []) {
     criados.set(existente.identificador, { ...existente, tipo: inferirTipo(existente.identificador) });
@@ -73,7 +74,15 @@ function projetoFalso(falhas: FalhasSimuladas = {}) {
     if (falhas.exclusaoFalhaEm === exclusoes - 1) {
       return { _tag: 'FalhaDeExclusao', causa: 'falha simulada de exclusão' };
     }
-    for (const [chave, valor] of criados) if (valor.id === id) criados.delete(chave);
+    for (const [chave, valor] of criados) {
+      if (valor.id === id) {
+        // A ordem em que o projeto foi de fato modificado. Sem isto, "apagou o
+        // vínculo antes da organização" só pode ser afirmado sobre o **plano**,
+        // e plano não é execução.
+        ordemDeExclusao.push(valor.identificador);
+        criados.delete(chave);
+      }
+    }
     return { _tag: 'Excluido' };
   }
 
@@ -93,7 +102,7 @@ function projetoFalso(falhas: FalhasSimuladas = {}) {
     apagarMembership: async (id) => apagar(id),
   };
 
-  return { porta, criados };
+  return { porta, criados, ordemDeExclusao };
 }
 
 /** Disco em memória: guarda a última gravação do diário. */
@@ -260,8 +269,9 @@ describe('a limpeza distingue falha de leitura de registro ausente', () => {
 
     const resultado = await executarLimpeza(projeto.porta, diario, { simular: false });
 
-    // A organização da spec não foi criada neste cenário, então não há o que
-    // apagar dela: sobram as 11 do seed.
+    // Os registros que as specs criam não existem neste cenário — a suíte não
+    // rodou —, então o que sai são os 15 do seed. O plano os conhece mesmo
+    // assim, e eles entram como "já removidos".
     expect(resultado.removidos).toBe(15);
     expect([...projeto.criados.keys()]).toEqual(['cliente-de-verdade@empresa.com']);
   });
@@ -620,5 +630,95 @@ describe('a adoção pelo identificador natural é restrita', () => {
     // nasce junto, e o vínculo do convite aceito. Nenhum existe quando a suíte
     // não roda — e todos são "já removidos", não erro.
     expect(resultado.plano.jaRemovidas.map((o) => o.criadoPor)).toEqual(['spec', 'spec', 'spec']);
+  });
+});
+
+/**
+ * Ticket 23 — a limpeza **executada**, e não só planejada.
+ *
+ * A primeira regressão deste ticket chamava `reconciliar` e `planejarLimpeza`
+ * direto, e dizia atravessar a limpeza. Não atravessava: não passava por
+ * `executarLimpeza`, não tocava a porta de exclusão, e o caso chamado "depois
+ * da limpeza" rodava **antes** de qualquer remoção — `relatarOrfaos(...) === []`
+ * ali significa apenas que o plano conhece os registros.
+ *
+ * É a família 1 mais uma vez, e desta vez dentro da prova: as duas metades
+ * certas — o plano prevê, a limpeza apaga — e a ligação entre elas não medida.
+ *
+ * Aqui a suíte é simulada de verdade: os registros que as specs criariam são
+ * injetados no projeto falso, `executarLimpeza` roda sem `simular`, e o que se
+ * cobra é o **estado do projeto depois**.
+ */
+describe('a limpeza executada apaga os registros que as specs criaram', () => {
+  /** Semeia normalmente, como `e2e:seed` faria. */
+  async function semearNoProjeto() {
+    const projeto = projetoFalso();
+    const { diario } = await executarSeed({
+      porta: projeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: discoFalso().persistir,
+    });
+    return { projeto, diario };
+  }
+
+  /** O que a suíte teria criado ao rodar: os dois vínculos e a organização da spec. */
+  function injetarRegistrosDasSpecs(projeto: ReturnType<typeof projetoFalso>, diario: DiarioDeExecucao) {
+    const daSpec = diario.plano.operacoes.filter((o) => o.criadoPor === 'spec');
+    for (const [i, operacao] of daSpec.entries()) {
+      projeto.criados.set(operacao.identificador, {
+        identificador: operacao.identificador,
+        // Ids **remotos**: não são os do diário, porque o seed não criou estes
+        // registros. Adotá-los é exatamente o que a reconciliação precisa fazer.
+        id: `id-remoto-da-spec-${i}`,
+        tipo: operacao.tipo,
+      });
+    }
+    return daSpec;
+  }
+
+  it('adota os vínculos pelos ids remotos, apaga cada um antes da sua organização, e não deixa resíduo', async () => {
+    const { projeto, diario } = await semearNoProjeto();
+    const daSpec = injetarRegistrosDasSpecs(projeto, diario);
+    // Um registro que não é desta execução: ele não pode ser tocado.
+    projeto.criados.set('cliente-de-verdade@empresa.com', {
+      identificador: 'cliente-de-verdade@empresa.com', id: 'id-real', tipo: 'usuario',
+    });
+
+    const resultado = await executarLimpeza(projeto.porta, diario, { simular: false });
+
+    // 1. Adoção pelos ids remotos — os dois vínculos que as specs criam.
+    const vinculosDaSpec = daSpec.filter((o) => o.tipo === 'membership');
+    expect(vinculosDaSpec).toHaveLength(2);
+    for (const vinculo of vinculosDaSpec) {
+      const adotada = resultado.adotadas.find((a) => a.identificador === vinculo.identificador);
+      expect(adotada, `o vínculo ${vinculo.chave} não foi adotado`).toBeDefined();
+      expect(adotada!.idAdotado).toMatch(/^id-remoto-da-spec-/u);
+    }
+
+    // 2. Cada vínculo saiu **antes** da organização dele, no projeto de verdade.
+    const posicao = (identificador: string) => projeto.ordemDeExclusao.indexOf(identificador);
+    for (const vinculo of vinculosDaSpec) {
+      const slugDaOrganizacao = vinculo.identificador.slice(vinculo.identificador.lastIndexOf('@') + 1);
+      expect(posicao(vinculo.identificador)).toBeGreaterThanOrEqual(0);
+      expect(posicao(vinculo.identificador)).toBeLessThan(posicao(slugDaOrganizacao));
+    }
+
+    // 3. Nenhum dos registros das specs sobrou.
+    for (const operacao of daSpec) {
+      expect([...projeto.criados.keys()]).not.toContain(operacao.identificador);
+    }
+
+    // 4. E o que é de fora da execução ficou intacto.
+    expect([...projeto.criados.keys()]).toEqual(['cliente-de-verdade@empresa.com']);
+  });
+
+  it('a segunda limpeza não tem o que apagar, e termina em sucesso', async () => {
+    const { projeto, diario } = await semearNoProjeto();
+    injetarRegistrosDasSpecs(projeto, diario);
+
+    await executarLimpeza(projeto.porta, diario, { simular: false });
+    const segunda = await executarLimpeza(projeto.porta, diario, { simular: false });
+
+    expect(segunda.removidos).toBe(0);
+    expect(segunda.plano.aprovadas).toEqual([]);
+    expect(projeto.criados.size).toBe(0);
   });
 });

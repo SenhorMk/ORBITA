@@ -291,7 +291,11 @@ describe('o vínculo criado pelo aceite do convite é apagado pela limpeza', () 
     expect(chaves.indexOf(convite.chave)).toBeLessThan(chaves.indexOf(organizacaoDoConvite!.chave));
   });
 
-  it('depois da limpeza não sobra órfão: tudo o que o projeto tem está no plano', () => {
+  // O nome importa: isto acontece **antes** de qualquer exclusão, e o que ele
+  // prova é que o plano conhece todos os registros — não que o projeto ficou
+  // limpo. A limpeza executada, com o estado do projeto depois das remoções,
+  // está em `orquestracao.test.ts`.
+  it('o plano conhece todos os registros do projeto: nenhum fica fora dele', () => {
     const diario = diarioDoSeed();
     const convite = operacaoDoConvite(diario);
     const noProjeto: RegistroEncontrado[] = [
