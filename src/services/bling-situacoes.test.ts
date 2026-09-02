@@ -321,8 +321,8 @@ describe('obterSituacoesDePedidoDeVenda', () => {
     // token — que faz *polling* de até 30 s. Aqui **nenhum** `fetch` é lento:
     // quem demora é o passo anterior a ele. Se o prazo valesse só para o
     // `fetch`, isto esperaria a demora inteira.
-    const original = BlingClient.TEMPO_LIMITE_SITUACOES_MS;
-    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_SITUACOES_MS', { value: 60, configurable: true });
+    const original = BlingClient.TEMPO_LIMITE_OPERACAO_MS;
+    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: 60, configurable: true });
     fake.programar(json(200, MODULOS), json(200, SITUACOES));
 
     const cliente = BlingClient.forOrganization(`${ORG}-${Math.random()}`);
@@ -343,14 +343,14 @@ describe('obterSituacoesDePedidoDeVenda', () => {
       expect(decorrido).toBeLessThan(1000);
       expect(fake.recebidas).toHaveLength(0);
     } finally {
-      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_SITUACOES_MS', { value: original, configurable: true });
+      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: original, configurable: true });
     }
   });
 
   it('tem teto de tempo: um Bling que não responde vira falha, não espera', async () => {
-    const original = BlingClient.TEMPO_LIMITE_SITUACOES_MS;
+    const original = BlingClient.TEMPO_LIMITE_OPERACAO_MS;
     // O teto real é de 20 s. O teste não espera 20 s para provar que ele existe.
-    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_SITUACOES_MS', { value: 60, configurable: true });
+    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: 60, configurable: true });
     fake.programar({ status: 200, body: JSON.stringify(MODULOS), atrasoMs: 400 });
 
     try {
@@ -365,7 +365,7 @@ describe('obterSituacoesDePedidoDeVenda', () => {
       // prova o teto é ter desistido **antes** de a resposta chegar.
       expect(decorrido).toBeLessThan(300);
     } finally {
-      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_SITUACOES_MS', { value: original, configurable: true });
+      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: original, configurable: true });
     }
   });
 
@@ -453,11 +453,11 @@ describe('cancelarPedidoVenda', () => {
     // respondem na hora e **o PATCH** é que trava. Se o teto valesse só para a
     // descoberta, isto esperaria o atraso inteiro e a venda manual ficaria sem
     // devolver a instrução de cancelar à mão.
-    const original = BlingClient.TEMPO_LIMITE_SITUACOES_MS;
+    const original = BlingClient.TEMPO_LIMITE_OPERACAO_MS;
     // O orçamento precisa caber as três requisições: `enforceRateLimit` espaça
     // cada uma em 340 ms, então menos de ~700 ms estouraria antes do PATCH e o
     // teste provaria outra coisa.
-    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_SITUACOES_MS', { value: 1200, configurable: true });
+    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: 1200, configurable: true });
     fake.programar(
       json(200, MODULOS),
       json(200, SITUACOES),
@@ -474,8 +474,16 @@ describe('cancelarPedidoVenda', () => {
       // Chegou a tentar o cancelamento — o teto não abortou antes da hora.
       expect(caminhos()).toHaveLength(3);
       expect(caminhos()[2]).toBe('/pedidos/vendas/26764331138/situacoes/15');
+      // E o `signal` chegou **àquele** `fetch`: o servidor viu o socket fechar
+      // antes de responder. Só o tempo decorrido não distingue isto de um teto
+      // que devolve o controle e deixa a requisição correndo até o fim.
+      //
+      // O `close` do lado do servidor chega um tique depois de a corrida
+      // devolver o controle aqui, então a asserção espera o socket assentar.
+      await new Promise((r) => setTimeout(r, 200));
+      expect(fake.abortadas).toContain(2);
     } finally {
-      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_SITUACOES_MS', { value: original, configurable: true });
+      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: original, configurable: true });
     }
   });
 
@@ -498,6 +506,15 @@ describe('cancelarPedidoVenda', () => {
     // Sem vazar a exceção interna nem culpar a conta.
     expect(resultado.failure.message).not.toMatch(/conexao Bling encontrada/iu);
     expect(resultado.failure.message).not.toMatch(/Token expirado/iu);
+    // A exceção veio da **terceira** requisição, e isso é afirmado pelo fio:
+    // os três caminhos, na ordem, e o método da última. Sem isto, um 401 na
+    // primeira leitura daria o mesmo resultado e o teste não notaria.
+    expect(caminhos()).toEqual([
+      '/situacoes/modulos',
+      '/situacoes/modulos/98765432',
+      '/pedidos/vendas/26764331138/situacoes/15',
+    ]);
+    expect(fake.recebidas.at(-1)?.method).toBe('PATCH');
   });
 
   it('propaga a recusa do Bling ao aplicar a situação', async () => {

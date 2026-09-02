@@ -37,6 +37,15 @@ export interface RespostaProgramada {
 export class BlingFake {
   private servidor: Server | null = null;
   readonly recebidas: RequisicaoCapturada[] = [];
+  /**
+   * Indices em `recebidas` cujo socket o cliente fechou antes da resposta.
+   *
+   * E o unico sinal, do lado do servidor, de que o `AbortSignal` chegou aquele
+   * `fetch`. Um teto que so corre por fora devolve o controle ao chamador e
+   * deixa a requisicao seguir ate o fim — e a diferenca entre os dois casos nao
+   * aparece em nenhuma asercao de tempo.
+   */
+  readonly abortadas: number[] = [];
   private fila: RespostaProgramada[] = [];
   private padrao: RespostaProgramada = { status: 200, body: JSON.stringify({ data: [] }) };
 
@@ -51,9 +60,12 @@ export class BlingFake {
           body: Buffer.concat(pedacos).toString('utf8'),
           authorization: req.headers.authorization,
         });
+        const indice = this.recebidas.length - 1;
         const resposta = this.fila.shift() ?? this.padrao;
+        let respondida = false;
         const responder = () => {
           if (res.destroyed) return;
+          respondida = true;
           res.writeHead(resposta.status, { 'Content-Type': 'application/json', ...resposta.headers });
           res.end(resposta.body);
         };
@@ -61,7 +73,13 @@ export class BlingFake {
           const timer = setTimeout(responder, resposta.atrasoMs);
           // O cliente que desiste fecha o socket; sem isto o servidor ficaria
           // segurando o processo de teste ate o timer disparar.
-          res.on('close', () => clearTimeout(timer));
+          res.on('close', () => {
+            clearTimeout(timer);
+            // Fechou antes da resposta: o cliente abortou. E a unica prova, do
+            // lado do servidor, de que o `signal` chegou aquele `fetch` — o
+            // teto externo sozinho devolveria o controle sem soltar o socket.
+            if (!respondida) this.abortadas.push(indice);
+          });
           return;
         }
         responder();
@@ -84,6 +102,7 @@ export class BlingFake {
 
   limpar(): void {
     this.recebidas.length = 0;
+    this.abortadas.length = 0;
     this.fila.length = 0;
   }
 
