@@ -17,6 +17,13 @@ import {
   type BlingCallResult,
   type PedidoVendaPayload,
 } from '../lib/integrations/bling/pedidoVendaContract';
+import {
+  encontrarModuloDePedidosDeVenda,
+  encontrarSituacaoDeCancelamento,
+  lerModulos,
+  lerSituacoes,
+  type Situacao,
+} from '../lib/integrations/bling/situacoesContract';
 
 const orgClientCache = new Map<string, BlingClient>();
 
@@ -854,28 +861,21 @@ export class BlingClient implements BlingPort {
    * numérico, então casar pelo nome é o único caminho que a API oferece.
    */
   async cancelarPedidoVenda(idPedido: string): Promise<BlingCallResult<void>> {
-    let situacoes: unknown;
-    try {
-      situacoes = await this.getSituacoesModulo(9);
-    } catch (erro: unknown) {
+    const situacoesResult = await this.obterSituacoesDePedidoDeVenda();
+    if (situacoesResult._tag === 'BlingFailed') return situacoesResult;
+
+    const cancelado = encontrarSituacaoDeCancelamento(situacoesResult.value);
+    if (!cancelado) {
+      // Só **aqui** a conta pode ser mencionada, porque só aqui a leitura deu
+      // certo: os módulos vieram, o módulo de vendas foi identificado, as
+      // situações foram lidas, e nenhuma se chama "Cancelado". A mensagem lista
+      // o que existe para que a pessoa confira sem adivinhar.
+      const nomes = situacoesResult.value.map((situacao) => situacao.nome).join(', ');
       return blingFailure(
         'RESOURCE_NOT_FOUND',
-        0,
-        `Não foi possível ler as situações de venda para cancelar: ${descreverErro(erro)}`,
-      );
-    }
-
-    const lista = Array.isArray(situacoes) ? (situacoes as Array<{ id?: number; nome?: string }>) : [];
-    const cancelado = lista.find((s) => {
-      const nome = (s.nome ?? '').trim().toLowerCase();
-      return nome === 'cancelado' || nome === 'cancelada';
-    });
-
-    if (!cancelado?.id) {
-      return blingFailure(
-        'RESOURCE_NOT_FOUND',
-        0,
-        'A conta do Bling não tem uma situação de venda chamada "Cancelado".',
+        200,
+        'Nenhuma situação de pedido de venda chamada "Cancelado" foi encontrada na conta do Bling. '
+          + `As situações cadastradas são: ${nomes || 'nenhuma'}.`,
       );
     }
 
@@ -1072,26 +1072,87 @@ export class BlingClient implements BlingPort {
     }
   }
 
-  // Buscar lista de situações de um módulo (9 = Pedidos de Venda)
-  async getSituacoesModulo(idModulo: number = 9): Promise<unknown> {
-    const url = `${this.baseUrl}/situacoes/modulos`;
-    const response = await this.fetchWithAuth(url);
+  /**
+   * As situações do módulo de **pedidos de venda** desta conta.
+   *
+   * Ticket 31. A versão anterior chamava `GET /situacoes/modulos` — a lista de
+   * **módulos** — e procurava um campo `situacoes` dentro de cada módulo. Esse
+   * campo não existe nessa rota, então a função devolvia `[]` em **qualquer**
+   * conta, e quem dependia dela concluía que a conta não tinha a situação
+   * procurada. Dois recursos ficaram sem funcionar por causa disso: a
+   * compensação da venda manual e o botão de cancelar pedido da listagem.
+   *
+   * São duas chamadas porque são dois recursos, e o id do módulo é por conta:
+   *
+   *   1. `GET /situacoes/modulos` → acha o módulo de pedidos de venda pelo nome;
+   *   2. `GET /situacoes/modulos/{idModuloSistema}` → as situações dele.
+   *
+   * Cada ponto de falha tem mensagem própria. A conta do lojista só é
+   * mencionada quando a leitura funcionou e o dado realmente não está lá.
+   */
+  async obterSituacoesDePedidoDeVenda(): Promise<BlingCallResult<readonly Situacao[]>> {
+    try {
+      return await this.descobrirSituacoesDePedidoDeVenda();
+    } catch (erro: unknown) {
+      // `fetchWithAuth` **lança** em 401/403: ele tenta renovar o token antes de
+      // devolver a resposta, e a falha da renovação vira exceção. Sem este
+      // `catch`, a compensação da venda manual rejeitaria de dentro do próprio
+      // tratamento de erro, e o usuário perderia a instrução de cancelar o
+      // pedido à mão — que é a única coisa acionável naquele momento.
+      return blingFailure('UNKNOWN_ERROR', 0, descreverErro(erro));
+    }
+  }
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Erro na API Bling ao buscar situações (HTTP ${response.status}): ${errorText}`);
+  private async descobrirSituacoesDePedidoDeVenda(): Promise<BlingCallResult<readonly Situacao[]>> {
+    const respostaModulos = await this.fetchWithAuth(`${this.baseUrl}/situacoes/modulos`);
+    if (!respostaModulos.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(respostaModulos.status, await respostaModulos.text()) };
     }
 
-    const data = await response.json();
-    // Filtra para retornar apenas as situações do módulo especificado
-    if (data && data.data && Array.isArray(data.data)) {
-      const modulo = (data.data as Array<{ id: number; situacoes?: unknown }>).find((m) => m.id === idModulo);
-      if (modulo && modulo.situacoes) {
-        return modulo.situacoes;
-      }
+    const modulos = lerModulos(await this.lerCorpoJson(respostaModulos));
+    if (modulos === null) {
+      return blingFailure(
+        'INVALID_RESPONSE',
+        respostaModulos.status,
+        'O Bling respondeu a lista de módulos em um formato que o ORBITA não reconhece.',
+      );
     }
 
-    return [];
+    const modulo = encontrarModuloDePedidosDeVenda(modulos);
+    if (!modulo) {
+      return blingFailure(
+        'RESOURCE_NOT_FOUND',
+        respostaModulos.status,
+        'O ORBITA não identificou o módulo de pedidos de venda entre os módulos que o Bling devolveu.',
+      );
+    }
+
+    const respostaSituacoes = await this.fetchWithAuth(
+      `${this.baseUrl}/situacoes/modulos/${encodeURIComponent(String(modulo.id))}`,
+    );
+    if (!respostaSituacoes.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(respostaSituacoes.status, await respostaSituacoes.text()) };
+    }
+
+    const situacoes = lerSituacoes(await this.lerCorpoJson(respostaSituacoes));
+    if (situacoes === null) {
+      return blingFailure(
+        'INVALID_RESPONSE',
+        respostaSituacoes.status,
+        'O Bling respondeu as situações do módulo de vendas em um formato que o ORBITA não reconhece.',
+      );
+    }
+
+    return { _tag: 'BlingOk', value: situacoes };
+  }
+
+  /** Corpo JSON de uma resposta `ok`, ou `undefined` quando não é JSON. */
+  private async lerCorpoJson(response: Response): Promise<unknown> {
+    try {
+      return await response.json();
+    } catch {
+      return undefined;
+    }
   }
 
   // ── Contas a pagar com contrato oficial e falha tipada (Ticket 33) ─────

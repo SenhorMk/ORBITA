@@ -15,9 +15,21 @@ export async function GET(request: Request) {
 
     const blingClient = bling.forVerifiedOrganization(scope);
 
-    const situacoes = await blingClient.getSituacoesModulo(9);
+    // Ticket 31 — antes era `getSituacoesModulo(9)`, que lia a lista de
+    // módulos e procurava situações dentro dela. Devolvia `[]` sempre, e o
+    // botão de cancelar pedido da listagem concluía que a conta não tinha a
+    // situação "Cancelado". O `9` também era inventado: ids de módulo são por
+    // conta, e o módulo agora é descoberto pelo nome.
+    const situacoes = await blingClient.obterSituacoesDePedidoDeVenda();
 
-    return NextResponse.json(situacoes);
+    if (situacoes._tag === 'BlingFailed') {
+      // A razão vem do **Bling** ou da forma da resposta dele — não é
+      // diagnóstico interno, e é o que permite agir. O contrato da rota é
+      // preservado: lista no sucesso, `{ error }` na falha.
+      return NextResponse.json({ error: situacoes.failure.message }, { status: 502 });
+    }
+
+    return NextResponse.json(situacoes.value);
   } catch (error: unknown) {
     // Ticket 22, critério 13 — este `catch` era inerte atrás do 401 legado, e
     // devolvia a mensagem do erro ao cliente (CWE-209).

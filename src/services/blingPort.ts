@@ -1,5 +1,6 @@
 import type { BlingCategoria, BlingCliente, BlingPedido, BlingProduto } from '../types';
 import type { BlingCallResult, PedidoVendaPayload } from '../lib/integrations/bling/pedidoVendaContract';
+import type { Situacao } from '../lib/integrations/bling/situacoesContract';
 
 /**
  * Porta de aplicação para o Bling ERP.
@@ -87,7 +88,14 @@ export interface BlingPort {
 
   // ── Fiscal e configuração ──────────────────────────────────────────────
   createNfe(payload: unknown): Promise<unknown>;
-  getSituacoesModulo(idModulo?: number): Promise<unknown>;
+  /**
+   * Situações do módulo de pedidos de venda da conta (Ticket 31).
+   *
+   * Substitui `getSituacoesModulo(idModulo)`, que lia a rota errada e devolvia
+   * `[]` em qualquer conta. O id do módulo é por conta e passou a ser
+   * descoberto, então não há mais parâmetro a passar.
+   */
+  obterSituacoesDePedidoDeVenda(): Promise<BlingCallResult<readonly Situacao[]>>;
 }
 
 /** Entrada de criação e atualização de produto. */

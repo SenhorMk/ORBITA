@@ -23,7 +23,7 @@ const MEMBER_ID = '30000000-0000-4000-8000-000000000002';
 const getUserMock = vi.fn();
 const contextoAtivoMock = vi.fn();
 const vinculoMock = vi.fn();
-const getSituacoesModuloMock = vi.fn();
+const obterSituacoesMock = vi.fn();
 const criarHandlerPedidoStatusMock = vi.fn();
 
 /**
@@ -50,7 +50,7 @@ vi.mock('@/lib/supabaseServer', () => ({
   },
 }));
 vi.mock('@/services/bling', () => ({
-  bling: { forVerifiedOrganization: () => ({ getSituacoesModulo: getSituacoesModuloMock }) },
+  bling: { forVerifiedOrganization: () => ({ obterSituacoesDePedidoDeVenda: obterSituacoesMock }) },
 }));
 
 function sessaoDe(userId: string) {
@@ -95,7 +95,7 @@ describe('GET /api/bling/situacoes — portão puro removido', () => {
   it('devolve 401 sem sessão', async () => {
     const { GET } = await import('./bling/situacoes/route');
     expect((await GET(requisicao('https://orbita.test/api/bling/situacoes', 'GET', false))).status).toBe(401);
-    expect(getSituacoesModuloMock).not.toHaveBeenCalled();
+    expect(obterSituacoesMock).not.toHaveBeenCalled();
   });
 
   it('devolve 403 a quem está autenticado e não tem vínculo', async () => {
@@ -103,7 +103,7 @@ describe('GET /api/bling/situacoes — portão puro removido', () => {
     vinculoDe(null);
     const { GET } = await import('./bling/situacoes/route');
     expect((await GET(requisicao('https://orbita.test/api/bling/situacoes'))).status).toBe(403);
-    expect(getSituacoesModuloMock).not.toHaveBeenCalled();
+    expect(obterSituacoesMock).not.toHaveBeenCalled();
   });
 
   // Era a rota que o modelo antigo deixava passar por `app_metadata` e o novo
@@ -111,7 +111,7 @@ describe('GET /api/bling/situacoes — portão puro removido', () => {
   it('responde ao membro, que não precisa de gestão para ler situações', async () => {
     sessaoDe(MEMBER_ID);
     vinculoDe('member');
-    getSituacoesModuloMock.mockResolvedValue([{ id: 9, nome: 'Em aberto' }]);
+    obterSituacoesMock.mockResolvedValue({ _tag: 'BlingOk', value: [{ id: 9, nome: 'Em aberto' }] });
     const { GET } = await import('./bling/situacoes/route');
     expect((await GET(requisicao('https://orbita.test/api/bling/situacoes'))).status).toBe(200);
   });
