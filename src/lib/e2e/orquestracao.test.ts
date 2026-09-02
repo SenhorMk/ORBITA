@@ -146,9 +146,11 @@ describe('o seed grava o diário antes e durante as escritas', () => {
       porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
     });
 
-    // 1 plano + as 11 que o seed cria. A décima segunda operação do plano é a
-    // organização que a **spec** cria durante os testes: prevista para a
-    // limpeza alcançá-la, nunca escrita pelo seed.
+    // 1 gravação do plano + uma por operação **do seed**, que hoje são 15. As
+    // outras três operações do plano são criadas pelas **specs** durante os
+    // testes — a organização da spec e os dois vínculos —, previstas para a
+    // limpeza alcançá-las e nunca escritas pelo seed. Por isso a contagem sai
+    // do filtro `criadoPor === 'seed'`, e não de um número escrito à mão.
     const criadasPeloSeed = diario.plano.operacoes.filter((o) => o.criadoPor === 'seed').length;
     expect(disco.gravacoes).toHaveLength(1 + criadasPeloSeed);
     expect(disco.ultimo().concluidas).toHaveLength(criadasPeloSeed);
@@ -165,9 +167,9 @@ describe('o seed grava o diário antes e durante as escritas', () => {
     })).rejects.toThrow(/Falha ao criar o usuário/u);
 
     const diario = disco.ultimo();
-    // 2 organizações + 2 usuários + os 2 memberships deles: o laço cria o
-    // membership logo depois de cada usuário, então a falha no terceiro
-    // usuário deixa seis registros gravados.
+    // 3 organizações + 2 usuários + os 2 memberships deles: o laço cria o
+    // membership logo depois de cada usuário, então a falha no terceiro usuário
+    // deixa **sete** registros gravados.
     expect(diario.concluidas).toHaveLength(7);
     expect(lerDiario(diario, { projetoRef: PROJETO, runId: RUN })._tag).toBe('DiarioValido');
   });
