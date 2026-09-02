@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 
-import type { SeedManifest, SyntheticPersona } from '../../src/lib/e2e/syntheticSeedData';
-import { findPersona } from '../../src/lib/e2e/syntheticSeedData';
+import type {
+  SeedManifest,
+  SyntheticOrganization,
+  SyntheticPersona,
+} from '../../src/lib/e2e/syntheticSeedData';
+import { findOrganization, findPersona } from '../../src/lib/e2e/syntheticSeedData';
 
 /**
  * Loads the seed manifest a previous `npm run e2e:seed` run wrote to disk
@@ -23,4 +27,16 @@ export function loadSeedManifest(manifestPath = process.env.E2E_SEED_MANIFEST_PA
 
 export function persona(manifest: SeedManifest, key: string): SyntheticPersona {
   return findPersona(manifest, key);
+}
+
+/**
+ * A organização sintética pela chave do manifesto.
+ *
+ * Existe para a spec não depender de `activeOrg` quando o que ela precisa é de
+ * uma organização **específica**: a seleção ativa é estado do servidor, e outra
+ * spec pode tê-la trocado. `findOrganization` falha alto se a chave não existir,
+ * em vez de devolver algo aproximado.
+ */
+export function organizacao(manifest: SeedManifest, key: string): SyntheticOrganization {
+  return findOrganization(manifest, key);
 }

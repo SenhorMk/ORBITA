@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   iniciarDiario,
   planejarExecucao,
+  reconciliar,
   registrarConclusao,
   type DiarioDeExecucao,
   type RegistroEncontrado,
@@ -120,7 +121,11 @@ describe('limpeza repetida termina em sucesso', () => {
     const diario = diarioCompleto();
     const todos = tudoPresente(diario);
     // A primeira execução apagou os memberships e morreu.
-    const sobraram = todos.filter((_, i) => !diario.plano.operacoes[i]!.chave.startsWith('membership:'));
+    // Filtra por **tipo**, e não por prefixo de chave: os vínculos que as specs
+    // criam entram no plano com a chave `spec:membership:…`, e um filtro de
+    // prefixo os deixaria de fora — o teste diria "apagou os memberships"
+    // tendo apagado só uma parte deles.
+    const sobraram = todos.filter((_, i) => diario.plano.operacoes[i]!.tipo !== 'membership');
 
     const plano = planejarLimpeza(diario, sobraram);
 
@@ -208,5 +213,105 @@ describe('a busca de órfãos é limitada ao runId e é informativa', () => {
     const real = { identificador: 'contato-run-1@empresa-de-verdade.com', id: 'id-real' };
 
     expect(relatarOrfaos([real], 'run-1', plano)).toEqual([]);
+  });
+});
+
+/**
+ * Ticket 23 — o vínculo que o **aceite do convite** cria.
+ *
+ * O seed não o escreve, e não deve: um convidado que já fosse membro faria a
+ * spec passar sem provar o aceite. Mas o plano o prevê, como `spec`, e é isso
+ * que permite à limpeza adotá-lo pelo identificador natural e apagá-lo
+ * **explicitamente**.
+ *
+ * Antes disso ele era órfão: sumia junto da organização, por integridade
+ * referencial, e não por ação da limpeza. Resultado certo por um caminho que
+ * ninguém tinha afirmado — e no dia em que a cascade mudasse, o resíduo voltaria
+ * calado.
+ */
+describe('o vínculo criado pelo aceite do convite é apagado pela limpeza', () => {
+  /** O diário do seed: sem os registros de spec, porque o seed não os cria. */
+  function diarioDoSeed(runId = 'run-1'): DiarioDeExecucao {
+    const plano = planejarExecucao(buildSeedManifest({ runId }), PROJETO);
+    return plano.operacoes
+      .filter((o) => o.criadoPor === 'seed')
+      .reduce((diario, operacao, i) => registrarConclusao(diario, operacao.chave, `id-seed-${i}`), iniciarDiario(plano));
+  }
+
+  function operacaoDoConvite(diario: DiarioDeExecucao) {
+    const operacao = diario.plano.operacoes.find((o) => o.chave === 'spec:membership:convidado');
+    if (!operacao) throw new Error('O plano não prevê o vínculo do convite.');
+    return operacao;
+  }
+
+  /**
+   * A limpeza como a orquestração a executa: **reconcilia primeiro**, planeja
+   * depois. É o `reconciliar` que adota pelo identificador natural, e testar o
+   * plano isolado não provaria a adoção — provaria só o que o diário já tinha.
+   */
+  function limpezaReconciliada(diario: DiarioDeExecucao, noProjeto: RegistroEncontrado[]) {
+    const reconciliado = reconciliar(diario, noProjeto);
+    return { reconciliado, plano: planejarLimpeza(reconciliado.diario, noProjeto) };
+  }
+
+  it('adota o vínculo pelo identificador natural, mesmo sem id no diário', () => {
+    const diario = diarioDoSeed();
+    const convite = operacaoDoConvite(diario);
+    // O projeto tem o vínculo que a spec criou. O diário não — o seed não o
+    // escreveu, então não há id gravado para ele.
+    const noProjeto: RegistroEncontrado[] = [
+      ...tudoPresente(diario).filter((r) => r.id !== undefined),
+      { identificador: convite.identificador, id: 'id-real-do-vinculo-do-convite' },
+    ];
+
+    const { reconciliado, plano } = limpezaReconciliada(diario, noProjeto);
+
+    expect(reconciliado.adotadas.map((a) => a.identificador)).toContain(convite.identificador);
+    const aprovada = plano.aprovadas.find((a) => a.chave === convite.chave);
+    expect(aprovada).toBeDefined();
+    // O id vem do **projeto**, e não do diário: é o que "adotar" significa.
+    expect(aprovada!.id).toBe('id-real-do-vinculo-do-convite');
+  });
+
+  // A ordem não é detalhe: apagar a organização antes do vínculo deixaria a
+  // exclusão do vínculo acontecer por cascade — de novo o resultado certo pelo
+  // caminho não afirmado.
+  it('apaga o vínculo **antes** da organização do convite', () => {
+    const diario = diarioDoSeed();
+    const convite = operacaoDoConvite(diario);
+    const noProjeto: RegistroEncontrado[] = [
+      ...tudoPresente(diario).filter((r) => r.id !== undefined),
+      { identificador: convite.identificador, id: 'id-real-do-vinculo-do-convite' },
+    ];
+
+    const chaves = limpezaReconciliada(diario, noProjeto).plano.aprovadas.map((a) => a.chave);
+    const organizacaoDoConvite = diario.plano.operacoes.find((o) => o.chave === 'org:org-convite');
+
+    expect(organizacaoDoConvite).toBeDefined();
+    expect(chaves.indexOf(convite.chave)).toBeLessThan(chaves.indexOf(organizacaoDoConvite!.chave));
+  });
+
+  it('depois da limpeza não sobra órfão: tudo o que o projeto tem está no plano', () => {
+    const diario = diarioDoSeed();
+    const convite = operacaoDoConvite(diario);
+    const noProjeto: RegistroEncontrado[] = [
+      ...tudoPresente(diario).filter((r) => r.id !== undefined),
+      { identificador: convite.identificador, id: 'id-real-do-vinculo-do-convite' },
+    ];
+
+    // `relatarOrfaos` é a pergunta certa: o que existe no projeto e o plano não
+    // conhece. O vínculo do convite deixou de estar nessa lista.
+    const { plano } = limpezaReconciliada(diario, noProjeto);
+    expect(relatarOrfaos(noProjeto, diario.plano.runId, plano)).toEqual([]);
+  });
+
+  it('o vínculo que a spec não chegou a criar é "já removido", e não erro', () => {
+    const diario = diarioDoSeed();
+    // A suíte não rodou: o vínculo do convite não existe no projeto.
+    const plano = planejarLimpeza(diario, tudoPresente(diario).filter((r) => r.id !== undefined));
+
+    const convite = operacaoDoConvite(diario);
+    expect(plano.jaRemovidas.map((o) => o.chave)).toContain(convite.chave);
+    expect(limpezaPodeProsseguir(plano)).toBe(true);
   });
 });

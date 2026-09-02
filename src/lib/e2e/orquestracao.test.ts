@@ -441,7 +441,10 @@ describe('a organização que a spec cria é alcançada pela limpeza', () => {
 
     const resultado = await executarLimpeza(projeto.porta, diario, { simular: true });
 
-    expect(resultado.plano.jaRemovidas.map((o) => o.criadoPor)).toEqual(['spec']);
+    // Três registros de spec: a organização que ela cria, o vínculo de dono que
+    // nasce junto, e o vínculo do convite aceito. Nenhum existe quando a suíte
+    // não roda — e todos são "já removidos", não erro.
+    expect(resultado.plano.jaRemovidas.map((o) => o.criadoPor)).toEqual(['spec', 'spec', 'spec']);
     expect(resultado.plano.naoRegistradas).toEqual([]);
   });
 });
@@ -613,6 +616,9 @@ describe('a adoção pelo identificador natural é restrita', () => {
     const resultado = await executarLimpeza(projeto.porta, diario, { simular: true });
 
     expect(resultado.adotadas).toEqual([]);
-    expect(resultado.plano.jaRemovidas.map((o) => o.criadoPor)).toEqual(['spec']);
+    // Três registros de spec: a organização que ela cria, o vínculo de dono que
+    // nasce junto, e o vínculo do convite aceito. Nenhum existe quando a suíte
+    // não roda — e todos são "já removidos", não erro.
+    expect(resultado.plano.jaRemovidas.map((o) => o.criadoPor)).toEqual(['spec', 'spec', 'spec']);
   });
 });

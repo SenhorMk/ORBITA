@@ -44,7 +44,7 @@ describe('o plano é escrito antes de qualquer escrita', () => {
     // no plano para a limpeza alcançá-la.
     // Ticket 23 — a organização do convite entrou, com dono próprio e um
     // convidado sem vínculo: +1 organização, +2 usuários, +1 membership.
-    expect(porTipo).toEqual({ usuario: 7, organizacao: 4, membership: 5 });
+    expect(porTipo).toEqual({ usuario: 7, organizacao: 4, membership: 7 });
   });
 
   it('a organização criada pela spec entra no plano, marcada como tal', () => {
@@ -53,7 +53,9 @@ describe('o plano é escrito antes de qualquer escrita', () => {
     const plano = planejarExecucao(manifesto(), PROJETO);
     const daSpec = plano.operacoes.filter((o) => o.criadoPor === 'spec');
 
-    expect(daSpec).toHaveLength(1);
+    // Três: a organização que a spec cria, o vínculo do convite aceito e o
+    // vínculo de dono que nasce junto da organização da spec.
+    expect(daSpec).toHaveLength(3);
     expect(daSpec[0]!.identificador).toContain('spec-created-org');
     expect(plano.operacoes.filter((o) => o.criadoPor === 'seed')).toHaveLength(15);
   });
@@ -89,12 +91,20 @@ describe('o plano é escrito antes de qualquer escrita', () => {
     const plano = planejarExecucao(manifesto(), PROJETO);
     const memberships = plano.operacoes.filter((o) => o.tipo === 'membership');
 
-    expect(memberships).toHaveLength(5);
-    expect(memberships.map((m) => m.chave)).not.toContain('membership:external');
-    // Ticket 23 — o convidado tem a mesma propriedade, e por outro motivo: ele
-    // existe para **aceitar** um convite, e o seed que já o tornasse membro
+    const doSeed = memberships.filter((m) => m.criadoPor === 'seed');
+    expect(doSeed).toHaveLength(5);
+    expect(doSeed.map((m) => m.chave)).not.toContain('membership:external');
+    // Ticket 23 — o convidado não tem vínculo **do seed**, e é o ponto: ele
+    // existe para **aceitar** um convite, e um seed que já o tornasse membro
     // faria a spec passar sem provar o aceite.
-    expect(memberships.map((m) => m.chave)).not.toContain(`membership:${PERSONA_CONVIDADA}`);
+    expect(doSeed.map((m) => m.chave)).not.toContain(`membership:${PERSONA_CONVIDADA}`);
+
+    // Mas o plano **prevê** o vínculo que o aceite cria, como `spec`. É o que
+    // permite à limpeza adotá-lo pelo identificador natural e apagá-lo
+    // explicitamente, antes da organização — em vez de deixá-lo sumir por
+    // cascade, que é resultado certo por caminho não afirmado.
+    const daSpec = memberships.filter((m) => m.criadoPor === 'spec');
+    expect(daSpec.map((m) => m.chave)).toContain(`spec:membership:${PERSONA_CONVIDADA}`);
   });
 
   // Ticket 23 — os registros novos precisam entrar no **plano**, e não só no

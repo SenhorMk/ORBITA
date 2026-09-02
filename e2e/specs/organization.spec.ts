@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-import { loadSeedManifest, persona } from '../fixtures/personas';
+import { loadSeedManifest, organizacao, persona } from '../fixtures/personas';
 import { LoginPage } from '../pages/LoginPage';
 import { OrganizationApi } from '../pages/OrganizationApi';
 import {
@@ -152,6 +152,7 @@ test.describe('organização', () => {
   test('o limite do plano recusa o convite quando a organização está cheia', async ({ page }) => {
     const owner = persona(manifest, 'owner-a');
     const convidado = persona(manifest, PERSONA_CONVIDADA);
+    const orgA = organizacao(manifest, 'org-a');
 
     const ownerLogin = new LoginPage(page);
     await ownerLogin.goto();
@@ -159,11 +160,18 @@ test.describe('organização', () => {
 
     const ownerOrgApi = new OrganizationApi(page);
     const ownList = (await (await ownerOrgApi.listOrganizations()).json()) as {
-      activeOrg: { organizacao: { id: string } };
+      organizacoes: Array<{ id: string; slug: string }>;
     };
 
+    // Localizada **pelo slug do manifesto**, e não por `activeOrg`. A seleção
+    // ativa é estado do servidor que outra spec pode ter trocado — e aí este
+    // caso convidaria para a organização errada e mediria outra coisa, sem
+    // avisar. O que ele precisa é da organização cheia, e ela tem nome.
+    const organizacaoCheia = ownList.organizacoes.find((org) => org.slug === orgA.slug);
+    expect(organizacaoCheia, `org-a (${orgA.slug}) não está na lista do owner`).toBeDefined();
+
     const recusa = await ownerOrgApi.createInvite(
-      ownList.activeOrg.organizacao.id,
+      organizacaoCheia!.id,
       convidado.email,
       'member',
     );
