@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { z } from 'zod';
+
 import { BlingFake } from './__testkit__/blingFake';
 import { moduloSistemaSchema, situacaoSchema } from '../lib/integrations/bling/situacoesContract';
 
@@ -22,25 +24,46 @@ import { moduloSistemaSchema, situacaoSchema } from '../lib/integrations/bling/s
 
 const RAIZ = path.resolve(__dirname, '..', '..');
 
-const rotasOficiais = (
-  JSON.parse(readFileSync(path.join(RAIZ, 'docs/integrations/bling-v3-paths.json'), 'utf8')) as {
-    paths: readonly string[];
-  }
-).paths;
+/**
+ * As capturas são lidas com schema, não com `as`.
+ *
+ * Um `as` sobre `JSON.parse` afirma uma forma que ninguém conferiu: se a
+ * captura mudar de formato, o teste quebra num `undefined` obscuro em vez de
+ * dizer que o catálogo mudou. Como o assunto deste arquivo é justamente
+ * "afirmar forma sem conferir", usar `as` aqui seria o mesmo erro de novo.
+ */
+const catalogoDeRotasSchema = z.object({ paths: z.array(z.string()) });
 
-interface SchemaOficial {
-  readonly obrigatorios: readonly string[];
-  readonly campos: Readonly<Record<string, { readonly tipo: string } | undefined>>;
+const schemaOficialSchema = z.object({
+  obrigatorios: z.array(z.string()),
+  campos: z.record(z.string(), z.object({ tipo: z.string() }).loose()),
+});
+
+const catalogoDeSchemasSchema = z.object({
+  schemas: z.record(z.string(), schemaOficialSchema),
+  capturasAdicionais: z
+    .array(z.object({ capturadoEm: z.string(), url: z.string(), schemas: z.array(z.string()) }))
+    .optional(),
+});
+
+function lerCaptura<T>(arquivo: string, schema: z.ZodType<T>): T {
+  const bruto: unknown = JSON.parse(readFileSync(path.join(RAIZ, arquivo), 'utf8'));
+  const lido = schema.safeParse(bruto);
+  if (!lido.success) {
+    throw new Error(`captura ${arquivo} não tem a forma esperada: ${lido.error.message}`);
+  }
+  return lido.data;
 }
 
-const catalogo = JSON.parse(
-  readFileSync(path.join(RAIZ, 'docs/integrations/bling-v3-schemas.json'), 'utf8'),
-) as {
-  schemas: Readonly<Record<string, SchemaOficial | undefined>>;
-  capturasAdicionais?: ReadonlyArray<{ capturadoEm: string; url: string; schemas: readonly string[] }>;
-};
+const rotasOficiais = lerCaptura('docs/integrations/bling-v3-paths.json', catalogoDeRotasSchema).paths;
+const catalogo = lerCaptura('docs/integrations/bling-v3-schemas.json', catalogoDeSchemasSchema);
 
-const schemasOficiais = catalogo.schemas;
+/** Um DTO oficial pelo nome, falhando com o nome quando ele sumir da captura. */
+function schemaOficial(nome: string) {
+  const encontrado = catalogo.schemas[nome];
+  if (!encontrado) throw new Error(`schema oficial ausente na captura: ${nome}`);
+  return encontrado;
+}
 
 const fake = new BlingFake();
 const ORG = '31313131-3131-4131-8131-313131313131';
@@ -104,9 +127,9 @@ describe('as rotas usadas existem no contrato oficial', () => {
  * da resposta, e é esta.
  */
 describe('a forma que o código espera bate com os schemas oficiais', () => {
-  const moduloBase = schemasOficiais.SituacoesModuloBaseDTO!;
-  const modulo = schemasOficiais.SituacoesModuloDTO!;
-  const situacao = schemasOficiais.SituacoesDTO!;
+  const moduloBase = schemaOficial('SituacoesModuloBaseDTO');
+  const modulo = schemaOficial('SituacoesModuloDTO');
+  const situacao = schemaOficial('SituacoesDTO');
 
   const camposDoModulo = { ...moduloBase.campos, ...modulo.campos };
 
@@ -198,7 +221,9 @@ describe('obterSituacoesDePedidoDeVenda', () => {
     expect(resultado._tag).toBe('BlingFailed');
     if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
     expect(resultado.failure.status).toBe(400);
-    expect(resultado.failure.message).toMatch(/requisição inválida/iu);
+    // A razão do provedor NAO sai: a frase e montada so a partir do status.
+    expect(resultado.failure.message).not.toMatch(/requisição inválida/iu);
+    expect(resultado.failure.message).toMatch(/HTTP 400/u);
     // Não pediu situações de módulo nenhum: parou no primeiro passo.
     expect(caminhos()).toEqual(['/situacoes/modulos']);
   });
@@ -237,6 +262,47 @@ describe('obterSituacoesDePedidoDeVenda', () => {
     );
   });
 
+  it('uma falha HTTP não publica o corpo que o Bling mandou', async () => {
+    // Este é o caminho que faltava: `BlingFailed` vindo de resposta HTTP, não
+    // de exceção. `parseBlingFailure` monta a mensagem a partir do corpo —
+    // `description`, os `fields[]` que ecoam o que foi enviado, e até 300
+    // caracteres crus quando o corpo não é o envelope da v3. Nada disso pode
+    // chegar à resposta pública.
+    fake.programar(
+      json(400, {
+        error: {
+          type: 'VALIDATION_ERROR',
+          description: 'Falha ao consultar interno-db-01.bling.local com token abc123',
+          fields: [{ code: 1, msg: 'valor recusado: 4111111111111111', element: 'cartao' }],
+        },
+      }),
+    );
+
+    const resultado = await adapter().obterSituacoesDePedidoDeVenda();
+
+    if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
+    expect(resultado.failure.message).not.toMatch(/interno-db-01/u);
+    expect(resultado.failure.message).not.toMatch(/abc123/u);
+    expect(resultado.failure.message).not.toMatch(/4111111111111111/u);
+    expect(resultado.failure.message).not.toMatch(/VALIDATION_ERROR/u);
+    // O status sobrevive: é número, e é o que correlaciona a queixa com o log.
+    expect(resultado.failure.message).toMatch(/HTTP 400/u);
+    expect(resultado.failure.status).toBe(400);
+  });
+
+  it('nem quando o corpo não é o envelope da v3', async () => {
+    // O ramo mais perigoso do `parseBlingFailure`: corpo que não casa com o
+    // envelope vira os primeiros 300 caracteres crus como mensagem. Uma página
+    // de erro de proxy entraria inteira na resposta.
+    fake.programar({ status: 502, body: '<html>nginx: upstream 10.0.3.14:8080 falhou</html>' });
+
+    const resultado = await adapter().obterSituacoesDePedidoDeVenda();
+
+    if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
+    expect(resultado.failure.message).not.toMatch(/nginx|10\.0\.3\.14|html/iu);
+    expect(resultado.failure.message).toMatch(/indisponível/iu);
+  });
+
   it('lista inteira descartada não vira sucesso vazio', async () => {
     // O contrário faria a compensação dizer "a conta não tem Cancelado" para
     // uma resposta que o ORBITA simplesmente não soube ler.
@@ -247,6 +313,38 @@ describe('obterSituacoesDePedidoDeVenda', () => {
     if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
     expect(resultado.failure.message).toMatch(/formato/iu);
     expect(resultado.failure.message).not.toMatch(/na conta do Bling/iu);
+  });
+
+  it('o teto vale para a operação inteira, não só para o `fetch`', async () => {
+    // O achado da revisão: `AbortSignal` de `fetch` não limita a leitura da
+    // credencial, a fila do rate limit, o backoff de 429 nem a renovação de
+    // token — que faz *polling* de até 30 s. Aqui **nenhum** `fetch` é lento:
+    // quem demora é o passo anterior a ele. Se o prazo valesse só para o
+    // `fetch`, isto esperaria a demora inteira.
+    const original = BlingClient.TEMPO_LIMITE_SITUACOES_MS;
+    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_SITUACOES_MS', { value: 60, configurable: true });
+    fake.programar(json(200, MODULOS), json(200, SITUACOES));
+
+    const cliente = BlingClient.forOrganization(`${ORG}-${Math.random()}`);
+    Object.defineProperty(cliente, 'getAccessToken', {
+      value: async () => {
+        await new Promise((r) => setTimeout(r, 2000));
+        return 'token-de-teste';
+      },
+      configurable: true,
+    });
+
+    try {
+      const comecou = Date.now();
+      const resultado = await cliente.obterSituacoesDePedidoDeVenda();
+      const decorrido = Date.now() - comecou;
+
+      if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
+      expect(decorrido).toBeLessThan(1000);
+      expect(fake.recebidas).toHaveLength(0);
+    } finally {
+      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_SITUACOES_MS', { value: original, configurable: true });
+    }
   });
 
   it('tem teto de tempo: um Bling que não responde vira falha, não espera', async () => {
@@ -360,6 +458,7 @@ describe('cancelarPedidoVenda', () => {
 
     if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
     expect(resultado.failure.status).toBe(400);
-    expect(resultado.failure.message).toMatch(/transição não permitida/iu);
+    expect(resultado.failure.message).not.toMatch(/transição não permitida/iu);
+    expect(resultado.failure.message).toMatch(/cancelar o pedido/iu);
   });
 });

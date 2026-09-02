@@ -29,6 +29,34 @@ import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 const orgClientCache = new Map<string, BlingClient>();
 
 /**
+ * Frase pública para uma falha HTTP do Bling, derivada **só do status**.
+ *
+ * Vocabulário fechado, escrito aqui: nada do corpo da resposta do provedor
+ * chega ao usuário. O corpo vai inteiro para o log, onde ele serve para
+ * diagnóstico sem virar superfície pública.
+ *
+ * O status entra na frase de propósito — é número, não texto de terceiro, e é
+ * o que permite alguém correlacionar a queixa com o log.
+ */
+function mensagemPublicaDeStatusDoBling(status: number, oQue: string): string {
+  if (status === 404) {
+    return `O Bling não encontrou o recurso necessário para ${oQue} (HTTP 404).`;
+  }
+  if (status === 429) {
+    return `O Bling está limitando as requisições no momento (HTTP 429), e por isso não deu para ${oQue}. `
+      + 'Tente de novo em alguns instantes.';
+  }
+  if (status >= 500) {
+    return `O Bling está indisponível no momento (HTTP ${status}), e por isso não deu para ${oQue}. `
+      + 'Tente de novo em alguns instantes.';
+  }
+  if (status === 401 || status === 403) {
+    return `O Bling recusou o acesso necessário para ${oQue}. Reconecte a conta em "Conectar APIs".`;
+  }
+  return `O Bling recusou ${oQue} (HTTP ${status}).`;
+}
+
+/**
  * Corpo de `POST`/`PUT /produtos`, com os quatro obrigatorios do OpenAPI
  * oficial (`nome`, `tipo`, `situacao`, `formato`). `codigo` so entra quando
  * informado — o SKU nunca e inventado — e `estoque` nunca entra: no schema
@@ -896,7 +924,16 @@ export class BlingClient implements BlingPort {
     });
 
     if (!response.ok) {
-      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+      // Também redigido: esta mensagem sai na resposta pública da venda manual,
+      // dentro do "o cancelamento automático também falhou (…)". O que a pessoa
+      // precisa dali é a instrução de cancelar à mão, e ela não depende do
+      // texto do provedor.
+      return this.falhaDeLeituraDoBling(
+        'bling.pedido.cancelar',
+        'cancelar o pedido',
+        response.status,
+        await response.text(),
+      );
     }
 
     return { _tag: 'BlingOk', value: undefined };
@@ -1101,8 +1138,33 @@ export class BlingClient implements BlingPort {
    * mencionada quando a leitura funcionou e o dado realmente não está lá.
    */
   async obterSituacoesDePedidoDeVenda(): Promise<BlingCallResult<readonly Situacao[]>> {
+    // Um prazo só, que vale para a operação **inteira**.
+    //
+    // Passar o `signal` ao `fetch` não bastava, e o comentário anterior mentia
+    // ao dizer que era "o teto das duas leituras": `fetchWithAuth` faz muita
+    // coisa fora do `fetch` — lê a credencial no cofre (rede + banco), espera
+    // na fila do rate limit, dorme no backoff de 429 e pode renovar o token,
+    // que por sua vez faz *polling* de até 30 s esperando um lock. Nada disso
+    // era interrompido por um `AbortSignal` de `fetch`.
+    //
+    // O prazo agora corre por fora, contra a operação toda. O `signal`
+    // continua indo ao `fetch` porque é ele que solta o socket; a corrida é o
+    // que garante **resposta** dentro do orçamento. O que já estava em voo
+    // termina sozinho — não dá para cancelar um `await` de banco —, mas quem
+    // chamou não fica preso a ele.
+    const prazo = AbortSignal.timeout(BlingClient.TEMPO_LIMITE_SITUACOES_MS);
+
     try {
-      return await this.descobrirSituacoesDePedidoDeVenda();
+      return await Promise.race([
+        this.descobrirSituacoesDePedidoDeVenda(prazo),
+        new Promise<never>((_, rejeitar) => {
+          prazo.addEventListener(
+            'abort',
+            () => rejeitar(new Error('prazo esgotado ao ler as situações de venda no Bling')),
+            { once: true },
+          );
+        }),
+      ]);
     } catch (erro: unknown) {
       // `fetchWithAuth` **lança** em 401/403: ele tenta renovar o token antes de
       // devolver a resposta, e a falha da renovação vira exceção. Sem este
@@ -1125,21 +1187,17 @@ export class BlingClient implements BlingPort {
     }
   }
 
-  private async descobrirSituacoesDePedidoDeVenda(): Promise<BlingCallResult<readonly Situacao[]>> {
-    // Orçamento de tempo para as duas leituras somadas.
-    //
-    // O chamador mais crítico é a compensação da venda manual, que roda *depois*
-    // de o pedido já existir no ERP e *dentro* do tratamento de erro da
-    // requisição. Sem teto, um Bling que aceita a conexão e não responde deixa
-    // a requisição pendurada até o limite da plataforma — e o usuário fica sem
-    // a instrução de cancelar o pedido à mão, que é o que evita duplicar a
-    // venda na próxima tentativa. Esgotado o prazo, o `fetch` lança e vira
-    // falha tipada como qualquer outra.
-    const prazo = AbortSignal.timeout(BlingClient.TEMPO_LIMITE_SITUACOES_MS);
-
+  private async descobrirSituacoesDePedidoDeVenda(
+    prazo: AbortSignal,
+  ): Promise<BlingCallResult<readonly Situacao[]>> {
     const respostaModulos = await this.fetchWithAuth(`${this.baseUrl}/situacoes/modulos`, { signal: prazo });
     if (!respostaModulos.ok) {
-      return { _tag: 'BlingFailed', failure: parseBlingFailure(respostaModulos.status, await respostaModulos.text()) };
+      return this.falhaDeLeituraDoBling(
+        'bling.situacoes.ler-modulos',
+        'ler as situações de venda',
+        respostaModulos.status,
+        await respostaModulos.text(),
+      );
     }
 
     const modulos = lerModulos(await this.lerCorpoJson(respostaModulos));
@@ -1165,7 +1223,12 @@ export class BlingClient implements BlingPort {
       { signal: prazo },
     );
     if (!respostaSituacoes.ok) {
-      return { _tag: 'BlingFailed', failure: parseBlingFailure(respostaSituacoes.status, await respostaSituacoes.text()) };
+      return this.falhaDeLeituraDoBling(
+        'bling.situacoes.ler-situacoes',
+        'ler as situações de venda',
+        respostaSituacoes.status,
+        await respostaSituacoes.text(),
+      );
     }
 
     const situacoes = lerSituacoes(await this.lerCorpoJson(respostaSituacoes));
@@ -1178,6 +1241,34 @@ export class BlingClient implements BlingPort {
     }
 
     return { _tag: 'BlingOk', value: situacoes };
+  }
+
+  /**
+   * Falha de leitura do Bling com a razão **redigida**.
+   *
+   * `parseBlingFailure` monta a mensagem a partir do corpo que o provedor
+   * mandou: `description`/`message` do envelope, os `fields[]` — que ecoam o
+   * que foi enviado — e, quando o corpo não é o envelope da v3, os primeiros
+   * 300 caracteres crus. Isso é **texto livre de terceiro** indo para uma
+   * resposta pública: uma página de erro de proxy, um host interno, um valor
+   * submetido de volta. Publicar isso é o mesmo risco que a política do ticket
+   * 22 (critério 13) fechou do lado do Postgres, só que pela outra ponta.
+   *
+   * A falha completa vai para o log. O que sai é montado a partir do **status**
+   * — número, vocabulário fechado —, e nunca do corpo.
+   *
+   * O `type` também não sai: ele é `error.type` do corpo, string livre do
+   * provedor, e só cai em `HTTP_<status>` quando o envelope não casa.
+   */
+  private falhaDeLeituraDoBling(
+    operacao: string,
+    oQue: string,
+    status: number,
+    corpo: string,
+  ): BlingCallResult<never> {
+    const detalhada = parseBlingFailure(status, corpo);
+    registrarFalhaInterna(operacao, detalhada);
+    return blingFailure(`HTTP_${status}`, status, mensagemPublicaDeStatusDoBling(status, oQue));
   }
 
   /** Corpo JSON de uma resposta `ok`, ou `undefined` quando não é JSON. */
