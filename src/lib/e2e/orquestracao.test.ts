@@ -159,7 +159,7 @@ describe('o seed grava o diário antes e durante as escritas', () => {
     // 2 organizações + 2 usuários + os 2 memberships deles: o laço cria o
     // membership logo depois de cada usuário, então a falha no terceiro
     // usuário deixa seis registros gravados.
-    expect(diario.concluidas).toHaveLength(6);
+    expect(diario.concluidas).toHaveLength(7);
     expect(lerDiario(diario, { projetoRef: PROJETO, runId: RUN })._tag).toBe('DiarioValido');
   });
 });
@@ -175,7 +175,7 @@ describe('a retomada não destrói o diário existente', () => {
       porta: primeiroProjeto.porta, manifest: manifesto(), projetoRef: PROJETO, persistir: disco.persistir,
     })).rejects.toThrow();
     const diarioParcial = disco.ultimo();
-    expect(diarioParcial.concluidas).toHaveLength(6);
+    expect(diarioParcial.concluidas).toHaveLength(7);
 
     const discoRetomada = discoFalso();
     const { diario } = await executarSeed({
@@ -188,7 +188,7 @@ describe('a retomada não destrói o diário existente', () => {
 
     // A primeira gravação da retomada já traz o que existia — nunca um vazio.
     const primeiraDaRetomada = JSON.parse(discoRetomada.gravacoes[0]!) as DiarioDeExecucao;
-    expect(primeiraDaRetomada.concluidas).toHaveLength(6);
+    expect(primeiraDaRetomada.concluidas).toHaveLength(7);
     expect(diario.concluidas).toHaveLength(
       diario.plano.operacoes.filter((o) => o.criadoPor === 'seed').length,
     );
@@ -262,7 +262,7 @@ describe('a limpeza distingue falha de leitura de registro ausente', () => {
 
     // A organização da spec não foi criada neste cenário, então não há o que
     // apagar dela: sobram as 11 do seed.
-    expect(resultado.removidos).toBe(11);
+    expect(resultado.removidos).toBe(15);
     expect([...projeto.criados.keys()]).toEqual(['cliente-de-verdade@empresa.com']);
   });
 
@@ -295,7 +295,7 @@ describe('a limpeza distingue falha de leitura de registro ausente', () => {
 
     expect(resultado.simulado).toBe(true);
     expect(resultado.removidos).toBe(0);
-    expect(projeto.criados.size).toBe(11);
+    expect(projeto.criados.size).toBe(15);
     for (const aprovada of resultado.plano.aprovadas) {
       expect(resultado.simulacao).toContain(aprovada.identificador);
     }
@@ -386,7 +386,7 @@ describe('a gravação local falha depois de a criação remota concluir', () =>
     expect(diario.concluidas).toHaveLength(criadasPeloSeed);
     // E o projeto não ganhou organização duplicada.
     const slugs = [...projeto.criados.values()].filter((c) => c.tipo === 'organizacao');
-    expect(slugs).toHaveLength(2);
+    expect(slugs).toHaveLength(3);
   });
 
   it('sem a retomada, a limpeza adota o registro e o apaga — em vez de escondê-lo', async () => {

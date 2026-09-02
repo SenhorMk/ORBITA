@@ -8,7 +8,7 @@ import {
   reconciliar,
   registrarConclusao,
 } from './execucaoSeed';
-import { buildSeedManifest } from './syntheticSeedData';
+import { buildSeedManifest, ORGANIZACAO_DO_CONVITE, PERSONA_CONVIDADA } from './syntheticSeedData';
 
 /**
  * Diário de execução do seed.
@@ -42,7 +42,9 @@ describe('o plano é escrito antes de qualquer escrita', () => {
     }, {});
     // 2 organizações do seed + 1 que a spec cria durante os testes: ela entra
     // no plano para a limpeza alcançá-la.
-    expect(porTipo).toEqual({ usuario: 5, organizacao: 3, membership: 4 });
+    // Ticket 23 — a organização do convite entrou, com dono próprio e um
+    // convidado sem vínculo: +1 organização, +2 usuários, +1 membership.
+    expect(porTipo).toEqual({ usuario: 7, organizacao: 4, membership: 5 });
   });
 
   it('a organização criada pela spec entra no plano, marcada como tal', () => {
@@ -53,7 +55,7 @@ describe('o plano é escrito antes de qualquer escrita', () => {
 
     expect(daSpec).toHaveLength(1);
     expect(daSpec[0]!.identificador).toContain('spec-created-org');
-    expect(plano.operacoes.filter((o) => o.criadoPor === 'seed')).toHaveLength(11);
+    expect(plano.operacoes.filter((o) => o.criadoPor === 'seed')).toHaveLength(15);
   });
 
   it('conclusão que diverge do projeto é reportada, sem reescrever o diário', () => {
@@ -87,8 +89,39 @@ describe('o plano é escrito antes de qualquer escrita', () => {
     const plano = planejarExecucao(manifesto(), PROJETO);
     const memberships = plano.operacoes.filter((o) => o.tipo === 'membership');
 
-    expect(memberships).toHaveLength(4);
+    expect(memberships).toHaveLength(5);
     expect(memberships.map((m) => m.chave)).not.toContain('membership:external');
+    // Ticket 23 — o convidado tem a mesma propriedade, e por outro motivo: ele
+    // existe para **aceitar** um convite, e o seed que já o tornasse membro
+    // faria a spec passar sem provar o aceite.
+    expect(memberships.map((m) => m.chave)).not.toContain(`membership:${PERSONA_CONVIDADA}`);
+  });
+
+  // Ticket 23 — os registros novos precisam entrar no **plano**, e não só no
+  // manifesto. É o plano que o diário registra, que a retomada reconcilia e que
+  // a limpeza apaga: um registro fora dele viraria órfão remoto invisível, que
+  // é exatamente o que o diário existe para não deixar acontecer.
+  it('a organização do convite e o convidado entram no plano, e a retomada os alcança', () => {
+    const plano = planejarExecucao(manifesto(), PROJETO);
+    const chaves = plano.operacoes.map((o) => o.chave);
+
+    expect(chaves).toContain(`org:${ORGANIZACAO_DO_CONVITE}`);
+    expect(chaves).toContain('persona:owner-convite');
+    expect(chaves).toContain('membership:owner-convite');
+    expect(chaves).toContain(`persona:${PERSONA_CONVIDADA}`);
+
+    // A retomada depois de uma interrupção no meio: o que o diário não tem
+    // continua pendente, e nada dos registros novos fica de fora.
+    const diario = iniciarDiario(plano);
+    const pendentes = operacoesPendentes(diario).map((o) => o.chave);
+    for (const chave of [
+      `org:${ORGANIZACAO_DO_CONVITE}`,
+      'persona:owner-convite',
+      'membership:owner-convite',
+      `persona:${PERSONA_CONVIDADA}`,
+    ]) {
+      expect(pendentes).toContain(chave);
+    }
   });
 
   it('todo identificador carrega o prefixo sintético e o runId', () => {

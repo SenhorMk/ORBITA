@@ -3,7 +3,12 @@ import { test, expect } from '@playwright/test';
 import { loadSeedManifest, persona } from '../fixtures/personas';
 import { LoginPage } from '../pages/LoginPage';
 import { OrganizationApi } from '../pages/OrganizationApi';
-import { requirePersonaUserId, slugDaOrganizacaoDaSpec, type SeedManifest } from '../../src/lib/e2e/syntheticSeedData';
+import {
+  PERSONA_CONVIDADA,
+  requirePersonaUserId,
+  slugDaOrganizacaoDaSpec,
+  type SeedManifest,
+} from '../../src/lib/e2e/syntheticSeedData';
 
 // Matrix: "organização: criação/seleção CAS, convite, papéis e revogação."
 //
@@ -84,12 +89,20 @@ test.describe('organização', () => {
     expect(validSwitchResponse.ok()).toBe(true);
   });
 
+  // Ticket 23 — o convite acontece na **organização do convite**, e não em
+  // `org-a`. `org-a` tem três membros contra um limite de plano de três, e o
+  // convite era recusado com `403 LIMIT_EXCEEDED` — corretamente. A spec falhava
+  // antes do aceite, que é o que ela existe para exercitar.
+  //
+  // O convidado é **dedicado e sem vínculo**. Convidar quem já é membro criaria
+  // um convite que ninguém precisa aceitar para virar membro, e esta spec
+  // passaria sem provar coisa nenhuma sobre o aceite.
   test('convite criado pelo owner pode ser aceito e o membro passa a existir na organização', async ({
     page,
     browser,
   }) => {
-    const owner = persona(manifest, 'owner-a');
-    const member = persona(manifest, 'member-a');
+    const owner = persona(manifest, 'owner-convite');
+    const convidado = persona(manifest, PERSONA_CONVIDADA);
 
     const ownerLogin = new LoginPage(page);
     await ownerLogin.goto();
@@ -101,22 +114,65 @@ test.describe('organização', () => {
     };
     const orgId = ownList.activeOrg.organizacao.id;
 
-    const inviteResponse = await ownerOrgApi.createInvite(orgId, member.email, 'member');
+    const convidadoContext = await browser.newContext();
+    const convidadoPage = await convidadoContext.newPage();
+    const convidadoLogin = new LoginPage(convidadoPage);
+    await convidadoLogin.goto();
+    await convidadoLogin.loginAndWaitForDashboard(convidado.email, convidado.password);
+    const convidadoOrgApi = new OrganizationApi(convidadoPage);
+
+    // **Ausência antes.** Sem esta medida, a asserção final não distingue "o
+    // aceite funcionou" de "já era membro".
+    const antes = await convidadoOrgApi.listOrganizations();
+    expect(antes.ok()).toBe(true);
+    const antesBody = (await antes.json()) as { organizacoes: Array<{ id: string }> };
+    expect(antesBody.organizacoes.some((org) => org.id === orgId)).toBe(false);
+
+    const inviteResponse = await ownerOrgApi.createInvite(orgId, convidado.email, 'member');
     expect(inviteResponse.ok()).toBe(true);
     const invite = (await inviteResponse.json()) as { convite: { token: string } };
     expect(invite.convite.token).toBeTruthy();
 
-    const memberContext = await browser.newContext();
-    const memberPage = await memberContext.newPage();
-    const memberLogin = new LoginPage(memberPage);
-    await memberLogin.goto();
-    await memberLogin.loginAndWaitForDashboard(member.email, member.password);
-
-    const memberOrgApi = new OrganizationApi(memberPage);
-    const acceptResponse = await memberOrgApi.acceptInvite(invite.convite.token);
+    const acceptResponse = await convidadoOrgApi.acceptInvite(invite.convite.token);
     expect(acceptResponse.ok()).toBe(true);
 
-    await memberContext.close();
+    // **Presença depois.** É o par da medida acima, e só o par prova o aceite.
+    const depois = await convidadoOrgApi.listOrganizations();
+    expect(depois.ok()).toBe(true);
+    const depoisBody = (await depois.json()) as { organizacoes: Array<{ id: string }> };
+    expect(depoisBody.organizacoes.some((org) => org.id === orgId)).toBe(true);
+
+    await convidadoContext.close();
+  });
+
+  // O limite continua valendo, e há prova disso: `org-a` está cheia — três
+  // membros para um limite de três —, e convidar para ela é recusado. Sem este
+  // caso, afrouxar o entitlement passaria despercebido, porque a spec de cima
+  // teria vaga de sobra.
+  test('o limite do plano recusa o convite quando a organização está cheia', async ({ page }) => {
+    const owner = persona(manifest, 'owner-a');
+    const convidado = persona(manifest, PERSONA_CONVIDADA);
+
+    const ownerLogin = new LoginPage(page);
+    await ownerLogin.goto();
+    await ownerLogin.loginAndWaitForDashboard(owner.email, owner.password);
+
+    const ownerOrgApi = new OrganizationApi(page);
+    const ownList = (await (await ownerOrgApi.listOrganizations()).json()) as {
+      activeOrg: { organizacao: { id: string } };
+    };
+
+    const recusa = await ownerOrgApi.createInvite(
+      ownList.activeOrg.organizacao.id,
+      convidado.email,
+      'member',
+    );
+
+    expect(recusa.status()).toBe(403);
+    // A recusa chega **classificada**, e é isso que tornou a causa observável em
+    // um minuto quando este ticket nasceu.
+    const corpo = (await recusa.json()) as { code?: string };
+    expect(corpo.code).toBe('LIMIT_EXCEEDED');
   });
 
   test('revogação de membro impede que o membro revogado continue agindo na organização', async ({
