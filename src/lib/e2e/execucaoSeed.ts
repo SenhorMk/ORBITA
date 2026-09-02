@@ -1,4 +1,11 @@
-import { SYNTHETIC_DATA_PREFIX, slugDaOrganizacaoDaSpec, SUFIXO_ORG_CRIADA_PELA_SPEC, type SeedManifest } from './syntheticSeedData';
+import {
+  ORGANIZACAO_DO_CONVITE,
+  PERSONA_CONVIDADA,
+  SYNTHETIC_DATA_PREFIX,
+  slugDaOrganizacaoDaSpec,
+  SUFIXO_ORG_CRIADA_PELA_SPEC,
+  type SeedManifest,
+} from './syntheticSeedData';
 
 /**
  * Diário de execução do seed: o plano escrito **antes** de qualquer escrita, e
@@ -120,7 +127,59 @@ export function planejarExecucao(
     });
   }
 
+  // Vínculos que as specs criam ao rodar. O seed **não** os cria — se criasse, a
+  // spec de convite passaria sem provar o aceite —, mas o plano precisa
+  // preverem-los mesmo assim: é o plano que a limpeza percorre, e é por ele que
+  // a reconciliação adota o id real de um registro que ela não escreveu.
+  //
+  // Sem isto o vínculo sobrava como órfão: sumia junto da organização por
+  // integridade referencial, e não por ação da limpeza. O resultado ficava certo
+  // por um caminho que ninguém tinha afirmado — e um dia em que a cascade
+  // mudasse, o resíduo voltaria calado.
+  for (const vinculo of vinculosCriadosPelasSpecs(manifest)) {
+    operacoes.push(vinculo);
+  }
+
   return { projetoRef, runId: manifest.runId, criadoEm: agora().toISOString(), operacoes };
+}
+
+/**
+ * Os vínculos que as specs criam, com identificador natural determinístico.
+ *
+ * O identificador tem a mesma forma dos vínculos do seed — `email@slug` —,
+ * porque é assim que a reconciliação o encontra no projeto: os dois lados
+ * legíveis, nenhum deles uma chave interna que o Supabase não devolve.
+ */
+function vinculosCriadosPelasSpecs(manifest: SeedManifest): OperacaoPlanejada[] {
+  const convidado = manifest.personas.find((persona) => persona.key === PERSONA_CONVIDADA);
+  const organizacaoDoConvite = manifest.organizations.find((org) => org.key === ORGANIZACAO_DO_CONVITE);
+  const ownerA = manifest.personas.find((persona) => persona.key === 'owner-a');
+  if (!convidado || !organizacaoDoConvite || !ownerA) {
+    throw new Error(
+      'O manifesto não tem o convidado, a organização do convite ou o `owner-a`. '
+        + 'O plano não pode prever os vínculos que as specs criam sem os três.',
+    );
+  }
+
+  return [
+    {
+      // Ticket 23 — o aceite do convite cria este vínculo, e é o que a spec
+      // existe para provar.
+      tipo: 'membership',
+      chave: `spec:membership:${PERSONA_CONVIDADA}`,
+      identificador: `${convidado.email}@${organizacaoDoConvite.slug}`,
+      criadoPor: 'spec',
+    },
+    {
+      // Criar uma organização torna quem criou o dono dela. Este vínculo nasce
+      // com a `spec-created-org` e era o "órfão informativo" que o ticket 07
+      // registrou como limite conhecido: some por cascade, não por limpeza.
+      tipo: 'membership',
+      chave: 'spec:membership:owner-a@spec-created-org',
+      identificador: `${ownerA.email}@${slugDaOrganizacaoDaSpec(manifest.prefix)}`,
+      criadoPor: 'spec',
+    },
+  ];
 }
 
 /**

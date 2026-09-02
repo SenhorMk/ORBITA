@@ -16,14 +16,19 @@ const fixedClock = () => new Date('2026-08-28T12:00:00.000Z');
 const fixedRandom = () => 0.123456789;
 
 describe('buildSeedManifest', () => {
-  it('gera duas organizações sintéticas (A e B) e cinco personas cobrindo owner/admin/member/external', () => {
+  it('gera as três organizações sintéticas e as sete personas da matriz', () => {
     const manifest = buildSeedManifest({ runId: 'fixed-run', clock: fixedClock });
 
-    expect(manifest.organizations).toHaveLength(2);
-    expect(manifest.personas).toHaveLength(5);
+    // Ticket 23 — três organizações agora: A, B e a **do convite**, cujo único
+    // membro é o próprio dono, para sobrar vaga a quem aceitar o convite.
+    expect(manifest.organizations).toHaveLength(3);
+    expect(manifest.personas).toHaveLength(7);
 
     const roles = manifest.personas.map((persona) => persona.role).sort();
-    expect(roles).toEqual(['admin', 'external', 'member', 'owner', 'owner'].sort());
+    // Dois `external`: a persona externa do cross-tenant e o convidado do
+    // ticket 23. Os dois existem sem organização, por motivos diferentes — e
+    // por isso são duas, e não uma reaproveitada.
+    expect(roles).toEqual(['admin', 'external', 'external', 'member', 'owner', 'owner', 'owner'].sort());
   });
 
   it('prefixa todos os slugs e e-mails sintéticos com SYNTHETIC_DATA_PREFIX', () => {

@@ -89,10 +89,41 @@ function buildSyntheticPassword(runId: string, personaKey: string): string {
 }
 
 /**
+ * A organização em que a spec de convite convida — e o convidado que ela convida.
+ *
+ * Ticket 23. A spec convidava para `org-a`, que o seed enche com exatamente três
+ * membros (`owner-a`, `admin-a`, `member-a`) contra um limite de plano de três.
+ * O convite era recusado com `403 LIMIT_EXCEEDED`, **corretamente**, e a spec
+ * falhava antes do aceite — que é o que ela existe para exercitar.
+ *
+ * Três saídas eram possíveis, e a escolhida foi dar ao convite a **própria
+ * organização**:
+ *
+ * - encolher `org-a` para dois membros custaria o `admin-a`, e com ele a matriz
+ *   de papéis owner/admin/member que o seed existe para dar. Trocar uma lacuna
+ *   por outra;
+ * - aumentar o limite do plano faria a suíte exercitar um plano que talvez
+ *   nenhum cliente use, e apagaria a garantia que o entitlement dá;
+ * - uma organização própria custa duas personas e uma linha de manifesto, e o
+ *   executor do seed já é genérico o bastante para não mudar.
+ *
+ * **O convidado é dedicado, e sem vínculo nenhum.** Reaproveitar `member-a`
+ * criaria um convite que ninguém precisa aceitar para virar membro — a spec
+ * passaria sem provar o aceite. E reaproveitar `external` quebraria a premissa
+ * do `cross-tenant-denial`, que existe justamente porque ele não é membro de
+ * lugar nenhum: aceitar um convite o tornaria membro.
+ */
+export const ORGANIZACAO_DO_CONVITE = 'org-convite';
+
+/** A persona convidada pela spec de organização. Sem vínculo, de propósito. */
+export const PERSONA_CONVIDADA = 'convidado';
+
+/**
  * Builds the full manifest of synthetic organizations and personas for one
- * E2E staging run: two organizations (A and B) and the owner/admin/member/
- * external-owner personas the ticket's minimum matrix requires for
- * cross-tenant and role-based denial specs.
+ * E2E staging run: organizations A and B — with the owner/admin/member/
+ * external-owner personas the ticket's minimum matrix requires for cross-tenant
+ * and role-based denial specs — plus the invite organization of ticket 23, whose
+ * only member is its owner so the invited guest has a seat.
  */
 export function buildSeedManifest(options: BuildSeedManifestOptions = {}): SeedManifest {
   const clock = options.clock ?? (() => new Date());
@@ -103,6 +134,11 @@ export function buildSeedManifest(options: BuildSeedManifestOptions = {}): SeedM
   const organizations: SyntheticOrganization[] = [
     { key: 'org-a', slug: `${prefix}org-a`, nome: `ORBITA E2E Org A ${runId}` },
     { key: 'org-b', slug: `${prefix}org-b`, nome: `ORBITA E2E Org B ${runId}` },
+    {
+      key: ORGANIZACAO_DO_CONVITE,
+      slug: `${prefix}${ORGANIZACAO_DO_CONVITE}`,
+      nome: `ORBITA E2E Org Convite ${runId}`,
+    },
   ];
 
   const personaSpecs: ReadonlyArray<{ key: string; role: SyntheticPersonaRole; organizationKey: string | null }> = [
@@ -111,6 +147,10 @@ export function buildSeedManifest(options: BuildSeedManifestOptions = {}): SeedM
     { key: 'member-a', role: 'member', organizationKey: 'org-a' },
     { key: 'owner-b', role: 'owner', organizationKey: 'org-b' },
     { key: 'external', role: 'external', organizationKey: null },
+    // Ticket 23 — a organização do convite, com **um** membro só: o limite do
+    // Starter é 3, e é preciso sobrar vaga para quem aceitar o convite.
+    { key: 'owner-convite', role: 'owner', organizationKey: ORGANIZACAO_DO_CONVITE },
+    { key: PERSONA_CONVIDADA, role: 'external', organizationKey: null },
   ];
 
   const personas: SyntheticPersona[] = personaSpecs.map((spec) => ({
