@@ -447,6 +447,59 @@ describe('cancelarPedidoVenda', () => {
     expect(resultado.failure.status).toBe(503);
   });
 
+  it('o orçamento cobre o PATCH, não só a descoberta', async () => {
+    // O achado da revisão anterior: o prazo terminava antes da terceira
+    // requisição — justamente a que cancela o pedido. Aqui as duas leituras
+    // respondem na hora e **o PATCH** é que trava. Se o teto valesse só para a
+    // descoberta, isto esperaria o atraso inteiro e a venda manual ficaria sem
+    // devolver a instrução de cancelar à mão.
+    const original = BlingClient.TEMPO_LIMITE_SITUACOES_MS;
+    // O orçamento precisa caber as três requisições: `enforceRateLimit` espaça
+    // cada uma em 340 ms, então menos de ~700 ms estouraria antes do PATCH e o
+    // teste provaria outra coisa.
+    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_SITUACOES_MS', { value: 1200, configurable: true });
+    fake.programar(
+      json(200, MODULOS),
+      json(200, SITUACOES),
+      { status: 200, body: '{}', atrasoMs: 5000 },
+    );
+
+    try {
+      const comecou = Date.now();
+      const resultado = await adapter().cancelarPedidoVenda('26764331138');
+      const decorrido = Date.now() - comecou;
+
+      if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
+      expect(decorrido).toBeLessThan(2500);
+      // Chegou a tentar o cancelamento — o teto não abortou antes da hora.
+      expect(caminhos()).toHaveLength(3);
+      expect(caminhos()[2]).toBe('/pedidos/vendas/26764331138/situacoes/15');
+    } finally {
+      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_SITUACOES_MS', { value: original, configurable: true });
+    }
+  });
+
+  it('uma exceção do cliente no PATCH vira falha tipada, não rejeição', async () => {
+    // `fetchWithAuth` lança em 401/403 quando a renovação de token falha. Se
+    // isso escapasse, rejeitaria de dentro do `catch` da venda manual — que é
+    // onde a compensação roda — e o usuário perderia a instrução de cancelar o
+    // pedido à mão. As duas leituras passam; o PATCH é que dispara a renovação.
+    fake.programar(
+      json(200, MODULOS),
+      json(200, SITUACOES),
+      json(401, { error: { type: 'UNAUTHORIZED', description: 'Token expirado' } }),
+    );
+
+    const resultado = await adapter().cancelarPedidoVenda('26764331138');
+
+    expect(resultado._tag).toBe('BlingFailed');
+    if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
+    expect(resultado.failure.message).toMatch(/cancelar o pedido/iu);
+    // Sem vazar a exceção interna nem culpar a conta.
+    expect(resultado.failure.message).not.toMatch(/conexao Bling encontrada/iu);
+    expect(resultado.failure.message).not.toMatch(/Token expirado/iu);
+  });
+
   it('propaga a recusa do Bling ao aplicar a situação', async () => {
     fake.programar(
       json(200, MODULOS),

@@ -322,10 +322,19 @@ export class BlingClient implements BlingPort {
   // Fetch autenticado com auto-refresh em caso de 401 Unauthorized
   // Fetch autenticado com auto-refresh em caso de 401 Unauthorized e retry em caso de 429
   private async fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
+    // Quem passa `signal` está sob orçamento de tempo (ver `comOrcamento`).
+    // Estes dois pontos de conferência garantem que nenhum trabalho **novo**
+    // comece depois do prazo: nem a leitura da credencial, nem uma tentativa
+    // seguinte depois do backoff. Não interrompem o que já está em voo — não dá
+    // para cancelar um `await` de banco —, mas impedem que uma chamada
+    // abandonada continue gastando fila, token e requisição.
+    options.signal?.throwIfAborted();
+
     let token = await this.getAccessToken();
     let retries = 0;
 
     while (retries < 2) {
+      options.signal?.throwIfAborted();
       await this.enforceRateLimit();
 
       const response = await fetch(url, {
@@ -899,7 +908,23 @@ export class BlingClient implements BlingPort {
    * numérico, então casar pelo nome é o único caminho que a API oferece.
    */
   async cancelarPedidoVenda(idPedido: string): Promise<BlingCallResult<void>> {
-    const situacoesResult = await this.obterSituacoesDePedidoDeVenda();
+    // **Um** orçamento para a compensação inteira — descoberta e mutação.
+    //
+    // Antes o prazo cobria só a descoberta e terminava antes do `PATCH`, que é
+    // justamente o passo que cancela o pedido. Uma espera ou uma exceção ali
+    // deixava a venda manual sem devolver a instrução de cancelar à mão, que é
+    // o que impede a próxima tentativa de criar um segundo pedido órfão. O teto
+    // estava em toda parte menos onde importava.
+    return this.comOrcamento('bling.pedido.cancelar', 'cancelar o pedido', (prazo) =>
+      this.cancelarPedidoVendaComPrazo(idPedido, prazo),
+    );
+  }
+
+  private async cancelarPedidoVendaComPrazo(
+    idPedido: string,
+    prazo: AbortSignal,
+  ): Promise<BlingCallResult<void>> {
+    const situacoesResult = await this.descobrirSituacoesDePedidoDeVenda(prazo);
     if (situacoesResult._tag === 'BlingFailed') return situacoesResult;
 
     const cancelado = encontrarSituacaoDeCancelamento(situacoesResult.value);
@@ -921,6 +946,7 @@ export class BlingClient implements BlingPort {
     const response = await this.fetchWithAuth(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
+      signal: prazo,
     });
 
     if (!response.ok) {
@@ -928,7 +954,7 @@ export class BlingClient implements BlingPort {
       // dentro do "o cancelamento automático também falhou (…)". O que a pessoa
       // precisa dali é a instrução de cancelar à mão, e ela não depende do
       // texto do provedor.
-      return this.falhaDeLeituraDoBling(
+      return this.falhaPublicaDoBling(
         'bling.pedido.cancelar',
         'cancelar o pedido',
         response.status,
@@ -1138,50 +1164,65 @@ export class BlingClient implements BlingPort {
    * mencionada quando a leitura funcionou e o dado realmente não está lá.
    */
   async obterSituacoesDePedidoDeVenda(): Promise<BlingCallResult<readonly Situacao[]>> {
-    // Um prazo só, que vale para a operação **inteira**.
-    //
-    // Passar o `signal` ao `fetch` não bastava, e o comentário anterior mentia
-    // ao dizer que era "o teto das duas leituras": `fetchWithAuth` faz muita
-    // coisa fora do `fetch` — lê a credencial no cofre (rede + banco), espera
-    // na fila do rate limit, dorme no backoff de 429 e pode renovar o token,
-    // que por sua vez faz *polling* de até 30 s esperando um lock. Nada disso
-    // era interrompido por um `AbortSignal` de `fetch`.
-    //
-    // O prazo agora corre por fora, contra a operação toda. O `signal`
-    // continua indo ao `fetch` porque é ele que solta o socket; a corrida é o
-    // que garante **resposta** dentro do orçamento. O que já estava em voo
-    // termina sozinho — não dá para cancelar um `await` de banco —, mas quem
-    // chamou não fica preso a ele.
+    return this.comOrcamento('bling.situacoes.descobrir', 'ler as situações de venda', (prazo) =>
+      this.descobrirSituacoesDePedidoDeVenda(prazo),
+    );
+  }
+
+  /**
+   * Roda uma conversa com o Bling sob **um** orçamento de tempo, devolvendo
+   * falha tipada em vez de exceção.
+   *
+   * Duas coisas que o `AbortSignal` sozinho não faz, e que são o motivo deste
+   * invólucro existir:
+   *
+   * **1. O prazo precisa valer fora do `fetch`.** `fetchWithAuth` lê a
+   * credencial no cofre (rede + banco), espera na fila do rate limit, dorme no
+   * backoff de 429 e pode renovar o token — que faz *polling* de até 30 s
+   * esperando um lock. Um `signal` de `fetch` não interrompe nada disso, então
+   * o prazo corre por fora, contra a operação inteira. O `signal` continua indo
+   * ao `fetch` porque é ele que solta o socket.
+   *
+   * **2. `fetchWithAuth` lança.** Em 401/403 ele tenta renovar o token, e a
+   * falha da renovação vira exceção. Quem chama isto de dentro de um tratamento
+   * de erro — a compensação da venda manual — rejeitaria de dentro do próprio
+   * `catch`, e o usuário perderia a instrução de cancelar o pedido à mão.
+   *
+   * **Limite conhecido:** o que já estava em voo quando o prazo estoura termina
+   * sozinho, fora do ciclo da requisição — não dá para cancelar um `await` de
+   * banco. O que este teto garante é **resposta** dentro do orçamento, não
+   * interrupção do trabalho. `fetchWithAuth` confere o `signal` antes de cada
+   * tentativa, então nenhuma requisição **nova** começa depois do prazo.
+   *
+   * A mensagem do erro nunca entra na resposta: aqui dentro cai o que o cofre e
+   * o Postgres lançam, e `descreverErro` de um erro do Postgres carrega
+   * `details` e `hint` — valor de linha (CWE-209, a política do ticket 22,
+   * critério 13).
+   */
+  private async comOrcamento<T>(
+    operacao: string,
+    oQue: string,
+    trabalho: (prazo: AbortSignal) => Promise<BlingCallResult<T>>,
+  ): Promise<BlingCallResult<T>> {
     const prazo = AbortSignal.timeout(BlingClient.TEMPO_LIMITE_SITUACOES_MS);
 
     try {
       return await Promise.race([
-        this.descobrirSituacoesDePedidoDeVenda(prazo),
+        trabalho(prazo),
         new Promise<never>((_, rejeitar) => {
           prazo.addEventListener(
             'abort',
-            () => rejeitar(new Error('prazo esgotado ao ler as situações de venda no Bling')),
+            () => rejeitar(new Error(`prazo esgotado ao ${oQue} no Bling`)),
             { once: true },
           );
         }),
       ]);
     } catch (erro: unknown) {
-      // `fetchWithAuth` **lança** em 401/403: ele tenta renovar o token antes de
-      // devolver a resposta, e a falha da renovação vira exceção. Sem este
-      // `catch`, a compensação da venda manual rejeitaria de dentro do próprio
-      // tratamento de erro, e o usuário perderia a instrução de cancelar o
-      // pedido à mão — que é a única coisa acionável naquele momento.
-      //
-      // A mensagem do erro **não** entra na resposta. Aqui dentro cai o que o
-      // cofre de credenciais, o Postgres e o `AbortSignal` lançam, e
-      // `descreverErro` de um erro do Postgres carrega `details` e `hint` —
-      // valor de linha (CWE-209, a mesma política do ticket 22, critério 13).
-      // O diagnóstico vai para o log; o que sai é fixo e acionável.
-      registrarFalhaInterna('bling.situacoes.descobrir', erro);
+      registrarFalhaInterna(operacao, erro);
       return blingFailure(
         'UNKNOWN_ERROR',
         0,
-        'Não foi possível falar com o Bling para ler as situações de venda. '
+        `Não foi possível falar com o Bling para ${oQue}. `
           + 'Confira a conexão em "Conectar APIs" e tente de novo.',
       );
     }
@@ -1192,7 +1233,7 @@ export class BlingClient implements BlingPort {
   ): Promise<BlingCallResult<readonly Situacao[]>> {
     const respostaModulos = await this.fetchWithAuth(`${this.baseUrl}/situacoes/modulos`, { signal: prazo });
     if (!respostaModulos.ok) {
-      return this.falhaDeLeituraDoBling(
+      return this.falhaPublicaDoBling(
         'bling.situacoes.ler-modulos',
         'ler as situações de venda',
         respostaModulos.status,
@@ -1223,7 +1264,7 @@ export class BlingClient implements BlingPort {
       { signal: prazo },
     );
     if (!respostaSituacoes.ok) {
-      return this.falhaDeLeituraDoBling(
+      return this.falhaPublicaDoBling(
         'bling.situacoes.ler-situacoes',
         'ler as situações de venda',
         respostaSituacoes.status,
@@ -1244,7 +1285,12 @@ export class BlingClient implements BlingPort {
   }
 
   /**
-   * Falha de leitura do Bling com a razão **redigida**.
+   * Resposta HTTP recusada pelo Bling, traduzida em falha **pública** —
+   * ou seja, com a razão do provedor removida.
+   *
+   * Serve tanto leitura quanto mutação: os dois `GET` da descoberta e o
+   * `PATCH` que cancela o pedido passam por aqui. O nome anterior dizia
+   * "leitura" e já era falso quando o `PATCH` entrou.
    *
    * `parseBlingFailure` monta a mensagem a partir do corpo que o provedor
    * mandou: `description`/`message` do envelope, os `fields[]` — que ecoam o
@@ -1255,12 +1301,17 @@ export class BlingClient implements BlingPort {
    * 22 (critério 13) fechou do lado do Postgres, só que pela outra ponta.
    *
    * A falha completa vai para o log. O que sai é montado a partir do **status**
-   * — número, vocabulário fechado —, e nunca do corpo.
+   * — número, vocabulário fechado —, e nunca do corpo. O `type` também não
+   * sai: ele é `error.type` do corpo, string livre do provedor.
    *
-   * O `type` também não sai: ele é `error.type` do corpo, string livre do
-   * provedor, e só cai em `HTTP_<status>` quando o envelope não casa.
+   * @param operacao rótulo da telemetria, e é o que aparece no log de
+   *   `registrarFalhaInterna` — `bling.situacoes.ler-modulos`,
+   *   `bling.situacoes.ler-situacoes`, `bling.pedido.cancelar`. Identifica o
+   *   **passo**, não o método público que o chamou.
+   * @param oQue trecho em infinitivo que entra na frase mostrada ao usuário
+   *   ("não deu para ${oQue}"). É texto nosso, nunca do provedor.
    */
-  private falhaDeLeituraDoBling(
+  private falhaPublicaDoBling(
     operacao: string,
     oQue: string,
     status: number,
