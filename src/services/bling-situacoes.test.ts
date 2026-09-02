@@ -3,6 +3,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { BlingFake } from './__testkit__/blingFake';
+import { moduloSistemaSchema, situacaoSchema } from '../lib/integrations/bling/situacoesContract';
 
 /**
  * Ticket 31 — descoberta das situações de pedido de venda, pelo fio.
@@ -26,6 +27,20 @@ const rotasOficiais = (
     paths: readonly string[];
   }
 ).paths;
+
+interface SchemaOficial {
+  readonly obrigatorios: readonly string[];
+  readonly campos: Readonly<Record<string, { readonly tipo: string } | undefined>>;
+}
+
+const catalogo = JSON.parse(
+  readFileSync(path.join(RAIZ, 'docs/integrations/bling-v3-schemas.json'), 'utf8'),
+) as {
+  schemas: Readonly<Record<string, SchemaOficial | undefined>>;
+  capturasAdicionais?: ReadonlyArray<{ capturadoEm: string; url: string; schemas: readonly string[] }>;
+};
+
+const schemasOficiais = catalogo.schemas;
 
 const fake = new BlingFake();
 const ORG = '31313131-3131-4131-8131-313131313131';
@@ -82,6 +97,72 @@ describe('as rotas usadas existem no contrato oficial', () => {
   });
 });
 
+/**
+ * Conferir só o **caminho** não teria pego o defeito original: a rota
+ * `/situacoes/modulos` existe, e era chamada. O que não existia era o campo
+ * `situacoes` **dentro** de cada módulo. A guarda que faltava é sobre a forma
+ * da resposta, e é esta.
+ */
+describe('a forma que o código espera bate com os schemas oficiais', () => {
+  const moduloBase = schemasOficiais.SituacoesModuloBaseDTO!;
+  const modulo = schemasOficiais.SituacoesModuloDTO!;
+  const situacao = schemasOficiais.SituacoesDTO!;
+
+  const camposDoModulo = { ...moduloBase.campos, ...modulo.campos };
+
+  it('o campo `situacoes` NÃO existe no módulo — é o defeito original, virado guarda', () => {
+    // A versão antiga procurava `modulo.situacoes` e recebia `undefined` em
+    // toda conta. Se o Bling um dia acrescentar esse campo, este teste cai e
+    // avisa que a descoberta em dois passos pode ser simplificada.
+    expect(Object.keys(camposDoModulo)).not.toContain('situacoes');
+  });
+
+  it('os campos que a busca do módulo usa são declarados no contrato', () => {
+    // `encontrarModuloDePedidosDeVenda` decide por `descricao` e `nome`.
+    // Depender de campo que o contrato não declara foi exatamente o defeito.
+    expect(camposDoModulo.id?.tipo).toBe('integer');
+    expect(camposDoModulo.nome?.tipo).toBe('string');
+    expect(camposDoModulo.descricao?.tipo).toBe('string');
+  });
+
+  it('o schema local exige o que o oficial marca como obrigatório na situação', () => {
+    expect(situacao.obrigatorios).toEqual(['id', 'nome']);
+    expect(situacaoSchema.safeParse({ id: 15 }).success).toBe(false);
+    expect(situacaoSchema.safeParse({ nome: 'Cancelado' }).success).toBe(false);
+    expect(situacaoSchema.safeParse({ id: 15, nome: 'Cancelado' }).success).toBe(true);
+  });
+
+  it('o schema local respeita os tipos oficiais da situação', () => {
+    expect(situacao.campos.id?.tipo).toBe('integer');
+    expect(situacao.campos.nome?.tipo).toBe('string');
+    // `integer`, não `number`: um id fracionário não é id.
+    expect(situacaoSchema.safeParse({ id: 15.5, nome: 'Cancelado' }).success).toBe(false);
+    expect(situacaoSchema.safeParse({ id: '15', nome: 'Cancelado' }).success).toBe(false);
+    expect(situacaoSchema.safeParse({ id: 15, nome: 42 }).success).toBe(false);
+  });
+
+  it('o schema local do módulo exige o `id`, que é o que a segunda chamada usa', () => {
+    expect(moduloBase.obrigatorios).toContain('id');
+    expect(moduloSistemaSchema.safeParse({ nome: 'Vendas' }).success).toBe(false);
+    expect(moduloSistemaSchema.safeParse({ id: 7 }).success).toBe(true);
+  });
+
+  it('`nome` e `descricao` ficam opcionais no schema local, e isso é deliberado', () => {
+    // O oficial marca os dois como obrigatórios. O local afrouxa de propósito:
+    // um módulo sem rótulo não pode derrubar a leitura da lista inteira — ele
+    // só deixa de casar com a busca. Afrouxar o que **não** é usado como chave
+    // é diferente de depender de campo inexistente.
+    expect(modulo.obrigatorios).toEqual(['criarSituacoes', 'descricao', 'nome']);
+    expect(moduloSistemaSchema.safeParse({ id: 7 }).success).toBe(true);
+  });
+
+  it('a captura registra origem e data', () => {
+    const captura = catalogo.capturasAdicionais?.find((c) => c.schemas.includes('SituacoesDTO'));
+    expect(captura?.url).toMatch(/developer\.bling\.com\.br.*openapi.*\.json/u);
+    expect(captura?.capturadoEm).toMatch(/^\d{4}-\d{2}-\d{2}$/u);
+  });
+});
+
 describe('obterSituacoesDePedidoDeVenda', () => {
   it('descobre o módulo e depois pede as situações DELE, nessa ordem', async () => {
     fake.programar(json(200, MODULOS), json(200, SITUACOES));
@@ -133,8 +214,61 @@ describe('obterSituacoesDePedidoDeVenda', () => {
 
     expect(resultado._tag).toBe('BlingFailed');
     if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
-    expect(resultado.failure.message).toMatch(/Conectar APIs|OAuth/iu);
+    expect(resultado.failure.message).toMatch(/Conectar APIs/iu);
     expect(resultado.failure.message).not.toMatch(/situação de venda chamada/iu);
+  });
+
+  it('a mensagem do erro lançado NÃO sai na resposta', async () => {
+    // Aqui dentro cai o que o cofre de credenciais e o Postgres lançam, e
+    // `descreverErro` de um erro do Postgres carrega `details` e `hint` — valor
+    // de linha (CWE-209). A resposta é fixa; o diagnóstico vai para o log.
+    fake.programar(json(401, { error: { type: 'UNAUTHORIZED', description: 'Token inválido' } }));
+
+    const resultado = await adapter().obterSituacoesDePedidoDeVenda();
+
+    if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
+    // A exceção real diz "Nenhuma conexao Bling encontrada para esta
+    // organizacao" e traz o status HTTP — nada disso pode aparecer.
+    expect(resultado.failure.message).not.toMatch(/conexao Bling encontrada/iu);
+    expect(resultado.failure.message).not.toMatch(/HTTP \d{3}/u);
+    expect(resultado.failure.message).toBe(
+      'Não foi possível falar com o Bling para ler as situações de venda. '
+        + 'Confira a conexão em "Conectar APIs" e tente de novo.',
+    );
+  });
+
+  it('lista inteira descartada não vira sucesso vazio', async () => {
+    // O contrário faria a compensação dizer "a conta não tem Cancelado" para
+    // uma resposta que o ORBITA simplesmente não soube ler.
+    fake.programar(json(200, MODULOS), json(200, { data: [{ situacao: 'Cancelado' }] }));
+
+    const resultado = await adapter().obterSituacoesDePedidoDeVenda();
+
+    if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
+    expect(resultado.failure.message).toMatch(/formato/iu);
+    expect(resultado.failure.message).not.toMatch(/na conta do Bling/iu);
+  });
+
+  it('tem teto de tempo: um Bling que não responde vira falha, não espera', async () => {
+    const original = BlingClient.TEMPO_LIMITE_SITUACOES_MS;
+    // O teto real é de 20 s. O teste não espera 20 s para provar que ele existe.
+    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_SITUACOES_MS', { value: 60, configurable: true });
+    fake.programar({ status: 200, body: JSON.stringify(MODULOS), atrasoMs: 400 });
+
+    try {
+      const comecou = Date.now();
+      const resultado = await adapter().obterSituacoesDePedidoDeVenda();
+      const decorrido = Date.now() - comecou;
+
+      if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
+      expect(resultado.failure.message).toMatch(/Conectar APIs/iu);
+      // Sem esta asserção o teste passaria mesmo sem teto nenhum: bastaria o
+      // servidor responder depois e a leitura falhar por outro motivo. O que
+      // prova o teto é ter desistido **antes** de a resposta chegar.
+      expect(decorrido).toBeLessThan(300);
+    } finally {
+      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_SITUACOES_MS', { value: original, configurable: true });
+    }
   });
 
   it('falha com a razão do Bling quando as situações do módulo não vêm', async () => {

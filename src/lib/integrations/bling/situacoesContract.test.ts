@@ -61,6 +61,14 @@ describe('lerModulos', () => {
     expect(lerModulos(undefined)).toBeNull();
     expect(lerModulos('<html>erro</html>')).toBeNull();
   });
+
+  it('lista inteira descartada NÃO vira lista vazia', () => {
+    // Se virasse, o ticket 31 se repetiria pelo outro lado: uma lista vazia por
+    // engano faz o chamador concluir que a conta não tem o que procura. Havia
+    // itens; nenhum foi reconhecido; o formato mudou.
+    expect(lerModulos({ data: [{ nome: 'sem id' }, { nome: 'outro sem id' }] })).toBeNull();
+    expect(lerSituacoes({ data: [{ situacao: 'Cancelado' }] })).toBeNull();
+  });
 });
 
 describe('lerSituacoes', () => {

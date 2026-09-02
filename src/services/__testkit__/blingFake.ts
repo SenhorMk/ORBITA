@@ -23,6 +23,14 @@ export interface RespostaProgramada {
   readonly status: number;
   readonly body: string;
   readonly headers?: Record<string, string>;
+  /**
+   * Atraso antes de responder, para exercitar teto de tempo do lado do cliente.
+   *
+   * Existe porque um servidor que aceita a conexao e demora a responder e um
+   * caso diferente de um que recusa — e so o primeiro prova que o `AbortSignal`
+   * do chamador funciona.
+   */
+  readonly atrasoMs?: number;
 }
 
 /** Servidor fake: responde o que a fila mandar e guarda o que recebeu. */
@@ -44,8 +52,19 @@ export class BlingFake {
           authorization: req.headers.authorization,
         });
         const resposta = this.fila.shift() ?? this.padrao;
-        res.writeHead(resposta.status, { 'Content-Type': 'application/json', ...resposta.headers });
-        res.end(resposta.body);
+        const responder = () => {
+          if (res.destroyed) return;
+          res.writeHead(resposta.status, { 'Content-Type': 'application/json', ...resposta.headers });
+          res.end(resposta.body);
+        };
+        if (resposta.atrasoMs) {
+          const timer = setTimeout(responder, resposta.atrasoMs);
+          // O cliente que desiste fecha o socket; sem isto o servidor ficaria
+          // segurando o processo de teste ate o timer disparar.
+          res.on('close', () => clearTimeout(timer));
+          return;
+        }
+        responder();
       });
     });
 

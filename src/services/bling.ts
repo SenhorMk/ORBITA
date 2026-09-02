@@ -24,6 +24,7 @@ import {
   lerSituacoes,
   type Situacao,
 } from '../lib/integrations/bling/situacoesContract';
+import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 
 const orgClientCache = new Map<string, BlingClient>();
 
@@ -71,6 +72,15 @@ export class BlingLeituraError extends Error {
 }
 
 export class BlingClient implements BlingPort {
+  /**
+   * Teto das duas leituras da descoberta de situações, somadas.
+   *
+   * Generoso de propósito: `fetchWithAuth` reserva parte do orçamento para o
+   * backoff de 429 e para uma renovação de token, e um teto apertado
+   * transformaria lentidão em falha.
+   */
+  static readonly TEMPO_LIMITE_SITUACOES_MS = 20_000;
+
   private baseUrl = process.env.BLING_API_BASE_URL || 'https://api.bling.com.br/Api/v3';
   private oauthUrl = process.env.BLING_OAUTH_URL || 'https://www.bling.com.br/Api/v3/oauth/token';
 
@@ -1099,12 +1109,35 @@ export class BlingClient implements BlingPort {
       // `catch`, a compensação da venda manual rejeitaria de dentro do próprio
       // tratamento de erro, e o usuário perderia a instrução de cancelar o
       // pedido à mão — que é a única coisa acionável naquele momento.
-      return blingFailure('UNKNOWN_ERROR', 0, descreverErro(erro));
+      //
+      // A mensagem do erro **não** entra na resposta. Aqui dentro cai o que o
+      // cofre de credenciais, o Postgres e o `AbortSignal` lançam, e
+      // `descreverErro` de um erro do Postgres carrega `details` e `hint` —
+      // valor de linha (CWE-209, a mesma política do ticket 22, critério 13).
+      // O diagnóstico vai para o log; o que sai é fixo e acionável.
+      registrarFalhaInterna('bling.situacoes.descobrir', erro);
+      return blingFailure(
+        'UNKNOWN_ERROR',
+        0,
+        'Não foi possível falar com o Bling para ler as situações de venda. '
+          + 'Confira a conexão em "Conectar APIs" e tente de novo.',
+      );
     }
   }
 
   private async descobrirSituacoesDePedidoDeVenda(): Promise<BlingCallResult<readonly Situacao[]>> {
-    const respostaModulos = await this.fetchWithAuth(`${this.baseUrl}/situacoes/modulos`);
+    // Orçamento de tempo para as duas leituras somadas.
+    //
+    // O chamador mais crítico é a compensação da venda manual, que roda *depois*
+    // de o pedido já existir no ERP e *dentro* do tratamento de erro da
+    // requisição. Sem teto, um Bling que aceita a conexão e não responde deixa
+    // a requisição pendurada até o limite da plataforma — e o usuário fica sem
+    // a instrução de cancelar o pedido à mão, que é o que evita duplicar a
+    // venda na próxima tentativa. Esgotado o prazo, o `fetch` lança e vira
+    // falha tipada como qualquer outra.
+    const prazo = AbortSignal.timeout(BlingClient.TEMPO_LIMITE_SITUACOES_MS);
+
+    const respostaModulos = await this.fetchWithAuth(`${this.baseUrl}/situacoes/modulos`, { signal: prazo });
     if (!respostaModulos.ok) {
       return { _tag: 'BlingFailed', failure: parseBlingFailure(respostaModulos.status, await respostaModulos.text()) };
     }
@@ -1129,6 +1162,7 @@ export class BlingClient implements BlingPort {
 
     const respostaSituacoes = await this.fetchWithAuth(
       `${this.baseUrl}/situacoes/modulos/${encodeURIComponent(String(modulo.id))}`,
+      { signal: prazo },
     );
     if (!respostaSituacoes.ok) {
       return { _tag: 'BlingFailed', failure: parseBlingFailure(respostaSituacoes.status, await respostaSituacoes.text()) };

@@ -56,7 +56,13 @@ const envelopeSchema = z.object({ data: z.array(z.unknown()) });
  * distinção entre `null` (formato inesperado) e `[]` (listagem vazia de
  * verdade) é o que permite mensagens diferentes.
  *
- * @returns a lista lida, ou `null` quando o corpo não é o envelope da v3.
+ * **Lista inteira descartada não é lista vazia.** Se o Bling devolveu itens e
+ * nenhum deles casou com o schema, o formato mudou — e tratar isso como
+ * "vazio" repetiria exatamente o defeito do ticket 31: uma lista vazia por
+ * engano vira "a conta não tem a situação". Nesse caso a leitura falha.
+ *
+ * @returns a lista lida, ou `null` quando o corpo não é o envelope da v3 ou
+ *   quando havia itens e nenhum foi reconhecido.
  */
 function lerListagem<T>(body: unknown, schema: z.ZodType<T>): readonly T[] | null {
   const envelope = envelopeSchema.safeParse(body);
@@ -67,6 +73,8 @@ function lerListagem<T>(body: unknown, schema: z.ZodType<T>): readonly T[] | nul
     const parsed = schema.safeParse(item);
     if (parsed.success) itens.push(parsed.data);
   }
+
+  if (itens.length === 0 && envelope.data.data.length > 0) return null;
   return itens;
 }
 
