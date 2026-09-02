@@ -26,6 +26,39 @@ import {
 } from '../lib/integrations/bling/situacoesContract';
 import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 
+/**
+ * A vez de um participante na fila de requisições.
+ *
+ * Existe porque o estado dela estava implícito num `resolveNext` solto, e foi
+ * exatamente aí que a ordenação quebrou: quem desistia resolvia a própria porta
+ * na hora, e o sucessor passava na frente de um predecessor que ainda não
+ * tinha terminado.
+ *
+ * São **dois** desfechos distintos, e o tipo obriga a escolher entre eles:
+ *
+ * - `liberar()` — a vez foi usada, o sucessor pode seguir agora;
+ * - `encadearEm(anterior)` — a vez foi abandonada, e o sucessor só segue
+ *   quando o predecessor liberar. É o que preserva a ordem.
+ */
+export class PortaDaFila {
+  private abrir: () => void = () => {};
+  readonly aberta: Promise<void>;
+
+  constructor() {
+    this.aberta = new Promise<void>((resolve) => { this.abrir = resolve; });
+  }
+
+  liberar(): void {
+    this.abrir();
+  }
+
+  encadearEm(anterior: Promise<void>): void {
+    // Resolve nos dois desfechos do predecessor: a fila não pode travar porque
+    // alguém antes falhou.
+    anterior.then(() => this.abrir(), () => this.abrir());
+  }
+}
+
 const orgClientCache = new Map<string, BlingClient>();
 
 /**
@@ -326,7 +359,7 @@ export class BlingClient implements BlingPort {
    *    produziu os bugs dos tickets 26, 27 e 28: dois lados coerentes consigo
    *    mesmos e divergentes entre si.
    */
-  private async getAccessToken(): Promise<string> {
+  private async getAccessToken(signal?: AbortSignal): Promise<string> {
     if (!this.organizacaoId) {
       throw new Error('Organizacao verificada e obrigatoria para operacoes com o Bling.');
     }
@@ -354,6 +387,11 @@ export class BlingClient implements BlingPort {
     }
 
     if (creds.token_expires_at && new Date() >= new Date(creds.token_expires_at as string)) {
+      // Caminho inicial de token vencido: a renovação começa aqui, antes de
+      // qualquer requisição. A leitura do cofre acima pode ter consumido o
+      // orçamento inteiro, e começar um polling de lock já fora do prazo é o
+      // pior gasto possível.
+      signal?.throwIfAborted();
       return await this.forceRefreshToken();
     }
 
@@ -375,13 +413,18 @@ export class BlingClient implements BlingPort {
    */
   private async enforceRateLimit(signal?: AbortSignal): Promise<void> {
     const delay = 340;
-    const previousPromise = this.requestQueuePromise;
+    const anterior = this.requestQueuePromise;
 
-    let resolveNext = (): void => {};
-    this.requestQueuePromise = new Promise<void>((res) => { resolveNext = res; });
+    const porta = new PortaDaFila();
+    this.requestQueuePromise = porta.aberta;
+
+    // Só depois de a vez ser efetivamente tomada é que a porta pode abrir
+    // sozinha. Antes disso, ela pertence à ordem, não a esta chamada.
+    let vezTomada = false;
 
     try {
-      await esperarOuDesistir(previousPromise, signal);
+      await esperarOuDesistir(anterior, signal);
+      vezTomada = true;
 
       const timeToWait = Math.max(0, delay - (Date.now() - this.lastRequestTime));
       if (timeToWait > 0) {
@@ -390,9 +433,16 @@ export class BlingClient implements BlingPort {
 
       this.lastRequestTime = Date.now();
     } finally {
-      // A vez é liberada mesmo quando o prazo estoura no meio da espera. Sem o
-      // `finally`, uma chamada abandonada travaria a fila das seguintes.
-      resolveNext();
+      if (vezTomada) {
+        // Chegou a ocupar o intervalo — abandonando ou não, o sucessor pode ir.
+        porta.liberar();
+      } else {
+        // Desistiu **antes** de a vez chegar. Abrir aqui deixaria o sucessor
+        // ultrapassar um predecessor que ainda está requisitando: no cenário
+        // A → B → C, um B que expira esperando A liberaria C para requisitar em
+        // paralelo com A. A porta continua encadeada em A.
+        porta.encadearEm(anterior);
+      }
     }
   }
 
@@ -411,7 +461,7 @@ export class BlingClient implements BlingPort {
     // banco, que não é cancelável. Esse é o resíduo conhecido.
     options.signal?.throwIfAborted();
 
-    let token = await this.getAccessToken();
+    let token = await this.getAccessToken(options.signal ?? undefined);
     let retries = 0;
 
     while (retries < 2) {
@@ -1439,8 +1489,12 @@ export class BlingClient implements BlingPort {
     // falhar por conta própria (corpo truncado, conexão caída) e mascarar um
     // status HTTP que já estava perfeitamente conhecido.
     //
-    // Cancelar o fluxo em vez de consumi-lo solta a conexão de imediato.
-    void response.body?.cancel();
+    // Cancelar o fluxo em vez de consumi-lo solta a conexão de imediato. A
+    // rejeição é **observada e engolida de propósito**: se o cancelamento
+    // falhar, isso não pode virar rejeição solta nem, pior, mascarar um status
+    // que já é conhecido. O motivo do fracasso do cancelamento não muda nada do
+    // que o chamador precisa saber.
+    void response.body?.cancel().catch(() => {});
 
     registrarFalhaInterna(`${operacao}.http-${status}`, new Error(`HTTP ${status}`));
     return blingFailure(`HTTP_${status}`, status, mensagemPublicaDeStatusDoBling(status, oQue));

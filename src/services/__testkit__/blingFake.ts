@@ -17,6 +17,15 @@ export interface RequisicaoCapturada {
   readonly url: string;
   readonly body: string;
   readonly authorization: string | undefined;
+  /**
+   * Instante em que a requisicao chegou (`Date.now()`).
+   *
+   * A fila do cliente **espaca** as requisicoes; ela nao as serializa ate o
+   * fim. Entao o que prova a ordem nao e "quantas estao no ar", e sim a
+   * distancia entre as chegadas — e isso so da para medir com o instante de
+   * cada uma.
+   */
+  readonly em: number;
 }
 
 export interface RespostaProgramada {
@@ -33,6 +42,13 @@ export interface RespostaProgramada {
   readonly atrasoMs?: number;
 }
 
+/** Uma espera por aborto, com o temporizador que precisa ser limpo junto. */
+interface EsperaDeAborto {
+  readonly resolve: () => void;
+  readonly rejeitar: (erro: Error) => void;
+  readonly limite: ReturnType<typeof setTimeout>;
+}
+
 /** Servidor fake: responde o que a fila mandar e guarda o que recebeu. */
 export class BlingFake {
   private servidor: Server | null = null;
@@ -46,7 +62,7 @@ export class BlingFake {
    * aparece em nenhuma asercao de tempo.
    */
   readonly abortadas: number[] = [];
-  private aguardando = new Map<number, () => void>();
+  private aguardando = new Map<number, EsperaDeAborto[]>();
 
   private fila: RespostaProgramada[] = [];
   private padrao: RespostaProgramada = { status: 200, body: JSON.stringify({ data: [] }) };
@@ -55,23 +71,51 @@ export class BlingFake {
    * Resolve quando o cliente abortar a requisicao de indice `indice`.
    *
    * Substitui a espera fixa que o teste usava para "deixar o socket assentar":
-   * um \`setTimeout\` de 200 ms passa a ser tempo demais numa maquina lenta e
+   * um `setTimeout` de 200 ms passa a ser tempo demais numa maquina lenta e
    * tempo de sobra numa rapida, e o teste fica dependendo de qual das duas
    * executou. Aqui o sinal e o proprio evento.
+   *
+   * Cada espera limpa o proprio temporizador em **todos** os desfechos —
+   * aborto, estouro de prazo, `limpar()` e `parar()` —, e varias esperas sobre
+   * o mesmo indice sao atendidas juntas. Um waiter esquecido segura o processo
+   * de teste depois da suite ter terminado, que e a forma mais chata de
+   * vazamento num fake.
    */
   aguardarAborto(indice: number, timeoutMs = 5_000): Promise<void> {
     if (this.abortadas.includes(indice)) return Promise.resolve();
 
     return new Promise<void>((resolve, rejeitar) => {
-      const limite = setTimeout(
-        () => rejeitar(new Error(`requisicao ${indice} nao foi abortada em ${timeoutMs} ms`)),
-        timeoutMs,
-      );
-      this.aguardando.set(indice, () => {
-        clearTimeout(limite);
-        resolve();
-      });
+      const espera = {
+        resolve,
+        rejeitar,
+        limite: setTimeout(() => {
+          this.removerEspera(indice, espera);
+          rejeitar(new Error(`requisicao ${indice} nao foi abortada em ${timeoutMs} ms`));
+        }, timeoutMs),
+      };
+
+      const existentes = this.aguardando.get(indice) ?? [];
+      existentes.push(espera);
+      this.aguardando.set(indice, existentes);
     });
+  }
+
+  private removerEspera(indice: number, espera: EsperaDeAborto): void {
+    clearTimeout(espera.limite);
+    const restantes = (this.aguardando.get(indice) ?? []).filter((e) => e !== espera);
+    if (restantes.length > 0) this.aguardando.set(indice, restantes);
+    else this.aguardando.delete(indice);
+  }
+
+  /** Encerra todas as esperas pendentes, com o motivo dado. */
+  private encerrarEsperas(motivo: string): void {
+    for (const [indice, esperas] of this.aguardando) {
+      for (const espera of esperas) {
+        clearTimeout(espera.limite);
+        espera.rejeitar(new Error(`espera pelo aborto da requisicao ${indice} cancelada: ${motivo}`));
+      }
+    }
+    this.aguardando.clear();
   }
 
   async iniciar(): Promise<string> {
@@ -84,6 +128,7 @@ export class BlingFake {
           url: req.url ?? '',
           body: Buffer.concat(pedacos).toString('utf8'),
           authorization: req.headers.authorization,
+          em: Date.now(),
         });
         const indice = this.recebidas.length - 1;
         const resposta = this.fila.shift() ?? this.padrao;
@@ -105,10 +150,11 @@ export class BlingFake {
             // teto externo sozinho devolveria o controle sem soltar o socket.
             if (!respondida) {
               this.abortadas.push(indice);
-              const avisar = this.aguardando.get(indice);
-              if (avisar) {
-                this.aguardando.delete(indice);
-                avisar();
+              const esperas = this.aguardando.get(indice) ?? [];
+              this.aguardando.delete(indice);
+              for (const espera of esperas) {
+                clearTimeout(espera.limite);
+                espera.resolve();
               }
             }
           });
@@ -135,11 +181,12 @@ export class BlingFake {
   limpar(): void {
     this.recebidas.length = 0;
     this.abortadas.length = 0;
-    this.aguardando.clear();
+    this.encerrarEsperas('o fake foi limpo entre testes');
     this.fila.length = 0;
   }
 
   async parar(): Promise<void> {
+    this.encerrarEsperas('o fake foi parado');
     if (this.servidor) await new Promise<void>((resolve) => this.servidor!.close(() => resolve()));
   }
 }
