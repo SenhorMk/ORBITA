@@ -479,8 +479,10 @@ describe('cancelarPedidoVenda', () => {
       // que devolve o controle e deixa a requisição correndo até o fim.
       //
       // O `close` do lado do servidor chega um tique depois de a corrida
-      // devolver o controle aqui, então a asserção espera o socket assentar.
-      await new Promise((r) => setTimeout(r, 200));
+      // devolver o controle aqui. A espera é pelo **evento**, não por um tempo
+      // fixo: um `setTimeout` seria tempo demais numa máquina lenta e de sobra
+      // numa rápida, e o teste passaria a depender de qual delas executou.
+      await fake.aguardarAborto(2);
       expect(fake.abortadas).toContain(2);
     } finally {
       Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: original, configurable: true });

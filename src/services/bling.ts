@@ -38,20 +38,46 @@ const orgClientCache = new Map<string, BlingClient>();
  */
 function esperar(ms: number, signal?: AbortSignal): Promise<void> {
   if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
-  signal.throwIfAborted();
+
+  const prazo = signal;
+  prazo.throwIfAborted();
 
   return new Promise((resolve, rejeitar) => {
+    const aoAbortar = () => {
+      clearTimeout(temporizador);
+      rejeitar(prazo.reason);
+    };
+
     const temporizador = setTimeout(() => {
-      signal.removeEventListener('abort', aoAbortar);
+      prazo.removeEventListener('abort', aoAbortar);
       resolve();
     }, ms);
 
-    function aoAbortar() {
-      clearTimeout(temporizador);
-      rejeitar(signal!.reason);
-    }
+    prazo.addEventListener('abort', aoAbortar, { once: true });
+  });
+}
 
-    signal.addEventListener('abort', aoAbortar, { once: true });
+/**
+ * Espera uma promessa qualquer, desistindo quando o prazo estoura.
+ *
+ * A promessa original **continua** — quem a criou é que decide o destino dela.
+ * Isto só solta quem estava esperando, que é o caso da fila do rate limit: a
+ * vez do predecessor não é cancelável, mas ninguém precisa ficar preso a ela
+ * depois do prazo.
+ */
+function esperarOuDesistir<T>(promessa: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promessa;
+
+  const prazo = signal;
+  prazo.throwIfAborted();
+
+  return new Promise<T>((resolve, rejeitar) => {
+    const aoAbortar = () => rejeitar(prazo.reason);
+    prazo.addEventListener('abort', aoAbortar, { once: true });
+
+    promessa.then(resolve, rejeitar).finally(() => {
+      prazo.removeEventListener('abort', aoAbortar);
+    });
   });
 }
 
@@ -59,11 +85,15 @@ function esperar(ms: number, signal?: AbortSignal): Promise<void> {
  * Frase pública para uma falha HTTP do Bling, derivada **só do status**.
  *
  * Vocabulário fechado, escrito aqui: nada do corpo da resposta do provedor
- * chega ao usuário. O corpo vai inteiro para o log, onde ele serve para
- * diagnóstico sem virar superfície pública.
+ * chega ao usuário — e **nada dele vai para o log tampouco**. O corpo sequer é
+ * lido: `falhaPublicaDoBling` cancela o fluxo da resposta. Uma versão anterior
+ * deste comentário dizia que ele "vai inteiro para o log", e era falso duas
+ * vezes: `registrarFalhaInterna` grava a classe do erro, não o conteúdo, e o
+ * texto nunca chega até lá.
  *
  * O status entra na frase de propósito — é número, não texto de terceiro, e é
- * o que permite alguém correlacionar a queixa com o log.
+ * o que permite alguém correlacionar a queixa com o log, onde ele aparece no
+ * rótulo da operação.
  */
 function mensagemPublicaDeStatusDoBling(status: number, oQue: string): string {
   if (status === 404) {
@@ -330,29 +360,39 @@ export class BlingClient implements BlingPort {
     return creds.access_token as string;
   }
 
-  // Fila para garantir no mínimo 2 segundos entre requisições
+  /**
+   * Espaça as requisições ao Bling, cedendo a vez sob prazo.
+   *
+   * **As duas esperas observam o aborto**, e não só a segunda: quem chega na
+   * fila espera primeiro o predecessor e depois o intervalo. Antes só o
+   * intervalo era abortável, então uma chamada já fora do prazo continuava
+   * presa atrás de outra — e dizer que a fila era "abortável de verdade" era
+   * amplo demais.
+   *
+   * **O relógio só avança quando a vez é usada.** Uma chamada que expirou não
+   * mexe em `lastRequestTime`: se mexesse, ela empurraria a janela da
+   * requisição seguinte sem ter feito requisição nenhuma.
+   */
   private async enforceRateLimit(signal?: AbortSignal): Promise<void> {
     const delay = 340;
     const previousPromise = this.requestQueuePromise;
 
-    let resolveNext: () => void;
-    this.requestQueuePromise = new Promise(res => { resolveNext = res; });
-
-    await previousPromise;
-
-    const now = Date.now();
-    const timeSinceLast = now - this.lastRequestTime;
-    const timeToWait = Math.max(0, delay - timeSinceLast);
+    let resolveNext = (): void => {};
+    this.requestQueuePromise = new Promise<void>((res) => { resolveNext = res; });
 
     try {
+      await esperarOuDesistir(previousPromise, signal);
+
+      const timeToWait = Math.max(0, delay - (Date.now() - this.lastRequestTime));
       if (timeToWait > 0) {
         await esperar(timeToWait, signal);
       }
+
       this.lastRequestTime = Date.now();
     } finally {
       // A vez é liberada mesmo quando o prazo estoura no meio da espera. Sem o
       // `finally`, uma chamada abandonada travaria a fila das seguintes.
-      resolveNext!();
+      resolveNext();
     }
   }
 
@@ -389,6 +429,10 @@ export class BlingClient implements BlingPort {
       });
 
       if (response.status === 429) {
+        // Conferir **antes** de entrar no backoff: sem isto, uma chamada já
+        // fora do prazo dormia o intervalo inteiro só para descobrir na volta
+        // que não deveria ter esperado.
+        options.signal?.throwIfAborted();
         retries++;
         const retryAfter = parseInt(response.headers.get('Retry-After') || '1', 10);
         console.warn(`⚠️ Rate Limit atingido (HTTP 429). Aguardando retry com backoff...`);
@@ -397,6 +441,10 @@ export class BlingClient implements BlingPort {
       }
 
       if ((response.status === 401 || response.status === 403) && retries === 0) {
+        // A renovação é o passo mais caro e o **menos** interrompível: ela faz
+        // polling de lock com `await` de banco. Começar uma já fora do prazo é
+        // o pior gasto possível, e é o único ponto onde ainda dá para evitar.
+        options.signal?.throwIfAborted();
         console.warn(`⚠️ Bling v3 retornou HTTP ${response.status}. Renovando token OAuth v3 para atualizar escopos/permissões...`);
         try {
           token = await this.forceRefreshToken();
@@ -1004,8 +1052,7 @@ export class BlingClient implements BlingPort {
       return this.falhaPublicaDoBling(
         'bling.pedido.cancelar',
         'cancelar o pedido',
-        response.status,
-        await response.text(),
+        response,
       );
     }
 
@@ -1295,8 +1342,7 @@ export class BlingClient implements BlingPort {
       return this.falhaPublicaDoBling(
         'bling.situacoes.ler-modulos',
         'ler as situações de venda',
-        respostaModulos.status,
-        await respostaModulos.text(),
+        respostaModulos,
       );
     }
 
@@ -1326,8 +1372,7 @@ export class BlingClient implements BlingPort {
       return this.falhaPublicaDoBling(
         'bling.situacoes.ler-situacoes',
         'ler as situações de venda',
-        respostaSituacoes.status,
-        await respostaSituacoes.text(),
+        respostaSituacoes,
       );
     }
 
@@ -1384,14 +1429,19 @@ export class BlingClient implements BlingPort {
   private falhaPublicaDoBling(
     operacao: string,
     oQue: string,
-    status: number,
-    corpo: string,
+    response: Response,
   ): BlingCallResult<never> {
-    // O corpo é recebido e deliberadamente não usado: ele existe no parâmetro
-    // para deixar explícito no ponto da chamada que há um corpo e que ele
-    // **não** é publicado nem guardado. Descartá-lo antes de chegar aqui
-    // esconderia a decisão.
-    void corpo;
+    const { status } = response;
+
+    // O corpo **não é lido**. Antes vinha um `await response.text()` de cada
+    // chamador, só para o valor ser descartado aqui — trabalho e memória gastos
+    // com um texto que não vai para lugar nenhum, e um `await` a mais que pode
+    // falhar por conta própria (corpo truncado, conexão caída) e mascarar um
+    // status HTTP que já estava perfeitamente conhecido.
+    //
+    // Cancelar o fluxo em vez de consumi-lo solta a conexão de imediato.
+    void response.body?.cancel();
+
     registrarFalhaInterna(`${operacao}.http-${status}`, new Error(`HTTP ${status}`));
     return blingFailure(`HTTP_${status}`, status, mensagemPublicaDeStatusDoBling(status, oQue));
   }

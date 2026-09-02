@@ -46,8 +46,33 @@ export class BlingFake {
    * aparece em nenhuma asercao de tempo.
    */
   readonly abortadas: number[] = [];
+  private aguardando = new Map<number, () => void>();
+
   private fila: RespostaProgramada[] = [];
   private padrao: RespostaProgramada = { status: 200, body: JSON.stringify({ data: [] }) };
+
+  /**
+   * Resolve quando o cliente abortar a requisicao de indice `indice`.
+   *
+   * Substitui a espera fixa que o teste usava para "deixar o socket assentar":
+   * um \`setTimeout\` de 200 ms passa a ser tempo demais numa maquina lenta e
+   * tempo de sobra numa rapida, e o teste fica dependendo de qual das duas
+   * executou. Aqui o sinal e o proprio evento.
+   */
+  aguardarAborto(indice: number, timeoutMs = 5_000): Promise<void> {
+    if (this.abortadas.includes(indice)) return Promise.resolve();
+
+    return new Promise<void>((resolve, rejeitar) => {
+      const limite = setTimeout(
+        () => rejeitar(new Error(`requisicao ${indice} nao foi abortada em ${timeoutMs} ms`)),
+        timeoutMs,
+      );
+      this.aguardando.set(indice, () => {
+        clearTimeout(limite);
+        resolve();
+      });
+    });
+  }
 
   async iniciar(): Promise<string> {
     this.servidor = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -78,7 +103,14 @@ export class BlingFake {
             // Fechou antes da resposta: o cliente abortou. E a unica prova, do
             // lado do servidor, de que o `signal` chegou aquele `fetch` — o
             // teto externo sozinho devolveria o controle sem soltar o socket.
-            if (!respondida) this.abortadas.push(indice);
+            if (!respondida) {
+              this.abortadas.push(indice);
+              const avisar = this.aguardando.get(indice);
+              if (avisar) {
+                this.aguardando.delete(indice);
+                avisar();
+              }
+            }
           });
           return;
         }
@@ -103,6 +135,7 @@ export class BlingFake {
   limpar(): void {
     this.recebidas.length = 0;
     this.abortadas.length = 0;
+    this.aguardando.clear();
     this.fila.length = 0;
   }
 
