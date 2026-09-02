@@ -25,94 +25,12 @@ import {
   type Situacao,
 } from '../lib/integrations/bling/situacoesContract';
 import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
+import { FilaDeRequisicoes, esperar } from './filaDeRequisicoes';
 
-/**
- * A vez de um participante na fila de requisições.
- *
- * Existe porque o estado dela estava implícito num `resolveNext` solto, e foi
- * exatamente aí que a ordenação quebrou: quem desistia resolvia a própria porta
- * na hora, e o sucessor passava na frente de um predecessor que ainda não
- * tinha terminado.
- *
- * São **dois** desfechos distintos, e o tipo obriga a escolher entre eles:
- *
- * - `liberar()` — a vez foi usada, o sucessor pode seguir agora;
- * - `encadearEm(anterior)` — a vez foi abandonada, e o sucessor só segue
- *   quando o predecessor liberar. É o que preserva a ordem.
- */
-export class PortaDaFila {
-  private abrir: () => void = () => {};
-  readonly aberta: Promise<void>;
-
-  constructor() {
-    this.aberta = new Promise<void>((resolve) => { this.abrir = resolve; });
-  }
-
-  liberar(): void {
-    this.abrir();
-  }
-
-  encadearEm(anterior: Promise<void>): void {
-    // Resolve nos dois desfechos do predecessor: a fila não pode travar porque
-    // alguém antes falhou.
-    anterior.then(() => this.abrir(), () => this.abrir());
-  }
-}
 
 const orgClientCache = new Map<string, BlingClient>();
 
-/**
- * Espera que o prazo consegue interromper.
- *
- * `setTimeout` cru não é cancelável de fora, e era por isso que a fila do rate
- * limit e o backoff de 429 continuavam correndo depois de a chamada ter sido
- * abandonada. Com isto, uma chamada fora do prazo solta a vez em vez de segurar
- * a fila até o fim do intervalo.
- */
-function esperar(ms: number, signal?: AbortSignal): Promise<void> {
-  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
 
-  const prazo = signal;
-  prazo.throwIfAborted();
-
-  return new Promise((resolve, rejeitar) => {
-    const aoAbortar = () => {
-      clearTimeout(temporizador);
-      rejeitar(prazo.reason);
-    };
-
-    const temporizador = setTimeout(() => {
-      prazo.removeEventListener('abort', aoAbortar);
-      resolve();
-    }, ms);
-
-    prazo.addEventListener('abort', aoAbortar, { once: true });
-  });
-}
-
-/**
- * Espera uma promessa qualquer, desistindo quando o prazo estoura.
- *
- * A promessa original **continua** — quem a criou é que decide o destino dela.
- * Isto só solta quem estava esperando, que é o caso da fila do rate limit: a
- * vez do predecessor não é cancelável, mas ninguém precisa ficar preso a ela
- * depois do prazo.
- */
-function esperarOuDesistir<T>(promessa: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promessa;
-
-  const prazo = signal;
-  prazo.throwIfAborted();
-
-  return new Promise<T>((resolve, rejeitar) => {
-    const aoAbortar = () => rejeitar(prazo.reason);
-    prazo.addEventListener('abort', aoAbortar, { once: true });
-
-    promessa.then(resolve, rejeitar).finally(() => {
-      prazo.removeEventListener('abort', aoAbortar);
-    });
-  });
-}
 
 /**
  * Frase pública para uma falha HTTP do Bling, derivada **só do status**.
@@ -209,8 +127,7 @@ export class BlingClient implements BlingPort {
   private oauthUrl = process.env.BLING_OAUTH_URL || 'https://www.bling.com.br/Api/v3/oauth/token';
 
   private refreshTokenPromise: Promise<string> | null = null;
-  private lastRequestTime: number = 0;
-  private requestQueuePromise: Promise<void> = Promise.resolve();
+  private readonly fila = new FilaDeRequisicoes({ dormir: esperar });
 
   private readonly organizacaoId?: string;
   private conexaoId?: string;
@@ -398,52 +315,9 @@ export class BlingClient implements BlingPort {
     return creds.access_token as string;
   }
 
-  /**
-   * Espaça as requisições ao Bling, cedendo a vez sob prazo.
-   *
-   * **As duas esperas observam o aborto**, e não só a segunda: quem chega na
-   * fila espera primeiro o predecessor e depois o intervalo. Antes só o
-   * intervalo era abortável, então uma chamada já fora do prazo continuava
-   * presa atrás de outra — e dizer que a fila era "abortável de verdade" era
-   * amplo demais.
-   *
-   * **O relógio só avança quando a vez é usada.** Uma chamada que expirou não
-   * mexe em `lastRequestTime`: se mexesse, ela empurraria a janela da
-   * requisição seguinte sem ter feito requisição nenhuma.
-   */
+  /** Espaça as requisições ao Bling. Ver `FilaDeRequisicoes`. */
   private async enforceRateLimit(signal?: AbortSignal): Promise<void> {
-    const delay = 340;
-    const anterior = this.requestQueuePromise;
-
-    const porta = new PortaDaFila();
-    this.requestQueuePromise = porta.aberta;
-
-    // Só depois de a vez ser efetivamente tomada é que a porta pode abrir
-    // sozinha. Antes disso, ela pertence à ordem, não a esta chamada.
-    let vezTomada = false;
-
-    try {
-      await esperarOuDesistir(anterior, signal);
-      vezTomada = true;
-
-      const timeToWait = Math.max(0, delay - (Date.now() - this.lastRequestTime));
-      if (timeToWait > 0) {
-        await esperar(timeToWait, signal);
-      }
-
-      this.lastRequestTime = Date.now();
-    } finally {
-      if (vezTomada) {
-        // Chegou a ocupar o intervalo — abandonando ou não, o sucessor pode ir.
-        porta.liberar();
-      } else {
-        // Desistiu **antes** de a vez chegar. Abrir aqui deixaria o sucessor
-        // ultrapassar um predecessor que ainda está requisitando: no cenário
-        // A → B → C, um B que expira esperando A liberaria C para requisitar em
-        // paralelo com A. A porta continua encadeada em A.
-        porta.encadearEm(anterior);
-      }
-    }
+    await this.fila.aguardarVez(signal);
   }
 
   // Fetch autenticado com auto-refresh em caso de 401 Unauthorized

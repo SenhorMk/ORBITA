@@ -40,6 +40,15 @@ export interface RespostaProgramada {
    * do chamador funciona.
    */
   readonly atrasoMs?: number;
+  /**
+   * Envia o cabecalho e um pedaco do corpo, e **nunca termina**.
+   *
+   * E o unico jeito de distinguir `response.body.cancel()` de
+   * `await response.text()`: com um corpo finito, por maior que seja, as duas
+   * coisas terminam e o teste nao ve diferenca. Com um corpo que nao acaba,
+   * quem consome fica preso e quem cancela segue.
+   */
+  readonly corpoInterminavel?: boolean;
 }
 
 /** Uma espera por aborto, com o temporizador que precisa ser limpo junto. */
@@ -137,6 +146,11 @@ export class BlingFake {
           if (res.destroyed) return;
           respondida = true;
           res.writeHead(resposta.status, { 'Content-Type': 'application/json', ...resposta.headers });
+          if (resposta.corpoInterminavel) {
+            res.write(resposta.body);
+            // Sem `end()`: o corpo fica aberto ate o cliente desistir.
+            return;
+          }
           res.end(resposta.body);
         };
         if (resposta.atrasoMs) {

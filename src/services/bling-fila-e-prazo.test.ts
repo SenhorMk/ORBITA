@@ -3,6 +3,36 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { BlingFake } from './__testkit__/blingFake';
 
 /**
+ * O cofre é a fronteira dublada, e não o `getAccessToken`.
+ *
+ * Dublar o método inteiro desviaria da linha que a correção mudou — foi o
+ * defeito da versão anterior desta prova.
+ */
+const lerCredenciais = vi.fn();
+
+/**
+ * A conexão é resolvida por consulta ao Supabase antes de o cofre ser lido.
+ * Sem este dublê, `getAccessToken` para antes com "Bling nao conectado" e a
+ * linha em prova nunca é alcançada.
+ */
+vi.mock('../lib/supabaseServer', () => ({
+  supabaseServer: {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({ maybeSingle: async () => ({ data: { id: 'conexao-de-teste' }, error: null }) }),
+        }),
+      }),
+    }),
+  },
+}));
+vi.mock('../lib/integrations/credentialsVault', () => ({
+  credentialsVault: {
+    getDecryptedCredentials: (...args: unknown[]) => lerCredenciais(...args),
+  },
+}));
+
+/**
  * Ticket 31 — a fila de requisições sob prazo.
  *
  * Arquivo separado de `bling-situacoes.test.ts` porque o assunto é outro: lá é
@@ -20,7 +50,6 @@ const ORG = '41414141-4141-4141-8141-414141414141';
 // Importado dinamicamente: `src/services/bling` valida a configuração do
 // Supabase no topo do módulo, e o `stubEnv` só existe dentro do `beforeAll`.
 let BlingClient: typeof import('./bling').BlingClient;
-let PortaDaFila: typeof import('./bling').PortaDaFila;
 
 /** Cliente com token instantâneo, para o assunto ser só a fila. */
 function adapter(getAccessToken: () => Promise<string> = async () => 'token-de-teste') {
@@ -40,7 +69,7 @@ beforeAll(async () => {
   vi.stubEnv('BLING_API_BASE_URL', baseUrl);
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://fila-test-000000.supabase.co');
   vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'fila-test-service-role-key-000000');
-  ({ BlingClient, PortaDaFila } = await import('./bling'));
+  ({ BlingClient } = await import('./bling'));
 });
 
 afterEach(() => fake.limpar());
@@ -50,168 +79,85 @@ afterAll(async () => {
   await fake.parar();
 });
 
-/**
- * A porta é testada **diretamente**, e não só através do cliente.
- *
- * A primeira tentativa de provar isto foi por três chamadas concorrentes, e ela
- * passava com a regressão reintroduzida — porque o espaçamento de 340 ms vem de
- * `lastRequestTime`, não da porta, e continuava igual nos dois casos. Um teste
- * que não distingue o defeito não é prova, por mais realista que pareça.
- *
- * O que a porta promete é encadeamento, e é isso que se afirma aqui.
- */
-describe('PortaDaFila', () => {
-  it('liberar() abre a porta na hora', async () => {
-    const porta = new PortaDaFila();
-    let aberta = false;
-    void porta.aberta.then(() => { aberta = true; });
+describe('o prazo alcança o token e o backoff', () => {
+  it('não inicia a renovação de um token já vencido depois do prazo', async () => {
+    // **Exercita o `getAccessToken` real.** A versão anterior substituía o
+    // método inteiro por um dublê — e assim desviava exatamente da linha que a
+    // correção mudou. O que se dubla aqui é o **cofre**, uma camada abaixo, que
+    // é a fronteira legítima.
+    //
+    // O cofre devolve um token já vencido e demora a responder: quando ele
+    // volta, o orçamento já acabou, e a renovação não pode começar. Ela faz
+    // polling de lock com `await` de banco, então é o pior gasto possível.
+    let renovacoes = 0;
+    lerCredenciais.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+      return {
+        access_token: 'token-vencido',
+        client_id: 'id',
+        client_secret: 'segredo',
+        refresh_token: 'refresh',
+        token_expires_at: new Date(Date.now() - 60_000).toISOString(),
+      };
+    });
 
-    porta.liberar();
-    await porta.aberta;
-
-    expect(aberta).toBe(true);
-  });
-
-  it('encadearEm() NÃO abre enquanto o predecessor não terminar', async () => {
-    // O cenário A → B → C: B desiste esperando A, e a porta de B é o que C
-    // aguarda. Se ela abrisse na desistência, C ultrapassaria A.
-    let liberarA = (): void => {};
-    const a = new Promise<void>((resolve) => { liberarA = resolve; });
-
-    const portaDeB = new PortaDaFila();
-    let bAberta = false;
-    void portaDeB.aberta.then(() => { bAberta = true; });
-
-    portaDeB.encadearEm(a);
-
-    // Vários tiques: se fosse abrir sozinha, abriria aqui.
-    await new Promise((r) => setTimeout(r, 50));
-    expect(bAberta).toBe(false);
-
-    liberarA();
-    await portaDeB.aberta;
-    expect(bAberta).toBe(true);
-  });
-
-  it('encadearEm() abre também quando o predecessor falha', async () => {
-    // A fila não pode travar porque alguém antes quebrou.
-    const a = Promise.reject(new Error('o predecessor falhou'));
-    const porta = new PortaDaFila();
-
-    porta.encadearEm(a);
-
-    await expect(porta.aberta).resolves.toBeUndefined();
-  });
-});
-
-describe('a fila preserva a ordem quando alguém desiste', () => {
-  it('A → B → C: C não chega antes de A', async () => {
-    // Prova de integração, mais fraca que a da porta de propósito: afirma a
-    // **ordem de chegada**, que é o efeito visível do encadeamento.
-    const cliente = adapter();
-
-    fake.programar(
-      { status: 200, body: JSON.stringify(MODULOS), atrasoMs: 900 },
-      json(200, MODULOS),
-      json(200, MODULOS),
-    );
-
-    const original = BlingClient.TEMPO_LIMITE_OPERACAO_MS;
-    const ajustarPrazo = (ms: number) =>
-      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: ms, configurable: true });
-
-    try {
-      ajustarPrazo(20_000);
-      const a = cliente.obterSituacoesDePedidoDeVenda();
-      await new Promise((r) => setImmediate(r));
-
-      ajustarPrazo(150);
-      const b = cliente.obterSituacoesDePedidoDeVenda();
-      await new Promise((r) => setImmediate(r));
-
-      ajustarPrazo(20_000);
-      const c = cliente.obterSituacoesDePedidoDeVenda();
-
-      const [resultadoA] = await Promise.all([a, b, c]);
-      expect(resultadoA._tag).toBe('BlingOk');
-
-      expect(fake.recebidas.length).toBeGreaterThanOrEqual(2);
-      const [primeira, segunda] = fake.recebidas;
-      if (!primeira || !segunda) throw new Error('esperava duas requisições');
-      expect(segunda.em).toBeGreaterThanOrEqual(primeira.em);
-      expect(fake.abortadas).not.toContain(0);
-    } finally {
-      ajustarPrazo(original);
-    }
-  });
-
-  it('quem desiste antes da vez não empurra a janela do próximo', async () => {
-    // `lastRequestTime` só avança quando a vez é efetivamente usada. Se uma
-    // chamada expirada o alterasse, ela empurraria o intervalo da requisição
-    // seguinte sem ter feito requisição nenhuma.
-    const cliente = adapter(async () => {
-      await new Promise((r) => setTimeout(r, 500));
-      return 'token-de-teste';
+    const cliente = BlingClient.forOrganization(`${ORG}-${Math.random()}`);
+    Object.defineProperty(cliente, 'forceRefreshToken', {
+      value: async () => { renovacoes += 1; return 'token-novo'; },
+      configurable: true,
     });
 
     const original = BlingClient.TEMPO_LIMITE_OPERACAO_MS;
     Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: 80, configurable: true });
 
     try {
-      const expirada = await cliente.obterSituacoesDePedidoDeVenda();
-      expect(expirada._tag).toBe('BlingFailed');
-      // Nem chegou a requisitar: morreu na leitura do token.
-      expect(fake.recebidas).toHaveLength(0);
-    } finally {
-      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: original, configurable: true });
-    }
-  });
-});
-
-describe('o prazo alcança o token e o backoff', () => {
-  it('não inicia a renovação de um token já vencido depois do prazo', async () => {
-    // Caminho inicial de token expirado: `getAccessToken` decide renovar antes
-    // de qualquer requisição. Começar uma renovação já fora do prazo é o pior
-    // gasto possível — ela faz polling de lock com `await` de banco.
-    let renovacoes = 0;
-    const cliente = adapter(async () => {
-      await new Promise((r) => setTimeout(r, 400));
-      renovacoes += 1;
-      return 'token-renovado';
-    });
-
-    const original = BlingClient.TEMPO_LIMITE_OPERACAO_MS;
-    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: 60, configurable: true });
-
-    try {
       const resultado = await cliente.obterSituacoesDePedidoDeVenda();
+
       expect(resultado._tag).toBe('BlingFailed');
+
+      // **Esperar o trabalho de fundo assentar antes de afirmar.** A chamada
+      // volta ao chamador em 80 ms, mas o caminho continua correndo por trás —
+      // é o resíduo conhecido. Afirmar imediatamente veria `renovacoes === 0`
+      // mesmo sem a guarda, só porque o cofre ainda não tinha respondido: a
+      // asserção seria sobre o relógio, não sobre a causa.
+      await new Promise((r) => setTimeout(r, 600));
+
+      // Agora sim: a leitura do cofre aconteceu, o token estava vencido, e
+      // mesmo assim a renovação **não** foi iniciada.
+      expect(lerCredenciais).toHaveBeenCalled();
+      expect(renovacoes).toBe(0);
       expect(fake.recebidas).toHaveLength(0);
-      // A leitura já em voo termina — é o resíduo conhecido —, mas nenhuma
-      // requisição sai depois dela.
-      expect(renovacoes).toBeLessThanOrEqual(1);
     } finally {
       Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: original, configurable: true });
+      lerCredenciais.mockReset();
     }
   });
 
-  it('o backoff de 429 é interrompido pelo prazo', async () => {
-    // Sem isto, um 429 com `Retry-After` alto prenderia a chamada bem além do
-    // orçamento — dormindo, sem nada em voo para interromper.
+  it('o backoff de 429 é interrompido, e não apenas abandonado', async () => {
+    // "Voltou antes do `Retry-After`" não distingue nada: a corrida externa
+    // devolve o controle de qualquer jeito, e a espera pode continuar dormindo
+    // por trás para depois **repetir a requisição**. Foi o que a versão
+    // anterior desta prova deixou passar.
+    //
+    // O que distingue é o silêncio depois: se a espera tivesse sobrevivido, uma
+    // segunda requisição chegaria ao servidor quando ela acordasse.
     const cliente = adapter();
-    fake.programar({ status: 429, body: '{}', headers: { 'Retry-After': '30' } });
+    fake.programar(
+      { status: 429, body: '{}', headers: { 'Retry-After': '1' } },
+      json(200, MODULOS),
+    );
 
     const original = BlingClient.TEMPO_LIMITE_OPERACAO_MS;
-    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: 400, configurable: true });
+    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: 200, configurable: true });
 
     try {
-      const comecou = Date.now();
       const resultado = await cliente.obterSituacoesDePedidoDeVenda();
-      const decorrido = Date.now() - comecou;
-
       expect(resultado._tag).toBe('BlingFailed');
-      // 30 s de `Retry-After` contra 400 ms de orçamento.
-      expect(decorrido).toBeLessThan(3000);
+      expect(fake.recebidas).toHaveLength(1);
+
+      // O backoff teria sido de 1 s. Passado bem mais que isso, a segunda
+      // requisição continua não existindo.
+      await new Promise((r) => setTimeout(r, 1_600));
       expect(fake.recebidas).toHaveLength(1);
     } finally {
       Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: original, configurable: true });
@@ -220,21 +166,31 @@ describe('o prazo alcança o token e o backoff', () => {
 });
 
 describe('o corpo de uma resposta recusada não é lido', () => {
-  it('um corpo enorme não é consumido para ser descartado', async () => {
-    // `falhaPublicaDoBling` cancela o fluxo em vez de fazer `text()`. Além do
-    // desperdício, aquele `await` podia falhar sozinho — corpo truncado,
-    // conexão caída — e mascarar um status HTTP já conhecido.
+  it('um corpo que nunca termina não prende a chamada', async () => {
+    // **O discriminador.** Um corpo finito, mesmo de 2 MB, termina nos dois
+    // casos — `cancel()` e `text()` — e o teste não vê diferença. Foi assim que
+    // a versão anterior desta prova ficou verde sem provar nada.
+    //
+    // Com um corpo que não acaba, `await response.text()` fica preso até o
+    // prazo da operação estourar; `cancel()` devolve na hora. A diferença
+    // aparece no resultado: falha de leitura com o status certo, ou falha
+    // genérica por prazo esgotado.
     const cliente = adapter();
-    const corpoEnorme = 'x'.repeat(2_000_000);
-    fake.programar({ status: 500, body: corpoEnorme });
+    fake.programar({ status: 500, body: 'x'.repeat(1024), corpoInterminavel: true });
 
-    const resultado = await cliente.obterSituacoesDePedidoDeVenda();
+    const original = BlingClient.TEMPO_LIMITE_OPERACAO_MS;
+    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: 2_000, configurable: true });
 
-    if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
-    // O status sobrevive inteiro, que é o ponto: ele já era conhecido antes de
-    // o corpo existir.
-    expect(resultado.failure.status).toBe(500);
-    expect(resultado.failure.message).toMatch(/indisponível/iu);
-    expect(resultado.failure.message).not.toMatch(/x{100}/u);
+    try {
+      const resultado = await cliente.obterSituacoesDePedidoDeVenda();
+
+      if (resultado._tag !== 'BlingFailed') throw new Error('esperava falha');
+      // O status sobreviveu: ele já era conhecido antes de o corpo existir, e o
+      // corpo não chegou a ser esperado.
+      expect(resultado.failure.status).toBe(500);
+      expect(resultado.failure.message).toMatch(/indisponível/iu);
+    } finally {
+      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: original, configurable: true });
+    }
   });
 });
