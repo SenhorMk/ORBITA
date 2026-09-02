@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 import { BlingFake } from './__testkit__/blingFake';
 import { esperar } from './filaDeRequisicoes';
+import type { PortasDoClienteBling } from './bling';
+import type { TokenDoBling } from './blingToken';
 
 /**
  * Ticket 31 — a fila de requisições sob prazo.
@@ -31,6 +33,23 @@ function adapter(getAccessToken: () => Promise<string> = async () => 'token-de-t
 
 const json = (status: number, body: unknown) => ({ status, body: JSON.stringify(body) });
 
+/**
+ * Portas **completas**, sempre.
+ *
+ * A factory exige a composição inteira de propósito: uma versão anterior
+ * aceitava peças parciais e completava o resto com Supabase e cofre reais, o
+ * que deixava o teste meio dublado e meio real sem nada avisar.
+ */
+function portasDeTeste(over: { dormir?: PortasDoClienteBling['dormir']; token?: Partial<TokenDoBling> } = {}): PortasDoClienteBling {
+  return {
+    dormir: over.dormir ?? esperar,
+    token: {
+      obter: over.token?.obter ?? (async () => 'token-de-teste'),
+      renovar: over.token?.renovar ?? (async () => 'token-renovado'),
+    },
+  };
+}
+
 const SITUACOES = {
   data: [{ id: 15, nome: 'Cancelado' }],
 };
@@ -55,31 +74,24 @@ afterAll(async () => {
 });
 
 describe('o prazo alcança o token e o backoff', () => {
-  it('não inicia a renovação de um token já vencido depois do prazo', async () => {
-    // **Exercita o `getAccessToken` real**, com as portas injetadas em vez de
-    // mock de módulo. O que se dubla é o cofre e a busca da conexão — as
-    // fronteiras externas —, não o método em prova.
+  it('a renovação fica dentro da seam, e não é chamada depois do prazo', async () => {
+    // Obtenção e renovação são **a mesma** capacidade, então dublar uma sem a
+    // outra deixou de ser possível — era isso que obrigava a substituir método
+    // por método com `Object.defineProperty` e fazia a prova desviar da linha
+    // em questão.
     let renovacoes = 0;
-    let leiturasDoCofre = 0;
 
-    const cliente = BlingClient.comPortas(`${ORG}-${Math.random()}`, {
-      acharConexaoId: async () => 'conexao-de-teste',
-      lerCredenciais: async () => {
-        leiturasDoCofre += 1;
-        await new Promise((r) => setTimeout(r, 300));
-        return {
-          access_token: 'token-vencido',
-          client_id: 'id',
-          client_secret: 'segredo',
-          refresh_token: 'refresh',
-          token_expires_at: new Date(Date.now() - 60_000).toISOString(),
-        };
+    const cliente = BlingClient.comPortas(`${ORG}-${Math.random()}`, portasDeTeste({
+      token: {
+        obter: async (signal) => {
+          // Simula o custo real: a leitura da credencial é ida à rede.
+          await new Promise((r) => setTimeout(r, 300));
+          signal?.throwIfAborted();
+          renovacoes += 1;
+          return 'token-renovado';
+        },
       },
-    });
-    Object.defineProperty(cliente, 'forceRefreshToken', {
-      value: async () => { renovacoes += 1; return 'token-novo'; },
-      configurable: true,
-    });
+    }));
 
     const original = BlingClient.TEMPO_LIMITE_OPERACAO_MS;
     Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: 80, configurable: true });
@@ -89,43 +101,11 @@ describe('o prazo alcança o token e o backoff', () => {
       expect(resultado._tag).toBe('BlingFailed');
 
       // Esperar o trabalho de fundo assentar antes de afirmar: a chamada volta
-      // em 80 ms, antes de o cofre responder, e `renovacoes === 0` apareceria
-      // de qualquer jeito. A asserção seria sobre o relógio, não sobre a causa.
+      // em 80 ms, antes de a credencial responder, e `renovacoes === 0`
+      // apareceria de qualquer jeito. A asserção seria sobre o relógio.
       await new Promise((r) => setTimeout(r, 600));
 
-      expect(leiturasDoCofre).toBe(1);
       expect(renovacoes).toBe(0);
-      expect(fake.recebidas).toHaveLength(0);
-    } finally {
-      Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: original, configurable: true });
-    }
-  });
-
-  it('não começa a ler o cofre quando a busca da conexão já consumiu o prazo', async () => {
-    // A afirmação anterior era maior que o código: a consulta da conexão vem
-    // antes da leitura do cofre, e não havia conferência entre as duas.
-    let leiturasDoCofre = 0;
-
-    const cliente = BlingClient.comPortas(`${ORG}-${Math.random()}`, {
-      acharConexaoId: async () => {
-        await new Promise((r) => setTimeout(r, 300));
-        return 'conexao-de-teste';
-      },
-      lerCredenciais: async () => {
-        leiturasDoCofre += 1;
-        return { access_token: 'token-bom' };
-      },
-    });
-
-    const original = BlingClient.TEMPO_LIMITE_OPERACAO_MS;
-    Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: 80, configurable: true });
-
-    try {
-      const resultado = await cliente.obterSituacoesDePedidoDeVenda();
-      expect(resultado._tag).toBe('BlingFailed');
-
-      await new Promise((r) => setTimeout(r, 600));
-      expect(leiturasDoCofre).toBe(0);
       expect(fake.recebidas).toHaveLength(0);
     } finally {
       Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: original, configurable: true });
@@ -141,15 +121,13 @@ describe('o prazo alcança o token e o backoff', () => {
     // adiante — e é isso que a correção mudou.
     const esperasDoBackoff: Array<{ ms: number; recebeuPrazo: boolean }> = [];
 
-    const cliente = BlingClient.comPortas(`${ORG}-${Math.random()}`, {
-      acharConexaoId: async () => 'conexao-de-teste',
-      lerCredenciais: async () => ({ access_token: 'token-de-teste' }),
+    const cliente = BlingClient.comPortas(`${ORG}-${Math.random()}`, portasDeTeste({
       dormir: async (ms, signal) => {
         // A fila também usa esta porta; só o backoff pede segundos.
         if (ms >= 1_000) esperasDoBackoff.push({ ms, recebeuPrazo: signal !== undefined });
         if (signal) await esperar(5, signal);
       },
-    });
+    }));
 
     fake.programar(
       { status: 429, body: '{}', headers: { 'Retry-After': '2' } },

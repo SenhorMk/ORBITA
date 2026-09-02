@@ -1,7 +1,4 @@
 import { BlingPedido, BlingCliente, BlingProduto, BlingCategoria } from '../types';
-import { supabaseServer } from '../lib/supabaseServer';
-import { credentialsVault } from '../lib/integrations/credentialsVault';
-import { refreshBlingToken } from './blingOAuth';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { descreverErro } from '../lib/erroLegivel';
 import type {
@@ -26,43 +23,32 @@ import {
 } from '../lib/integrations/bling/situacoesContract';
 import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 import { FilaDeRequisicoes, esperar, type Dormir } from './filaDeRequisicoes';
+import { TokenDoBlingSupabase, type TokenDoBling } from './blingToken';
 
 
 /**
- * As peças externas que o cliente usa antes de falar HTTP com o Bling.
+ * As peças externas que o cliente usa além do HTTP com o Bling.
  *
- * Existe para que os testes possam exercitar o `getAccessToken` **real** sem
- * mock de módulo — a convenção deste repositório é porta injetada, como
- * `BlingPort` e `ManualOrderStorePort`. Sem isto, provar o caminho do token
- * exigia dublar o próprio método, e a prova desviava justamente da linha em
- * questão.
+ * **Completas, sempre.** Uma versão anterior aceitava peças parciais e
+ * completava o resto com a infraestrutura real — o que permitia um teste rodar
+ * meio dublado e meio contra Supabase e cofre de verdade, sem nada avisando. É
+ * o pior dos dois mundos: nem isolado nem real.
+ *
+ * A construção normal usa exatamente esta composição, montada em
+ * `portasReais`. A porta não existe para o teste; ela existe porque este é o
+ * limite entre falar com o Bling e descobrir com que credencial falar.
  */
 export interface PortasDoClienteBling {
-  /** Espera cancelável usada no backoff de 429. */
+  /** Espera cancelável, usada na fila e no backoff de 429. */
   readonly dormir: Dormir;
-  /** Id da conexão Bling da organização, ou `null` quando não há. */
-  readonly acharConexaoId: (organizacaoId: string) => Promise<string | null>;
-  /** Credenciais decifradas da conexão. */
-  readonly lerCredenciais: (
-    organizacaoId: string,
-    conexaoId: string,
-  ) => Promise<Record<string, unknown> | null>;
+  /** Obtenção e renovação do token, como uma capacidade só. */
+  readonly token: TokenDoBling;
 }
 
-const PORTAS_REAIS: PortasDoClienteBling = {
-  dormir: esperar,
-  acharConexaoId: async (organizacaoId) => {
-    const { data } = await supabaseServer
-      .from('conexoes_integracao')
-      .select('id')
-      .eq('organizacao_id', organizacaoId)
-      .eq('provedor', 'bling')
-      .maybeSingle();
-    return data?.id ?? null;
-  },
-  lerCredenciais: (organizacaoId, conexaoId) =>
-    credentialsVault.getDecryptedCredentials(organizacaoId, conexaoId) as Promise<Record<string, unknown> | null>,
-};
+/** A composição de produção, e a mesma que os testes trocam por inteiro. */
+export function portasReais(organizacaoId: string, conexaoId?: string): PortasDoClienteBling {
+  return { dormir: esperar, token: new TokenDoBlingSupabase({ organizacaoId, conexaoId }) };
+}
 
 const orgClientCache = new Map<string, BlingClient>();
 
@@ -169,11 +155,11 @@ export class BlingClient implements BlingPort {
   private conexaoId?: string;
   private readonly portas: PortasDoClienteBling;
 
-  private constructor(organizacaoId?: string, conexaoId?: string, portas: PortasDoClienteBling = PORTAS_REAIS) {
+  private constructor(organizacaoId?: string, conexaoId?: string, portas?: PortasDoClienteBling) {
     this.organizacaoId = organizacaoId;
     this.conexaoId = conexaoId;
-    this.portas = portas;
-    this.fila = new FilaDeRequisicoes({ dormir: portas.dormir });
+    this.portas = portas ?? portasReais(organizacaoId ?? '', conexaoId);
+    this.fila = new FilaDeRequisicoes({ dormir: this.portas.dormir });
   }
 
   /**
@@ -183,8 +169,8 @@ export class BlingClient implements BlingPort {
    * um cliente com portas próprias não é o mesmo cliente, e guardá-lo lá
    * contaminaria quem pedisse o normal depois.
    */
-  static comPortas(organizacaoId: string, portas: Partial<PortasDoClienteBling>): BlingClient {
-    return new BlingClient(organizacaoId, undefined, { ...PORTAS_REAIS, ...portas });
+  static comPortas(organizacaoId: string, portas: PortasDoClienteBling): BlingClient {
+    return new BlingClient(organizacaoId, undefined, portas);
   }
 
   /**
@@ -221,91 +207,7 @@ export class BlingClient implements BlingPort {
    * organizacao criado no Ticket 28.
    */
   async forceRefreshToken(): Promise<string> {
-    if (!this.organizacaoId) {
-      throw new Error('Organizacao verificada e obrigatoria para operacoes com o Bling.');
-    }
-    return await this._forceRefreshTokenForOrg();
-  }
-
-  private async _forceRefreshTokenForOrg(): Promise<string> {
-    if (!this.organizacaoId) {
-      throw new Error('OrganizacaoId é obrigatório.');
-    }
-
-    // Localizar conexao_id se não especificado
-    if (!this.conexaoId) {
-      const { data: conn } = await supabaseServer
-        .from('conexoes_integracao')
-        .select('id')
-        .eq('organizacao_id', this.organizacaoId)
-        .eq('provedor', 'bling')
-        .maybeSingle();
-
-      if (conn?.id) {
-        this.conexaoId = conn.id;
-      }
-    }
-
-    if (!this.conexaoId) {
-      throw new Error('Nenhuma conexao Bling encontrada para esta organizacao.');
-    }
-
-    const { data: lockAcquired, error: lockError } = await supabaseServer
-      .rpc('acquire_conexao_token_lock', {
-        p_conexao_id: this.conexaoId,
-        p_timeout_seconds: 30,
-      });
-
-    if (lockError) {
-      console.error('Erro ao adquirir lock de conexao Bling:', lockError);
-    }
-
-    if (!lockAcquired) {
-      // Polling aguardando liberação
-      for (let i = 0; i < 15; i++) {
-        await new Promise(r => setTimeout(r, 2000));
-        const creds = await credentialsVault.getDecryptedCredentials(this.organizacaoId, this.conexaoId);
-        if (creds?.access_token && creds?.token_expires_at) {
-          if (new Date() < new Date(creds.token_expires_at as string)) {
-            return creds.access_token as string;
-          }
-        }
-      }
-      throw new Error('Timeout esperando outro processo renovar token Bling da organizacao.');
-    }
-
-    try {
-      const creds = await credentialsVault.getDecryptedCredentials(this.organizacaoId, this.conexaoId);
-      if (!creds?.client_id || !creds?.client_secret || !creds?.refresh_token) {
-        throw new Error('Credenciais Bling incompletas no cofre da organizacao.');
-      }
-
-      const refreshResult = await refreshBlingToken({
-        clientId: creds.client_id as string,
-        clientSecret: creds.client_secret as string,
-        refreshToken: creds.refresh_token as string,
-      });
-
-      if (refreshResult._tag === 'BlingOAuthTokenExchangeFailed') {
-        throw new Error(`Falha ao renovar token Bling: ${refreshResult.reason}`);
-      }
-
-      const newExpiresAt = new Date(Date.now() + refreshResult.expires_in * 1000).toISOString();
-
-      await credentialsVault.saveEncryptedCredentials(this.organizacaoId, this.conexaoId, {
-        client_id: creds.client_id,
-        client_secret: creds.client_secret,
-        access_token: refreshResult.access_token,
-        refresh_token: refreshResult.refresh_token,
-        token_expires_at: newExpiresAt,
-      });
-
-      return refreshResult.access_token;
-    } finally {
-      await supabaseServer.rpc('release_conexao_token_lock', {
-        p_conexao_id: this.conexaoId,
-      });
-    }
+    return await this.portas.token.renovar();
   }
 
   // `_doForceRefreshToken` (renovacao por `user_id` em `integracoes_bling`) foi
@@ -327,38 +229,7 @@ export class BlingClient implements BlingPort {
    *    mesmos e divergentes entre si.
    */
   private async getAccessToken(signal?: AbortSignal): Promise<string> {
-    if (!this.organizacaoId) {
-      throw new Error('Organizacao verificada e obrigatoria para operacoes com o Bling.');
-    }
-
-    if (!this.conexaoId) {
-      this.conexaoId = (await this.portas.acharConexaoId(this.organizacaoId)) ?? undefined;
-    }
-
-    if (!this.conexaoId) {
-      throw new Error('Bling nao conectado para esta organizacao. Conclua os passos 1 e 2 em Integracoes.');
-    }
-
-    // A consulta da conexão acima também consome tempo, e pode ter estourado o
-    // orçamento sozinha. Sem esta conferência, a leitura do cofre — outra ida à
-    // rede — começaria já fora do prazo.
-    signal?.throwIfAborted();
-
-    const creds = await this.portas.lerCredenciais(this.organizacaoId, this.conexaoId);
-    if (!creds?.access_token) {
-      throw new Error('Bling nao conectado para esta organizacao. Conclua os passos 1 e 2 em Integracoes.');
-    }
-
-    if (creds.token_expires_at && new Date() >= new Date(creds.token_expires_at as string)) {
-      // Caminho inicial de token vencido: a renovação começa aqui, antes de
-      // qualquer requisição. A leitura do cofre acima pode ter consumido o
-      // orçamento inteiro, e começar um polling de lock já fora do prazo é o
-      // pior gasto possível.
-      signal?.throwIfAborted();
-      return await this.forceRefreshToken();
-    }
-
-    return creds.access_token as string;
+    return await this.portas.token.obter(signal);
   }
 
   /** Espaça as requisições ao Bling. Ver `FilaDeRequisicoes`. */

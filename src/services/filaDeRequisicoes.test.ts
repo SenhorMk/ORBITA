@@ -10,23 +10,30 @@ import { FilaDeRequisicoes, esperar } from './filaDeRequisicoes';
  * ficava verde com a regressão reintroduzida: o espaçamento observado vinha do
  * relógio, não da porta, e era idêntico nos dois casos.
  *
- * Aqui o relógio e a espera são injetados, então **nesta suíte** nenhuma
- * asserção depende de tempo de parede: a máquina lenta não reprova o certo, nem
- * a rápida aprova o errado.
+ * O relógio e a espera são injetados **nos casos que medem ordem e duração**,
+ * e nesses não há tempo de parede: a máquina lenta não reprova o certo, nem a
+ * rápida aprova o errado.
  *
- * A afirmação vale só para este arquivo. `bling-fila-e-prazo.test.ts` continua
- * com esperas reais, porque lá o assunto é o cliente HTTP inteiro e o que se
- * observa é trabalho de fundo assentando — dizer que a suíte toda está livre de
- * tempo de parede seria repetir o erro que esta série vem cometendo: afirmar
- * cobertura maior do que a que existe.
+ * A exceção é deliberada e está marcada: o caso do `dormir` padrão precisa
+ * exercitar justamente a peça que os outros substituem, então ali o
+ * temporizador é real. `bling-fila-e-prazo.test.ts` também tem esperas reais,
+ * porque lá o observado é trabalho de fundo assentando.
+ *
+ * Dizer "esta suíte não depende de tempo de parede" seria repetir o erro que
+ * esta série vem cometendo: afirmar cobertura maior do que a que existe.
  */
 
 /** Espera controlada: cada chamada fica pendente até o teste soltá-la. */
 function esperaControlada() {
   const pendentes: Array<{ ms: number; signal?: AbortSignal; resolve: () => void; rejeitar: (e: unknown) => void }> = [];
 
-  const dormir = (ms: number, signal?: AbortSignal): Promise<void> =>
-    new Promise<void>((resolve, rejeitar) => {
+  const dormir = (ms: number, signal?: AbortSignal): Promise<void> => {
+    // Prazo já estourado: rejeita sem entrar na lista. Sem isto o dublê
+    // registraria uma espera que ninguém jamais concluiria, e o teste travaria
+    // em vez de falhar dizendo o motivo.
+    if (signal?.aborted) return Promise.reject(signal.reason);
+
+    return new Promise<void>((resolve, rejeitar) => {
       const sair = () => {
         // Sai da lista: uma espera concluída ou abortada não pode ser
         // "concluída" de novo e roubar o lugar da próxima — foi assim que a
@@ -54,6 +61,7 @@ function esperaControlada() {
       pendentes.push(entrada);
       signal?.addEventListener('abort', aoAbortar, { once: true });
     });
+  };
 
   return {
     dormir,
@@ -258,6 +266,13 @@ describe('FilaDeRequisicoes — o relógio', () => {
 
     const controle = new AbortController();
     const segunda = fila.aguardarVez(controle.signal);
+
+    // **Esperar a vez do predecessor antes de abortar.** Sem isto o aborto pega
+    // a chamada ainda na microtask do predecessor já resolvido, ela rejeita
+    // antes de chegar em `this.dormir`, e o teste fica verde mesmo com o
+    // `setTimeout` cru de volta — foi exatamente o que aconteceu.
+    await assentar();
+
     const motivo = new Error('prazo');
     controle.abort(motivo);
 
