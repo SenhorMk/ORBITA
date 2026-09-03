@@ -9,12 +9,14 @@ import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope'
 
 import {
   createManualOrderHandler,
+  type Dormir,
   type ManualOrderAuthPort,
   type ManualOrderBlingPort,
   type ManualOrderCliente,
   type ManualOrderProduto,
   type ManualOrderStorePort,
   type PersistManualOrderInput,
+  type PersistVendaResult,
 } from './handler';
 
 export type {
@@ -136,10 +138,32 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
  * `pedidos` em menos de um segundo, quase sempre **primeiro**. Por isso a RPC
  * **assume** a linha do webhook em vez de inserir outra: mesma organização,
  * mesmo `bling_id`, mesmo pedido. `uq_pedidos_org_bling` continua no lugar, e
- * assumir uma linha que **já é** venda manual continua sendo `23505` — que cai
- * no `catch` do handler e dispara a compensação, como qualquer outra falha.
+ * assumir uma linha que **já é** venda manual continua sendo `23505` — que o
+ * handler trata como falha definitiva, e dispara a compensação.
+ *
+ * **Falha definitiva × falha ambígua (ticket 30, fatia 3).** `supabase-js`
+ * nunca lança para uma chamada de RPC — devolve `{ data, error }` mesmo
+ * quando a falha é de rede. A distinção que importa está em `error.code`:
+ *
+ * - **Não vazio** (`23505`, `P0002`, `PGRST116`, …) — o `PostgrestBuilder`
+ *   só preenche isso depois de fazer `JSON.parse` do corpo de uma resposta
+ *   HTTP que o servidor **enviou**. Uma resposta assim só existe depois que o
+ *   servidor terminou de processar a requisição — a transação da RPC, que é
+ *   implícita e única, já foi revertida. **Definitiva.**
+ * - **Vazio ou ausente** — o `PostgrestBuilder` também preenche `error` para
+ *   falhas do `fetch` em si (timeout, conexão perdida, abort): nesses ramos,
+ *   olhado em `node_modules/@supabase/postgrest-js/dist/index.mjs`, `code`
+ *   começa e permanece `""` porque não veio corpo nenhum para interpretar.
+ *   Sem resposta do servidor, não há como saber se a transação chegou a
+ *   commitar antes da falha aparecer aqui. **Ambígua.**
+ *
+ * O caso do `data` que não é `string` é outra coisa: `res.ok` só é verdadeiro
+ * depois que a RPC comitou (é assim que o PostgREST decide o código HTTP),
+ * então esse ramo sabe que a gravação **aconteceu** — só o formato do
+ * retorno é que surpreendeu. Vira falha definitiva também, mas por motivo
+ * diferente: não há ambiguidade sobre o commit, só sobre o valor devolvido.
  */
-async function persistVenda(input: PersistManualOrderInput): Promise<{ pedidoId: string }> {
+async function persistVenda(input: PersistManualOrderInput): Promise<PersistVendaResult> {
   const { data, error } = await supabaseServer.rpc('registrar_venda_manual', {
     p_organizacao_id: input.scope.organizationId,
     p_actor_id: input.scope.actorId,
@@ -162,14 +186,30 @@ async function persistVenda(input: PersistManualOrderInput): Promise<{ pedidoId:
   });
 
   if (error) {
-    throw new Error(error.message);
+    const codigo = typeof error.code === 'string' ? error.code : '';
+    return codigo !== ''
+      ? { _tag: 'PersistVendaFalhouDefinitivamente', causa: new Error(error.message) }
+      : { _tag: 'PersistVendaAmbigua', causa: new Error(error.message) };
   }
   if (typeof data !== 'string') {
-    throw new Error('a venda foi registrada mas o banco não devolveu o id do pedido');
+    // `res.ok`: a gravação aconteceu. Não é ambiguidade de transporte.
+    return {
+      _tag: 'PersistVendaFalhouDefinitivamente',
+      causa: new Error('a venda foi registrada mas o banco não devolveu o id do pedido'),
+    };
   }
 
-  return { pedidoId: data };
+  return { _tag: 'PersistVendaOk', pedidoId: data };
 }
+
+/** `Dormir` real, para produção — a versão injetada nos testes não espera de verdade. */
+const dormirDeVerdade: Dormir = (ms, signal) => new Promise((resolve, reject) => {
+  const timer = setTimeout(resolve, ms);
+  signal?.addEventListener('abort', () => {
+    clearTimeout(timer);
+    reject(signal.reason);
+  }, { once: true });
+});
 
 function blingManualOrderAdapter(client: BlingPort): ManualOrderBlingPort {
   return {
@@ -211,6 +251,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     bling: blingManualOrderAdapter(bling.forVerifiedOrganization(scope)),
     now: () => new Date(),
     newLocalReference,
+    dormir: dormirDeVerdade,
   });
 
   return handler(request);

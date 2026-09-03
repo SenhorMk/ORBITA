@@ -56,13 +56,22 @@
 -- estava sobrando era a reserva, nao a baixa.
 --
 -- ---------------------------------------------------------------------------
--- O QUE NAO MUDA, E POR QUE
+-- O QUE NAO MUDA, E O QUE MUDA DE PROPOSITO
 -- ---------------------------------------------------------------------------
 -- Um pedido importado do Bling ainda `Pendente` continua reservando ao
 -- receber seus itens — exatamente como antes. `estoque` desses pedidos so
 -- muda por sincronizacao de produto (`processProdutoEvent`), nunca por este
 -- gatilho; a reserva continua sendo o unico sinal local de compromisso ate a
 -- entrega ou o cancelamento.
+--
+-- Os dois gatilhos daqui sao COMPARTILHADOS — nao existe caminho separado
+-- para venda manual e para webhook. Entao um pedido puramente do Bling que
+-- transicione PARA `Entregue` (sem venda manual nenhuma por perto) tambem
+-- passa a liberar a reserva nesse instante, onde antes ficava presa para
+-- sempre. Nao e efeito colateral tolerado: e a MESMA correcao, e vale para
+-- qualquer pedido que passe por `Entregue`, nao so os da venda manual. Prova
+-- por transicao, sem passar pela RPC nenhuma vez, em
+-- `supabase/tests/database/migration_58_invariantes_de_reserva.test.sql`.
 --
 -- ---------------------------------------------------------------------------
 -- O ESTADO EXISTENTE, NAO TOCADO

@@ -7,8 +7,8 @@ import {
 } from '@/lib/config/manualOrderContract';
 import { pedidoVendaPayloadSchema, type PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
-import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 
+import { compensarNoBling, resolverAmbiguidadeDePersistencia } from './compensacao';
 import type {
   ManualOrderCliente,
   ManualOrderDependencies,
@@ -18,6 +18,7 @@ import type {
 } from './ports';
 
 export * from './ports';
+export { compensarNoBling, resolverAmbiguidadeDePersistencia } from './compensacao';
 
 function json(body: ManualOrderResponseBody, status: number): NextResponse {
   return NextResponse.json(body, { status });
@@ -264,85 +265,6 @@ async function sincronizarComBling(
 }
 
 /**
- * Desfaz no Bling a venda que o ORBITA não conseguiu gravar.
- *
- * O efeito remoto acontece ANTES da gravação local, e não há como inverter a
- * ordem: o `bling_id` do pedido só existe depois da criação remota. A única
- * saída honesta é compensar — cancelar lá o que não existe aqui.
- *
- * Sem isto, cada tentativa deixava um pedido órfão na conta real do lojista.
- * Aconteceu em 2026-08-30: o pedido 26735607230 nasceu no Bling, a gravação
- * local foi recusada pelo banco, e ele ficou sem par no ORBITA. Não havia
- * retentativa segura — tentar de novo criava mais um.
- *
- * **Antes de compensar, confere se a venda já não foi registrada de verdade**
- * (ticket 30, fatia 3). `persistVenda` pode lançar depois de já ter
- * commitado — confirmação perdida entre o banco e o Node, ou o `data` da RPC
- * chegando num formato inesperado depois da gravação. Compensar nesse caso
- * cancelaria no Bling uma venda que é real e completa no ORBITA: a
- * verificação abaixo troca uma suposição por uma leitura.
- */
-async function compensarNoBling(
-  scope: VerifiedOrganizationScope,
-  blingPedidoId: string | null,
-  error: unknown,
-  deps: ManualOrderDependencies,
-): Promise<NextResponse> {
-  // Ticket 22, critério 13 — `causa` é `descreverErro` do erro do banco, e ela
-  // ia inteira para o cliente. Não ajuda a reconciliar nada e é diagnóstico
-  // interno (CWE-209): passa a ficar só no log. O que permite agir — o id do
-  // pedido no Bling e a instrução — continua na resposta.
-  registrarFalhaInterna('pedidos.manual.registrar', error);
-
-  if (blingPedidoId === null) {
-    // Nada foi criado no Bling: não há o que reconciliar, e não há o que dizer
-    // além de que falhou.
-    return fail(MENSAGEM_PUBLICA_DE_FALHA, 500, { blingPedidoId });
-  }
-
-  const jaRegistrada = await deps.store.findVendaManualJaRegistrada(scope, blingPedidoId);
-  if (jaRegistrada !== null) {
-    // A gravação aconteceu — só a confirmação dela é que se perdeu no
-    // caminho. Cancelar agora destruiria uma venda real. Reportar sucesso é o
-    // que a chamada original teria feito se a resposta não tivesse se
-    // perdido.
-    return json(
-      {
-        success: true,
-        pedidoId: jaRegistrada.pedidoId,
-        blingPedidoId,
-        avisos: ['A venda já havia sido registrada numa tentativa anterior; nenhuma ação nova foi necessária.'],
-      },
-      200,
-    );
-  }
-
-  const compensacao = await deps.bling.cancelarPedidoVenda(blingPedidoId);
-  if (compensacao._tag === 'BlingFailed') {
-    // As duas metades falharam. É o único caminho que exige ação humana, e por
-    // isso ele diz exatamente o quê, onde e por quê.
-    return fail(
-      `Falha ao registrar a venda no ORBITA. O pedido ${blingPedidoId} foi criado no Bling e o `
-        // A razão vem do **Bling**, não daqui: é ela que diz por que o
-        // cancelamento automático não funcionou, e é o que a pessoa precisa
-        // saber para resolver à mão. Mensagem de provedor externo não é
-        // diagnóstico interno, e sai de propósito.
-        + `cancelamento automático também falhou (${compensacao.failure.message}). `
-        + 'Cancele o pedido no Bling antes de tentar de novo, senão a próxima tentativa cria outro.',
-      500,
-      { blingPedidoId, compensado: false },
-    );
-  }
-
-  return fail(
-    `Falha ao registrar a venda no ORBITA. O pedido ${blingPedidoId} foi cancelado no Bling `
-      + 'automaticamente, então nada ficou pendente lá. Pode tentar de novo.',
-    500,
-    { blingPedidoId, compensado: true },
-  );
-}
-
-/**
  * `POST /api/pedidos/manual`.
  *
  * A venda só é gravada localmente depois que o Bling confirma a criação do
@@ -408,24 +330,26 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
       avisos.push(...sync.avisos);
     }
 
-    try {
-      const { pedidoId } = await deps.store.persistVenda({
-        scope,
-        clienteId: cliente.id,
-        blingPedidoId,
-        referenciaLocal,
-        total,
-        desconto: body.desconto,
-        frete: body.frete,
-        formaPagamento: body.formaPagamentoRotulo ?? null,
-        observacoes: body.observacoes ?? null,
-        dataStr,
-        itens,
-      });
+    const resultado = await deps.store.persistVenda({
+      scope,
+      clienteId: cliente.id,
+      blingPedidoId,
+      referenciaLocal,
+      total,
+      desconto: body.desconto,
+      frete: body.frete,
+      formaPagamento: body.formaPagamentoRotulo ?? null,
+      observacoes: body.observacoes ?? null,
+      dataStr,
+      itens,
+    });
 
-      return json({ success: true, pedidoId, blingPedidoId, total, avisos }, 201);
-    } catch (error: unknown) {
-      return compensarNoBling(scope, blingPedidoId, error, deps);
+    if (resultado._tag === 'PersistVendaOk') {
+      return json({ success: true, pedidoId: resultado.pedidoId, blingPedidoId, total, avisos }, 201);
     }
+    if (resultado._tag === 'PersistVendaFalhouDefinitivamente') {
+      return compensarNoBling(scope, blingPedidoId, resultado.causa, deps);
+    }
+    return resolverAmbiguidadeDePersistencia(scope, blingPedidoId, resultado.causa, deps);
   };
 }

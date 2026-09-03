@@ -49,19 +49,26 @@ interface FakeStore extends ManualOrderStorePort {
 function fakeStore(options: {
   clientes?: Record<string, ManualOrderCliente>;
   produtos?: ManualOrderProduto[];
-  persistError?: Error;
+  /** Simula `PersistVendaFalhouDefinitivamente` — o servidor respondeu com um erro estruturado. */
+  persistDefinitiveError?: Error;
+  /** Simula `PersistVendaAmbigua` — a chamada falhou sem resposta do servidor (timeout/conexão perdida). */
+  persistAmbiguousError?: Error;
   /**
    * Ticket 30, fatia 3 — simula a venda que `persistVenda` reporta como falha
-   * mas que, na verdade, já foi commitada (confirmação perdida entre o banco
-   * e o Node). Quando definido, `findVendaManualJaRegistrada` devolve este
-   * `pedidoId` em vez de `null`.
+   * mas que, na verdade, já foi (ou será) commitada. Quando definido,
+   * `findVendaManualJaRegistrada` devolve este `pedidoId` a partir da
+   * `vendaApareceNaTentativa`-ésima chamada (1-based; padrão 1 = já na
+   * primeira leitura).
    */
   vendaJaRegistradaPedidoId?: string;
+  vendaApareceNaTentativa?: number;
 } = {}): FakeStore {
   const clientesPorOrg = options.clientes ?? { [ORG_A]: cliente() };
   const produtos = options.produtos ?? [produto()];
   const persisted: PersistManualOrderInput[] = [];
   const vinculos: Array<{ clienteId: string; blingId: string }> = [];
+  const apareceNaTentativa = options.vendaApareceNaTentativa ?? 1;
+  let tentativasDeConfirmacao = 0;
 
   return {
     persisted,
@@ -78,12 +85,30 @@ function fakeStore(options: {
       return produtos.filter((p) => produtoIds.includes(p.id));
     },
     async persistVenda(input) {
-      if (options.persistError) throw options.persistError;
+      if (options.persistDefinitiveError) {
+        return { _tag: 'PersistVendaFalhouDefinitivamente', causa: options.persistDefinitiveError };
+      }
+      if (options.persistAmbiguousError) {
+        return { _tag: 'PersistVendaAmbigua', causa: options.persistAmbiguousError };
+      }
       persisted.push(input);
-      return { pedidoId: 'pedido-local-1' };
+      return { _tag: 'PersistVendaOk', pedidoId: 'pedido-local-1' };
     },
     async findVendaManualJaRegistrada() {
-      return options.vendaJaRegistradaPedidoId ? { pedidoId: options.vendaJaRegistradaPedidoId } : null;
+      tentativasDeConfirmacao += 1;
+      if (!options.vendaJaRegistradaPedidoId) return null;
+      return tentativasDeConfirmacao >= apareceNaTentativa ? { pedidoId: options.vendaJaRegistradaPedidoId } : null;
+    },
+  };
+}
+
+/** `Dormir` de teste: nunca espera de verdade — só conta as chamadas. */
+function dormirInstantaneo(): { readonly dormir: (ms: number) => Promise<void>; readonly chamadas: number[] } {
+  const chamadas: number[] = [];
+  return {
+    chamadas,
+    dormir: async (ms: number) => {
+      chamadas.push(ms);
     },
   };
 }
@@ -174,6 +199,7 @@ function deps(overrides: Partial<ManualOrderDependencies> = {}): ManualOrderDepe
     bling: fakeBling(),
     now: () => new Date('2026-08-29T15:30:00.000Z'),
     newLocalReference: () => 'ORBITA-REF-1',
+    dormir: dormirInstantaneo().dormir,
     ...overrides,
   };
 }
@@ -399,12 +425,16 @@ describe('resultado real da venda', () => {
     expect(body.avisos?.join(' ')).toContain('Preço abaixo do mínimo');
   });
 
-  it('cancela o pedido no Bling quando a gravação local falha', async () => {
+  it('cancela o pedido no Bling quando a gravação local falha DEFINITIVAMENTE', async () => {
     // O efeito remoto acontece antes da gravação local e não há como inverter
     // a ordem: o `bling_id` só existe depois da criação. Sem compensar, cada
     // tentativa deixa um pedido órfão na conta real do lojista — aconteceu
     // com o pedido 26735607230 em 2026-08-30.
-    const store = fakeStore({ persistError: new Error('null value in column "user_id"') });
+    //
+    // "Definitiva" aqui: o banco RESPONDEU com um erro estruturado
+    // (violação de NOT NULL) — a transação já foi revertida, não há
+    // ambiguidade nenhuma para resolver antes de compensar.
+    const store = fakeStore({ persistDefinitiveError: new Error('null value in column "user_id"') });
     const bling = fakeBling();
     const handler = createManualOrderHandler(deps({ store, bling }));
 
@@ -419,7 +449,7 @@ describe('resultado real da venda', () => {
   });
 
   it('quando o cancelamento também falha, diz o que precisa ser feito à mão', async () => {
-    const store = fakeStore({ persistError: new Error('null value in column "user_id"') });
+    const store = fakeStore({ persistDefinitiveError: new Error('null value in column "user_id"') });
     const bling = fakeBling({ cancelamentoFailure: 'pedido já faturado' });
     const handler = createManualOrderHandler(deps({ store, bling }));
 
@@ -436,7 +466,7 @@ describe('resultado real da venda', () => {
   });
 
   it('sem envio ao Bling não há o que compensar', async () => {
-    const store = fakeStore({ persistError: new Error('banco fora do ar') });
+    const store = fakeStore({ persistDefinitiveError: new Error('banco fora do ar') });
     const bling = fakeBling();
     const handler = createManualOrderHandler(deps({ store, bling }));
 
@@ -448,28 +478,81 @@ describe('resultado real da venda', () => {
     expect(body.compensado).toBeUndefined();
   });
 
-  // Ticket 30, fatia 3 — retentativa depois de resposta perdida.
-  it('NÃO cancela no Bling quando a venda já havia sido registrada — a falha era só de confirmação', async () => {
-    // `persistVenda` lança (ex.: a conexão caiu entre o commit do Postgres e a
-    // resposta chegar ao Node), mas a venda JÁ EXISTE, completa, gravada por
-    // essa mesma tentativa. Compensar aqui cancelaria no Bling uma venda real.
-    const store = fakeStore({
-      persistError: new Error('conexão perdida depois do commit'),
-      vendaJaRegistradaPedidoId: 'pedido-ja-registrado-1',
+  describe('ticket 30, fatia 3 — retentativa depois de resposta AMBÍGUA (sem resposta do servidor)', () => {
+    it('NÃO cancela no Bling quando a venda já existia na primeira leitura — commit aconteceu, só o ACK se perdeu', async () => {
+      // `persistVenda` devolve `PersistVendaAmbigua` (ex.: a conexão caiu
+      // depois do commit do Postgres e antes da resposta chegar ao Node), mas
+      // a venda JÁ EXISTE, completa. Compensar cancelaria no Bling uma venda
+      // real.
+      const store = fakeStore({
+        persistAmbiguousError: new Error('conexão perdida depois do commit'),
+        vendaJaRegistradaPedidoId: 'pedido-ja-registrado-1',
+      });
+      const bling = fakeBling();
+      const dormirRegistrado = dormirInstantaneo();
+      const handler = createManualOrderHandler(deps({ store, bling, dormir: dormirRegistrado.dormir }));
+
+      const response = await handler(requestWith(corpoValido()));
+      const body = (await response.json()) as ManualOrderResponseBody;
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.pedidoId).toBe('pedido-ja-registrado-1');
+      expect(body.blingPedidoId).toBe('918273');
+      // O ponto inteiro do teste: nada foi cancelado no Bling.
+      expect(bling.cancelados).toEqual([]);
+      expect(body.avisos?.join(' ')).toContain('já havia sido registrada');
     });
-    const bling = fakeBling();
-    const handler = createManualOrderHandler(deps({ store, bling }));
 
-    const response = await handler(requestWith(corpoValido()));
-    const body = (await response.json()) as ManualOrderResponseBody;
+    it('NÃO cancela quando a venda só aparece DEPOIS da primeira leitura — prova que a janela de retentativa é usada, não só a primeira checagem', async () => {
+      // Reproduz o interleaving que uma checagem única não distingue: no
+      // instante do erro a transação AINDA estava em voo. Ela só commita
+      // durante a janela de confirmação — a 3ª tentativa é a primeira que a
+      // encontra. Uma implementação com checagem única (sem retentativa)
+      // veria "não encontrada" na 1ª tentativa e compensaria cedo demais.
+      const store = fakeStore({
+        persistAmbiguousError: new Error('timeout de rede'),
+        vendaJaRegistradaPedidoId: 'pedido-em-voo-1',
+        vendaApareceNaTentativa: 3,
+      });
+      const bling = fakeBling();
+      const dormirRegistrado = dormirInstantaneo();
+      const handler = createManualOrderHandler(deps({ store, bling, dormir: dormirRegistrado.dormir }));
 
-    expect(response.status).toBe(200);
-    expect(body.success).toBe(true);
-    expect(body.pedidoId).toBe('pedido-ja-registrado-1');
-    expect(body.blingPedidoId).toBe('918273');
-    // O ponto inteiro do teste: nada foi cancelado no Bling.
-    expect(bling.cancelados).toEqual([]);
-    expect(body.avisos?.join(' ')).toContain('já havia sido registrada');
+      const response = await handler(requestWith(corpoValido()));
+      const body = (await response.json()) as ManualOrderResponseBody;
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.pedidoId).toBe('pedido-em-voo-1');
+      expect(bling.cancelados).toEqual([]);
+      // Esperou pelo menos duas vezes antes de achar na 3ª tentativa.
+      expect(dormirRegistrado.chamadas.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('NÃO compensa quando a ambiguidade nunca se resolve — reporta estado indeterminado em vez de adivinhar', async () => {
+      // A venda nunca aparece, mesmo depois de esgotada a janela de
+      // confirmação. Isso NÃO prova que ela falhou — só que não deu para
+      // confirmar dentro do tempo dado. Compensar aqui poderia cancelar uma
+      // venda que commita um instante depois da última tentativa.
+      const store = fakeStore({ persistAmbiguousError: new Error('timeout de rede') });
+      const bling = fakeBling();
+      const dormirRegistrado = dormirInstantaneo();
+      const handler = createManualOrderHandler(deps({ store, bling, dormir: dormirRegistrado.dormir }));
+
+      const response = await handler(requestWith(corpoValido()));
+      const body = (await response.json()) as ManualOrderResponseBody;
+
+      expect(response.status).toBe(500);
+      expect(body.success).toBe(false);
+      expect(body.estadoIndeterminado).toBe(true);
+      expect(body.compensado).toBeUndefined();
+      // O ponto inteiro do teste: NUNCA cancela no Bling num estado ambíguo
+      // não resolvido.
+      expect(bling.cancelados).toEqual([]);
+      expect(body.error).toContain('NÃO tente de novo');
+      expect(body.error).toContain('NÃO cancele o pedido no Bling');
+    });
   });
 });
 

@@ -46,6 +46,7 @@ import {
   type ManualOrderResponseBody,
   type ManualOrderStorePort,
   type PersistManualOrderInput,
+  type PersistVendaResult,
 } from './handler';
 
 const SEGREDO_BLING = 'secret-bling-12345';
@@ -143,17 +144,24 @@ class PedidosCompartilhados {
    * dela — a prova da regra é o teste pgTAP.
    *
    * `comTomada: false` reproduz a migration 56, que é onde o defeito mora.
+   *
+   * O `23505` da guarda é sempre `PersistVendaFalhouDefinitivamente` — é
+   * exatamente o caso em que o banco RESPONDE com um erro estruturado, nunca
+   * o de resposta perdida. A ambiguidade de transporte (`PersistVendaAmbigua`)
+   * não tem análogo aqui: esta porta em memória nunca "perde a conexão".
    */
-  registrarVendaManual(input: PersistManualOrderInput, comTomada: boolean): { pedidoId: string } {
+  registrarVendaManual(input: PersistManualOrderInput, comTomada: boolean): PersistVendaResult {
     const existente = input.blingPedidoId === null
       ? undefined
       : this.achar(input.scope.organizationId, input.blingPedidoId);
 
     let linha: LinhaPedido;
     if (existente && !comTomada) {
-      throw conflitoDeChaveUnica();
+      return { _tag: 'PersistVendaFalhouDefinitivamente', causa: conflitoDeChaveUnica() };
     } else if (existente) {
-      if (existente.origem === ORIGEM_MANUAL) throw conflitoDeChaveUnica();
+      if (existente.origem === ORIGEM_MANUAL) {
+        return { _tag: 'PersistVendaFalhouDefinitivamente', causa: conflitoDeChaveUnica() };
+      }
       // O número real do Bling, que o webhook trouxe, é preservado.
       existente.numero = existente.numero ?? input.blingPedidoId;
       existente.origem = ORIGEM_MANUAL;
@@ -186,7 +194,7 @@ class PedidosCompartilhados {
     }
 
     this.titulos.push({ pedidoId: linha.id, valor: input.total });
-    return { pedidoId: linha.id };
+    return { _tag: 'PersistVendaOk', pedidoId: linha.id };
   }
 }
 
@@ -364,6 +372,7 @@ async function venderPelaTela(comTomada: boolean): Promise<{ status: number; bod
     bling: blingDaVendaManual(),
     now: () => new Date('2026-09-02T15:59:58.000Z'),
     newLocalReference: () => 'ORBITA-9368b28e-a499-4882-9735-e96111ecb144',
+    dormir: async () => {},
   });
 
   const corpo = buildManualOrderRequest({

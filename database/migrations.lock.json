@@ -304,7 +304,7 @@
     {
       "order": 61,
       "path": "../database/58_reserva_nao_conta_pedido_finalizado.sql",
-      "sha256": "45a4b3d803a74ce7ec3901e6f1ee3ba9582e6e42a693a70e47a773a3371463ca"
+      "sha256": "21048d9e0141a3ef718e02e64c5f0f81dee4133d684a114e496157757e8e1dd6"
     }
   ],
   "references": [

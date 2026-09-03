@@ -8,7 +8,10 @@
 import type { NextResponse } from 'next/server';
 
 import type { BlingCallResult, PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
+import type { Dormir } from '@/services/filaDeRequisicoes';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+
+export type { Dormir };
 
 /** Cliente do ORBITA já lido dentro do escopo verificado da organização. */
 export interface ManualOrderCliente {
@@ -51,6 +54,27 @@ export interface PersistManualOrderInput {
 }
 
 /**
+ * Desfecho de `persistVenda` (ticket 30, fatia 3 — retentativa após resposta
+ * perdida). Três casos, não dois, porque "a chamada lançou" mistura duas
+ * situações que exigem reações opostas:
+ *
+ * - `PersistVendaOk` — a venda foi gravada, com o id do pedido local.
+ * - `PersistVendaFalhouDefinitivamente` — o servidor **respondeu** com um erro
+ *   estruturado (código SQL/PostgREST não vazio). Uma resposta assim só existe
+ *   depois que o servidor terminou de processar a requisição — a transação já
+ *   foi revertida. É seguro compensar.
+ * - `PersistVendaAmbigua` — a chamada falhou **sem** resposta estruturada do
+ *   servidor (timeout, conexão perdida, abort). Não há como saber, só por
+ *   isso, se a transação chegou a commitar antes da falha aparecer do lado do
+ *   cliente. Compensar aqui pode cancelar no Bling uma venda que está, neste
+ *   exato momento, sendo gravada com sucesso do outro lado.
+ */
+export type PersistVendaResult =
+  | { readonly _tag: 'PersistVendaOk'; readonly pedidoId: string }
+  | { readonly _tag: 'PersistVendaFalhouDefinitivamente'; readonly causa: unknown }
+  | { readonly _tag: 'PersistVendaAmbigua'; readonly causa: unknown };
+
+/**
  * Persistência da venda manual. É uma porta única de propósito porque pedido,
  * itens, baixa de estoque e título financeiro precisam cair juntos — a versão
  * anterior espalhava esses quatro efeitos pelo handler e deixava o título
@@ -60,21 +84,21 @@ export interface ManualOrderStorePort {
   findClienteById(scope: VerifiedOrganizationScope, clienteId: string): Promise<ManualOrderCliente | null>;
   linkClienteBlingId(scope: VerifiedOrganizationScope, clienteId: string, blingId: string): Promise<void>;
   findProdutosByIds(scope: VerifiedOrganizationScope, produtoIds: readonly string[]): Promise<readonly ManualOrderProduto[]>;
-  persistVenda(input: PersistManualOrderInput): Promise<{ readonly pedidoId: string }>;
+  /**
+   * Nunca lança — `PersistVendaResult` é o valor, não a exceção, exatamente
+   * porque o handler precisa **distinguir** os três desfechos acima para
+   * decidir se pode compensar. Um `throw` apaga essa distinção antes mesmo de
+   * ela chegar ao chamador.
+   */
+  persistVenda(input: PersistManualOrderInput): Promise<PersistVendaResult>;
   /**
    * Ticket 30, fatia 3 — recuperação de confirmação perdida.
    *
-   * `persistVenda` pode lançar mesmo depois de `registrar_venda_manual` ter
-   * COMMITADO no Postgres: a conexão Node↔Postgres pode cair entre o commit e
-   * a resposta chegar ao cliente do banco, e `route.ts`'s `persistVenda`
-   * também lança quando a RPC devolve um `data` que não é string — depois de
-   * já ter gravado. Nos dois casos, o `catch` do handler veria "falhou" para
-   * uma venda que **já existe**, completa, na organização.
-   *
-   * Chamado só quando `persistVenda` lança e há um `blingPedidoId` — antes de
-   * compensar (cancelar no Bling), confere se a venda já foi de fato
-   * registrada. Se sim, cancelar seria destrutivo: apagaria no ERP uma venda
-   * que já é real e completa no ORBITA.
+   * Confere se a venda já foi de fato registrada, por `bling_id` + origem.
+   * Chamado antes de compensar (cancelar no Bling) sempre que o resultado de
+   * `persistVenda` não é `PersistVendaOk`: se a venda já existe, cancelar
+   * seria destrutivo — apagaria no ERP uma venda que já é real e completa no
+   * ORBITA.
    */
   findVendaManualJaRegistrada(scope: VerifiedOrganizationScope, blingPedidoId: string): Promise<{ readonly pedidoId: string } | null>;
 }
@@ -125,6 +149,8 @@ export interface ManualOrderDependencies {
   readonly bling: ManualOrderBlingPort;
   readonly now: () => Date;
   readonly newLocalReference: () => string;
+  /** Espera entre tentativas de confirmar uma `PersistVendaAmbigua`. Ver `Dormir`. */
+  readonly dormir: Dormir;
 }
 
 /** Corpo de resposta da rota, consumido pelo `ManualOrderModal`. */
@@ -149,4 +175,16 @@ export interface ManualOrderResponseBody {
    * pedido órfão na conta do lojista.
    */
   readonly compensado?: boolean;
+  /**
+   * `true` só quando a gravação falhou de um jeito que **não dá para
+   * resolver do lado do cliente**: a chamada não teve resposta estruturada do
+   * servidor (timeout/conexão perdida), e a checagem de confirmação, mesmo
+   * repetida, não achou nem descartou a venda dentro da janela de espera.
+   *
+   * Não compensa neste caso — cancelar no Bling arriscaria destruir uma venda
+   * que pode estar sendo gravada com sucesso neste exato momento do outro
+   * lado. `compensado` fica ausente: não houve tentativa de compensação, não
+   * "tentou e falhou".
+   */
+  readonly estadoIndeterminado?: boolean;
 }
