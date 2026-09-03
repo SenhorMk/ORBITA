@@ -135,7 +135,7 @@ async function tentarAssumirLinha(client) {
  * @param {number} ms - Milissegundos a esperar.
  * @returns {Promise<void>}
  */
-function esperar(ms) {
+export function esperar(ms) {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
@@ -158,7 +158,7 @@ function esperar(ms) {
  * @param {{ readonly timeoutMs?: number, readonly intervaloDePollMs?: number }} [opcoes] - Orçamento de espera e intervalo entre consultas.
  * @returns {Promise<{ readonly observado: true, readonly waitEvent: string | null } | { readonly observado: false }>} Se e como o bloqueio foi observado.
  */
-async function observarBloqueioNoPostgres(adminClient, pid, { timeoutMs = 3000, intervaloDePollMs = 20 } = {}) {
+export async function observarBloqueioNoPostgres(adminClient, pid, { timeoutMs = 3000, intervaloDePollMs = 20 } = {}) {
   const limite = Date.now() + timeoutMs;
   while (Date.now() < limite) {
     const resultado = await adminClient.query(

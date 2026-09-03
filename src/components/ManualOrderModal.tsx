@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useEffect, useDeferredValue, useRef } from "react";
+import { useState, useEffect, useDeferredValue } from "react";
 import { GlassModal } from '@/components/ui/glass-modal';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/lib/supabaseClient';
-import { buildManualOrderRequest, type ManualOrderRequest } from '@/lib/config/manualOrderContract';
 import { Search, Plus, Trash2, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
-import { fetchWithAuth } from '@/lib/fetchWithAuth';
-import { descreverErro } from '@/lib/erroLegivel';
+import { useManualOrderSubmit, type ItemPedidoManual } from './useManualOrderSubmit';
+
+export type { ItemPedidoManual, UseManualOrderSubmitInput } from './useManualOrderSubmit';
 
 interface ManualOrderModalProps {
   open: boolean;
@@ -29,16 +29,6 @@ interface ProdutoOption {
   estoque?: number;
   estoque_reservado?: number;
   bling_id: string;
-}
-
-interface ItemPedidoManual {
-  produto_id: string;
-  bling_id: string;
-  nome: string;
-  codigo?: string;
-  quantidade: number;
-  max_quantidade: number;
-  valor_unitario: number;
 }
 
 /**
@@ -126,175 +116,6 @@ function useManualOrderItems(
   };
 
   return { itens, setItens, addItem, updateItemQty, removeItem, calculateTotal };
-}
-
-interface BuildManualOrderPayloadInput {
-  syncBling: boolean;
-  selectedCliente: string;
-  formaPagamento: string;
-  desconto: number | '';
-  frete: number | '';
-  observacoes: string;
-  itens: ItemPedidoManual[];
-  /**
-   * Ticket 30, fatia 3, 3ª rodada — âncora de idempotência entre
-   * retentativas da MESMA submissão. Estável enquanto `handleSubmit` for
-   * chamado para a mesma tentativa (ver `referenciaLocalRef`); nunca
-   * regenerado a cada clique.
-   */
-  referenciaLocal: string;
-}
-
-/**
- * Monta o corpo de `POST /api/pedidos/manual` pelo contrato compartilhado com a
- * rota. Nem `total` nem `parcelas` são montados aqui: o valor da venda é
- * derivado no servidor pelos preços do cadastro, e as parcelas são construídas
- * lá com a forma de pagamento real da conta Bling. A versão anterior montava
- * `parcelas` que a rota simplesmente não lia.
- */
-function buildManualOrderPayload(input: BuildManualOrderPayloadInput): ManualOrderRequest {
-  return buildManualOrderRequest({
-    syncBling: input.syncBling,
-    clienteId: input.selectedCliente,
-    itens: input.itens.map((item) => ({ produtoId: item.produto_id, quantidade: item.quantidade })),
-    desconto: Number(input.desconto) || 0,
-    frete: Number(input.frete) || 0,
-    observacoes: input.observacoes.trim() ? input.observacoes.trim() : undefined,
-    formaPagamentoRotulo: input.formaPagamento,
-    referenciaLocal: input.referenciaLocal,
-  });
-}
-
-interface UseManualOrderSubmitInput {
-  syncBling: boolean;
-  selectedCliente: string;
-  formaPagamento: string;
-  desconto: number | '';
-  frete: number | '';
-  observacoes: string;
-  itens: ItemPedidoManual[];
-  setError: (message: string | null) => void;
-  onSuccess?: () => void;
-  onOpenChange: (open: boolean) => void;
-  resetForm: () => void;
-}
-
-/**
- * Envio da venda manual, isolado do componente para caber no limite de
- * tamanho de função do gate de qualidade.
- *
- * Dona da referência local de idempotência (ticket 30, fatia 3, 3ª rodada):
- * `referenciaLocalRef` fica estável enquanto o usuário retenta a MESMA
- * submissão (inclusive depois de um erro), e só é zerada quando o modal
- * abre de novo (`resetReferenciaLocal`, chamado pelo efeito do componente)
- * ou depois de um sucesso de verdade.
- */
-/** O que `POST /api/pedidos/manual` significa para o modal, resumido em três desfechos. */
-type EnvioManualResult =
-  | { readonly _tag: 'Erro'; readonly mensagem: string }
-  | { readonly _tag: 'SucessoComAvisos'; readonly mensagem: string }
-  | { readonly _tag: 'Sucesso' };
-
-/** A chamada de rede em si, separada de `handleSubmit` só pelo limite de tamanho de função do gate de qualidade. */
-async function enviarPedidoManual(payload: ManualOrderRequest): Promise<EnvioManualResult> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
-
-  const res = await fetchWithAuth('/api/pedidos/manual', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    },
-    body: JSON.stringify(payload)
-  });
-
-  const data = (await res.json()) as { error?: string; avisos?: string[]; vendaDuplicada?: boolean };
-
-  if (!res.ok) {
-    // O Bling sinaliza venda idêntica à anterior por código estruturado; a
-    // rota o traduz em `vendaDuplicada`. Antes isso era detectado comparando
-    // a mensagem por substring, com os escapes gravados literalmente no
-    // fonte — comparação que nunca casava.
-    return {
-      _tag: 'Erro',
-      mensagem: data.vendaDuplicada
-        ? 'Venda duplicada: o Bling recusou um pedido idêntico ao anterior (mesmo cliente, produtos e valores). Altere alguma informação antes de reenviar.'
-        : data.error || 'Falha ao processar pedido manual',
-    };
-  }
-
-  // Avisos são falhas parciais reais (por exemplo, a baixa de estoque no
-  // Bling) e o modal fica aberto para que o usuário as leia em vez de
-  // vê-las desaparecer.
-  if (data.avisos && data.avisos.length > 0) {
-    return { _tag: 'SucessoComAvisos', mensagem: `Venda registrada, mas com pendências: ${data.avisos.join(' ')}` };
-  }
-
-  return { _tag: 'Sucesso' };
-}
-
-function useManualOrderSubmit(input: UseManualOrderSubmitInput) {
-  const [loading, setLoading] = useState(false);
-  const { setError } = input;
-  const referenciaLocalRef = useRef<string | null>(null);
-
-  const resetReferenciaLocal = () => {
-    referenciaLocalRef.current = null;
-  };
-
-  const handleSubmit = async () => {
-    if (!input.selectedCliente) {
-      setError('Selecione um cliente.');
-      return;
-    }
-    if (input.itens.length === 0) {
-      setError('Adicione pelo menos um item ao pedido.');
-      return;
-    }
-
-    setError(null);
-    setLoading(true);
-
-    try {
-      // Gera a referência só na primeira tentativa; uma retentativa (o
-      // usuário clicando "Finalizar" de novo depois de um erro, sem mudar
-      // nada) reenvia a MESMA, para que o servidor a reconheça.
-      referenciaLocalRef.current ??= crypto.randomUUID();
-      const payload = buildManualOrderPayload({
-        syncBling: input.syncBling,
-        selectedCliente: input.selectedCliente,
-        formaPagamento: input.formaPagamento,
-        desconto: input.desconto,
-        frete: input.frete,
-        observacoes: input.observacoes,
-        itens: input.itens,
-        referenciaLocal: referenciaLocalRef.current,
-      });
-
-      const resultado = await enviarPedidoManual(payload);
-      if (resultado._tag === 'Erro') {
-        setError(resultado.mensagem);
-        return;
-      }
-      if (resultado._tag === 'SucessoComAvisos') {
-        setError(resultado.mensagem);
-        input.onSuccess?.();
-        return;
-      }
-
-      input.onSuccess?.();
-      input.onOpenChange(false);
-      resetReferenciaLocal();
-      input.resetForm();
-    } catch (err: unknown) {
-      setError(descreverErro(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return { loading, handleSubmit, resetReferenciaLocal };
 }
 
 interface ManualOrderFormFieldsProps {
@@ -548,7 +369,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
 
   const { itens, setItens, addItem, updateItemQty, removeItem, calculateTotal } = useManualOrderItems(produtos, setError, setSearchProduto);
 
-  const { loading, handleSubmit, resetReferenciaLocal } = useManualOrderSubmit({
+  const { loading, handleSubmit } = useManualOrderSubmit({
     syncBling, selectedCliente, formaPagamento, desconto, frete, observacoes, itens,
     setError,
     onSuccess,
@@ -564,10 +385,16 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
 
   useEffect(() => {
     if (!open) return;
-    // Uma abertura nova do modal representa uma venda nova (ticket 30,
-    // fatia 3, 3ª rodada) — a referência de idempotência da tentativa
-    // anterior não deve valer para esta.
-    resetReferenciaLocal();
+    // Ticket 30, fatia 3, 4ª rodada de revisão — a abertura do modal NÃO
+    // zera a referência de idempotência. Um envio anterior pode ter ficado
+    // indeterminado (nem sucesso nem falha confirmados), e reabrir o modal
+    // — ou um reload da página inteira, que é exatamente o cenário que a
+    // 4ª rodada pediu para fechar — precisa continuar apontando para a
+    // MESMA tentativa até ela se resolver. `useManualOrderSubmit` já cuida
+    // de retomar de `localStorage` na inicialização; zerar aqui destruiria
+    // justamente a persistência que fecha esse gap. Só um sucesso real
+    // limpa a referência (`resetReferenciaLocal`, chamado de dentro do
+    // próprio envio).
     let isMounted = true;
     loadManualOrderFormData(
       (v) => { if (isMounted) setClientes(v); },
@@ -576,7 +403,6 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
     return () => {
       isMounted = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `resetReferenciaLocal` é estável (não recriada entre renders relevantes); incluí-la reexecutaria o efeito a cada digitação do formulário.
   }, [open]);
 
   return (

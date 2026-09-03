@@ -102,9 +102,9 @@ export interface ManualOrderStorePort {
    */
   findVendaManualJaRegistrada(scope: VerifiedOrganizationScope, blingPedidoId: string): Promise<{ readonly pedidoId: string } | null>;
   /**
-   * Ticket 30, fatia 3, endurecida na 3ª rodada — reivindica a referência
-   * local como uma tentativa nova, ou devolve o desfecho de uma tentativa
-   * ANTERIOR com a mesma referência.
+   * Ticket 30, fatia 3 — reivindica a referência local como uma tentativa
+   * nova, ou devolve o desfecho de uma tentativa ANTERIOR com a mesma
+   * referência.
    *
    * Chamado ANTES de qualquer chamada ao Bling. Sem isto, uma retentativa —
    * humana, de proxy, de navegador, de qualquer camada — depois de um
@@ -112,10 +112,15 @@ export interface ManualOrderStorePort {
    * um SEGUNDO pedido real no Bling: a mensagem "não tente de novo" não é
    * garantia nenhuma sozinha.
    *
-   * Se a tabela ainda não existir no banco (migration 59 não aplicada — a
-   * migration e o código deste PR não têm ordem de deploy garantida),
-   * devolve `TentativaNova` em vez de lançar: a proteção fica ausente, não
-   * quebra a venda. Ver `evidence/30-compatibilidade-de-deploy-*.md`.
+   * **FAIL CLOSED (4ª rodada de revisão).** Se a infraestrutura de
+   * idempotência não estiver disponível (a tabela/RPC da migration 59 ainda
+   * não existir, ou qualquer outra falha ao reivindicar), devolve
+   * `TentativaIndisponivel` — e o handler NÃO chama o Bling. A versão
+   * anterior caía para `TentativaNova` nesse caso, o que desligava
+   * silenciosamente a proteção exatamente na janela em que o código novo
+   * mais precisa dela. Ver `evidence/30-compatibilidade-de-deploy-*.md`: a
+   * ordem de deploy recomendada passou a ser migrations primeiro, código
+   * depois — não o inverso.
    */
   reivindicarTentativa(scope: VerifiedOrganizationScope, referenciaLocal: string): Promise<ReivindicacaoDeTentativa>;
   /** Grava o desfecho final de uma tentativa já reivindicada. */
@@ -124,17 +129,26 @@ export interface ManualOrderStorePort {
 
 /**
  * O que uma reivindicação de tentativa devolve. `TentativaNova` segue o
- * fluxo normal; os outros três casos são o desfecho de uma tentativa
- * ANTERIOR com a mesma referência local, e o handler nunca chama o Bling de
- * novo para eles.
+ * fluxo normal; os outros quatro casos são situações em que o handler NÃO
+ * chama o Bling: três são o desfecho de uma tentativa ANTERIOR com a mesma
+ * referência, e `TentativaIndisponivel` é a infraestrutura de idempotência
+ * não estando disponível — falha fechada, nunca aberta.
  */
 export type ReivindicacaoDeTentativa =
   | { readonly _tag: 'TentativaNova'; readonly tentativaId: string }
   | { readonly _tag: 'TentativaConcluida'; readonly pedidoId: string; readonly blingPedidoId: string | null }
   | { readonly _tag: 'TentativaIndeterminada'; readonly blingPedidoId: string | null }
-  | { readonly _tag: 'TentativaEmAndamento' };
+  | { readonly _tag: 'TentativaEmAndamento' }
+  | { readonly _tag: 'TentativaIndisponivel'; readonly causa: unknown };
 
 export interface DesfechoDaTentativa {
+  /**
+   * `'falhou'` só é seguro para reabrir a MESMA referência quando o Bling
+   * está confirmadamente limpo — ver a máquina de estados em
+   * `compensacao.ts`. Uma falha de persistência cuja compensação no Bling
+   * também falhou (ou ficou ambígua) grava `'indeterminada'`, não
+   * `'falhou'`, porque um pedido pode continuar existindo lá.
+   */
   readonly estado: 'concluida' | 'indeterminada' | 'falhou';
   readonly pedidoId?: string;
   readonly blingPedidoId?: string | null;

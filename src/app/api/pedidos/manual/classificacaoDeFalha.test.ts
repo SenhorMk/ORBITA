@@ -1,5 +1,5 @@
 /**
- * Ticket 30, fatia 3 — endurecida na 3ª rodada de revisão.
+ * Ticket 30, fatia 3 — endurecida na 3ª rodada de revisão, allowlist na 4ª.
  *
  * `classificarErroDePersistencia` decide se uma compensação DESTRUTIVA
  * (cancelar um pedido no Bling) pode acontecer. Este arquivo é a regressão
@@ -12,6 +12,12 @@
  * inéditos, campos ausentes, ou tipos inesperados — cai em `Ambigua`. Os
  * testes abaixo cobrem os três casos que a revisão pediu, e depois um
  * conjunto de formatos "desconhecidos" para provar o lado padrão da política.
+ *
+ * **4ª rodada:** a revisão apontou que reconhecer pelo FORMATO de SQLSTATE
+ * (`/^[0-9A-Z]{5}$/`) não é prova de que o valor É um SQLSTATE — só que
+ * TEM o formato de um. O bloco "code de 5 letras que não é SQLSTATE
+ * nenhum" prova a distinção: `ERROR` bate o formato antigo e teria virado
+ * Definitiva; com a allowlist, não bate.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -55,6 +61,24 @@ describe('classificarErroDePersistencia', () => {
       ['array', ['23505']],
     ])('%s', (_descricao, error) => {
       expect(classificarErroDePersistencia(error)).toBe('Ambigua');
+    });
+  });
+
+  describe('4ª rodada — code com o FORMATO de SQLSTATE, mas que não é um código reconhecido → Ambigua', () => {
+    it.each([
+      ['ERROR — 5 letras maiúsculas, bate o antigo regex de formato, não é SQLSTATE nenhum', { code: 'ERROR', message: 'erro genérico' }],
+      ['ABCDE — 5 letras maiúsculas quaisquer', { code: 'ABCDE', message: 'erro' }],
+      ['99999 — 5 dígitos, bate o formato, não está na allowlist', { code: '99999', message: 'erro' }],
+      ['23500 — vizinho de 23505, mas não é o código que a guarda da migration 57 levanta', { code: '23500', message: 'erro' }],
+      ['P0001 — vizinho de P0002 (raise_exception genérico do PL/pgSQL, não o específico que este código levanta)', { code: 'P0001', message: 'erro' }],
+    ])('%s', (_descricao, error) => {
+      expect(classificarErroDePersistencia(error)).toBe('Ambigua');
+    });
+  });
+
+  describe('4ª rodada — os SQLSTATE reais da allowlist, lidos direto do SQL (não listados no primeiro bloco)', () => {
+    it('23503 — foreign_key_violation, a mesma família de integridade de 23505/23514', () => {
+      expect(classificarErroDePersistencia({ code: '23503', message: 'insert or update on table violates foreign key constraint' })).toBe('Definitiva');
     });
   });
 });

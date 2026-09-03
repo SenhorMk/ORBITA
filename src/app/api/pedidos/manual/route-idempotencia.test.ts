@@ -17,6 +17,16 @@
  *      depois desse estado NÃO chama `POST /pedidos/vendas` no Bling uma
  *      segunda vez — a proteção contra duplicação externa funciona com a
  *      RPC real de reivindicação, não só com a porta fake do handler.
+ *   3. (4ª rodada de revisão) DUAS requisições HTTP com a MESMA
+ *      `referenciaLocal`, disparadas ao mesmo tempo — `Promise.all`, sem
+ *      `await` sequencial entre elas — nunca produzem duas chamadas a
+ *      `createPedidoVenda`. Exatamente uma reivindica a tentativa de
+ *      verdade; a outra observa `TentativaEmAndamento` e nem chega perto do
+ *      Bling. A prova de atomicidade da PRÓPRIA RPC (bloqueio real via
+ *      `pg_stat_activity`) está em
+ *      `scripts/database-concurrency-tentativas.mjs`; este teste prova que
+ *      a ROTA usa essa atomicidade corretamente — não é a mesma prova,
+ *      complementa ela.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -37,40 +47,62 @@ vi.mock('@/lib/requestOrganizationContext', () => ({
   }),
 }));
 
-/** Estado da "tabela" de tentativas, só o suficiente para o cenário testado. */
-let tentativaArmazenada: { estado: string; blingPedidoId: string | null } | null = null;
+/**
+ * Estado das "tabelas" de tentativas, uma por `referenciaLocal` — indexado
+ * por referência para que o teste de concorrência (que usa uma referência
+ * própria) não interfira com o teste de ambiguidade.
+ */
+const tentativasPorReferencia = new Map<string, { estado: string; blingPedidoId: string | null; pedidoId: string | null }>();
 let chamadasDeCriarPedido = 0;
+/** Controla o desfecho de `registrar_venda_manual` — ambíguo (padrão) ou sucesso, por teste. */
+let modoRegistrarVenda: 'ambiguo' | 'sucesso' = 'ambiguo';
 
 vi.mock('@/lib/supabaseServer', () => ({
   supabaseServer: {
     rpc: (fnName: string, args?: Record<string, unknown>) => {
       if (fnName === 'reivindicar_tentativa_venda_manual') {
-        if (tentativaArmazenada) {
+        const referencia = String(args?.p_referencia_local);
+        // Reivindicação ATÔMICA no nível do mock: nenhum `await` entre a
+        // checagem e a gravação, exatamente como o `INSERT ... ON CONFLICT
+        // DO NOTHING` real (migration 59) — uma promise síncrona resolve por
+        // completo antes de ceder ao event loop, então duas chamadas
+        // concorrentes (Promise.all, sem sequenciar) ainda são decididas
+        // pela ORDEM REAL em que o código de cada requisição chega aqui, não
+        // por uma corrida de fato dentro do mock.
+        const existente = tentativasPorReferencia.get(referencia);
+        if (existente) {
           return Promise.resolve({
             data: [{
-              tentativa_id: 'tentativa-1',
-              estado: tentativaArmazenada.estado,
-              pedido_id: null,
-              bling_pedido_id: tentativaArmazenada.blingPedidoId,
+              tentativa_id: `tentativa-${referencia}`,
+              estado: existente.estado,
+              pedido_id: existente.pedidoId,
+              bling_pedido_id: existente.blingPedidoId,
               is_duplicate: true,
             }],
             error: null,
           });
         }
-        tentativaArmazenada = { estado: 'em_andamento', blingPedidoId: null };
+        tentativasPorReferencia.set(referencia, { estado: 'em_andamento', blingPedidoId: null, pedidoId: null });
         return Promise.resolve({
-          data: [{ tentativa_id: 'tentativa-1', estado: 'em_andamento', pedido_id: null, bling_pedido_id: null, is_duplicate: false }],
+          data: [{ tentativa_id: `tentativa-${referencia}`, estado: 'em_andamento', pedido_id: null, bling_pedido_id: null, is_duplicate: false }],
           error: null,
         });
       }
       if (fnName === 'concluir_tentativa_venda_manual') {
-        if (tentativaArmazenada) {
-          tentativaArmazenada.estado = String(args?.p_estado);
-          tentativaArmazenada.blingPedidoId = (args?.p_bling_pedido_id as string | null) ?? tentativaArmazenada.blingPedidoId;
+        const tentativaId = String(args?.p_tentativa_id);
+        const referencia = tentativaId.replace(/^tentativa-/, '');
+        const existente = tentativasPorReferencia.get(referencia);
+        if (existente) {
+          existente.estado = String(args?.p_estado);
+          existente.blingPedidoId = (args?.p_bling_pedido_id as string | null) ?? existente.blingPedidoId;
+          existente.pedidoId = (args?.p_pedido_id as string | null) ?? existente.pedidoId;
         }
         return Promise.resolve({ data: null, error: null });
       }
       if (fnName === 'registrar_venda_manual') {
+        if (modoRegistrarVenda === 'sucesso') {
+          return Promise.resolve({ data: 'pedido-local-concorrencia-1', error: null });
+        }
         // Falha de TRANSPORTE — sem `code` — exatamente o formato que
         // `classificarErroDePersistencia` reconhece como Ambígua.
         return Promise.resolve({ data: null, error: { message: 'AbortError: The operation was aborted', code: '' } });
@@ -151,18 +183,19 @@ function corpoValido() {
   };
 }
 
-function requisicao() {
+function requisicao(overrides: Partial<ReturnType<typeof corpoValido>> = {}) {
   return new Request('https://orbita.test/api/pedidos/manual', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(corpoValido()),
+    body: JSON.stringify({ ...corpoValido(), ...overrides }),
   });
 }
 
 describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real)', () => {
   beforeEach(() => {
-    tentativaArmazenada = null;
+    tentativasPorReferencia.clear();
     chamadasDeCriarPedido = 0;
+    modoRegistrarVenda = 'ambiguo';
     vi.useFakeTimers();
   });
 
@@ -194,6 +227,44 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
     expect(respostaSegunda.status).toBe(500);
     expect(corpoSegunda.estadoIndeterminado).toBe(true);
     // O ponto inteiro do teste: NENHUMA segunda chamada a criarPedidoVenda.
+    expect(chamadasDeCriarPedido).toBe(1);
+  });
+
+  it('4ª rodada — DUAS requisições HTTP SIMULTÂNEAS com a MESMA referenciaLocal: uma única chamada ao Bling', async () => {
+    modoRegistrarVenda = 'sucesso';
+    const referenciaConcorrente = '66666666-6666-4666-8666-666666666666';
+    const { POST } = await import('./route');
+
+    // Disparadas com Promise.all — SEM await sequencial entre elas. É a
+    // rota REAL, ponta a ponta, decidindo com a RPC real de reivindicação —
+    // não uma simulação de handler com porta fake.
+    const [respostaA, respostaB] = await Promise.all([
+      POST(requisicao({ referenciaLocal: referenciaConcorrente })),
+      POST(requisicao({ referenciaLocal: referenciaConcorrente })),
+    ]);
+    const [corpoA, corpoB] = await Promise.all([respostaA.json(), respostaB.json()]);
+
+    const respostas = [
+      { status: respostaA.status, corpo: corpoA },
+      { status: respostaB.status, corpo: corpoB },
+    ];
+    const vencedoras = respostas.filter((r) => r.status === 201);
+    const emAndamento = respostas.filter((r) => r.status === 409);
+
+    // O ponto central: exatamente UMA reivindica e chama o Bling; a outra
+    // observa "em andamento" e nem chega perto dele.
+    expect(vencedoras).toHaveLength(1);
+    expect(emAndamento).toHaveLength(1);
+    expect(chamadasDeCriarPedido).toBe(1);
+    expect(vencedoras[0].corpo.pedidoId).toBe('pedido-local-concorrencia-1');
+
+    // E o desfecho posterior reutiliza o resultado correto — uma terceira
+    // chamada com a MESMA referência, depois que a vencedora já concluiu,
+    // encontra 'concluida' e não chama o Bling uma terceira vez.
+    const respostaPosterior = await POST(requisicao({ referenciaLocal: referenciaConcorrente }));
+    const corpoPosterior = await respostaPosterior.json();
+    expect(respostaPosterior.status).toBe(200);
+    expect(corpoPosterior.pedidoId).toBe('pedido-local-concorrencia-1');
     expect(chamadasDeCriarPedido).toBe(1);
   });
 });

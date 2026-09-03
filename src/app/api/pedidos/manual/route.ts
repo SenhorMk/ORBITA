@@ -140,6 +140,16 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
  * vez de lançar: sem a tabela não há como reivindicar nada, e a venda manual
  * não pode quebrar por causa disso — só fica sem a proteção.
  */
+/**
+ * **Nunca lança.** Toda falha vira `TentativaIndisponivel` — inclusive
+ * `42P01` (tabela/RPC da migration 59 ausente). A versão anterior tratava
+ * `42P01` como "segue sem a proteção" (`TentativaNova`); a 4ª rodada de
+ * revisão apontou, corretamente, que isso desliga silenciosamente a
+ * garantia que a migration 59 existe para dar — código novo contra banco
+ * antigo voltaria a poder duplicar no Bling numa retentativa, exatamente a
+ * janela que a fatia 3 foi escrita para fechar. Falha fechada: sem
+ * conseguir reivindicar, o handler não chama o Bling.
+ */
 async function reivindicarTentativa(scope: VerifiedOrganizationScope, referenciaLocal: string): Promise<ReivindicacaoDeTentativa> {
   const { data, error } = await supabaseServer.rpc('reivindicar_tentativa_venda_manual', {
     p_organizacao_id: scope.organizationId,
@@ -147,14 +157,13 @@ async function reivindicarTentativa(scope: VerifiedOrganizationScope, referencia
   });
 
   if (error) {
-    if (error.code === '42P01') {
-      return { _tag: 'TentativaNova', tentativaId: referenciaLocal };
-    }
-    throw new Error(`Falha ao reivindicar a tentativa de venda: ${error.message}`);
+    return { _tag: 'TentativaIndisponivel', causa: new Error(`Falha ao reivindicar a tentativa de venda: ${error.message}`) };
   }
 
   const linha = Array.isArray(data) ? data[0] : data;
-  if (!linha) throw new Error('reivindicar_tentativa_venda_manual não devolveu linha nenhuma');
+  if (!linha) {
+    return { _tag: 'TentativaIndisponivel', causa: new Error('reivindicar_tentativa_venda_manual não devolveu linha nenhuma') };
+  }
 
   if (!linha.is_duplicate) {
     return { _tag: 'TentativaNova', tentativaId: linha.tentativa_id };

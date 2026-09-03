@@ -98,6 +98,35 @@ begin
         raise exception 'Organizacao e referencia local sao obrigatorias.' using errcode = '22023';
     end if;
 
+    -- ATOMICO POR CONSTRUCAO: tenta inserir DIRETO, mesmo mecanismo do
+    -- `INSERT ... ON CONFLICT` de `registrar_venda_manual` (migration 57).
+    --
+    -- A versao anterior desta funcao fazia `SELECT ... FOR UPDATE` e SO
+    -- DEPOIS `INSERT` se nao achasse nada — e reproduzia, dentro do proprio
+    -- mecanismo criado para fechar a corrida do ticket 30, a MESMA corrida:
+    -- `SELECT ... FOR UPDATE` sobre uma linha que ainda NAO EXISTE nao
+    -- bloqueia nada (nao ha o que bloquear). Duas reivindicacoes concorrentes
+    -- da mesma referencia podiam as duas passar pelo `if not found` e as duas
+    -- tentarem `INSERT` — a segunda batendo num `23505` NAO TRATADO, em vez
+    -- de devolver `TentativaEmAndamento` graciosamente. Reproduzido contra
+    -- Postgres real com duas conexoes antes desta correcao: uma vencia, a
+    -- outra lancava `duplicate key value violates unique constraint
+    -- "uq_tentativas_venda_manual_org_referencia"` sem nenhum tratamento.
+    insert into public.tentativas_venda_manual (organizacao_id, referencia_local, estado)
+    values (p_organizacao_id, p_referencia_local, 'em_andamento')
+    on conflict (organizacao_id, referencia_local) do nothing
+    returning id into v_new_id;
+
+    if v_new_id is not null then
+        return query select v_new_id, 'em_andamento'::text, null::uuid, null::text, false;
+        return;
+    end if;
+
+    -- Conflito: ja existe uma tentativa com esta referencia. A LINHA AGORA
+    -- EXISTE, entao `FOR UPDATE` bloqueia de verdade contra qualquer outra
+    -- reivindicacao concorrente da MESMA referencia, e le o estado ja
+    -- commitado quando destrava — o mesmo padrao provado em
+    -- `evidence/30-atomicidade-da-tomada-2026-09-03.md`.
     select id, tentativas_venda_manual.estado, tentativas_venda_manual.pedido_id, tentativas_venda_manual.bling_pedido_id
     into v_existente
     from public.tentativas_venda_manual
@@ -105,29 +134,19 @@ begin
       and referencia_local = p_referencia_local
     for update;
 
-    if found then
-        if v_existente.estado = 'falhou' then
-            -- Falha DEFINITIVA anterior: o servidor respondeu com um erro
-            -- estruturado, e nada ficou pendente no Bling para essa
-            -- referencia (ou foi compensado). Seguro reabrir a MESMA
-            -- referencia para uma nova tentativa, em vez de bloquear o
-            -- cliente ou forca-lo a gerar outra.
-            update public.tentativas_venda_manual
-            set estado = 'em_andamento', pedido_id = null, bling_pedido_id = null
-            where id = v_existente.id;
-            return query select v_existente.id, 'em_andamento'::text, null::uuid, null::text, false;
-            return;
-        end if;
-
-        return query select v_existente.id, v_existente.estado, v_existente.pedido_id, v_existente.bling_pedido_id, true;
+    if v_existente.estado = 'falhou' then
+        -- Falha DEFINITIVA anterior, com a compensacao CONFIRMADA (a
+        -- aplicacao so grava 'falhou' quando o Bling nao tem nada pendente —
+        -- ver a maquina de estados em `compensacao.ts`). Seguro reabrir a
+        -- MESMA referencia para uma nova tentativa.
+        update public.tentativas_venda_manual
+        set estado = 'em_andamento', pedido_id = null, bling_pedido_id = null
+        where id = v_existente.id;
+        return query select v_existente.id, 'em_andamento'::text, null::uuid, null::text, false;
         return;
     end if;
 
-    insert into public.tentativas_venda_manual (organizacao_id, referencia_local, estado)
-    values (p_organizacao_id, p_referencia_local, 'em_andamento')
-    returning id into v_new_id;
-
-    return query select v_new_id, 'em_andamento'::text, null::uuid, null::text, false;
+    return query select v_existente.id, v_existente.estado, v_existente.pedido_id, v_existente.bling_pedido_id, true;
     return;
 end;
 $$;

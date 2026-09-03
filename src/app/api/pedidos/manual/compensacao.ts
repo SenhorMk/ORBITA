@@ -92,6 +92,32 @@ export function respostaEstadoIndeterminado(blingPedidoId: string | null): NextR
  * A checagem abaixo é defesa a mais, não o que decide se compensa: mesmo numa
  * falha definitiva, nada impede uma tentativa concorrente (ou uma reentrega)
  * de ter registrado a mesma venda entre o erro e este ponto.
+ *
+ * ---
+ *
+ * **A máquina de estados completa da fatia 3 (4ª rodada de revisão).** O
+ * erro que a revisão apontou: "falha definitiva" na persistência local NÃO
+ * significa "nada ficou pendente no Bling" — só significa que a GRAVAÇÃO
+ * LOCAL não vai acontecer. O Bling é uma chamada separada, com seu PRÓPRIO
+ * resultado, que pode ele mesmo ser confirmado ou ambíguo. A tabela:
+ *
+ * | Persistência local | Compensação no Bling | `estado` gravado | Uma retentativa com a MESMA referência pode... |
+ * |---|---|---|---|
+ * | `PersistVendaOk` | (não se aplica) | `concluida` | reutilizar o resultado — nunca chama o Bling de novo |
+ * | `PersistVendaFalhouDefinitivamente`, sem `blingPedidoId` | (nada a compensar) | `falhou` | ser aberta — nada foi criado no Bling |
+ * | `PersistVendaFalhouDefinitivamente`, achou venda já registrada | (não precisou compensar) | `concluida` | reutilizar o resultado |
+ * | `PersistVendaFalhouDefinitivamente` | **confirmada** (`compensado: true`) | `falhou` | ser aberta — o Bling está confirmadamente limpo |
+ * | `PersistVendaFalhouDefinitivamente` | **falhou/ambígua** (`compensado: false`) | **`indeterminada`** | **NÃO** — o Bling pode ter um pedido pendente que ninguém confirmou cancelado |
+ * | `PersistVendaAmbigua`, confirmação achou a venda | (não se aplica) | `concluida` | reutilizar o resultado |
+ * | `PersistVendaAmbigua`, confirmação nunca resolveu | (não tentou compensar) | `indeterminada` | **NÃO** — não se sabe se a venda existe |
+ *
+ * A linha que a revisão pegou: a versão anterior gravava `'falhou'` também
+ * quando a compensação falhava — como se "a persistência falhou" bastasse
+ * para saber que "nada ficou pendente no Bling". Só uma compensação
+ * CONFIRMADA prova isso. `'indeterminada'` é o estado certo para "não sei",
+ * e é exatamente o estado que a reivindicação de uma retentativa já trata
+ * como bloqueante — reaproveitar esse estado, em vez de inventar um quinto,
+ * mantém a máquina pequena.
  */
 export async function compensarNoBling(
   scope: VerifiedOrganizationScope,
@@ -135,7 +161,15 @@ export async function compensarNoBling(
         500,
         { blingPedidoId, compensado: false },
       ),
-      desfecho: { estado: 'falhou', blingPedidoId },
+      // MÁQUINA DE ESTADOS (4ª rodada de revisão) — 'falhou' só é seguro
+      // quando o Bling está CONFIRMADAMENTE limpo. Aqui não está: a
+      // compensação em si falhou, então o pedido pode continuar existindo lá.
+      // 'indeterminada', não 'falhou' — bloqueia a referência exatamente como
+      // uma ambiguidade de persistência bloqueia, até alguém confirmar à mão
+      // (cancelar no Bling) e destravar manualmente. Reabrir aqui deixaria
+      // uma retentativa criar um SEGUNDO pedido em cima de um primeiro que
+      // ninguém confirmou estar cancelado.
+      desfecho: { estado: 'indeterminada', blingPedidoId },
     };
   }
 

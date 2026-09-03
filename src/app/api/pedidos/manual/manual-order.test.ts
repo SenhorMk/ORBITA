@@ -465,7 +465,13 @@ describe('resultado real da venda', () => {
     expect(body.error).toContain('Pode tentar de novo');
   });
 
-  it('quando o cancelamento também falha, diz o que precisa ser feito à mão', async () => {
+  it('quando o cancelamento também falha, diz o que precisa ser feito à mão — e NÃO grava falhou, grava indeterminada', async () => {
+    // 4ª rodada de revisão — a máquina de estados. "Persistência falhou
+    // definitivamente" NÃO prova "nada ficou pendente no Bling": a
+    // compensação é uma chamada PRÓPRIA, com resultado PRÓPRIO. Se ela
+    // também falha, o Bling pode ter um pedido pendente que ninguém
+    // confirmou cancelado — a referência tem de ficar bloqueada
+    // ('indeterminada'), não liberada para reabrir ('falhou').
     const store = fakeStore({ persistDefinitiveError: new Error('null value in column "user_id"') });
     const bling = fakeBling({ cancelamentoFailure: 'pedido já faturado' });
     const handler = createManualOrderHandler(deps({ store, bling }));
@@ -480,6 +486,30 @@ describe('resultado real da venda', () => {
     expect(body.error).toContain('pedido já faturado');
     // A instrução precisa ser explícita: retentar sem limpar cria outro pedido.
     expect(body.error).toContain('Cancele o pedido no Bling');
+    // O ponto central do teste: o desfecho gravado é 'indeterminada', não
+    // 'falhou' — é isso que impede a referência de ser reaberta.
+    expect(store.desfechosRegistrados).toEqual([{ estado: 'indeterminada', blingPedidoId: '918273' }]);
+  });
+
+  it('uma retentativa com a MESMA referência, depois de persistência+compensação terem falhado, NÃO chama createPedidoVenda de novo', async () => {
+    // A continuação direta do teste acima: uma retentativa reivindica a
+    // MESMA referência e encontra o estado 'indeterminada' que o teste
+    // anterior provou ser gravado — e por isso nunca chega perto do Bling.
+    const store = fakeStore({
+      reivindicacaoForcada: { _tag: 'TentativaIndeterminada', blingPedidoId: '918273' },
+    });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+    const body = (await response.json()) as ManualOrderResponseBody;
+
+    expect(response.status).toBe(500);
+    expect(body.estadoIndeterminado).toBe(true);
+    // O ponto central: nenhuma chamada nova ao Bling — nem criação, nem
+    // cancelamento. A referência ficou bloqueada de verdade.
+    expect(bling.payloads).toHaveLength(0);
+    expect(bling.cancelados).toEqual([]);
   });
 
   it('sem envio ao Bling não há o que compensar', async () => {
@@ -701,6 +731,30 @@ describe('idempotência entre retentativas da mesma submissão (referenciaLocal)
 
     expect(response.status).toBe(409);
     expect(bling.payloads).toHaveLength(0);
+    expect(store.persisted).toHaveLength(0);
+  });
+
+  it('FAIL CLOSED: quando a reivindicação está indisponível (ex.: migration 59 não aplicada), recusa com 503 sem chamar o Bling', async () => {
+    // 4ª rodada de revisão — o bloqueante principal. A versão anterior via
+    // "infraestrutura de idempotência ausente" e concluía "prossiga sem
+    // proteção" (TentativaNova). Isso desligava silenciosamente a garantia
+    // bem na janela em que ela mais importa: código novo, banco sem a
+    // migration 59. Agora: sem conseguir reivindicar, a venda NÃO PROSSEGUE.
+    const store = fakeStore({
+      reivindicacaoForcada: { _tag: 'TentativaIndisponivel', causa: new Error('relation "tentativas_venda_manual" does not exist') },
+    });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+    const body = (await response.json()) as ManualOrderResponseBody;
+
+    expect(response.status).toBe(503);
+    expect(body.success).toBe(false);
+    // O ponto central do teste: NENHUMA chamada ao Bling — nem de criação
+    // nem de cancelamento — quando a proteção não pôde ser confirmada.
+    expect(bling.payloads).toHaveLength(0);
+    expect(bling.cancelados).toEqual([]);
     expect(store.persisted).toHaveLength(0);
   });
 

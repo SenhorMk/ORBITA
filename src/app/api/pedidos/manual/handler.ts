@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { type ManualOrderRequest } from '@/lib/config/manualOrderContract';
 import { pedidoVendaPayloadSchema, type PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 
 import {
   compensarNoBling,
@@ -254,6 +255,22 @@ function decidirSobreTentativa(
   }
   if (reivindicacao._tag === 'TentativaIndeterminada') {
     return { response: respostaEstadoIndeterminado(reivindicacao.blingPedidoId) };
+  }
+  if (reivindicacao._tag === 'TentativaIndisponivel') {
+    // FAIL CLOSED (4ª rodada de revisão): a infraestrutura de idempotência
+    // não respondeu — pode ser a migration 59 ainda não aplicada, pode ser
+    // uma falha de transporte. Não importa qual: sem conseguir reivindicar a
+    // referência, não há como garantir que uma retentativa não vai duplicar
+    // no Bling, então a venda NÃO PROSSEGUE. A versão anterior tratava
+    // "infraestrutura ausente" como "pode prosseguir sem a proteção" — essa
+    // troca é exatamente o que a revisão apontou como perigosa.
+    registrarFalhaInterna('pedidos.manual.tentativa.reivindicar', reivindicacao.causa);
+    return {
+      response: fail(
+        'Não foi possível confirmar que esta venda ainda não foi registrada. Por segurança, ela NÃO foi enviada ao Bling. Tente novamente em instantes.',
+        503,
+      ),
+    };
   }
   // 'TentativaEmAndamento' — uma tentativa concorrente com a MESMA
   // referência está executando agora. Não é erro do cliente nem do
