@@ -23,7 +23,7 @@
     "test:backup": "node scripts/test-backup-restore.mjs",
     "supabase:sync:rehearsal": "node scripts/supabase-sync-rehearsal.mjs",
     "test": "vitest run",
-    "test:db": "node scripts/test-database-lab.mjs",
+    "test:db": "node scripts/test-database-lab.mjs && node scripts/test-database-concurrency.mjs",
     "test:watch": "vitest",
     "e2e": "playwright test",
     "e2e:report": "playwright show-report playwright-report",

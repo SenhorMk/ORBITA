@@ -103,6 +103,19 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
     },
 
     persistVenda,
+
+    async findVendaManualJaRegistrada(scope: VerifiedOrganizationScope, blingPedidoId: string): Promise<{ pedidoId: string } | null> {
+      const { data, error } = await supabaseServer
+        .from('pedidos')
+        .select('id')
+        .eq('organizacao_id', scope.organizationId)
+        .eq('bling_id', blingPedidoId)
+        .eq('origem', 'Loja Física / Manual')
+        .maybeSingle();
+
+      if (error) throw new Error(`Falha ao conferir se a venda já foi registrada: ${error.message}`);
+      return data ? { pedidoId: data.id } : null;
+    },
   };
 }
 

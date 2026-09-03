@@ -300,6 +300,11 @@
       "order": 60,
       "path": "../database/57_venda_manual_assume_linha_do_webhook.sql",
       "sha256": "e4df539ca872ce14842720375c9513d4cf63f3fd585bfb55d063dd7bec3d419d"
+    },
+    {
+      "order": 61,
+      "path": "../database/58_reserva_nao_conta_pedido_finalizado.sql",
+      "sha256": "45a4b3d803a74ce7ec3901e6f1ee3ba9582e6e42a693a70e47a773a3371463ca"
     }
   ],
   "references": [

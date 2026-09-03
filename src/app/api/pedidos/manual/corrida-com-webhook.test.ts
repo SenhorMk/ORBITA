@@ -330,6 +330,12 @@ function lojaEmMemoria(comTomada: boolean): ManualOrderStorePort {
     async linkClienteBlingId() { /* o cliente já tem bling_id */ },
     async findProdutosByIds() { return [PRODUTO_LOCAL]; },
     async persistVenda(input) { return pedidos.registrarVendaManual(input, comTomada); },
+    async findVendaManualJaRegistrada(scope, blingPedidoId) {
+      const linha = pedidos.linhas.find(
+        (l) => l.organizacaoId === scope.organizationId && l.blingId === blingPedidoId && l.origem === ORIGEM_MANUAL,
+      );
+      return linha ? { pedidoId: linha.id } : null;
+    },
   };
 }
 

@@ -50,6 +50,13 @@ function fakeStore(options: {
   clientes?: Record<string, ManualOrderCliente>;
   produtos?: ManualOrderProduto[];
   persistError?: Error;
+  /**
+   * Ticket 30, fatia 3 — simula a venda que `persistVenda` reporta como falha
+   * mas que, na verdade, já foi commitada (confirmação perdida entre o banco
+   * e o Node). Quando definido, `findVendaManualJaRegistrada` devolve este
+   * `pedidoId` em vez de `null`.
+   */
+  vendaJaRegistradaPedidoId?: string;
 } = {}): FakeStore {
   const clientesPorOrg = options.clientes ?? { [ORG_A]: cliente() };
   const produtos = options.produtos ?? [produto()];
@@ -74,6 +81,9 @@ function fakeStore(options: {
       if (options.persistError) throw options.persistError;
       persisted.push(input);
       return { pedidoId: 'pedido-local-1' };
+    },
+    async findVendaManualJaRegistrada() {
+      return options.vendaJaRegistradaPedidoId ? { pedidoId: options.vendaJaRegistradaPedidoId } : null;
     },
   };
 }
@@ -436,6 +446,30 @@ describe('resultado real da venda', () => {
     expect(response.status).toBe(500);
     expect(bling.cancelados).toEqual([]);
     expect(body.compensado).toBeUndefined();
+  });
+
+  // Ticket 30, fatia 3 — retentativa depois de resposta perdida.
+  it('NÃO cancela no Bling quando a venda já havia sido registrada — a falha era só de confirmação', async () => {
+    // `persistVenda` lança (ex.: a conexão caiu entre o commit do Postgres e a
+    // resposta chegar ao Node), mas a venda JÁ EXISTE, completa, gravada por
+    // essa mesma tentativa. Compensar aqui cancelaria no Bling uma venda real.
+    const store = fakeStore({
+      persistError: new Error('conexão perdida depois do commit'),
+      vendaJaRegistradaPedidoId: 'pedido-ja-registrado-1',
+    });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+    const body = (await response.json()) as ManualOrderResponseBody;
+
+    expect(response.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.pedidoId).toBe('pedido-ja-registrado-1');
+    expect(body.blingPedidoId).toBe('918273');
+    // O ponto inteiro do teste: nada foi cancelado no Bling.
+    expect(bling.cancelados).toEqual([]);
+    expect(body.avisos?.join(' ')).toContain('já havia sido registrada');
   });
 });
 

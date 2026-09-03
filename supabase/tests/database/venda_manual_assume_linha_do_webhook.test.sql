@@ -1,5 +1,5 @@
 -- venda_manual_assume_linha_do_webhook.test.sql
--- Ticket 30, migration 57.
+-- Ticket 30, migrations 57 e 58.
 --
 -- A CORRIDA: o pedido nasce no Bling, o `order.created` volta em menos de um
 -- segundo, e o webhook grava a linha em `pedidos` ANTES de a venda manual
@@ -7,14 +7,36 @@
 -- `uq_pedidos_org_bling` (23505) e a venda inteira cai — sem baixa de estoque
 -- e sem titulo financeiro.
 --
--- Este teste prova as duas metades:
+-- A DUPLA CONTAGEM: achada ao medir esta corrida, e corrigida junto por
+-- exigencia de revisao — nao e a corrida, mas o mesmo pedido a expõe. O
+-- INSERT em `itens_pedido` reserva (+1, `tg_atualizar_estoque_reservado`) e
+-- `baixar_estoque_organizacao` baixa fisicamente (-1) — juntas, a
+-- disponibilidade cai DOIS por unidade vendida, porque a reserva de um pedido
+-- que nasce `Entregue` nunca era liberada. A migration 58 ensina os dois
+-- gatilhos de reserva a tratar `Entregue` como estado final, do mesmo jeito
+-- que `Cancelado` ja era.
+--
+-- Este teste prova quatro coisas:
 --   1. com a linha do webhook ja gravada, a venda manual a ASSUME: mesmo id,
 --      um pedido so, um item so, uma baixa so, um titulo so;
---   2. assumir DE NOVO uma linha que ja e venda manual continua sendo 23505 —
+--   2. a disponibilidade cai EXATAMENTE uma unidade por unidade vendida — nao
+--      duas —, tanto na tomada quanto numa venda manual sem webhook por perto;
+--   3. cancelar depois uma venda manual ja completa NAO manda a reserva para
+--      negativo — prova que a liberacao so acontece quando havia reserva de
+--      fato;
+--   4. assumir DE NOVO uma linha que ja e venda manual continua sendo 23505 —
 --      o indice fica, e o codigo de erro nao virou sucesso.
 --
--- REINTRODUZIR O DEFEITO: troque o `\ir` da migration 57 por nada. As
--- asserçoes 3 a 12 falham, a primeira delas com o proprio 23505.
+-- Os gatilhos de estoque NAO sao copiados aqui: vem de `\ir` das migrations
+-- 58/00_bootstrap, a funcao REAL que a producao executa. Uma copia so provaria
+-- a copia — foi exatamente o limite que a primeira versao deste teste
+-- registrou e que esta revisao fecha.
+--
+-- REINTRODUZIR A CORRIDA: troque o `\ir` da migration 57 por nada. As
+-- asserçoes 3 a 12 (secao B) falham, a primeira delas com o proprio 23505.
+--
+-- REINTRODUZIR A DUPLA CONTAGEM: troque o `\ir` da migration 58 por nada. As
+-- asserçoes da secao C (disponibilidade e cancelamento) falham.
 
 begin;
 
@@ -133,51 +155,15 @@ create table public.titulos_financeiros (
 );
 
 -- ----------------------------------------------------------------------------
--- Os dois gatilhos de estoque de `schema_master.sql`, copiados palavra por
--- palavra, porque a aritmetica da reserva e uma AFIRMACAO desta correcao:
--- a tomada do item tem de ter delta ZERO na reserva, e nao pode ser recusada
--- pela validacao de disponivel. Um teste sem os gatilhos nao distinguiria isso.
+-- `fn_atualizar_estoque_reservado` e `fn_atualizar_reserva_status_pedido` NAO
+-- sao copiados aqui: vem de `\ir` da migration 58, mais abaixo — a funcao REAL
+-- que a producao executa. Uma copia so provaria a copia; era exatamente o
+-- limite que a primeira versao deste teste registrava.
 --
--- LIMITE: sao copias. O que elas provam e que a regra da migration 57 fecha
--- com os gatilhos como estao escritos no schema; a aplicacao canonica completa
--- do laboratorio e que cobre o schema de fato.
+-- `fn_validar_estoque_disponivel` continua copiada: a migration 58 nao a
+-- toca, e o teste so precisa que ela exista para provar que a tomada nao e
+-- recusada pela validacao de disponivel.
 -- ----------------------------------------------------------------------------
-create or replace function public.fn_atualizar_estoque_reservado() returns trigger language plpgsql set search_path = public as $reserva$
-declare
-    v_pedido_cancelado boolean;
-begin
-    if (tg_op = 'DELETE') then
-        select (status = 'Cancelado') into v_pedido_cancelado from pedidos where id = old.pedido_id;
-    else
-        select (status = 'Cancelado') into v_pedido_cancelado from pedidos where id = new.pedido_id;
-    end if;
-
-    if (v_pedido_cancelado = true) then
-        if (tg_op = 'DELETE') then return old; else return new; end if;
-    end if;
-
-    if (tg_op = 'INSERT') then
-        update produtos set estoque_reservado = estoque_reservado + new.quantidade where id = new.produto_id;
-        return new;
-    elsif (tg_op = 'DELETE') then
-        update produtos set estoque_reservado = estoque_reservado - old.quantidade where id = old.produto_id;
-        return old;
-    elsif (tg_op = 'UPDATE') then
-        if (old.produto_id = new.produto_id) then
-            update produtos set estoque_reservado = estoque_reservado + (new.quantidade - old.quantidade) where id = new.produto_id;
-        else
-            update produtos set estoque_reservado = estoque_reservado - old.quantidade where id = old.produto_id;
-            update produtos set estoque_reservado = estoque_reservado + new.quantidade where id = new.produto_id;
-        end if;
-        return new;
-    end if;
-    return null;
-end;
-$reserva$;
-
-create trigger tg_atualizar_estoque_reservado
-after insert or update or delete on itens_pedido for each row execute function fn_atualizar_estoque_reservado();
-
 create or replace function public.fn_validar_estoque_disponivel() returns trigger language plpgsql set search_path = public as $disponivel$
 declare
     v_erp int; v_reservado int; v_disp_final int;
@@ -224,6 +210,16 @@ values ('30000000-0000-4000-8000-000000000001', 'owner-t30@orbita.test');
 \ir ../../../database/55_upsert_conflito_inferivel.sql
 \ir ../../../database/56_baixa_estoque_com_ator.sql
 \ir ../../../database/57_venda_manual_assume_linha_do_webhook.sql
+\ir ../../../database/58_reserva_nao_conta_pedido_finalizado.sql
+
+-- As duas ligacoes que a migration 58 corrige. Nao vem de `schema_master.sql`
+-- porque este teste nao o roda inteiro (ver cabecalho); sao as MESMAS duas
+-- linhas de `\ir ../../../supabase/lab/00_bootstrap_schema.sql`.
+create trigger tg_atualizar_estoque_reservado
+after insert or update or delete on itens_pedido for each row execute function fn_atualizar_estoque_reservado();
+
+create trigger tg_pedidos_reserva_status
+after update of status on pedidos for each row execute function fn_atualizar_reserva_status_pedido();
 
 insert into public.organizacoes (id, nome, slug)
 values ('30100000-0000-4000-8000-000000000001', 'Org T30', 'org-t30');
@@ -239,6 +235,12 @@ values ('30300000-0000-4000-8000-00000000000a', '30000000-0000-4000-8000-0000000
 insert into public.produtos (id, user_id, organizacao_id, bling_id, nome, preco, estoque)
 values ('30200000-0000-4000-8000-00000000000a', '30000000-0000-4000-8000-000000000001',
         '30100000-0000-4000-8000-000000000001', '77', 'Rape Pequeno Artemisia', 40.00, 3);
+
+-- Um segundo produto, para a venda manual SEM webhook por perto (secao C) —
+-- a dupla contagem nao depende da corrida, e o teste prova isso separado.
+insert into public.produtos (id, user_id, organizacao_id, bling_id, nome, preco, estoque)
+values ('30200000-0000-4000-8000-00000000000b', '30000000-0000-4000-8000-000000000001',
+        '30100000-0000-4000-8000-000000000001', '88', 'Vela de Cera de Abelha', 25.00, 5);
 
 -- ----------------------------------------------------------------------------
 -- O WEBHOOK CHEGA PRIMEIRO.
@@ -257,7 +259,7 @@ insert into public.itens_pedido (user_id, organizacao_id, pedido_id, produto_id,
 values ('30000000-0000-4000-8000-000000000001', '30100000-0000-4000-8000-000000000001',
         '30400000-0000-4000-8000-00000000000a', '30200000-0000-4000-8000-00000000000a', 1, 40.00);
 
-select plan(15);
+select plan(19);
 
 -- ----------------------------------------------------------------------------
 -- 1-2. O ponto de partida da corrida, medido antes de agir.
@@ -341,8 +343,15 @@ select is(
 
 select is(
     (select estoque_reservado from public.produtos where id = '30200000-0000-4000-8000-00000000000a'),
-    1,
-    'a reserva do webhook e reaproveitada: a tomada do item tem delta ZERO, nao soma a segunda'
+    0,
+    'a reserva do webhook (Pendente) e LIBERADA quando o pedido vira Entregue — migration 58. '
+    || 'Sem ela ficaria em 1, e a disponibilidade (estoque - reservado) cairia DOIS por unidade vendida'
+);
+
+select is(
+    (select estoque - estoque_reservado from public.produtos where id = '30200000-0000-4000-8000-00000000000a'),
+    2,
+    'disponibilidade: 3 de partida, 1 vendida, sobram exatamente 2 — nao 1'
 );
 
 select is(
@@ -381,6 +390,60 @@ select is(
     (select count(*) from public.titulos_financeiros where organizacao_id = '30100000-0000-4000-8000-000000000001'),
     1::bigint,
     'a recusa nao criou um segundo titulo financeiro'
+);
+
+-- ----------------------------------------------------------------------------
+-- SECAO C — a dupla contagem NAO depende da corrida.
+--
+-- Uma venda manual pura, sem webhook por perto (bling_id nulo, syncBling
+-- desligado), no segundo produto. Se a migration 58 sair, `estoque_reservado`
+-- termina em 1 em vez de 0 — o INSERT em `itens_pedido` reserva, e nada
+-- libera, porque o pedido nasce direto como `Entregue` (nunca faz a transicao
+-- UPDATE que o gatilho de status observa).
+-- ----------------------------------------------------------------------------
+create temp table venda_sem_bling as
+select public.registrar_venda_manual(
+    '30100000-0000-4000-8000-000000000001',
+    '30000000-0000-4000-8000-000000000001',
+    '30300000-0000-4000-8000-00000000000a',
+    null, null,
+    25.00, 0, 0, 'Pix', null, current_date,
+    '[{"produto_id":"30200000-0000-4000-8000-00000000000b","quantidade":1,"valor_unitario":25.00}]'::jsonb
+) as pedido_id;
+
+select is(
+    (select estoque_reservado from public.produtos where id = '30200000-0000-4000-8000-00000000000b'),
+    0,
+    'venda manual sem webhook nenhum por perto: tambem nunca reserva — a dupla contagem nao e a corrida'
+);
+
+select is(
+    (select estoque - estoque_reservado from public.produtos where id = '30200000-0000-4000-8000-00000000000b'),
+    4,
+    'disponibilidade: 5 de partida, 1 vendida, sobram exatamente 4'
+);
+
+-- ----------------------------------------------------------------------------
+-- SECAO D — cancelar depois nao manda a reserva para negativo.
+--
+-- `fn_atualizar_reserva_status_pedido` so libera reserva na transicao para um
+-- estado final vinda de um estado NAO final. A venda manual assumida na secao
+-- B ja chegou em `Entregue` sem nunca ter reservado (a liberacao aconteceu na
+-- propria transicao Pendente->Entregue). Cancela-la agora e uma transicao
+-- Entregue->Cancelado — final para final: nenhum dos dois lados reservava, e
+-- o gatilho tem de reconhecer isso e nao subtrair uma reserva que nao existe.
+--
+-- Sem a distincao correta (ex.: liberar sempre que o novo status e Cancelado,
+-- sem checar se o antigo ja era final), esta subtracao levaria
+-- `estoque_reservado` a -1 — um numero que nao significa nada e que
+-- contaminaria a proxima venda do mesmo produto.
+-- ----------------------------------------------------------------------------
+update public.pedidos set status = 'Cancelado' where id = '30400000-0000-4000-8000-00000000000a';
+
+select is(
+    (select estoque_reservado from public.produtos where id = '30200000-0000-4000-8000-00000000000a'),
+    0,
+    'cancelar uma venda manual ja Entregue nao manda a reserva para negativo — Entregue->Cancelado e final->final'
 );
 
 select * from finish();

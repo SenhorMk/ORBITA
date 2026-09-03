@@ -274,8 +274,16 @@ async function sincronizarComBling(
  * Aconteceu em 2026-08-30: o pedido 26735607230 nasceu no Bling, a gravação
  * local foi recusada pelo banco, e ele ficou sem par no ORBITA. Não havia
  * retentativa segura — tentar de novo criava mais um.
+ *
+ * **Antes de compensar, confere se a venda já não foi registrada de verdade**
+ * (ticket 30, fatia 3). `persistVenda` pode lançar depois de já ter
+ * commitado — confirmação perdida entre o banco e o Node, ou o `data` da RPC
+ * chegando num formato inesperado depois da gravação. Compensar nesse caso
+ * cancelaria no Bling uma venda que é real e completa no ORBITA: a
+ * verificação abaixo troca uma suposição por uma leitura.
  */
 async function compensarNoBling(
+  scope: VerifiedOrganizationScope,
   blingPedidoId: string | null,
   error: unknown,
   deps: ManualOrderDependencies,
@@ -290,6 +298,23 @@ async function compensarNoBling(
     // Nada foi criado no Bling: não há o que reconciliar, e não há o que dizer
     // além de que falhou.
     return fail(MENSAGEM_PUBLICA_DE_FALHA, 500, { blingPedidoId });
+  }
+
+  const jaRegistrada = await deps.store.findVendaManualJaRegistrada(scope, blingPedidoId);
+  if (jaRegistrada !== null) {
+    // A gravação aconteceu — só a confirmação dela é que se perdeu no
+    // caminho. Cancelar agora destruiria uma venda real. Reportar sucesso é o
+    // que a chamada original teria feito se a resposta não tivesse se
+    // perdido.
+    return json(
+      {
+        success: true,
+        pedidoId: jaRegistrada.pedidoId,
+        blingPedidoId,
+        avisos: ['A venda já havia sido registrada numa tentativa anterior; nenhuma ação nova foi necessária.'],
+      },
+      200,
+    );
   }
 
   const compensacao = await deps.bling.cancelarPedidoVenda(blingPedidoId);
@@ -400,7 +425,7 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
 
       return json({ success: true, pedidoId, blingPedidoId, total, avisos }, 201);
     } catch (error: unknown) {
-      return compensarNoBling(blingPedidoId, error, deps);
+      return compensarNoBling(scope, blingPedidoId, error, deps);
     }
   };
 }

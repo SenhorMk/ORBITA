@@ -61,6 +61,22 @@ export interface ManualOrderStorePort {
   linkClienteBlingId(scope: VerifiedOrganizationScope, clienteId: string, blingId: string): Promise<void>;
   findProdutosByIds(scope: VerifiedOrganizationScope, produtoIds: readonly string[]): Promise<readonly ManualOrderProduto[]>;
   persistVenda(input: PersistManualOrderInput): Promise<{ readonly pedidoId: string }>;
+  /**
+   * Ticket 30, fatia 3 — recuperação de confirmação perdida.
+   *
+   * `persistVenda` pode lançar mesmo depois de `registrar_venda_manual` ter
+   * COMMITADO no Postgres: a conexão Node↔Postgres pode cair entre o commit e
+   * a resposta chegar ao cliente do banco, e `route.ts`'s `persistVenda`
+   * também lança quando a RPC devolve um `data` que não é string — depois de
+   * já ter gravado. Nos dois casos, o `catch` do handler veria "falhou" para
+   * uma venda que **já existe**, completa, na organização.
+   *
+   * Chamado só quando `persistVenda` lança e há um `blingPedidoId` — antes de
+   * compensar (cancelar no Bling), confere se a venda já foi de fato
+   * registrada. Se sim, cancelar seria destrutivo: apagaria no ERP uma venda
+   * que já é real e completa no ORBITA.
+   */
+  findVendaManualJaRegistrada(scope: VerifiedOrganizationScope, blingPedidoId: string): Promise<{ readonly pedidoId: string } | null>;
 }
 
 export type { BlingCallResult };
