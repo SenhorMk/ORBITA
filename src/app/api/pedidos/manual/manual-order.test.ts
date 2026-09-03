@@ -9,8 +9,10 @@ import {
   type ManualOrderProduto,
   type ManualOrderResponseBody,
   type ManualOrderStorePort,
+  type PedidoEncontradoNoBling,
   type PersistManualOrderInput,
   type ReivindicacaoDeTentativa,
+  type TentativaRegistrada,
 } from './handler';
 import { buildManualOrderRequest, manualOrderRequestSchema } from '@/lib/config/manualOrderContract';
 import { pedidoVendaPayloadSchema, type PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
@@ -47,6 +49,8 @@ interface FakeStore extends ManualOrderStorePort {
   readonly persisted: PersistManualOrderInput[];
   readonly vinculos: Array<{ clienteId: string; blingId: string }>;
   readonly desfechosRegistrados: DesfechoDaTentativa[];
+  /** Fingerprints que o handler calculou e mandou reivindicar (5ª rodada). */
+  readonly fingerprintsReivindicados: string[];
 }
 
 function fakeStore(options: {
@@ -71,12 +75,15 @@ function fakeStore(options: {
    * tentativa anterior (concluída, indeterminada, ou em andamento).
    */
   reivindicacaoForcada?: ReivindicacaoDeTentativa;
+  /** 5ª rodada — o que `lerTentativaPorReferencia` (reconciliação) devolve. */
+  tentativaRegistrada?: TentativaRegistrada;
 } = {}): FakeStore {
   const clientesPorOrg = options.clientes ?? { [ORG_A]: cliente() };
   const produtos = options.produtos ?? [produto()];
   const persisted: PersistManualOrderInput[] = [];
   const vinculos: Array<{ clienteId: string; blingId: string }> = [];
   const desfechosRegistrados: DesfechoDaTentativa[] = [];
+  const fingerprintsReivindicados: string[] = [];
   const apareceNaTentativa = options.vendaApareceNaTentativa ?? 1;
   let tentativasDeConfirmacao = 0;
 
@@ -84,11 +91,16 @@ function fakeStore(options: {
     persisted,
     vinculos,
     desfechosRegistrados,
-    async reivindicarTentativa() {
+    fingerprintsReivindicados,
+    async reivindicarTentativa(_scope, _referencia, fingerprint) {
+      fingerprintsReivindicados.push(fingerprint);
       return options.reivindicacaoForcada ?? { _tag: 'TentativaNova', tentativaId: 'tentativa-fake-1' };
     },
-    async registrarDesfechoDaTentativa(_tentativaId, desfecho) {
+    async registrarDesfechoDaTentativa(_scope, _tentativaId, desfecho) {
       desfechosRegistrados.push(desfecho);
+    },
+    async lerTentativaPorReferencia() {
+      return options.tentativaRegistrada ?? null;
     },
     async findClienteById(scope, clienteId) {
       const found = clientesPorOrg[scope.organizationId];
@@ -136,24 +148,33 @@ interface FakeBling extends ManualOrderBlingPort {
   readonly contatosCriados: number;
   /** Pedidos que a compensacao mandou cancelar no Bling. */
   readonly cancelados: string[];
+  /** Referências consultadas por `buscarPedidoPorNumeroLoja` (reconciliação, 5ª rodada). */
+  readonly numerosLojaConsultados: string[];
 }
 
 function fakeBling(options: {
-  createFailure?: { message: string; duplicateSale?: boolean };
+  createFailure?: { message: string; duplicateSale?: boolean; status?: number; type?: string };
+  /** 5ª rodada — a chamada de criação LANÇA (timeout/conexão perdida). */
+  createThrows?: unknown;
   estoqueFailure?: string;
   formaPagamentoFailure?: string;
   alertas?: string[];
   cancelamentoFailure?: string;
+  /** 5ª rodada — o que a busca por `numeroLoja` (reconciliação) encontra. */
+  pedidoEncontrado?: PedidoEncontradoNoBling | null;
+  buscaFailure?: string;
 } = {}): FakeBling {
   const payloads: PedidoVendaPayload[] = [];
   const estoqueLancado: string[] = [];
   const cancelados: string[] = [];
+  const numerosLojaConsultados: string[] = [];
   let contatosCriados = 0;
 
   const port = {
     payloads,
     estoqueLancado,
     cancelados,
+    numerosLojaConsultados,
     get contatosCriados() {
       return contatosCriados;
     },
@@ -169,19 +190,31 @@ function fakeBling(options: {
     },
     async createPedidoVenda(payload: PedidoVendaPayload) {
       payloads.push(payload);
+      // 5ª rodada: o ACK perdido da PRÓPRIA criação — a chamada lança, e o
+      // pedido pode ter sido criado assim mesmo.
+      if (options.createThrows) {
+        throw options.createThrows;
+      }
       if (options.createFailure) {
         return {
           _tag: 'BlingFailed' as const,
           failure: {
             _tag: 'BlingProviderFailure' as const,
-            type: 'VALIDATION_ERROR',
-            status: 400,
+            type: options.createFailure.type ?? 'VALIDATION_ERROR',
+            status: options.createFailure.status ?? 400,
             message: options.createFailure.message,
             duplicateSale: options.createFailure.duplicateSale ?? false,
           },
         };
       }
       return { _tag: 'BlingOk' as const, value: { id: '918273', alertas: options.alertas ?? [] } };
+    },
+    async buscarPedidoPorNumeroLoja(numeroLoja: string) {
+      numerosLojaConsultados.push(numeroLoja);
+      if (options.buscaFailure) {
+        return { _tag: 'BlingFailed' as const, failure: { _tag: 'BlingProviderFailure' as const, type: 'SERVER_ERROR', status: 500, message: options.buscaFailure, duplicateSale: false } };
+      }
+      return { _tag: 'BlingOk' as const, value: options.pedidoEncontrado ?? null };
     },
     async lancarEstoquePedido(pedidoBlingId: string) {
       if (options.estoqueFailure) {
@@ -789,5 +822,107 @@ describe('idempotência entre retentativas da mesma submissão (referenciaLocal)
     await handler(requestWith(corpoValido()));
 
     expect(store.desfechosRegistrados).toEqual([{ estado: 'indeterminada', blingPedidoId: '918273' }]);
+  });
+});
+
+describe('ticket 30, fatia 3 — 5ª rodada: a criação no Bling pode ter acontecido sem ACK', () => {
+  it('createPedidoVenda LANÇA (timeout): a tentativa fica indeterminada, NÃO falhou', async () => {
+    const store = fakeStore();
+    const bling = fakeBling({ createThrows: new Error('ETIMEDOUT: socket hang up') });
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const resposta = await handler(requestWith(corpoValido()));
+    const corpo = (await resposta.json()) as ManualOrderResponseBody;
+
+    expect(resposta.status).toBe(500);
+    expect(corpo.estadoIndeterminado).toBe(true);
+    // O ponto: `falhou` é REABRÍVEL, e reabrir aqui deixaria a retentativa
+    // criar um segundo pedido para uma venda que pode já existir no ERP.
+    expect(store.desfechosRegistrados).toEqual([{ estado: 'indeterminada' }]);
+    // Não inventa um id que nunca chegou, e não tenta cancelar o que não
+    // sabe identificar.
+    expect(corpo.blingPedidoId).toBeNull();
+    expect(bling.cancelados).toEqual([]);
+    // E a venda NÃO foi gravada localmente.
+    expect(store.persisted).toHaveLength(0);
+  });
+
+  it('o Bling responde 5xx: também indeterminada — pode ter falhado DEPOIS de criar', async () => {
+    const store = fakeStore();
+    const bling = fakeBling({ createFailure: { message: 'Bad gateway', status: 502, type: 'HTTP_502' } });
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    await handler(requestWith(corpoValido()));
+
+    expect(store.desfechosRegistrados).toEqual([{ estado: 'indeterminada' }]);
+  });
+
+  it('o Bling responde 2xx com id ilegível: indeterminada — o pedido existe e não sabemos qual é', async () => {
+    const store = fakeStore();
+    const bling = fakeBling({
+      createFailure: { message: 'O Bling respondeu sucesso sem informar o ID do pedido criado.', status: 201, type: 'INVALID_RESPONSE' },
+    });
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    await handler(requestWith(corpoValido()));
+
+    expect(store.desfechosRegistrados).toEqual([{ estado: 'indeterminada' }]);
+  });
+
+  it('o Bling RECUSA com 400: aí sim falhou (reabrível) — nada foi criado, e retentar é seguro', async () => {
+    const store = fakeStore();
+    const bling = fakeBling({ createFailure: { message: 'Produto inválido', status: 400, type: 'VALIDATION_ERROR' } });
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const resposta = await handler(requestWith(corpoValido()));
+
+    expect(resposta.status).toBe(400);
+    expect(store.desfechosRegistrados).toEqual([{ estado: 'falhou' }]);
+  });
+});
+
+describe('ticket 30, fatia 3 — 5ª rodada: a chave de idempotência carrega o conteúdo da venda', () => {
+  it('o fingerprint reivindicado é derivado do corpo, e vendas diferentes produzem fingerprints diferentes', async () => {
+    const storeA = fakeStore();
+    const handlerA = createManualOrderHandler(deps({ store: storeA, bling: fakeBling() }));
+    await handlerA(requestWith(corpoValido()));
+
+    const storeB = fakeStore();
+    const handlerB = createManualOrderHandler(deps({ store: storeB, bling: fakeBling() }));
+    await handlerB(requestWith(corpoValido({ itens: [{ produtoId: PRODUTO, quantidade: 3 }] })));
+
+    expect(storeA.fingerprintsReivindicados).toHaveLength(1);
+    expect(storeA.fingerprintsReivindicados[0]).toMatch(/^[0-9a-f]{64}$/u);
+    expect(storeB.fingerprintsReivindicados[0]).not.toBe(storeA.fingerprintsReivindicados[0]);
+  });
+
+  it('a MESMA venda produz o MESMO fingerprint — uma retentativa legítima não vira conflito', async () => {
+    const storeA = fakeStore();
+    await createManualOrderHandler(deps({ store: storeA, bling: fakeBling() }))(requestWith(corpoValido()));
+    const storeB = fakeStore();
+    await createManualOrderHandler(deps({ store: storeB, bling: fakeBling() }))(requestWith(corpoValido()));
+
+    expect(storeB.fingerprintsReivindicados[0]).toBe(storeA.fingerprintsReivindicados[0]);
+  });
+
+  it('CONFLITO: a referência já pertence a outra venda — 409 e ZERO chamadas ao Bling', async () => {
+    const store = fakeStore({ reivindicacaoForcada: { _tag: 'TentativaConflitante' } });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const resposta = await handler(requestWith(corpoValido()));
+    const corpo = (await resposta.json()) as ManualOrderResponseBody;
+
+    expect(resposta.status).toBe(409);
+    expect(corpo.success).toBe(false);
+    // Não devolve o desfecho da OUTRA operação — dizer "já registrada" aqui
+    // afirmaria que esta venda existe, e ela nunca existiu.
+    expect(corpo.pedidoId).toBeUndefined();
+    expect(bling.payloads).toHaveLength(0);
+    expect(bling.cancelados).toEqual([]);
+    expect(store.persisted).toHaveLength(0);
+    // E não grava desfecho nenhum: a tentativa que existe é da outra venda, e
+    // não é desta submissão o direito de concluí-la.
+    expect(store.desfechosRegistrados).toEqual([]);
   });
 });

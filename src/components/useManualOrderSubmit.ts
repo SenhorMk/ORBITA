@@ -1,8 +1,15 @@
 import { useRef, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { buildManualOrderRequest, type ManualOrderRequest } from '@/lib/config/manualOrderContract';
+import { fingerprintDaVendaManual } from '@/lib/config/manualOrderFingerprint';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import { descreverErro } from '@/lib/erroLegivel';
+
+import {
+  acharPendentePorFingerprint,
+  esquecerTentativaPendente,
+  registrarTentativaPendente,
+} from './tentativaPendente';
 
 export interface ItemPedidoManual {
   produto_id: string;
@@ -51,46 +58,6 @@ function buildManualOrderPayload(input: BuildManualOrderPayloadInput): ManualOrd
   });
 }
 
-/**
- * Ticket 30, fatia 3 — 4ª rodada de revisão. `referenciaLocalRef` sozinha
- * (um `useRef`) só sobrevive enquanto a instância do componente existir: um
- * reload da página, o modal fechando e reabrindo, ou a aba fechando e sendo
- * reaberta apagam o `ref` e uma retentativa geraria uma referência NOVA — o
- * ledger do servidor veria como uma tentativa nova de verdade, e chamaria o
- * Bling de novo para uma venda que já podia estar em voo. `localStorage`
- * sobrevive a tudo isso; é o servidor (a tabela `tentativas_venda_manual`)
- * que continua sendo a fonte de verdade — isto é só o que permite ao
- * NAVEGADOR lembrar qual referência usar para retomar.
- */
-const CHAVE_TENTATIVA_PENDENTE = 'orbita:pedidos-manual:tentativa-pendente';
-
-function lerReferenciaLocalPersistida(): string | null {
-  try {
-    return window.localStorage.getItem(CHAVE_TENTATIVA_PENDENTE);
-  } catch {
-    // localStorage indisponível (modo privado, quota, ambiente sem DOM) — a
-    // proteção contra retentativa fica limitada à vida da instância do
-    // componente, não é motivo para impedir o envio.
-    return null;
-  }
-}
-
-function persistirReferenciaLocal(referencia: string): void {
-  try {
-    window.localStorage.setItem(CHAVE_TENTATIVA_PENDENTE, referencia);
-  } catch {
-    // idem
-  }
-}
-
-function limparReferenciaLocalPersistida(): void {
-  try {
-    window.localStorage.removeItem(CHAVE_TENTATIVA_PENDENTE);
-  } catch {
-    // idem
-  }
-}
-
 export interface UseManualOrderSubmitInput {
   syncBling: boolean;
   selectedCliente: string;
@@ -103,6 +70,18 @@ export interface UseManualOrderSubmitInput {
   onSuccess?: () => void;
   onOpenChange: (open: boolean) => void;
   resetForm: () => void;
+  /**
+   * Organização ativa **confirmada pelo servidor** (5ª rodada de revisão).
+   *
+   * É o escopo da memória de tentativas pendentes: o ledger do servidor é
+   * chaveado por `(organizacao_id, referencia_local)`, e guardar as
+   * referências fora desse recorte deixava a pendência de uma organização ser
+   * apagada por uma venda feita em outra. `null` enquanto o servidor não
+   * confirmou — e aí nada é lembrado entre instâncias, que é a degradação
+   * honesta: sem saber a organização, qualquer escolha de chave seria um
+   * palpite.
+   */
+  organizacaoId: string | null;
 }
 
 /** O que `POST /api/pedidos/manual` significa para o modal, resumido em três desfechos. */
@@ -151,33 +130,54 @@ async function enviarPedidoManual(payload: ManualOrderRequest): Promise<EnvioMan
 }
 
 /**
+ * Decide qual referência esta submissão usa.
+ *
+ * Uma retentativa da MESMA venda tem de reenviar a MESMA referência, para o
+ * ledger do servidor reconhecê-la; uma venda DIFERENTE tem de ganhar
+ * referência nova, senão o servidor a recusa como conflito de conteúdo. Quem
+ * decide qual das duas é o caso é o fingerprint — não a ordem dos cliques, nem
+ * o modal ter sido reaberto.
+ *
+ * Duas camadas de memória, e a ordem importa: `localStorage` primeiro, porque
+ * é a que sobrevive ao reload (o caso que a 4ª rodada abriu); o `Map` em
+ * memória depois, como rede para quando `localStorage` está indisponível
+ * (aba anônima, quota), onde a proteção volta a valer só dentro da instância.
+ */
+function resolverReferencia(
+  organizacaoId: string | null,
+  fingerprint: string,
+  emMemoria: Map<string, string>,
+): string {
+  const persistida = organizacaoId ? acharPendentePorFingerprint(organizacaoId, fingerprint)?.referencia : undefined;
+  const referencia = persistida ?? emMemoria.get(fingerprint) ?? crypto.randomUUID();
+
+  emMemoria.set(fingerprint, referencia);
+  if (organizacaoId) registrarTentativaPendente(organizacaoId, { referencia, fingerprint });
+
+  return referencia;
+}
+
+/**
  * Envio da venda manual, isolado do componente para caber no limite de
  * tamanho de função do gate de qualidade.
  *
- * Dona da referência local de idempotência (ticket 30, fatia 3). Estável
- * enquanto o usuário retenta a MESMA submissão — inclusive depois de um
- * erro, de um reload da página, ou do modal fechando e reabrindo, porque
- * `referenciaLocalRef` retoma de `localStorage` na inicialização (4ª rodada
- * de revisão: um `useRef` sozinho não sobrevive a nada disso, e uma
- * retentativa com referência nova faria o ledger do servidor tratá-la como
- * tentativa genuinamente nova, liberando uma segunda chamada ao Bling). Só
- * é zerada depois de um sucesso de verdade (`resetReferenciaLocal`).
+ * Dono da referência local de idempotência (ticket 30, fatia 3). A referência
+ * é estável enquanto o usuário retenta a MESMA venda — inclusive depois de um
+ * erro, de um reload da página, ou do modal fechando e reabrindo — e é NOVA
+ * quando a venda é outra. A 5ª rodada de revisão trocou "a última referência
+ * usada" (um slot só, global) por "a referência daquela venda", indexada pelo
+ * fingerprint do conteúdo e escopada por organização: ver
+ * `tentativaPendente.ts`.
+ *
+ * Uma referência só é esquecida quando o desfecho dela é CONHECIDO — sucesso
+ * do envio, ou uma reconciliação que a liberou. Esquecer por qualquer outro
+ * motivo removeria a âncora de uma tentativa que ninguém resolveu, que é
+ * exatamente o que a proteção existe para impedir.
  */
 export function useManualOrderSubmit(input: UseManualOrderSubmitInput) {
   const [loading, setLoading] = useState(false);
-  const { setError } = input;
-  // Lazy init: só roda uma vez, na primeira renderização — inclusive quando
-  // essa "primeira renderização" é depois de um reload, e é exatamente
-  // quando isto importa: retoma a referência pendente se houver uma.
-  const referenciaLocalRef = useRef<string | null>(null);
-  if (referenciaLocalRef.current === null) {
-    referenciaLocalRef.current = lerReferenciaLocalPersistida();
-  }
-
-  const resetReferenciaLocal = () => {
-    referenciaLocalRef.current = null;
-    limparReferenciaLocalPersistida();
-  };
+  const { setError, organizacaoId } = input;
+  const referenciasEmMemoria = useRef<Map<string, string>>(new Map());
 
   const handleSubmit = async () => {
     if (!input.selectedCliente) {
@@ -193,14 +193,7 @@ export function useManualOrderSubmit(input: UseManualOrderSubmitInput) {
     setLoading(true);
 
     try {
-      // Gera a referência só na primeira tentativa; uma retentativa (o
-      // usuário clicando "Finalizar" de novo depois de um erro, um reload,
-      // ou reabrindo o modal) reenvia a MESMA, para que o servidor a
-      // reconheça. Persistida ANTES do envio — sobrevive a partir daqui
-      // mesmo que a aba feche no meio da chamada.
-      referenciaLocalRef.current ??= crypto.randomUUID();
-      persistirReferenciaLocal(referenciaLocalRef.current);
-      const payload = buildManualOrderPayload({
+      const dadosDaVenda = {
         syncBling: input.syncBling,
         selectedCliente: input.selectedCliente,
         formaPagamento: input.formaPagamento,
@@ -208,10 +201,20 @@ export function useManualOrderSubmit(input: UseManualOrderSubmitInput) {
         frete: input.frete,
         observacoes: input.observacoes,
         itens: input.itens,
-        referenciaLocal: referenciaLocalRef.current,
-      });
+      };
 
-      const resultado = await enviarPedidoManual(payload);
+      // O fingerprint não depende da referência (ela é a chave, não o
+      // conteúdo), então montar o corpo com uma referência provisória para
+      // calculá-lo é seguro — e é o que permite decidir, em seguida, QUAL
+      // referência esta submissão merece.
+      const fingerprint = await fingerprintDaVendaManual(
+        buildManualOrderPayload({ ...dadosDaVenda, referenciaLocal: crypto.randomUUID() }),
+      );
+      // Gravada ANTES do envio: a partir daqui a âncora sobrevive mesmo que a
+      // aba feche no meio da chamada.
+      const referenciaLocal = resolverReferencia(organizacaoId, fingerprint, referenciasEmMemoria.current);
+
+      const resultado = await enviarPedidoManual(buildManualOrderPayload({ ...dadosDaVenda, referenciaLocal }));
       if (resultado._tag === 'Erro') {
         setError(resultado.mensagem);
         return;
@@ -222,9 +225,12 @@ export function useManualOrderSubmit(input: UseManualOrderSubmitInput) {
         return;
       }
 
+      // Desfecho CONHECIDO e bem-sucedido: só aqui a âncora pode ser esquecida.
+      referenciasEmMemoria.current.delete(fingerprint);
+      if (organizacaoId) esquecerTentativaPendente(organizacaoId, referenciaLocal);
+
       input.onSuccess?.();
       input.onOpenChange(false);
-      resetReferenciaLocal();
       input.resetForm();
     } catch (err: unknown) {
       setError(descreverErro(err));
@@ -233,5 +239,5 @@ export function useManualOrderSubmit(input: UseManualOrderSubmitInput) {
     }
   };
 
-  return { loading, handleSubmit, resetReferenciaLocal };
+  return { loading, handleSubmit };
 }

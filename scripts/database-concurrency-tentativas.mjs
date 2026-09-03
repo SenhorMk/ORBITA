@@ -45,13 +45,27 @@ async function seed(client) {
   `, [ORG_ID, OWNER_ID]);
 }
 
-const SQL_REIVINDICAR = `select * from public.reivindicar_tentativa_venda_manual($1, $2)`;
+const SQL_REIVINDICAR = `select * from public.reivindicar_tentativa_venda_manual($1, $2, $3)`;
+
+/**
+ * As duas conexoes reivindicam a MESMA venda — mesmo fingerprint. E o que
+ * torna a corrida uma corrida: com fingerprints diferentes a segunda seria
+ * recusada por conflito de conteudo (5a rodada de revisao), que e um caminho
+ * diferente e esta coberto no pgTAP.
+ */
+const FINGERPRINT_DA_MESMA_VENDA = 'fingerprint-da-corrida-de-reivindicacao';
 
 async function tentarReivindicar(client) {
   try {
-    const resultado = await client.query(SQL_REIVINDICAR, [ORG_ID, REFERENCIA]);
+    const resultado = await client.query(SQL_REIVINDICAR, [ORG_ID, REFERENCIA, FINGERPRINT_DA_MESMA_VENDA]);
     const linha = resultado.rows[0];
-    return { ok: true, tentativaId: linha.tentativa_id, isDuplicate: linha.is_duplicate, estado: linha.estado };
+    return {
+      ok: true,
+      tentativaId: linha.tentativa_id,
+      isDuplicate: linha.is_duplicate,
+      estado: linha.estado,
+      fingerprintConflitante: linha.fingerprint_conflitante,
+    };
   } catch (cause) {
     return { ok: false, code: cause && typeof cause === 'object' && 'code' in cause ? String(cause.code) : undefined, message: cause?.message };
   }
@@ -131,6 +145,17 @@ export async function runTentativaClaimRaceRehearsal({
     if (resultadoB.tentativaId !== resultadoA.tentativaId) {
       return err('TentativaRaceIdsDivergentes', 'As duas reivindicações deveriam apontar para a MESMA tentativa_id', { resultadoA, resultadoB });
     }
+    if (resultadoB.fingerprintConflitante) {
+      // As duas mandaram o MESMO fingerprint: a perdedora tem de ser
+      // reconhecida como retentativa da mesma venda, não como conflito de
+      // conteúdo (5ª rodada de revisão). Confundir os dois transformaria uma
+      // retentativa legítima numa recusa.
+      return err(
+        'TentativaRaceConflitoIndevido',
+        'A perdedora enviou o MESMO fingerprint e mesmo assim foi tratada como conflito de conteúdo',
+        { resultadoA, resultadoB },
+      );
+    }
 
     const contagem = await admin.query(
       `select count(*)::int as total from public.tentativas_venda_manual where organizacao_id = $1 and referencia_local = $2`,
@@ -143,6 +168,7 @@ export async function runTentativaClaimRaceRehearsal({
     return ok(Object.freeze({
       vencedoraTentativaId: resultadoA.tentativaId,
       perdedoraGraciosa: true,
+      perdedoraSemConflitoDeConteudo: true,
       bloqueioObservadoNoPostgres: observacao.waitEvent,
       linhasNaTabela: contagem.rows[0].total,
     }));

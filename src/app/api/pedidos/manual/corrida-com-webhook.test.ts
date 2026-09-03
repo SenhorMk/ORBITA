@@ -350,6 +350,7 @@ function lojaEmMemoria(comTomada: boolean): ManualOrderStorePort {
       return { _tag: 'TentativaNova', tentativaId: 'tentativa-corrida-1' };
     },
     async registrarDesfechoDaTentativa() { /* nada a verificar aqui */ },
+    async lerTentativaPorReferencia() { return null; },
   };
 }
 
@@ -361,6 +362,7 @@ function blingDaVendaManual(): ManualOrderBlingPort {
     async createContato() { return { _tag: 'BlingOk', value: { id: 4321 } }; },
     async createPedidoVenda() { return { _tag: 'BlingOk', value: { id: BLING_PEDIDO_ID, alertas: [] } }; },
     async lancarEstoquePedido() { return { _tag: 'BlingOk', value: undefined }; },
+    async buscarPedidoPorNumeroLoja() { return { _tag: 'BlingOk', value: null }; },
     async cancelarPedidoVenda(pedidoBlingId: string) {
       cancelados.push(pedidoBlingId);
       return { _tag: 'BlingOk', value: undefined };

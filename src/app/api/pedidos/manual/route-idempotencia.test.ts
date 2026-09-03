@@ -38,6 +38,8 @@ const ORG_ID = '11111111-1111-4111-8111-111111111111';
 const ACTOR_ID = '22222222-2222-4222-8222-222222222222';
 const CLIENTE_ID = '33333333-3333-4333-8333-333333333333';
 const PRODUTO_ID = '44444444-4444-4444-8444-444444444444';
+/** Segundo produto — só para provar que a ORDEM dos itens não muda o fingerprint. */
+const PRODUTO_ID_B = '4b4b4b4b-4b4b-4b4b-8b4b-4b4b4b4b4b4b';
 const REFERENCIA_LOCAL = '55555555-5555-4555-8555-555555555555';
 
 vi.mock('@/lib/requestOrganizationContext', () => ({
@@ -52,10 +54,21 @@ vi.mock('@/lib/requestOrganizationContext', () => ({
  * por referência para que o teste de concorrência (que usa uma referência
  * própria) não interfira com o teste de ambiguidade.
  */
-const tentativasPorReferencia = new Map<string, { estado: string; blingPedidoId: string | null; pedidoId: string | null }>();
+const tentativasPorReferencia = new Map<
+  string,
+  { estado: string; blingPedidoId: string | null; pedidoId: string | null; fingerprint: string }
+>();
+/** Organizações que o código pediu para concluir — prova que o escopo chega à RPC (5ª rodada). */
+const organizacoesNoConcluir: Array<string | undefined> = [];
 let chamadasDeCriarPedido = 0;
 /** Controla o desfecho de `registrar_venda_manual` — ambíguo (padrão) ou sucesso, por teste. */
 let modoRegistrarVenda: 'ambiguo' | 'sucesso' = 'ambiguo';
+/**
+ * 5ª rodada — quando definido, `criarPedidoVenda` LANÇA (timeout/conexão
+ * perdida). O pedido pode ter sido criado no Bling assim mesmo: é o cenário do
+ * ACK perdido na PRÓPRIA criação.
+ */
+let criarPedidoLanca: Error | null = null;
 
 vi.mock('@/lib/supabaseServer', () => ({
   supabaseServer: {
@@ -69,8 +82,24 @@ vi.mock('@/lib/supabaseServer', () => ({
         // concorrentes (Promise.all, sem sequenciar) ainda são decididas
         // pela ORDEM REAL em que o código de cada requisição chega aqui, não
         // por uma corrida de fato dentro do mock.
+        const fingerprint = String(args?.p_fingerprint ?? '');
         const existente = tentativasPorReferencia.get(referencia);
         if (existente) {
+          // Espelha a migration 59: conteúdo diferente na mesma chave é
+          // CONFLITO, e o desfecho da outra operação não sai daqui.
+          if (existente.fingerprint !== fingerprint) {
+            return Promise.resolve({
+              data: [{
+                tentativa_id: null,
+                estado: null,
+                pedido_id: null,
+                bling_pedido_id: null,
+                is_duplicate: true,
+                fingerprint_conflitante: true,
+              }],
+              error: null,
+            });
+          }
           return Promise.resolve({
             data: [{
               tentativa_id: `tentativa-${referencia}`,
@@ -78,17 +107,26 @@ vi.mock('@/lib/supabaseServer', () => ({
               pedido_id: existente.pedidoId,
               bling_pedido_id: existente.blingPedidoId,
               is_duplicate: true,
+              fingerprint_conflitante: false,
             }],
             error: null,
           });
         }
-        tentativasPorReferencia.set(referencia, { estado: 'em_andamento', blingPedidoId: null, pedidoId: null });
+        tentativasPorReferencia.set(referencia, { estado: 'em_andamento', blingPedidoId: null, pedidoId: null, fingerprint });
         return Promise.resolve({
-          data: [{ tentativa_id: `tentativa-${referencia}`, estado: 'em_andamento', pedido_id: null, bling_pedido_id: null, is_duplicate: false }],
+          data: [{
+            tentativa_id: `tentativa-${referencia}`,
+            estado: 'em_andamento',
+            pedido_id: null,
+            bling_pedido_id: null,
+            is_duplicate: false,
+            fingerprint_conflitante: false,
+          }],
           error: null,
         });
       }
       if (fnName === 'concluir_tentativa_venda_manual') {
+        organizacoesNoConcluir.push(args?.p_organizacao_id as string | undefined);
         const tentativaId = String(args?.p_tentativa_id);
         const referencia = tentativaId.replace(/^tentativa-/, '');
         const existente = tentativasPorReferencia.get(referencia);
@@ -129,7 +167,10 @@ vi.mock('@/lib/supabaseServer', () => ({
           select: () => ({
             eq: () => ({
               in: () => Promise.resolve({
-                data: [{ id: PRODUTO_ID, nome: 'Produto Teste', codigo: null, bling_id: '77', preco: 10, estoque: 5, estoque_reservado: 0 }],
+                data: [
+                  { id: PRODUTO_ID, nome: 'Produto Teste', codigo: null, bling_id: '77', preco: 10, estoque: 5, estoque_reservado: 0 },
+                  { id: PRODUTO_ID_B, nome: 'Produto Teste B', codigo: null, bling_id: '78', preco: 20, estoque: 5, estoque_reservado: 0 },
+                ],
                 error: null,
               }),
             }),
@@ -163,8 +204,10 @@ vi.mock('@/services/bling', () => ({
       criarContatoParaVenda: () => Promise.resolve({ _tag: 'BlingOk', value: { id: 999 } }),
       criarPedidoVenda: () => {
         chamadasDeCriarPedido += 1;
+        if (criarPedidoLanca) return Promise.reject(criarPedidoLanca);
         return Promise.resolve({ _tag: 'BlingOk', value: { id: '918273', alertas: [] } });
       },
+      buscarPedidoVendaPorNumeroLoja: () => Promise.resolve({ _tag: 'BlingOk', value: null }),
       lancarEstoquePedidoVenda: () => Promise.resolve({ _tag: 'BlingOk', value: undefined }),
       cancelarPedidoVenda: () => Promise.resolve({ _tag: 'BlingOk', value: undefined }),
     }),
@@ -183,7 +226,7 @@ function corpoValido() {
   };
 }
 
-function requisicao(overrides: Partial<ReturnType<typeof corpoValido>> = {}) {
+function requisicao(overrides: Partial<ReturnType<typeof corpoValido>> & Record<string, unknown> = {}) {
   return new Request('https://orbita.test/api/pedidos/manual', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -191,11 +234,35 @@ function requisicao(overrides: Partial<ReturnType<typeof corpoValido>> = {}) {
   });
 }
 
+/**
+ * Resolve uma promessa da rota avançando o relógio falso em FATIAS.
+ *
+ * A janela de confirmação usa `setTimeout` real (`dormirDeVerdade`), mas o
+ * handler só chega até ela depois de operações assíncronas nativas — entre
+ * elas o `crypto.subtle.digest` do fingerprint (5ª rodada) —, que não resolvem
+ * numa única drenagem de microtasks. Avançar 3s de uma vez, antes de o código
+ * ter registrado o `setTimeout`, passa por cima de um timer que ainda não
+ * existe e a promessa nunca resolve. Fatiar o avanço dá ao código a chance de
+ * alcançar cada espera.
+ */
+async function resolverAvancandoORelogio<T>(promessa: Promise<T>): Promise<T> {
+  let pendente = true;
+  const observada = promessa.finally(() => {
+    pendente = false;
+  });
+  for (let fatia = 0; fatia < 40 && pendente; fatia += 1) {
+    await vi.advanceTimersByTimeAsync(200);
+  }
+  return observada;
+}
+
 describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real)', () => {
   beforeEach(() => {
     tentativasPorReferencia.clear();
+    organizacoesNoConcluir.length = 0;
     chamadasDeCriarPedido = 0;
     modoRegistrarVenda = 'ambiguo';
+    criarPedidoLanca = null;
     vi.useFakeTimers();
   });
 
@@ -207,11 +274,7 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
     const { POST } = await import('./route');
 
     // Primeira chamada: dispara a janela de confirmação real (0/400/800/1600ms).
-    const primeira = POST(requisicao());
-    // As janelas usam `setTimeout` real via `dormirDeVerdade` — avança o
-    // relógio falso pelo total (2.8s) para não esperar de verdade.
-    await vi.advanceTimersByTimeAsync(3000);
-    const respostaPrimeira = await primeira;
+    const respostaPrimeira = await resolverAvancandoORelogio(POST(requisicao()));
     const corpoPrimeira = await respostaPrimeira.json();
 
     expect(respostaPrimeira.status).toBe(500);
@@ -249,14 +312,23 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
       { status: respostaB.status, corpo: corpoB },
     ];
     const vencedoras = respostas.filter((r) => r.status === 201);
-    const emAndamento = respostas.filter((r) => r.status === 409);
+    // A PERDEDORA tem dois desfechos SEGUROS, e qual deles acontece depende do
+    // entrelaçamento: se ela reivindica enquanto a vencedora ainda executa, vê
+    // `em_andamento` (409); se reivindica depois que a vencedora concluiu, vê
+    // o resultado pronto e o REUTILIZA (200). Fixar um dos dois seria fixar um
+    // acidente de agendamento — o invariante que importa é que ela NUNCA cria
+    // um segundo pedido, e que quando devolve resultado é o MESMO pedido.
+    const perdedoras = respostas.filter((r) => r.status === 409 || r.status === 200);
 
-    // O ponto central: exatamente UMA reivindica e chama o Bling; a outra
-    // observa "em andamento" e nem chega perto dele.
     expect(vencedoras).toHaveLength(1);
-    expect(emAndamento).toHaveLength(1);
+    expect(perdedoras).toHaveLength(1);
+    // O ponto central: uma única criação no Bling, sob duas requisições
+    // genuinamente simultâneas com a mesma referência.
     expect(chamadasDeCriarPedido).toBe(1);
     expect(vencedoras[0].corpo.pedidoId).toBe('pedido-local-concorrencia-1');
+    if (perdedoras[0].status === 200) {
+      expect(perdedoras[0].corpo.pedidoId).toBe('pedido-local-concorrencia-1');
+    }
 
     // E o desfecho posterior reutiliza o resultado correto — uma terceira
     // chamada com a MESMA referência, depois que a vencedora já concluiu,
@@ -266,5 +338,116 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
     expect(respostaPosterior.status).toBe(200);
     expect(corpoPosterior.pedidoId).toBe('pedido-local-concorrencia-1');
     expect(chamadasDeCriarPedido).toBe(1);
+  });
+  // ==========================================================================
+  // 5ª rodada de revisão
+  // ==========================================================================
+
+  it('MESMA referência + venda DIFERENTE: 409 de conflito, e NENHUMA chamada ao Bling', async () => {
+    modoRegistrarVenda = 'sucesso';
+    const referencia = '77777777-7777-4777-8777-777777777777';
+    const { POST } = await import('./route');
+
+    // Primeira venda: 1 unidade. Conclui normalmente.
+    const primeira = await POST(requisicao({ referenciaLocal: referencia }));
+    expect(primeira.status).toBe(201);
+    expect(chamadasDeCriarPedido).toBe(1);
+
+    // O usuário muda a QUANTIDADE e reenvia com a MESMA referência — o cenário
+    // exato da revisão (indeterminado → reload → altera → reenvia).
+    const segunda = await POST(
+      requisicao({ referenciaLocal: referencia, itens: [{ produtoId: PRODUTO_ID, quantidade: 2 }] }),
+    );
+    const corpoSegunda = await segunda.json();
+
+    expect(segunda.status).toBe(409);
+    // NÃO devolve o resultado da primeira: dizer "já registrada" aqui seria
+    // afirmar que a venda de 2 unidades existe, e ela nunca existiu.
+    expect(corpoSegunda.success).toBe(false);
+    expect(corpoSegunda.pedidoId).toBeUndefined();
+    // E, sobretudo: não executou nada de novo no ERP.
+    expect(chamadasDeCriarPedido).toBe(1);
+    // A MENSAGEM tem de ser a do conflito de conteúdo, não a de "outra
+    // requisição em andamento". Sem esta asserção o teste passaria mesmo com a
+    // tradução do conflito removida da rota: a RPC devolve os campos nulos num
+    // conflito, e o código cairia por acidente no ramo `TentativaEmAndamento`,
+    // que também é 409. O bloqueio de fato vive na migration 59 (provado em
+    // `tentativas_venda_manual_idempotentes.test.sql`, asserções 8-15 e 23-24);
+    // o que se prova AQUI é que a rota reconhece o conflito e diz a verdade
+    // sobre ele a quem está na tela.
+    expect(corpoSegunda.error).toContain('referência de uma venda diferente');
+  });
+
+  it('MESMA referência + MESMA venda com os itens em outra ORDEM: é retentativa, não conflito', async () => {
+    modoRegistrarVenda = 'sucesso';
+    const referencia = '88888888-8888-4888-8888-888888888888';
+    const { POST } = await import('./route');
+
+    const itensA = [{ produtoId: PRODUTO_ID, quantidade: 1 }, { produtoId: PRODUTO_ID_B, quantidade: 2 }];
+    const itensB = [{ produtoId: PRODUTO_ID_B, quantidade: 2 }, { produtoId: PRODUTO_ID, quantidade: 1 }];
+
+    const primeira = await POST(requisicao({ referenciaLocal: referencia, itens: itensA }));
+    expect(primeira.status).toBe(201);
+
+    const segunda = await POST(requisicao({ referenciaLocal: referencia, itens: itensB }));
+    const corpoSegunda = await segunda.json();
+
+    // A ordem na tela não é intenção comercial: reconhece como a MESMA venda e
+    // reutiliza o resultado, em vez de recusar por conflito.
+    expect(segunda.status).toBe(200);
+    expect(corpoSegunda.pedidoId).toBe('pedido-local-concorrencia-1');
+    expect(chamadasDeCriarPedido).toBe(1);
+  });
+
+  it('ACK PERDIDO na própria criação do Bling: fica indeterminada e a retentativa NÃO cria um segundo pedido', async () => {
+    modoRegistrarVenda = 'sucesso';
+    criarPedidoLanca = new Error('ETIMEDOUT: socket hang up');
+    const referencia = '99999999-9999-4999-8999-999999999999';
+    const { POST } = await import('./route');
+
+    // O pedido PODE ter sido criado no Bling — a resposta é que não chegou.
+    const primeira = await resolverAvancandoORelogio(POST(requisicao({ referenciaLocal: referencia })));
+    const corpoPrimeira = await primeira.json();
+
+    expect(primeira.status).toBe(500);
+    expect(corpoPrimeira.estadoIndeterminado).toBe(true);
+    // Não inventa um bling_id que nunca chegou.
+    expect(corpoPrimeira.blingPedidoId).toBeNull();
+    expect(chamadasDeCriarPedido).toBe(1);
+
+    // A tentativa NÃO pode ter ficado 'falhou' (reabrível): "não recebi
+    // resposta" não é "não criou".
+    // A chave do ledger é a referência que a rota monta (`ORBITA-<uuid>`) — a
+    // MESMA que viaja ao Bling em `numeroLoja`, e é por isso que a
+    // reconciliação consegue procurar por ela depois.
+    expect(tentativasPorReferencia.get(`ORBITA-${referencia}`)?.estado).toBe('indeterminada');
+
+    // A retentativa — agora com o Bling respondendo normalmente — continua
+    // barrada. É o ponto inteiro: sem isto, ela criaria o SEGUNDO pedido.
+    criarPedidoLanca = null;
+    const segunda = await POST(requisicao({ referenciaLocal: referencia }));
+    const corpoSegunda = await segunda.json();
+
+    expect(corpoSegunda.estadoIndeterminado).toBe(true);
+    expect(chamadasDeCriarPedido).toBe(1);
+  });
+
+  it('a organização que chega às RPCs é a do escopo verificado, não algo vindo do corpo', async () => {
+    modoRegistrarVenda = 'sucesso';
+    const referencia = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const { POST } = await import('./route');
+
+    // O corpo tenta ditar a organização. O schema nem tem esse campo, e o
+    // escopo vem de `resolveVerifiedOrganizationScope` — mas a asserção fixa o
+    // comportamento em vez de confiar na ausência do campo.
+    const resposta = await POST(
+      requisicao({ referenciaLocal: referencia, organizacaoId: 'ffffffff-ffff-4fff-8fff-ffffffffffff' }),
+    );
+
+    expect(resposta.status).toBe(201);
+    expect(organizacoesNoConcluir.length).toBeGreaterThan(0);
+    for (const organizacao of organizacoesNoConcluir) {
+      expect(organizacao).toBe(ORG_ID);
+    }
   });
 });

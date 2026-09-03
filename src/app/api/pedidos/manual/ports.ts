@@ -122,23 +122,67 @@ export interface ManualOrderStorePort {
    * ordem de deploy recomendada passou a ser migrations primeiro, código
    * depois — não o inverso.
    */
-  reivindicarTentativa(scope: VerifiedOrganizationScope, referenciaLocal: string): Promise<ReivindicacaoDeTentativa>;
-  /** Grava o desfecho final de uma tentativa já reivindicada. */
-  registrarDesfechoDaTentativa(tentativaId: string, desfecho: DesfechoDaTentativa): Promise<void>;
+  reivindicarTentativa(
+    scope: VerifiedOrganizationScope,
+    referenciaLocal: string,
+    fingerprint: string,
+  ): Promise<ReivindicacaoDeTentativa>;
+  /**
+   * Grava o desfecho final de uma tentativa já reivindicada.
+   *
+   * Recebe o escopo porque a RPC é `security definer` — ela ignora RLS, e o
+   * predicado de organização dentro dela é a única barreira que resta. A
+   * assinatura anterior atualizava só por id (5ª rodada de revisão).
+   */
+  registrarDesfechoDaTentativa(
+    scope: VerifiedOrganizationScope,
+    tentativaId: string,
+    desfecho: DesfechoDaTentativa,
+  ): Promise<void>;
+  /**
+   * Lê uma tentativa pela referência local, dentro da organização verificada.
+   *
+   * Usada pela reconciliação (5ª rodada de revisão): uma tentativa
+   * `indeterminada` precisa de um caminho de saída que não seja "limpe o
+   * localStorage", e para isso é preciso saber em que estado ela está e o que
+   * já se sabe dela.
+   */
+  lerTentativaPorReferencia(
+    scope: VerifiedOrganizationScope,
+    referenciaLocal: string,
+  ): Promise<TentativaRegistrada | null>;
+}
+
+/** Uma linha de `tentativas_venda_manual`, como a reconciliação precisa vê-la. */
+export interface TentativaRegistrada {
+  readonly id: string;
+  readonly estado: 'em_andamento' | 'concluida' | 'indeterminada' | 'falhou';
+  readonly pedidoId: string | null;
+  readonly blingPedidoId: string | null;
+  /** Quando a tentativa mudou de estado pela última vez — a idade de uma `em_andamento` travada. */
+  readonly atualizadaEm: string;
 }
 
 /**
  * O que uma reivindicação de tentativa devolve. `TentativaNova` segue o
- * fluxo normal; os outros quatro casos são situações em que o handler NÃO
- * chama o Bling: três são o desfecho de uma tentativa ANTERIOR com a mesma
- * referência, e `TentativaIndisponivel` é a infraestrutura de idempotência
- * não estando disponível — falha fechada, nunca aberta.
+ * fluxo normal; os outros cinco casos são situações em que o handler NÃO
+ * chama o Bling: três são o desfecho de uma tentativa ANTERIOR com a MESMA
+ * venda, `TentativaConflitante` é a mesma chave usada para OUTRA venda, e
+ * `TentativaIndisponivel` é a infraestrutura de idempotência não estando
+ * disponível — falha fechada, nunca aberta.
  */
 export type ReivindicacaoDeTentativa =
   | { readonly _tag: 'TentativaNova'; readonly tentativaId: string }
   | { readonly _tag: 'TentativaConcluida'; readonly pedidoId: string; readonly blingPedidoId: string | null }
   | { readonly _tag: 'TentativaIndeterminada'; readonly blingPedidoId: string | null }
   | { readonly _tag: 'TentativaEmAndamento' }
+  /**
+   * A referência já existe, mas para uma venda DIFERENTE (5ª rodada de
+   * revisão). Não é retentativa: nada executa, e o desfecho da outra operação
+   * NÃO é devolvido — devolvê-lo diria "sua venda já foi registrada" sobre uma
+   * venda que ninguém registrou.
+   */
+  | { readonly _tag: 'TentativaConflitante' }
   | { readonly _tag: 'TentativaIndisponivel'; readonly causa: unknown };
 
 export interface DesfechoDaTentativa {
@@ -171,6 +215,21 @@ export interface ManualOrderBlingPort {
   /** `POST /pedidos/vendas/{id}/lancar-estoque` — baixa vinculada ao pedido, no depósito padrão. */
   lancarEstoquePedido(pedidoBlingId: string): Promise<BlingCallResult<void>>;
   /**
+   * `GET /pedidos/vendas?numerosLojas[]=<referencia>` — procura o pedido pela
+   * referência local que o ORBITA enviou em `numeroLoja` na criação.
+   *
+   * É a peça que torna a reconciliação possível SEM `bling_id` (5ª rodada de
+   * revisão): quando `createPedidoVenda` não devolve resposta, o ORBITA não
+   * sabe o id do pedido — mas sabe a referência, porque ela foi decidida antes
+   * do envio. Perguntar por ela responde a única pergunta que importa: o
+   * pedido existe lá, ou não?
+   *
+   * `null` significa "o Bling respondeu, e não existe pedido com essa
+   * referência" — uma resposta NEGATIVA confirmada, diferente de uma falha de
+   * consulta, que vem como `BlingFailed`.
+   */
+  buscarPedidoPorNumeroLoja(numeroLoja: string): Promise<BlingCallResult<PedidoEncontradoNoBling | null>>;
+  /**
    * Compensação: marca como cancelado um pedido que o Bling aceitou e o ORBITA
    * não conseguiu gravar.
    *
@@ -180,6 +239,14 @@ export interface ManualOrderBlingPort {
    * em vez de um esquecer.
    */
   cancelarPedidoVenda(pedidoBlingId: string): Promise<BlingCallResult<void>>;
+}
+
+/** O que a reconciliação precisa saber de um pedido achado no Bling. */
+export interface PedidoEncontradoNoBling {
+  readonly id: string;
+  readonly numeroLoja: string;
+  /** Nome da situação na conta do lojista (`Cancelado`, `Em aberto`, …), quando o Bling a informa. */
+  readonly situacao: string | null;
 }
 
 export interface ManualOrderAuthPort {

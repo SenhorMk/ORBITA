@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { supabase } from '@/lib/supabaseClient';
 import { Search, Plus, Trash2, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 import { useManualOrderSubmit, type ItemPedidoManual } from './useManualOrderSubmit';
+import { PendenciasDeVendaManual } from './PendenciasDeVendaManual';
 
 export type { ItemPedidoManual, UseManualOrderSubmitInput } from './useManualOrderSubmit';
 
@@ -13,6 +14,12 @@ interface ManualOrderModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess?: () => void;
+  /**
+   * Organização ativa confirmada pelo servidor (ticket 30, 5ª rodada de
+   * revisão). Escopa a memória de tentativas pendentes — ver
+   * `tentativaPendente.ts` — e sem ela nada é lembrado entre instâncias.
+   */
+  organizacaoId: string | null;
 }
 
 interface ClienteOption {
@@ -348,7 +355,7 @@ function ManualOrderItemsPanel({ itens, desconto, frete, updateItemQty, removeIt
   );
 }
 
-export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderModalProps) {
+export function ManualOrderModal({ open, onOpenChange, onSuccess, organizacaoId }: ManualOrderModalProps) {
   const [error, setError] = useState<string | null>(null);
 
   // Form State
@@ -374,6 +381,7 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
     setError,
     onSuccess,
     onOpenChange,
+    organizacaoId,
     resetForm: () => {
       setItens([]);
       setSelectedCliente('');
@@ -429,6 +437,8 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
         </>
       }
     >
+        <PendenciasDeVendaManual open={open} organizacaoId={organizacaoId} />
+
         {error && (
           <div className="bg-rose-500/10 text-rose-400 p-4 rounded-2xl flex items-start gap-2 text-sm border border-rose-500/20 mb-6">
             <AlertCircle className="w-5 h-5 flex-shrink-0" />

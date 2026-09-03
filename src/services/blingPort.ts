@@ -42,6 +42,19 @@ export interface BlingPort {
   criarPedidoVenda(payload: PedidoVendaPayload): Promise<BlingCallResult<{ id: string; alertas: readonly string[] }>>;
   /** Baixa de estoque vinculada ao pedido (Ticket 30). */
   lancarEstoquePedidoVenda(idPedido: string): Promise<BlingCallResult<void>>;
+  /**
+   * Procura um pedido de venda pela referência local enviada em `numeroLoja`
+   * (Ticket 30, 5ª rodada de revisão).
+   *
+   * `GET /pedidos/vendas?numerosLojas[]=<ref>`. Existe para a reconciliação de
+   * uma tentativa cujo `createPedidoVenda` não devolveu resposta: sem
+   * `bling_id`, a referência local é a única coisa que os dois lados
+   * compartilham. `null` = o Bling respondeu e não há pedido com essa
+   * referência.
+   */
+  buscarPedidoVendaPorNumeroLoja(
+    numeroLoja: string,
+  ): Promise<BlingCallResult<{ id: string; numeroLoja: string; situacao: string | null } | null>>;
   /** Compensacao: marca como cancelado um pedido que o ORBITA nao conseguiu gravar. */
   cancelarPedidoVenda(idPedido: string): Promise<BlingCallResult<void>>;
   /** Forma de pagamento padrão da conta (Ticket 30). */

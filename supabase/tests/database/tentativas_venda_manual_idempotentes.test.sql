@@ -1,14 +1,29 @@
 -- tentativas_venda_manual_idempotentes.test.sql
--- Ticket 30, fatia 3, migration 59 — endurecida na 3ª rodada de revisão.
+-- Ticket 30, fatia 3, migration 59 — endurecida nas 3ª, 4ª e 5ª rodadas.
 --
 -- Prova a reivindicação atômica que fecha o gap de retentativa: sem isto,
 -- uma retentativa (humana, de proxy, de navegador) depois de um estado
 -- indeterminado geraria uma referência nova e criaria um SEGUNDO pedido
 -- real no Bling — trocando "compensação destrutiva" por "duplicação
--- externa". Mesmo padrão de `registrar_evento_inbox_bling` (migration 28).
+-- externa".
+--
+-- **5ª rodada de revisão**, duas fatias novas provadas aqui:
+--
+-- 1. **A chave sozinha não basta.** Reconhecer a referência responde "já vi
+--    este UUID?", não "esta é a MESMA operação?". As asserções 8-15, 18 e
+--    23-24 provam a regra: mesma referência + fingerprint diferente é
+--    CONFLITO — nunca executa, nunca reabre, e nunca devolve o desfecho da
+--    outra operação.
+-- 2. **Isolamento multi-tenant.** A migration introduziu uma tabela e RPCs
+--    `security definer` que decidem se uma escrita externa no ERP pode
+--    acontecer. As asserções 25-41 provam identidade por
+--    `(organizacao_id, referencia_local)`, impossibilidade de concluir
+--    tentativa alheia, GRANTs, `search_path` fixo e RLS.
 --
 -- REINTRODUZIR O DEFEITO: troque o `\ir` da migration 59 por nada. As
--- asserções todas falham — a função nem existe.
+-- asserções todas falham — a função nem existe. Para provar só a fatia do
+-- fingerprint, remova o ramo `if v_existente.fingerprint is distinct from
+-- p_fingerprint` da função: 8-15, 18 e 23-24 falham.
 
 begin;
 
@@ -25,90 +40,294 @@ create table public.pedidos (
 );
 
 insert into auth.users (id, email)
-values ('59000000-0000-4000-8000-000000000001', 'owner-t59@orbita.test');
+values ('59000000-0000-4000-8000-000000000001', 'owner-t59@orbita.test'),
+       ('59000000-0000-4000-8000-000000000002', 'owner-b-t59@orbita.test');
 
 \ir ../../../database/20_organizacao_membership_ativa.sql
 \ir ../../../database/21_convites_papeis_capacidades.sql
 \ir ../../../database/59_tentativas_venda_manual_idempotentes.sql
 
 insert into public.organizacoes (id, nome, slug)
-values ('59100000-0000-4000-8000-000000000001', 'Org T59', 'org-t59');
+values ('59100000-0000-4000-8000-000000000001', 'Org T59 A', 'org-t59-a'),
+       ('59100000-0000-4000-8000-000000000002', 'Org T59 B', 'org-t59-b');
 
 insert into public.membros_organizacao (organizacao_id, user_id, papel)
-values ('59100000-0000-4000-8000-000000000001', '59000000-0000-4000-8000-000000000001', 'owner');
+values ('59100000-0000-4000-8000-000000000001', '59000000-0000-4000-8000-000000000001', 'owner'),
+       ('59100000-0000-4000-8000-000000000002', '59000000-0000-4000-8000-000000000002', 'owner');
 
-select plan(11);
+select plan(41);
 
 -- ----------------------------------------------------------------------------
--- 1-3. Primeira reivindicação: tentativa nova.
+-- 1-4. Primeira reivindicação: tentativa nova.
 -- ----------------------------------------------------------------------------
 create temp table primeira as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-a'
+    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-1'
 );
 
 select is((select estado from primeira), 'em_andamento', '1. primeira reivindicação: estado em_andamento');
 select is((select is_duplicate from primeira), false, '2. primeira reivindicação: não é duplicata');
 select isnt((select tentativa_id from primeira), null, '3. primeira reivindicação: devolve um id');
+select is((select fingerprint_conflitante from primeira), false, '4. primeira reivindicação: sem conflito de conteúdo');
 
 -- ----------------------------------------------------------------------------
--- 4-5. Reivindicar a MESMA referência de novo, ainda em_andamento: devolve o
---      MESMO desfecho — é isso que barra a retentativa concorrente sem
---      chamar o Bling de novo (handler reage com 409, sem side effect).
+-- 5-7. Reivindicar a MESMA referência com o MESMO conteúdo: é retentativa.
+--      Devolve o mesmo desfecho — é isso que barra a retentativa concorrente
+--      sem chamar o Bling de novo (handler reage com 409, sem side effect).
 -- ----------------------------------------------------------------------------
 create temp table segunda_em_andamento as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-a'
+    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-1'
 );
 
-select is((select estado from segunda_em_andamento), 'em_andamento', '4. segunda reivindicação: continua em_andamento');
-select is((select is_duplicate from segunda_em_andamento), true, '5. segunda reivindicação: É duplicata — não insere linha nova');
+select is((select estado from segunda_em_andamento), 'em_andamento', '5. segunda reivindicação, mesmo conteúdo: continua em_andamento');
+select is((select is_duplicate from segunda_em_andamento), true, '6. segunda reivindicação: É duplicata — não insere linha nova');
+select is((select fingerprint_conflitante from segunda_em_andamento), false, '7. segunda reivindicação: mesmo conteúdo, então não é conflito');
 
 -- ----------------------------------------------------------------------------
--- 6-7. Conclui como indeterminada. A PRÓXIMA reivindicação com a mesma
---      referência tem de devolver esse estado — é o que impede a
---      retentativa de chamar o Bling: o handler vê 'indeterminada' e devolve
---      a mesma resposta, sem side effect novo.
+-- 8-15. CONFLITO DE CONTEÚDO (5ª rodada). A MESMA referência reenviada para
+--       uma venda DIFERENTE não é retentativa. Não pode executar, não pode
+--       devolver o desfecho da outra operação, e não pode alterar nada.
+-- ----------------------------------------------------------------------------
+create temp table conflito as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-OUTRA'
+);
+
+select is((select fingerprint_conflitante from conflito), true, '8. mesma chave + conteúdo diferente: sinaliza conflito');
+select is((select is_duplicate from conflito), true, '9. …a chave de fato já estava em uso');
+select is((select tentativa_id from conflito), null, '10. …e NÃO devolve o id da tentativa alheia');
+select is((select pedido_id from conflito), null, '11. …nem o pedido da outra operação');
+select is((select estado from conflito), null, '12. …nem o estado dela — o resultado da outra operação não é desta');
+
+select is(
+    (select estado from public.tentativas_venda_manual
+      where organizacao_id = '59100000-0000-4000-8000-000000000001' and referencia_local = 'referencia-a'),
+    'em_andamento',
+    '13. o conflito NÃO altera o estado gravado da tentativa original'
+);
+select is(
+    (select fingerprint from public.tentativas_venda_manual
+      where organizacao_id = '59100000-0000-4000-8000-000000000001' and referencia_local = 'referencia-a'),
+    'fingerprint-venda-1',
+    '14. …nem sobrescreve o fingerprint dela com o da submissão conflitante'
+);
+select is(
+    (select count(*) from public.tentativas_venda_manual
+      where organizacao_id = '59100000-0000-4000-8000-000000000001' and referencia_local = 'referencia-a'),
+    1::bigint,
+    '15. …e não cria uma segunda linha para a mesma chave'
+);
+
+-- ----------------------------------------------------------------------------
+-- 16-18. Conclui como indeterminada. A PRÓXIMA reivindicação com a mesma
+--        referência tem de devolver esse estado — é o que impede a
+--        retentativa de chamar o Bling. Com conteúdo diferente, continua
+--        sendo conflito: um estado terminal não libera a chave para OUTRA
+--        venda.
 -- ----------------------------------------------------------------------------
 select public.concluir_tentativa_venda_manual(
-    (select tentativa_id from primeira), 'indeterminada', null, '918273'
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from primeira), 'indeterminada', null, '918273'
 );
 
 create temp table terceira_indeterminada as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-a'
+    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-1'
 );
 
-select is((select estado from terceira_indeterminada), 'indeterminada', '6. terceira reivindicação: encontra o estado indeterminada gravado');
-select is((select bling_pedido_id from terceira_indeterminada), '918273', '7. …com o bling_pedido_id preservado, para a mensagem poder citá-lo');
+select is((select estado from terceira_indeterminada), 'indeterminada', '16. terceira reivindicação: encontra o estado indeterminada gravado');
+select is((select bling_pedido_id from terceira_indeterminada), '918273', '17. …com o bling_pedido_id preservado, para a mensagem poder citá-lo');
+
+create temp table indeterminada_com_outro_conteudo as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-OUTRA'
+);
+
+select is(
+    (select fingerprint_conflitante from indeterminada_com_outro_conteudo),
+    true,
+    '18. tentativa INDETERMINADA + conteúdo diferente: conflito, nunca o resultado anterior'
+);
 
 -- ----------------------------------------------------------------------------
--- 8-9. Uma referência DIFERENTE não é afetada pela primeira — a chave é
---      (organizacao_id, referencia_local), não só referencia_local.
+-- 19-20. Uma referência DIFERENTE não é afetada pela primeira.
 -- ----------------------------------------------------------------------------
 create temp table referencia_b as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-b'
+    '59100000-0000-4000-8000-000000000001', 'referencia-b', 'fingerprint-venda-2'
 );
 
-select is((select estado from referencia_b), 'em_andamento', '8. referência diferente: tentativa nova, não vê a indeterminada da referência-a');
-select is((select is_duplicate from referencia_b), false, '9. …não é duplicata');
+select is((select estado from referencia_b), 'em_andamento', '19. referência diferente: tentativa nova, não vê a indeterminada da referência-a');
+select is((select is_duplicate from referencia_b), false, '20. …não é duplicata');
 
 -- ----------------------------------------------------------------------------
--- 10-11. Uma tentativa que FALHOU definitivamente é REABERTA pela próxima
---        reivindicação — nada ficou pendente no Bling para uma falha
---        definitiva, então é seguro retentar com a MESMA referência, sem
---        forçar o cliente a gerar outra.
+-- 21-24. Uma tentativa que FALHOU definitivamente é REABERTA — nada ficou
+--        pendente no Bling numa falha definitiva com compensação confirmada,
+--        então é seguro retentar com a MESMA referência. Mas só para a MESMA
+--        venda: reabrir para outro conteúdo seria a chave de idempotência
+--        autorizando uma operação que ela não identifica.
 -- ----------------------------------------------------------------------------
-select public.concluir_tentativa_venda_manual((select tentativa_id from referencia_b), 'falhou', null, null);
+select public.concluir_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from referencia_b), 'falhou', null, null
+);
 
 create temp table reaberta_apos_falha as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-b'
+    '59100000-0000-4000-8000-000000000001', 'referencia-b', 'fingerprint-venda-2'
 );
 
-select is((select estado from reaberta_apos_falha), 'em_andamento', '10. referência que falhou é reaberta como em_andamento, não bloqueada para sempre');
-select is((select is_duplicate from reaberta_apos_falha), false, '11. …e a reabertura conta como tentativa nova, não duplicata');
+select is((select estado from reaberta_apos_falha), 'em_andamento', '21. referência que falhou é reaberta como em_andamento, não bloqueada para sempre');
+select is((select is_duplicate from reaberta_apos_falha), false, '22. …e a reabertura conta como tentativa nova, não duplicata');
+
+select public.concluir_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from referencia_b), 'falhou', null, null
+);
+
+create temp table falhou_com_outro_conteudo as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'referencia-b', 'fingerprint-venda-COMPLETAMENTE-OUTRA'
+);
+
+select is(
+    (select fingerprint_conflitante from falhou_com_outro_conteudo),
+    true,
+    '23. tentativa FALHOU + conteúdo diferente: conflito, não reabre a chave para outra venda'
+);
+select is(
+    (select estado from public.tentativas_venda_manual
+      where organizacao_id = '59100000-0000-4000-8000-000000000001' and referencia_local = 'referencia-b'),
+    'falhou',
+    '24. …e a tentativa continua falhou, não foi reaberta pelo conflito'
+);
+
+-- ----------------------------------------------------------------------------
+-- 25-28. MULTI-TENANT (5ª rodada): a identidade é (organizacao_id,
+--        referencia_local), não referencia_local sozinha. Duas organizações
+--        podem usar a MESMA referência sem colidir e sem se enxergar.
+-- ----------------------------------------------------------------------------
+create temp table org_b_mesma_referencia as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000002', 'referencia-a', 'fingerprint-da-org-b'
+);
+
+select is((select estado from org_b_mesma_referencia), 'em_andamento', '25. org B usando a MESMA referencia_local: tentativa nova');
+select is((select is_duplicate from org_b_mesma_referencia), false, '26. …não é duplicata — a chave de outra organização não é a mesma chave');
+select isnt(
+    (select tentativa_id from org_b_mesma_referencia),
+    (select tentativa_id from primeira),
+    '27. …e é uma tentativa distinta da de org A com a mesma referência'
+);
+select is(
+    (select count(*) from public.tentativas_venda_manual where referencia_local = 'referencia-a'),
+    2::bigint,
+    '28. duas linhas com a mesma referencia_local, uma por organização'
+);
+
+-- ----------------------------------------------------------------------------
+-- 29-31. Concluir uma tentativa ALHEIA é impossível, mesmo com o id em mãos.
+--        `concluir_tentativa_venda_manual` é `security definer` (ignora RLS
+--        por construção), então o predicado de organização dentro dela é a
+--        única barreira que resta — e é o que estas asserções fixam.
+-- ----------------------------------------------------------------------------
+select throws_ok(
+    format(
+        $$select public.concluir_tentativa_venda_manual(%L, %L, 'concluida', null, '111')$$,
+        '59100000-0000-4000-8000-000000000001',
+        (select tentativa_id from org_b_mesma_referencia)
+    ),
+    'P0002',
+    null,
+    '29. org A não consegue concluir a tentativa de org B, nem com o id correto'
+);
+
+select is(
+    (select estado from public.tentativas_venda_manual
+      where organizacao_id = '59100000-0000-4000-8000-000000000002' and referencia_local = 'referencia-a'),
+    'em_andamento',
+    '30. …e a tentativa de org B fica intacta depois da tentativa de invasão'
+);
+
+select public.concluir_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000002', (select tentativa_id from org_b_mesma_referencia), 'concluida', null, '222'
+);
+
+select is(
+    (select estado from public.tentativas_venda_manual
+      where organizacao_id = '59100000-0000-4000-8000-000000000002' and referencia_local = 'referencia-a'),
+    'concluida',
+    '31. a própria organização conclui a sua tentativa normalmente'
+);
+
+-- ----------------------------------------------------------------------------
+-- 32-38. Superfície de privilégio das duas RPCs e da tabela.
+-- ----------------------------------------------------------------------------
+select is(
+    has_function_privilege('authenticated', 'public.reivindicar_tentativa_venda_manual(uuid,text,text)', 'EXECUTE'),
+    false,
+    '32. authenticated NÃO executa a reivindicação — só a service role, pelo servidor'
+);
+select is(
+    has_function_privilege('authenticated', 'public.concluir_tentativa_venda_manual(uuid,uuid,text,uuid,text)', 'EXECUTE'),
+    false,
+    '33. authenticated NÃO executa a conclusão'
+);
+select is(
+    has_table_privilege('anon', 'public.tentativas_venda_manual', 'SELECT'),
+    false,
+    '34. anon não lê a tabela de tentativas'
+);
+select is(
+    (select p.prosecdef from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname = 'reivindicar_tentativa_venda_manual'),
+    true,
+    '35. reivindicar é security definer'
+);
+select is(
+    (select p.proconfig::text from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname = 'reivindicar_tentativa_venda_manual'),
+    '{search_path=public}',
+    '36. …com search_path fixado, não herdado do chamador'
+);
+select is(
+    (select p.prosecdef from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname = 'concluir_tentativa_venda_manual'),
+    true,
+    '37. concluir é security definer'
+);
+select is(
+    (select p.proconfig::text from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname = 'concluir_tentativa_venda_manual'),
+    '{search_path=public}',
+    '38. …com search_path fixado'
+);
+
+-- ----------------------------------------------------------------------------
+-- 39-41. RLS na tabela: um membro de uma organização não enxerga as
+--        tentativas da outra, mesmo com SELECT concedido a `authenticated`.
+-- ----------------------------------------------------------------------------
+select is(
+    (select relrowsecurity from pg_class where oid = 'public.tentativas_venda_manual'::regclass),
+    true,
+    '39. row level security habilitada na tabela'
+);
+
+set local role authenticated;
+set local request.jwt.claim.sub = '59000000-0000-4000-8000-000000000001';
+
+select is(
+    (select count(*) from public.tentativas_venda_manual
+      where organizacao_id = '59100000-0000-4000-8000-000000000002'),
+    0::bigint,
+    '40. membro da org A não enxerga NENHUMA tentativa da org B via RLS'
+);
+select is(
+    (select count(*) from public.tentativas_venda_manual
+      where organizacao_id = '59100000-0000-4000-8000-000000000001'),
+    2::bigint,
+    '41. …e continua enxergando as duas da própria organização'
+);
+
+reset role;
 
 select * from finish();
 rollback;

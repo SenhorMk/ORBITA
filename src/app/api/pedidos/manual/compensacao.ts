@@ -70,6 +70,28 @@ export function respostaEstadoIndeterminado(blingPedidoId: string | null): NextR
 }
 
 /**
+ * A resposta de quando a PRÓPRIA CRIAÇÃO no Bling ficou indeterminada
+ * (ticket 30, fatia 3 — 5ª rodada de revisão).
+ *
+ * É pior do que a ambiguidade de persistência: aqui o ORBITA não tem sequer o
+ * `bling_id`, então não há o que cancelar nem o que citar. O que existe é a
+ * `referenciaLocal`, decidida ANTES do envio e enviada ao Bling em
+ * `numeroLoja` — e é por ela que a reconciliação descobre, depois, se o
+ * pedido existe. Por isso a mensagem manda conferir em vez de mandar repetir:
+ * repetir é exatamente o que criaria o segundo pedido.
+ */
+export function respostaCriacaoNoBlingIndeterminada(): NextResponse {
+  return fail(
+    'Não foi possível confirmar se o pedido chegou a ser criado no Bling: a resposta não chegou. '
+      + 'A venda NÃO foi registrada no ORBITA e esta tentativa ficou bloqueada de propósito — '
+      + 'tentar de novo agora poderia criar um segundo pedido igual. '
+      + 'Use a conferência desta venda para descobrir o que de fato aconteceu antes de qualquer nova ação.',
+    500,
+    { estadoIndeterminado: true, blingPedidoId: null },
+  );
+}
+
+/**
  * Desfaz no Bling a venda que o ORBITA não conseguiu gravar.
  *
  * O efeito remoto acontece ANTES da gravação local, e não há como inverter a

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { type ManualOrderRequest } from '@/lib/config/manualOrderContract';
+import { fingerprintDaVendaManual } from '@/lib/config/manualOrderFingerprint';
 import { pedidoVendaPayloadSchema, type PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
@@ -8,9 +9,11 @@ import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import {
   compensarNoBling,
   resolverAmbiguidadeDePersistencia,
+  respostaCriacaoNoBlingIndeterminada,
   respostaEstadoIndeterminado,
   respostaVendaJaRegistrada,
 } from './compensacao';
+import { classificarFalhaDeCriacaoNoBling } from './classificacaoDeFalhaBling';
 import { prepararPedido } from './preparacao';
 import type {
   ManualOrderCliente,
@@ -149,9 +152,25 @@ function buildPedidoVendaPayload(
   return { _tag: 'PayloadBuilt', payload: parsed.data };
 }
 
+/**
+ * Desfecho da sincronização com o Bling. Três casos, não dois (5ª rodada de
+ * revisão): `SyncRejected` e `SyncIndeterminado` exigem reações OPOSTAS no
+ * ledger de idempotência.
+ *
+ * - `SyncRejected` — nada foi criado no Bling, e isso é **sabido**: a falha
+ *   aconteceu antes do envio (contato, forma de pagamento, payload inválido)
+ *   ou o Bling respondeu recusando. A tentativa pode ficar `falhou`, que é
+ *   REABRÍVEL — retentar é seguro.
+ * - `SyncIndeterminado` — o `POST /pedidos/vendas` foi despachado e o desfecho
+ *   é desconhecido: timeout, conexão perdida, `5xx`, ou sucesso com id
+ *   ilegível. O pedido pode existir na conta do lojista, e o ORBITA pode nem
+ *   saber o `bling_id`. A tentativa fica `indeterminada`, que BLOQUEIA a
+ *   referência — retentar criaria um segundo pedido real.
+ */
 type SyncResult =
   | { readonly _tag: 'Synced'; readonly blingPedidoId: string; readonly avisos: readonly string[] }
-  | { readonly _tag: 'SyncRejected'; readonly response: NextResponse };
+  | { readonly _tag: 'SyncRejected'; readonly response: NextResponse }
+  | { readonly _tag: 'SyncIndeterminado'; readonly causa: unknown };
 
 /**
  * Cria o pedido no Bling e lança o estoque vinculado a ele.
@@ -204,8 +223,22 @@ async function sincronizarComBling(
     return { _tag: 'SyncRejected', response: payloadResult.response };
   }
 
-  const criado = await deps.bling.createPedidoVenda(payloadResult.payload);
+  // A PARTIR DAQUI o pedido pode existir no Bling (5ª rodada de revisão).
+  // Uma exceção lançada aqui — timeout, conexão perdida, abort — não prova
+  // que nada foi criado: prova só que a RESPOSTA não chegou. Deixá-la subir
+  // marcaria a tentativa como `falhou` (reabrível) ou a deixaria presa em
+  // `em_andamento` para sempre; as duas coisas estão erradas.
+  let criado: Awaited<ReturnType<ManualOrderDependencies['bling']['createPedidoVenda']>>;
+  try {
+    criado = await deps.bling.createPedidoVenda(payloadResult.payload);
+  } catch (causa) {
+    return { _tag: 'SyncIndeterminado', causa };
+  }
+
   if (criado._tag === 'BlingFailed') {
+    if (classificarFalhaDeCriacaoNoBling(criado.failure) === 'Ambigua') {
+      return { _tag: 'SyncIndeterminado', causa: new Error(criado.failure.message) };
+    }
     return {
       _tag: 'SyncRejected',
       response: fail(`O Bling recusou o pedido: ${criado.failure.message}`, 400, {
@@ -256,6 +289,20 @@ function decidirSobreTentativa(
   if (reivindicacao._tag === 'TentativaIndeterminada') {
     return { response: respostaEstadoIndeterminado(reivindicacao.blingPedidoId) };
   }
+  if (reivindicacao._tag === 'TentativaConflitante') {
+    // CONFLITO DE CONTEÚDO (5ª rodada de revisão). A referência já pertence a
+    // outra venda. Não executa e não devolve o desfecho da outra — devolvê-lo
+    // diria "já registrada" sobre uma venda que ninguém registrou. `409` é o
+    // status do conflito de estado do recurso.
+    return {
+      response: fail(
+        'Esta submissão reutiliza a referência de uma venda diferente da que está sendo enviada agora. '
+          + 'Por segurança, nada foi enviado ao Bling. Recarregue a tela para iniciar uma venda nova, '
+          + 'ou reenvie exatamente a mesma venda da tentativa anterior.',
+        409,
+      ),
+    };
+  }
   if (reivindicacao._tag === 'TentativaIndisponivel') {
     // FAIL CLOSED (4ª rodada de revisão): a infraestrutura de idempotência
     // não respondeu — pode ser a migration 59 ainda não aplicada, pode ser
@@ -293,13 +340,22 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     const referenciaLocal = deps.newLocalReference(body.referenciaLocal);
     const avisos: string[] = [];
 
+    // O fingerprint é calculado AQUI, do corpo já validado — nunca recebido do
+    // cliente (5ª rodada de revisão). Um fingerprint enviado pelo cliente
+    // seria só a afirmação do cliente sobre si mesmo, e a regra que ele
+    // sustenta ("mesma chave + mesmo conteúdo") deixaria de valer contra um
+    // cliente desatualizado, um proxy, ou uma chamada direta à API.
+    const fingerprint = await fingerprintDaVendaManual(body);
+
     // Ticket 30, fatia 3, 3ª rodada — reivindica a referência ANTES de
     // qualquer chamada ao Bling. Uma retentativa (humana, de proxy, de
     // navegador) que reenvie a MESMA `referenciaLocal` cai num dos três
     // ramos de `respostaSeTentativaJaExistir` em vez de criar um segundo
     // pedido remoto — é isso que torna "não tente de novo" uma garantia do
     // sistema, não só uma instrução de texto.
-    const decisao = decidirSobreTentativa(await deps.store.reivindicarTentativa(scope, referenciaLocal));
+    const decisao = decidirSobreTentativa(
+      await deps.store.reivindicarTentativa(scope, referenciaLocal, fingerprint),
+    );
     if ('response' in decisao) return decisao.response;
     const { tentativaId } = decisao;
 
@@ -308,8 +364,19 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     if (body.syncBling) {
       const sync = await sincronizarComBling(scope, cliente, body, itens, total, dataStr, referenciaLocal, deps);
       if (sync._tag === 'SyncRejected') {
-        await deps.store.registrarDesfechoDaTentativa(tentativaId, { estado: 'falhou' });
+        // Recusa comprovada: nada existe no Bling, então a referência pode ser
+        // reaberta para uma retentativa da MESMA venda.
+        await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, { estado: 'falhou' });
         return sync.response;
+      }
+      if (sync._tag === 'SyncIndeterminado') {
+        // O pedido PODE existir no Bling, e sem `bling_id` não há o que
+        // cancelar nem o que gravar. A referência fica bloqueada até a
+        // reconciliação (`POST /api/pedidos/manual/reconciliar`) perguntar ao
+        // Bling, por `numeroLoja`, se o pedido existe.
+        registrarFalhaInterna('pedidos.manual.bling.criar.ambiguo', sync.causa);
+        await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, { estado: 'indeterminada' });
+        return respostaCriacaoNoBlingIndeterminada();
       }
       blingPedidoId = sync.blingPedidoId;
       avisos.push(...sync.avisos);
@@ -330,7 +397,7 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     });
 
     if (resultado._tag === 'PersistVendaOk') {
-      await deps.store.registrarDesfechoDaTentativa(tentativaId, {
+      await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, {
         estado: 'concluida',
         pedidoId: resultado.pedidoId,
         blingPedidoId,
@@ -347,7 +414,7 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     const { response, desfecho } = resultado._tag === 'PersistVendaFalhouDefinitivamente'
       ? await compensarNoBling(scope, blingPedidoId, resultado.causa, deps)
       : await resolverAmbiguidadeDePersistencia(scope, blingPedidoId, resultado.causa, deps);
-    await deps.store.registrarDesfechoDaTentativa(tentativaId, desfecho);
+    await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, desfecho);
     return response;
   };
 }

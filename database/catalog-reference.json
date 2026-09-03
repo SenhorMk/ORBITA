@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "fingerprint": "92223dfe5078de49a1ec77c439c68621c23a2f8a0836528efab9e7930faa0492",
+  "fingerprint": "0e1320d043cfeeaf14df172b659c790f724474e8ce9e38d54a597abb0aa368bc",
   "counts": {
     "relations": 54,
-    "columns": 559,
+    "columns": 560,
     "policies": 72,
     "functions": 91,
     "constraints": 254,
