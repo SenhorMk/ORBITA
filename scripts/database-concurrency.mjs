@@ -18,7 +18,12 @@ import { err, ok } from './script-result.mjs';
  * comeca, A termina, so entao B comeca de verdade) sem que o teste perceba —
  * ficaria verde por sorte de agendamento, nao por prova.
  *
- * A BARREIRA DETERMINISTICA, em cinco passos:
+ * A BARREIRA DETERMINISTICA, em cinco passos — e por que um temporizador NAO
+ * BASTA (achado da 3ª rodada de revisão): raciar a promise de B contra um
+ * `setTimeout` e ver que ela "ainda não resolveu" prova só isso — que não
+ * resolveu. Não prova que B alcançou o `INSERT ... ON CONFLICT` e está presa
+ * nele; B podia simplesmente não ter chegado ainda ao Postgres quando o
+ * temporizador venceu. A prova real tem de vir DO PRÓPRIO BANCO:
  *
  *   1. Conexao A abre uma transacao EXPLICITA (`BEGIN`) e chama a RPC. O
  *      trabalho da funcao acontece dentro dessa transacao aberta — o
@@ -26,17 +31,21 @@ import { err, ok } from './script-result.mjs';
  *      commitado ainda.
  *   2. Conexao B, numa transacao implicita normal (como a producao faz),
  *      dispara a MESMA chamada. Ela bate no bloqueio que A segura.
- *   3. O rehearsal RACEIA a promise de B contra um temporizador curto e
- *      OBSERVA que B continua pendente — a prova de que a sobreposicao
- *      realmente aconteceu, nao inferida do resultado final.
+ *   3. O rehearsal consulta `pg_stat_activity` (de uma TERCEIRA conexão,
+ *      administrativa) pelo `pid` de B, em polling curto, até observar
+ *      `wait_event_type = 'Lock'` — o próprio Postgres marcando que aquela
+ *      sessão está parada esperando outra transação. Essa é a prova: não
+ *      "B não respondeu a tempo", e sim "o banco confirma que B está
+ *      bloqueada". Ver `observarBloqueioNoPostgres`.
  *   4. So entao A commita (`COMMIT`).
  *   5. B destrava, reavalia sua clausula `WHERE` contra o estado JA
  *      commitado por A, e perde com `23505`.
  *
- * Se B destravasse ANTES do commit de A (passo 3 falhando), o rehearsal
- * reprova com `ManualOrderRaceNaoBloqueou` — isso significaria que a barreira
- * não forçou nada, e o resultado do resto do teste não provaria concorrência
- * real.
+ * Se `pg_stat_activity` nunca marcar B como esperando um Lock dentro do
+ * orçamento (passo 3 falhando), o rehearsal reprova com
+ * `ManualOrderRaceNaoBloqueou` — isso significaria que a sobreposição não foi
+ * observada de verdade, e o resultado do resto do teste não provaria
+ * concorrência real.
  */
 
 const ORG_ID = 'c0000000-0000-4000-8000-000000000001';
@@ -120,14 +129,49 @@ async function tentarAssumirLinha(client) {
 }
 
 /**
- * Espera um número fixo de milissegundos, sem cancelamento — só para a
- * janela de observação do bloqueio.
+ * Espera um número fixo de milissegundos, sem cancelamento — só para o
+ * intervalo entre tentativas de observação do bloqueio.
  *
  * @param {number} ms - Milissegundos a esperar.
  * @returns {Promise<void>}
  */
 function esperar(ms) {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+/**
+ * Observa, no PRÓPRIO POSTGRES — não por passagem de tempo — que a conexão
+ * `pid` está de fato esperando um bloqueio de linha.
+ *
+ * A revisão apontou, corretamente, que raciar uma promise contra um
+ * temporizador e ver que ela "ainda não resolveu" não prova que B alcançou o
+ * `INSERT ... ON CONFLICT` e está presa nele — B podia simplesmente não ter
+ * chegado ainda ao Postgres. A prova real está em `pg_stat_activity`: quando
+ * uma sessão bloqueia esperando outra transação liberar uma linha, o próprio
+ * Postgres marca essa sessão com `wait_event_type = 'Lock'` (mecanismo
+ * `LOCKTAG_TRANSACTION` — B espera o XID de A terminar, não um lock de linha
+ * direto, mas o sinal observável é o mesmo). Isso é atualizado pelo backend
+ * de B em tempo real, não por polling arriscado do lado do cliente.
+ *
+ * @param {import('pg').Client} adminClient - Conexão livre para consultar `pg_stat_activity`.
+ * @param {number} pid - `pg_backend_pid()` da conexão que deveria estar bloqueada.
+ * @param {{ readonly timeoutMs?: number, readonly intervaloDePollMs?: number }} [opcoes] - Orçamento de espera e intervalo entre consultas.
+ * @returns {Promise<{ readonly observado: true, readonly waitEvent: string | null } | { readonly observado: false }>} Se e como o bloqueio foi observado.
+ */
+async function observarBloqueioNoPostgres(adminClient, pid, { timeoutMs = 3000, intervaloDePollMs = 20 } = {}) {
+  const limite = Date.now() + timeoutMs;
+  while (Date.now() < limite) {
+    const resultado = await adminClient.query(
+      `select wait_event_type, wait_event, state from pg_stat_activity where pid = $1`,
+      [pid],
+    );
+    const linha = resultado.rows[0];
+    if (linha && linha.wait_event_type === 'Lock') {
+      return { observado: true, waitEvent: linha.wait_event ?? null };
+    }
+    await esperar(intervaloDePollMs);
+  }
+  return { observado: false };
 }
 
 /**
@@ -140,7 +184,7 @@ function esperar(ms) {
  */
 export async function runManualOrderRaceRehearsal({
   createClient = () => createLocalDatabaseClient('orbita-database-concurrency'),
-  janelaDeObservacaoMs = JANELA_DE_OBSERVACAO_DO_BLOQUEIO_MS,
+  timeoutDeObservacaoMs = JANELA_DE_OBSERVACAO_DO_BLOQUEIO_MS,
 } = {}) {
   const admin = createClient();
   const clientA = createClient();
@@ -165,26 +209,30 @@ export async function runManualOrderRaceRehearsal({
     }
 
     // ---- Passo 2: B dispara a mesma tomada, na mesma chave, SEM esperar A. ----
+    const pidDeB = (await clientB.query('select pg_backend_pid() as pid')).rows[0].pid;
     const promiseB = tentarAssumirLinha(clientB);
 
-    // ---- Passo 3: observa que B está genuinamente bloqueada. ----
-    const raceComTemporizador = await Promise.race([
-      promiseB.then((valor) => ({ resolveu: true, valor })),
-      esperar(janelaDeObservacaoMs).then(() => ({ resolveu: false })),
-    ]);
-    if (raceComTemporizador.resolveu) {
-      // B terminou antes de A commitar — a barreira não forçou sobreposição
-      // nenhuma. O resto do teste não provaria concorrência real, então nem
-      // tenta: reprova aqui, explicitamente.
+    // ---- Passo 3: observa NO POSTGRES, via pg_stat_activity, que B está
+    // genuinamente esperando o bloqueio que A segura — não por passagem de
+    // tempo. Se B já tivesse terminado (não bloqueado de verdade), essa
+    // consulta simplesmente não encontraria `wait_event_type = 'Lock'` para
+    // o pid dela dentro do orçamento, e o rehearsal reprova abaixo.
+    const observacao = await observarBloqueioNoPostgres(admin, pidDeB, { timeoutMs: timeoutDeObservacaoMs });
+    if (!observacao.observado) {
+      // B pode ter terminado sozinha (sem bloquear) ou o Postgres pode não
+      // ter marcado o wait a tempo. De qualquer forma, a sobreposição não
+      // foi PROVADA — reprova aqui, explicitamente, em vez de seguir supondo.
       await clientA.query('ROLLBACK').catch(() => {});
+      const resultadoBSeJaResolveu = await Promise.race([promiseB, esperar(50).then(() => undefined)]);
       return err(
         'ManualOrderRaceNaoBloqueou',
-        'B deveria continuar bloqueada enquanto A segura a transação aberta, e não bloqueou — a barreira de concorrência não forçou sobreposição real',
-        { resultadoB: raceComTemporizador.valor, janelaDeObservacaoMs },
+        'pg_stat_activity nunca marcou a conexão B como esperando um Lock enquanto A segurava a transação aberta — a sobreposição real não foi observada no banco',
+        { pidDeB, timeoutDeObservacaoMs, resultadoBSeJaResolveu },
       );
     }
 
-    // ---- Passo 4: só agora A commita — libera o bloqueio que B espera. ----
+    // ---- Passo 4: só agora, com o bloqueio de B confirmado no Postgres,
+    // A commita — libera o que B espera. ----
     await clientA.query('COMMIT');
 
     // ---- Passo 5: B destrava e reavalia contra o estado já commitado. ----
@@ -244,7 +292,7 @@ export async function runManualOrderRaceRehearsal({
     return ok(Object.freeze({
       vencedora: resultadoA.pedidoId,
       perdedoraCode: resultadoB.code,
-      bloqueioObservado: true,
+      bloqueioObservadoNoPostgres: observacao.waitEvent,
       estoqueFinal: Number(linha.estoque_final),
       estoqueReservadoFinal: Number(linha.estoque_reservado_final),
     }));

@@ -6,9 +6,13 @@ import { supabaseServer } from '@/lib/supabaseServer';
 import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
+
+import { classificarErroDePersistencia } from './classificacaoDeFalha';
 
 import {
   createManualOrderHandler,
+  type DesfechoDaTentativa,
   type Dormir,
   type ManualOrderAuthPort,
   type ManualOrderBlingPort,
@@ -17,6 +21,7 @@ import {
   type ManualOrderStorePort,
   type PersistManualOrderInput,
   type PersistVendaResult,
+  type ReivindicacaoDeTentativa,
 } from './handler';
 
 export type {
@@ -34,8 +39,8 @@ export type {
  * posição era ocupada por `MANUAL-<Math.random()>`, um identificador fictício
  * se passando por ID do ERP.
  */
-function newLocalReference(): string {
-  return `ORBITA-${randomUUID()}`;
+function newLocalReference(referenciaClienteFornecida?: string): string {
+  return `ORBITA-${referenciaClienteFornecida ?? randomUUID()}`;
 }
 
 function numberOrZero(value: unknown): number {
@@ -118,7 +123,69 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
       if (error) throw new Error(`Falha ao conferir se a venda já foi registrada: ${error.message}`);
       return data ? { pedidoId: data.id } : null;
     },
+
+    reivindicarTentativa,
+    registrarDesfechoDaTentativa,
   };
+}
+
+/**
+ * Reivindica a referência local como tentativa nova, ou devolve o desfecho
+ * de uma tentativa ANTERIOR com a mesma referência (ticket 30, fatia 3, 3ª
+ * rodada). Mesmo padrão de `registrar_evento_inbox_bling` (migration 28).
+ *
+ * Se a tabela ainda não existir (migration 59 não aplicada — o deploy do
+ * código pode chegar antes da migration manual; ver
+ * `evidence/30-compatibilidade-de-deploy-*.md`), devolve `TentativaNova` em
+ * vez de lançar: sem a tabela não há como reivindicar nada, e a venda manual
+ * não pode quebrar por causa disso — só fica sem a proteção.
+ */
+async function reivindicarTentativa(scope: VerifiedOrganizationScope, referenciaLocal: string): Promise<ReivindicacaoDeTentativa> {
+  const { data, error } = await supabaseServer.rpc('reivindicar_tentativa_venda_manual', {
+    p_organizacao_id: scope.organizationId,
+    p_referencia_local: referenciaLocal,
+  });
+
+  if (error) {
+    if (error.code === '42P01') {
+      return { _tag: 'TentativaNova', tentativaId: referenciaLocal };
+    }
+    throw new Error(`Falha ao reivindicar a tentativa de venda: ${error.message}`);
+  }
+
+  const linha = Array.isArray(data) ? data[0] : data;
+  if (!linha) throw new Error('reivindicar_tentativa_venda_manual não devolveu linha nenhuma');
+
+  if (!linha.is_duplicate) {
+    return { _tag: 'TentativaNova', tentativaId: linha.tentativa_id };
+  }
+  if (linha.estado === 'concluida') {
+    return { _tag: 'TentativaConcluida', pedidoId: linha.pedido_id, blingPedidoId: linha.bling_pedido_id ?? null };
+  }
+  if (linha.estado === 'indeterminada') {
+    return { _tag: 'TentativaIndeterminada', blingPedidoId: linha.bling_pedido_id ?? null };
+  }
+  // 'em_andamento': uma tentativa concorrente com a mesma referência ainda
+  // está executando.
+  return { _tag: 'TentativaEmAndamento' };
+}
+
+/** Grava o desfecho final de uma tentativa já reivindicada. Ver `reivindicarTentativa`. */
+async function registrarDesfechoDaTentativa(tentativaId: string, desfecho: DesfechoDaTentativa): Promise<void> {
+  const { error } = await supabaseServer.rpc('concluir_tentativa_venda_manual', {
+    p_tentativa_id: tentativaId,
+    p_estado: desfecho.estado,
+    p_pedido_id: desfecho.pedidoId ?? null,
+    p_bling_pedido_id: desfecho.blingPedidoId ?? null,
+  });
+
+  if (error && error.code !== '42P01') {
+    // Não deixa a venda cair por causa do REGISTRO do desfecho — a venda em
+    // si já foi decidida antes desta chamada. Só loga: sem isto, a próxima
+    // tentativa com a mesma referência ficaria presa em 'em_andamento' para
+    // sempre.
+    registrarFalhaInterna('pedidos.manual.tentativa.concluir', error);
+  }
 }
 
 /**
@@ -141,27 +208,20 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
  * assumir uma linha que **já é** venda manual continua sendo `23505` — que o
  * handler trata como falha definitiva, e dispara a compensação.
  *
- * **Falha definitiva × falha ambígua (ticket 30, fatia 3).** `supabase-js`
- * nunca lança para uma chamada de RPC — devolve `{ data, error }` mesmo
- * quando a falha é de rede. A distinção que importa está em `error.code`:
+ * **Falha definitiva × falha ambígua (ticket 30, fatia 3, endurecida na 3ª
+ * rodada de revisão).** A classificação vive em `classificacaoDeFalha.ts`,
+ * **por reconhecimento positivo** — só é definitiva uma falha cujo `code`
+ * bate um formato conhecido de SQLSTATE/PostgREST, e qualquer coisa não
+ * reconhecida cai em ambígua por padrão, nunca o contrário. A dependência de
+ * versão que sustenta essa fronteira, e a regressão que a prova sem depender
+ * só da leitura do código-fonte instalado, estão documentadas em
+ * `DEPENDENCIA_DE_VERSAO.md` e `classificacaoDeFalha.test.ts`.
  *
- * - **Não vazio** (`23505`, `P0002`, `PGRST116`, …) — o `PostgrestBuilder`
- *   só preenche isso depois de fazer `JSON.parse` do corpo de uma resposta
- *   HTTP que o servidor **enviou**. Uma resposta assim só existe depois que o
- *   servidor terminou de processar a requisição — a transação da RPC, que é
- *   implícita e única, já foi revertida. **Definitiva.**
- * - **Vazio ou ausente** — o `PostgrestBuilder` também preenche `error` para
- *   falhas do `fetch` em si (timeout, conexão perdida, abort): nesses ramos,
- *   olhado em `node_modules/@supabase/postgrest-js/dist/index.mjs`, `code`
- *   começa e permanece `""` porque não veio corpo nenhum para interpretar.
- *   Sem resposta do servidor, não há como saber se a transação chegou a
- *   commitar antes da falha aparecer aqui. **Ambígua.**
- *
- * O caso do `data` que não é `string` é outra coisa: `res.ok` só é verdadeiro
- * depois que a RPC comitou (é assim que o PostgREST decide o código HTTP),
- * então esse ramo sabe que a gravação **aconteceu** — só o formato do
- * retorno é que surpreendeu. Vira falha definitiva também, mas por motivo
- * diferente: não há ambiguidade sobre o commit, só sobre o valor devolvido.
+ * O caso do `data` que não é `string` também é `Ambigua` — deliberadamente,
+ * mesmo sabendo que `res.ok` prova que a RPC comitou. É um formato de
+ * resposta que o código não reconhece, e a política conservadora trata
+ * "não reconheço" como "não decido sozinho", não como uma segunda categoria
+ * de certeza.
  */
 async function persistVenda(input: PersistManualOrderInput): Promise<PersistVendaResult> {
   const { data, error } = await supabaseServer.rpc('registrar_venda_manual', {
@@ -186,16 +246,15 @@ async function persistVenda(input: PersistManualOrderInput): Promise<PersistVend
   });
 
   if (error) {
-    const codigo = typeof error.code === 'string' ? error.code : '';
-    return codigo !== ''
-      ? { _tag: 'PersistVendaFalhouDefinitivamente', causa: new Error(error.message) }
-      : { _tag: 'PersistVendaAmbigua', causa: new Error(error.message) };
+    const causa = new Error(error.message);
+    return classificarErroDePersistencia(error) === 'Definitiva'
+      ? { _tag: 'PersistVendaFalhouDefinitivamente', causa }
+      : { _tag: 'PersistVendaAmbigua', causa };
   }
   if (typeof data !== 'string') {
-    // `res.ok`: a gravação aconteceu. Não é ambiguidade de transporte.
     return {
-      _tag: 'PersistVendaFalhouDefinitivamente',
-      causa: new Error('a venda foi registrada mas o banco não devolveu o id do pedido'),
+      _tag: 'PersistVendaAmbigua',
+      causa: new Error('a venda foi registrada mas o banco não devolveu o id do pedido no formato esperado'),
     };
   }
 

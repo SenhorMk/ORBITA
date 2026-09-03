@@ -11,7 +11,20 @@ import { NextResponse } from 'next/server';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 
-import type { ManualOrderDependencies, ManualOrderResponseBody } from './ports';
+import type { DesfechoDaTentativa, ManualOrderDependencies, ManualOrderResponseBody } from './ports';
+
+/**
+ * Resposta HTTP e desfecho da tentativa, juntos — o chamador (`handler.ts`)
+ * precisa dos dois: a resposta vai para o cliente, o desfecho vai para
+ * `registrarDesfechoDaTentativa` (ticket 30, fatia 3, 3ª rodada), para que a
+ * PRÓXIMA reivindicação com a mesma `referenciaLocal` encontre um estado
+ * terminal em vez de reexecutar o Bling. Devolver os dois juntos evita
+ * reconstruir o desfecho reabrindo o corpo da resposta.
+ */
+export interface DesfechoDaFalha {
+  readonly response: NextResponse;
+  readonly desfecho: DesfechoDaTentativa;
+}
 
 function json(body: ManualOrderResponseBody, status: number): NextResponse {
   return NextResponse.json(body, { status });
@@ -22,11 +35,12 @@ function fail(error: string, status: number, extra: Partial<ManualOrderResponseB
 }
 
 /**
- * A resposta comum aos dois casos em que a venda já existia: cancelar
- * (definitiva) e confirmar (ambígua) chegam aqui pelo mesmo motivo — a
- * gravação aconteceu, só a certeza sobre ela é que demorou a chegar.
+ * A resposta comum a todo caso em que a venda já existia: cancelar
+ * (definitiva), confirmar (ambígua) e reivindicar uma referência já
+ * concluída (ticket 30, fatia 3, 3ª rodada) chegam aqui pelo mesmo motivo —
+ * a gravação aconteceu, só a certeza sobre ela é que demorou a chegar.
  */
-function respostaVendaJaRegistrada(pedidoId: string, blingPedidoId: string): NextResponse {
+export function respostaVendaJaRegistrada(pedidoId: string, blingPedidoId: string | null): NextResponse {
   return json(
     {
       success: true,
@@ -35,6 +49,23 @@ function respostaVendaJaRegistrada(pedidoId: string, blingPedidoId: string): Nex
       avisos: ['A venda já havia sido registrada numa tentativa anterior; nenhuma ação nova foi necessária.'],
     },
     200,
+  );
+}
+
+/**
+ * A resposta de estado indeterminado — nem "deu certo" nem "deu errado", e
+ * por isso mesmo não pode disparar compensação nem permitir retentativa
+ * automática. Compartilhada entre "a janela de confirmação se esgotou agora"
+ * e "uma tentativa anterior com a mesma referência já ficou indeterminada".
+ */
+export function respostaEstadoIndeterminado(blingPedidoId: string | null): NextResponse {
+  return fail(
+    `Não foi possível confirmar se a venda foi registrada. A conexão com o banco foi perdida antes `
+      + `de a resposta chegar${blingPedidoId ? `, e o pedido ${blingPedidoId} pode ou não existir no Bling e no ORBITA` : ''}. `
+      + 'NÃO tente de novo e NÃO cancele o pedido no Bling agora: confira manualmente se a venda já '
+      + 'existe no ORBITA antes de qualquer ação, para não duplicar nem apagar algo que já é real.',
+    500,
+    { blingPedidoId, estadoIndeterminado: true },
   );
 }
 
@@ -67,7 +98,7 @@ export async function compensarNoBling(
   blingPedidoId: string | null,
   error: unknown,
   deps: ManualOrderDependencies,
-): Promise<NextResponse> {
+): Promise<DesfechoDaFalha> {
   // Ticket 22, critério 13 — `causa` é `descreverErro` do erro do banco, e ela
   // ia inteira para o cliente. Não ajuda a reconciliar nada e é diagnóstico
   // interno (CWE-209): passa a ficar só no log. O que permite agir — o id do
@@ -77,37 +108,46 @@ export async function compensarNoBling(
   if (blingPedidoId === null) {
     // Nada foi criado no Bling: não há o que reconciliar, e não há o que dizer
     // além de que falhou.
-    return fail(MENSAGEM_PUBLICA_DE_FALHA, 500, { blingPedidoId });
+    return { response: fail(MENSAGEM_PUBLICA_DE_FALHA, 500, { blingPedidoId }), desfecho: { estado: 'falhou' } };
   }
 
   const jaRegistrada = await deps.store.findVendaManualJaRegistrada(scope, blingPedidoId);
   if (jaRegistrada !== null) {
-    return respostaVendaJaRegistrada(jaRegistrada.pedidoId, blingPedidoId);
+    return {
+      response: respostaVendaJaRegistrada(jaRegistrada.pedidoId, blingPedidoId),
+      desfecho: { estado: 'concluida', pedidoId: jaRegistrada.pedidoId, blingPedidoId },
+    };
   }
 
   const compensacao = await deps.bling.cancelarPedidoVenda(blingPedidoId);
   if (compensacao._tag === 'BlingFailed') {
     // As duas metades falharam. É o único caminho que exige ação humana, e por
     // isso ele diz exatamente o quê, onde e por quê.
-    return fail(
-      `Falha ao registrar a venda no ORBITA. O pedido ${blingPedidoId} foi criado no Bling e o `
-        // A razão vem do **Bling**, não daqui: é ela que diz por que o
-        // cancelamento automático não funcionou, e é o que a pessoa precisa
-        // saber para resolver à mão. Mensagem de provedor externo não é
-        // diagnóstico interno, e sai de propósito.
-        + `cancelamento automático também falhou (${compensacao.failure.message}). `
-        + 'Cancele o pedido no Bling antes de tentar de novo, senão a próxima tentativa cria outro.',
-      500,
-      { blingPedidoId, compensado: false },
-    );
+    return {
+      response: fail(
+        `Falha ao registrar a venda no ORBITA. O pedido ${blingPedidoId} foi criado no Bling e o `
+          // A razão vem do **Bling**, não daqui: é ela que diz por que o
+          // cancelamento automático não funcionou, e é o que a pessoa precisa
+          // saber para resolver à mão. Mensagem de provedor externo não é
+          // diagnóstico interno, e sai de propósito.
+          + `cancelamento automático também falhou (${compensacao.failure.message}). `
+          + 'Cancele o pedido no Bling antes de tentar de novo, senão a próxima tentativa cria outro.',
+        500,
+        { blingPedidoId, compensado: false },
+      ),
+      desfecho: { estado: 'falhou', blingPedidoId },
+    };
   }
 
-  return fail(
-    `Falha ao registrar a venda no ORBITA. O pedido ${blingPedidoId} foi cancelado no Bling `
-      + 'automaticamente, então nada ficou pendente lá. Pode tentar de novo.',
-    500,
-    { blingPedidoId, compensado: true },
-  );
+  return {
+    response: fail(
+      `Falha ao registrar a venda no ORBITA. O pedido ${blingPedidoId} foi cancelado no Bling `
+        + 'automaticamente, então nada ficou pendente lá. Pode tentar de novo.',
+      500,
+      { blingPedidoId, compensado: true },
+    ),
+    desfecho: { estado: 'falhou', blingPedidoId },
+  };
 }
 
 /**
@@ -163,36 +203,38 @@ async function confirmarVendaComRetentativa(
  * **Nunca compensa aqui.** Cancelar no Bling depois de uma janela de
  * confirmação que não achou a venda ainda seria uma aposta: a transação pode
  * commitar um instante depois da última tentativa de confirmação. A saída
- * honesta, sem um mecanismo de idempotência mais forte (chave de tentativa
- * persistida, reconciliação assíncrona), é recusar a decisão automática e
- * dizer isso claramente — não "tentou compensar e falhou", e sim "não dá para
- * saber, não aja sozinho".
+ * honesta é recusar a decisão automática e dizer isso claramente — não
+ * "tentou compensar e falhou", e sim "não dá para saber, não aja sozinho".
+ *
+ * O `desfecho` devolvido quando a ambiguidade não se resolve é `indeterminada`
+ * — é o que fecha o ciclo (ticket 30, fatia 3, 3ª rodada): a PRÓXIMA
+ * reivindicação com a mesma `referenciaLocal` encontra esse estado e devolve
+ * `respostaEstadoIndeterminado` de novo, sem chamar o Bling.
  */
 export async function resolverAmbiguidadeDePersistencia(
   scope: VerifiedOrganizationScope,
   blingPedidoId: string | null,
   error: unknown,
   deps: ManualOrderDependencies,
-): Promise<NextResponse> {
+): Promise<DesfechoDaFalha> {
   registrarFalhaInterna('pedidos.manual.registrar.ambiguo', error);
 
   if (blingPedidoId === null) {
     // Sem sincronização não há o que compensar no Bling — mas a ambiguidade
     // sobre a gravação local continua, e a mensagem não pode fingir certeza.
-    return fail(MENSAGEM_PUBLICA_DE_FALHA, 500, { blingPedidoId });
+    return { response: fail(MENSAGEM_PUBLICA_DE_FALHA, 500, { blingPedidoId }), desfecho: { estado: 'indeterminada' } };
   }
 
   const jaRegistrada = await confirmarVendaComRetentativa(scope, blingPedidoId, deps);
   if (jaRegistrada !== null) {
-    return respostaVendaJaRegistrada(jaRegistrada.pedidoId, blingPedidoId);
+    return {
+      response: respostaVendaJaRegistrada(jaRegistrada.pedidoId, blingPedidoId),
+      desfecho: { estado: 'concluida', pedidoId: jaRegistrada.pedidoId, blingPedidoId },
+    };
   }
 
-  return fail(
-    `Não foi possível confirmar se a venda foi registrada. A conexão com o banco foi perdida antes `
-      + `de a resposta chegar, e o pedido ${blingPedidoId} pode ou não existir no Bling e no ORBITA. `
-      + 'NÃO tente de novo e NÃO cancele o pedido no Bling agora: confira manualmente se a venda já '
-      + 'existe no ORBITA antes de qualquer ação, para não duplicar nem apagar algo que já é real.',
-    500,
-    { blingPedidoId, estadoIndeterminado: true },
-  );
+  return {
+    response: respostaEstadoIndeterminado(blingPedidoId),
+    desfecho: { estado: 'indeterminada', blingPedidoId },
+  };
 }

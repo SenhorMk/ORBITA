@@ -1,19 +1,21 @@
 import { NextResponse } from 'next/server';
 
-import {
-  calculateManualOrderTotal,
-  manualOrderRequestSchema,
-  type ManualOrderRequest,
-} from '@/lib/config/manualOrderContract';
+import { type ManualOrderRequest } from '@/lib/config/manualOrderContract';
 import { pedidoVendaPayloadSchema, type PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
-import { compensarNoBling, resolverAmbiguidadeDePersistencia } from './compensacao';
+import {
+  compensarNoBling,
+  resolverAmbiguidadeDePersistencia,
+  respostaEstadoIndeterminado,
+  respostaVendaJaRegistrada,
+} from './compensacao';
+import { prepararPedido } from './preparacao';
 import type {
   ManualOrderCliente,
   ManualOrderDependencies,
   ManualOrderResponseBody,
-  ManualOrderStorePort,
+  ReivindicacaoDeTentativa,
   ResolvedManualOrderItem,
 } from './ports';
 
@@ -41,46 +43,6 @@ function parseNumericBlingId(value: string | null): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-type ResolveItensResult =
-  | { readonly _tag: 'ItensResolved'; readonly itens: readonly ResolvedManualOrderItem[] }
-  | { readonly _tag: 'ItensRejected'; readonly response: NextResponse };
-
-/**
- * Casa os itens pedidos com o cadastro local dentro do escopo da organização.
- * O preço usado é sempre o do cadastro: o corpo da requisição não carrega
- * preço nem total justamente para que o cliente não possa ditar o valor.
- */
-async function resolveItens(
-  scope: VerifiedOrganizationScope,
-  body: ManualOrderRequest,
-  store: ManualOrderStorePort,
-): Promise<ResolveItensResult> {
-  const produtoIds = body.itens.map((item) => item.produtoId);
-  const duplicados = produtoIds.length !== new Set(produtoIds).size;
-  if (duplicados) {
-    return { _tag: 'ItensRejected', response: fail('O pedido tem o mesmo produto repetido em itens diferentes. Ajuste a quantidade em vez de repetir o item.', 400) };
-  }
-
-  const produtos = await store.findProdutosByIds(scope, produtoIds);
-  const porId = new Map(produtos.map((produto) => [produto.id, produto]));
-
-  const itens: ResolvedManualOrderItem[] = [];
-  for (const item of body.itens) {
-    const produto = porId.get(item.produtoId);
-    if (!produto) {
-      return { _tag: 'ItensRejected', response: fail(`Produto não encontrado no cadastro desta organização (${item.produtoId}).`, 400) };
-    }
-    if (produto.estoqueDisponivel < item.quantidade) {
-      return {
-        _tag: 'ItensRejected',
-        response: fail(`Estoque insuficiente para ${produto.nome}. Disponível: ${produto.estoqueDisponivel}, pedido: ${item.quantidade}.`, 400),
-      };
-    }
-    itens.push({ produto, quantidade: item.quantidade });
-  }
-
-  return { _tag: 'ItensResolved', itens };
-}
 
 type ContatoResult =
   | { readonly _tag: 'ContatoResolved'; readonly blingContatoId: number }
@@ -272,58 +234,64 @@ async function sincronizarComBling(
  * no Bling, que acontece depois do pedido já existir) vira aviso explícito na
  * resposta, nunca um `catch` silencioso nem um sucesso mascarado.
  */
+/**
+ * Decide o que fazer com uma reivindicação de referência (ticket 30, fatia
+ * 3, 3ª rodada): segue com a tentativa nova, ou devolve a resposta pronta
+ * para um dos três casos em que a submissão NÃO deve chamar o Bling de novo.
+ *
+ * Discriminado por `tentativaId` em vez de `NextResponse | null` de
+ * propósito — assim o chamador estreita o tipo por um campo real, sem
+ * precisar de um `if` inalcançável para satisfazer o TypeScript.
+ */
+function decidirSobreTentativa(
+  reivindicacao: ReivindicacaoDeTentativa,
+): { readonly tentativaId: string } | { readonly response: NextResponse } {
+  if (reivindicacao._tag === 'TentativaNova') {
+    return { tentativaId: reivindicacao.tentativaId };
+  }
+  if (reivindicacao._tag === 'TentativaConcluida') {
+    return { response: respostaVendaJaRegistrada(reivindicacao.pedidoId, reivindicacao.blingPedidoId) };
+  }
+  if (reivindicacao._tag === 'TentativaIndeterminada') {
+    return { response: respostaEstadoIndeterminado(reivindicacao.blingPedidoId) };
+  }
+  // 'TentativaEmAndamento' — uma tentativa concorrente com a MESMA
+  // referência está executando agora. Não é erro do cliente nem do
+  // servidor — é a mesma submissão, em voo, chegando duas vezes.
+  return {
+    response: fail(
+      'Esta venda já está sendo registrada por outra requisição em andamento com a mesma referência. Aguarde a resposta dela antes de tentar de novo.',
+      409,
+    ),
+  };
+}
+
 export function createManualOrderHandler(deps: ManualOrderDependencies) {
   return async function handleManualOrder(request: Request): Promise<NextResponse> {
-    const session = await deps.auth.authenticate(request);
-    if (!session) {
-      return fail('Não autorizado', 401);
-    }
-
-    const scopeResult = await deps.auth.resolveScope(request);
-    if (scopeResult._tag === 'Denied') {
-      return scopeResult.response;
-    }
-    const { scope } = scopeResult;
-
-    let rawBody: unknown;
-    try {
-      rawBody = await request.json();
-    } catch {
-      return fail('Corpo da requisição não é um JSON válido.', 400);
-    }
-
-    const parsedBody = manualOrderRequestSchema.safeParse(rawBody);
-    if (!parsedBody.success) {
-      const detalhes = parsedBody.error.issues.map((issue) => `${issue.path.join('.') || 'corpo'}: ${issue.message}`).join('; ');
-      return fail(`Pedido inválido: ${detalhes}`, 400);
-    }
-    const body = parsedBody.data;
-
-    const cliente = await deps.store.findClienteById(scope, body.clienteId);
-    if (!cliente) {
-      return fail('Cliente não encontrado no cadastro desta organização.', 400);
-    }
-
-    const itensResult = await resolveItens(scope, body, deps.store);
-    if (itensResult._tag === 'ItensRejected') {
-      return itensResult.response;
-    }
-    const { itens } = itensResult;
-
-    const total = calculateManualOrderTotal(
-      itens.map((item) => ({ quantidade: item.quantidade, valorUnitario: item.produto.preco })),
-      body.desconto,
-      body.frete,
-    );
+    const preparado = await prepararPedido(request, deps);
+    if (preparado._tag === 'Rejeitado') return preparado.response;
+    const { scope, body, cliente, itens, total } = preparado;
 
     const dataStr = toBlingDate(deps.now());
-    const referenciaLocal = deps.newLocalReference();
+    const referenciaLocal = deps.newLocalReference(body.referenciaLocal);
     const avisos: string[] = [];
+
+    // Ticket 30, fatia 3, 3ª rodada — reivindica a referência ANTES de
+    // qualquer chamada ao Bling. Uma retentativa (humana, de proxy, de
+    // navegador) que reenvie a MESMA `referenciaLocal` cai num dos três
+    // ramos de `respostaSeTentativaJaExistir` em vez de criar um segundo
+    // pedido remoto — é isso que torna "não tente de novo" uma garantia do
+    // sistema, não só uma instrução de texto.
+    const decisao = decidirSobreTentativa(await deps.store.reivindicarTentativa(scope, referenciaLocal));
+    if ('response' in decisao) return decisao.response;
+    const { tentativaId } = decisao;
+
     let blingPedidoId: string | null = null;
 
     if (body.syncBling) {
       const sync = await sincronizarComBling(scope, cliente, body, itens, total, dataStr, referenciaLocal, deps);
       if (sync._tag === 'SyncRejected') {
+        await deps.store.registrarDesfechoDaTentativa(tentativaId, { estado: 'falhou' });
         return sync.response;
       }
       blingPedidoId = sync.blingPedidoId;
@@ -345,11 +313,24 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     });
 
     if (resultado._tag === 'PersistVendaOk') {
+      await deps.store.registrarDesfechoDaTentativa(tentativaId, {
+        estado: 'concluida',
+        pedidoId: resultado.pedidoId,
+        blingPedidoId,
+      });
       return json({ success: true, pedidoId: resultado.pedidoId, blingPedidoId, total, avisos }, 201);
     }
-    if (resultado._tag === 'PersistVendaFalhouDefinitivamente') {
-      return compensarNoBling(scope, blingPedidoId, resultado.causa, deps);
-    }
-    return resolverAmbiguidadeDePersistencia(scope, blingPedidoId, resultado.causa, deps);
+
+    // Definitiva ou ambígua: as duas devolvem `{ response, desfecho }` — o
+    // desfecho não é sempre 'falhou'/'indeterminada' cegamente. Uma checagem
+    // dentro delas pode achar que a venda JÁ foi registrada (por uma
+    // tentativa concorrente, ou porque o commit chegou entre o erro e a
+    // checagem), e nesse caso o desfecho vem 'concluida' de verdade — é por
+    // isso que o registro usa o que elas devolvem, não uma suposição daqui.
+    const { response, desfecho } = resultado._tag === 'PersistVendaFalhouDefinitivamente'
+      ? await compensarNoBling(scope, blingPedidoId, resultado.causa, deps)
+      : await resolverAmbiguidadeDePersistencia(scope, blingPedidoId, resultado.causa, deps);
+    await deps.store.registrarDesfechoDaTentativa(tentativaId, desfecho);
+    return response;
   };
 }

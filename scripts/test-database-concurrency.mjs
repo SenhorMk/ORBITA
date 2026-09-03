@@ -35,7 +35,7 @@ if (outcome._tag === 'err') {
   process.exitCode = 1;
 } else {
   console.log(
-    `[database-concurrency] atomicidade provada com bloqueio observado (${outcome.value.bloqueioObservado}): `
+    `[database-concurrency] atomicidade provada com bloqueio observado no Postgres (wait_event=${outcome.value.bloqueioObservadoNoPostgres}): `
       + `vencedora ${outcome.value.vencedora}, perdedora ${outcome.value.perdedoraCode}, `
       + `estoque ${outcome.value.estoqueFinal}, reservado ${outcome.value.estoqueReservadoFinal}`,
   );

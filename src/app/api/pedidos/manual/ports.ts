@@ -101,6 +101,43 @@ export interface ManualOrderStorePort {
    * ORBITA.
    */
   findVendaManualJaRegistrada(scope: VerifiedOrganizationScope, blingPedidoId: string): Promise<{ readonly pedidoId: string } | null>;
+  /**
+   * Ticket 30, fatia 3, endurecida na 3ª rodada — reivindica a referência
+   * local como uma tentativa nova, ou devolve o desfecho de uma tentativa
+   * ANTERIOR com a mesma referência.
+   *
+   * Chamado ANTES de qualquer chamada ao Bling. Sem isto, uma retentativa —
+   * humana, de proxy, de navegador, de qualquer camada — depois de um
+   * `PersistVendaAmbigua` não resolvido geraria uma referência nova e criaria
+   * um SEGUNDO pedido real no Bling: a mensagem "não tente de novo" não é
+   * garantia nenhuma sozinha.
+   *
+   * Se a tabela ainda não existir no banco (migration 59 não aplicada — a
+   * migration e o código deste PR não têm ordem de deploy garantida),
+   * devolve `TentativaNova` em vez de lançar: a proteção fica ausente, não
+   * quebra a venda. Ver `evidence/30-compatibilidade-de-deploy-*.md`.
+   */
+  reivindicarTentativa(scope: VerifiedOrganizationScope, referenciaLocal: string): Promise<ReivindicacaoDeTentativa>;
+  /** Grava o desfecho final de uma tentativa já reivindicada. */
+  registrarDesfechoDaTentativa(tentativaId: string, desfecho: DesfechoDaTentativa): Promise<void>;
+}
+
+/**
+ * O que uma reivindicação de tentativa devolve. `TentativaNova` segue o
+ * fluxo normal; os outros três casos são o desfecho de uma tentativa
+ * ANTERIOR com a mesma referência local, e o handler nunca chama o Bling de
+ * novo para eles.
+ */
+export type ReivindicacaoDeTentativa =
+  | { readonly _tag: 'TentativaNova'; readonly tentativaId: string }
+  | { readonly _tag: 'TentativaConcluida'; readonly pedidoId: string; readonly blingPedidoId: string | null }
+  | { readonly _tag: 'TentativaIndeterminada'; readonly blingPedidoId: string | null }
+  | { readonly _tag: 'TentativaEmAndamento' };
+
+export interface DesfechoDaTentativa {
+  readonly estado: 'concluida' | 'indeterminada' | 'falhou';
+  readonly pedidoId?: string;
+  readonly blingPedidoId?: string | null;
 }
 
 export type { BlingCallResult };
@@ -148,7 +185,13 @@ export interface ManualOrderDependencies {
   readonly store: ManualOrderStorePort;
   readonly bling: ManualOrderBlingPort;
   readonly now: () => Date;
-  readonly newLocalReference: () => string;
+  /**
+   * Monta `ORBITA-<uuid>`. Recebe o UUID que o cliente enviou em
+   * `referenciaLocal`, quando presente — para que uma retentativa da mesma
+   * submissão gere a MESMA referência, e `reivindicarTentativa` a reconheça.
+   * Sem UUID do cliente, gera um novo, como sempre fez.
+   */
+  readonly newLocalReference: (referenciaClienteFornecida?: string) => string;
   /** Espera entre tentativas de confirmar uma `PersistVendaAmbigua`. Ver `Dormir`. */
   readonly dormir: Dormir;
 }

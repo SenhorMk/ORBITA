@@ -344,6 +344,12 @@ function lojaEmMemoria(comTomada: boolean): ManualOrderStorePort {
       );
       return linha ? { pedidoId: linha.id } : null;
     },
+    async reivindicarTentativa() {
+      // Este teste não exercita a idempotência entre retentativas (isso é
+      // coberto em `manual-order.test.ts`) — sempre uma tentativa nova.
+      return { _tag: 'TentativaNova', tentativaId: 'tentativa-corrida-1' };
+    },
+    async registrarDesfechoDaTentativa() { /* nada a verificar aqui */ },
   };
 }
 

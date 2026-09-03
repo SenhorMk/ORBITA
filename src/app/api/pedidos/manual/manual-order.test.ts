@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createManualOrderHandler,
+  type DesfechoDaTentativa,
   type ManualOrderBlingPort,
   type ManualOrderCliente,
   type ManualOrderDependencies,
@@ -9,6 +10,7 @@ import {
   type ManualOrderResponseBody,
   type ManualOrderStorePort,
   type PersistManualOrderInput,
+  type ReivindicacaoDeTentativa,
 } from './handler';
 import { buildManualOrderRequest, manualOrderRequestSchema } from '@/lib/config/manualOrderContract';
 import { pedidoVendaPayloadSchema, type PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
@@ -44,6 +46,7 @@ function cliente(overrides: Partial<ManualOrderCliente> = {}): ManualOrderClient
 interface FakeStore extends ManualOrderStorePort {
   readonly persisted: PersistManualOrderInput[];
   readonly vinculos: Array<{ clienteId: string; blingId: string }>;
+  readonly desfechosRegistrados: DesfechoDaTentativa[];
 }
 
 function fakeStore(options: {
@@ -62,17 +65,31 @@ function fakeStore(options: {
    */
   vendaJaRegistradaPedidoId?: string;
   vendaApareceNaTentativa?: number;
+  /**
+   * Ticket 30, fatia 3, 3ª rodada — força o resultado de `reivindicarTentativa`,
+   * para simular uma retentativa com a MESMA `referenciaLocal` de uma
+   * tentativa anterior (concluída, indeterminada, ou em andamento).
+   */
+  reivindicacaoForcada?: ReivindicacaoDeTentativa;
 } = {}): FakeStore {
   const clientesPorOrg = options.clientes ?? { [ORG_A]: cliente() };
   const produtos = options.produtos ?? [produto()];
   const persisted: PersistManualOrderInput[] = [];
   const vinculos: Array<{ clienteId: string; blingId: string }> = [];
+  const desfechosRegistrados: DesfechoDaTentativa[] = [];
   const apareceNaTentativa = options.vendaApareceNaTentativa ?? 1;
   let tentativasDeConfirmacao = 0;
 
   return {
     persisted,
     vinculos,
+    desfechosRegistrados,
+    async reivindicarTentativa() {
+      return options.reivindicacaoForcada ?? { _tag: 'TentativaNova', tentativaId: 'tentativa-fake-1' };
+    },
+    async registrarDesfechoDaTentativa(_tentativaId, desfecho) {
+      desfechosRegistrados.push(desfecho);
+    },
     async findClienteById(scope, clienteId) {
       const found = clientesPorOrg[scope.organizationId];
       return found && found.id === clienteId ? found : null;
@@ -627,5 +644,96 @@ describe('estoque local', () => {
     );
 
     expect(response.status).toBe(400);
+  });
+});
+
+// Ticket 30, fatia 3, 3ª rodada — a retentativa não pode virar duplicação
+// externa. O ponto central de cada teste abaixo é `bling.payloads` continuar
+// vazio ou com length 1: uma retentativa reconhecida pela mesma
+// `referenciaLocal` nunca chama `createPedidoVenda` de novo.
+describe('idempotência entre retentativas da mesma submissão (referenciaLocal)', () => {
+  it('uma tentativa já CONCLUÍDA devolve sucesso sem chamar o Bling de novo', async () => {
+    const store = fakeStore({
+      reivindicacaoForcada: { _tag: 'TentativaConcluida', pedidoId: 'pedido-anterior-1', blingPedidoId: '918273' },
+    });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+    const body = (await response.json()) as ManualOrderResponseBody;
+
+    expect(response.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.pedidoId).toBe('pedido-anterior-1');
+    expect(body.blingPedidoId).toBe('918273');
+    // O ponto do teste: nenhuma criação nova no Bling.
+    expect(bling.payloads).toHaveLength(0);
+    expect(store.persisted).toHaveLength(0);
+  });
+
+  it('uma tentativa já INDETERMINADA devolve o mesmo estado sem chamar o Bling de novo', async () => {
+    const store = fakeStore({
+      reivindicacaoForcada: { _tag: 'TentativaIndeterminada', blingPedidoId: '918273' },
+    });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+    const body = (await response.json()) as ManualOrderResponseBody;
+
+    expect(response.status).toBe(500);
+    expect(body.estadoIndeterminado).toBe(true);
+    expect(body.compensado).toBeUndefined();
+    // O ponto do teste: a retentativa NÃO cria um segundo pedido no Bling —
+    // é exatamente isso que transformaria "compensação destrutiva" em
+    // "duplicação externa".
+    expect(bling.payloads).toHaveLength(0);
+    expect(bling.cancelados).toEqual([]);
+    expect(store.persisted).toHaveLength(0);
+  });
+
+  it('uma tentativa já EM ANDAMENTO (concorrente) recusa com 409 sem chamar o Bling', async () => {
+    const store = fakeStore({ reivindicacaoForcada: { _tag: 'TentativaEmAndamento' } });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+
+    expect(response.status).toBe(409);
+    expect(bling.payloads).toHaveLength(0);
+    expect(store.persisted).toHaveLength(0);
+  });
+
+  it('uma tentativa NOVA prossegue normalmente e registra o desfecho concluída', async () => {
+    const store = fakeStore();
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+    expect(response.status).toBe(201);
+    expect(bling.payloads).toHaveLength(1);
+    expect(store.desfechosRegistrados).toEqual([
+      { estado: 'concluida', pedidoId: 'pedido-local-1', blingPedidoId: '918273' },
+    ]);
+  });
+
+  it('uma falha DEFINITIVA registra o desfecho falhou, para que a mesma referência possa ser reaberta depois', async () => {
+    const store = fakeStore({ persistDefinitiveError: new Error('null value in column "user_id"') });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    await handler(requestWith(corpoValido()));
+
+    expect(store.desfechosRegistrados).toEqual([{ estado: 'falhou', blingPedidoId: '918273' }]);
+  });
+
+  it('uma ambiguidade NUNCA resolvida registra o desfecho indeterminada', async () => {
+    const store = fakeStore({ persistAmbiguousError: new Error('timeout de rede') });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling, dormir: dormirInstantaneo().dormir }));
+
+    await handler(requestWith(corpoValido()));
+
+    expect(store.desfechosRegistrados).toEqual([{ estado: 'indeterminada', blingPedidoId: '918273' }]);
   });
 });
