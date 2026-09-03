@@ -1,5 +1,5 @@
 import type { BlingCategoria, BlingCliente, BlingPedido, BlingProduto } from '../types';
-import type { BlingCallResult, PedidoVendaPayload } from '../lib/integrations/bling/pedidoVendaContract';
+import type { BlingCallResult, BuscaDePedidoPorNumeroLoja, PedidoVendaPayload } from '../lib/integrations/bling/pedidoVendaContract';
 import type { Situacao } from '../lib/integrations/bling/situacoesContract';
 
 /**
@@ -52,9 +52,7 @@ export interface BlingPort {
    * compartilham. `null` = o Bling respondeu e não há pedido com essa
    * referência.
    */
-  buscarPedidoVendaPorNumeroLoja(
-    numeroLoja: string,
-  ): Promise<BlingCallResult<{ id: string; numeroLoja: string; situacao: string | null } | null>>;
+  buscarPedidoVendaPorNumeroLoja(numeroLoja: string): Promise<BlingCallResult<BuscaDePedidoPorNumeroLoja>>;
   /** Compensacao: marca como cancelado um pedido que o ORBITA nao conseguiu gravar. */
   cancelarPedidoVenda(idPedido: string): Promise<BlingCallResult<void>>;
   /** Forma de pagamento padrão da conta (Ticket 30). */

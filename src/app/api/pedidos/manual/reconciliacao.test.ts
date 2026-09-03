@@ -22,8 +22,8 @@ import {
   type ReconciliacaoDeps,
 } from './reconciliacao';
 import type {
+  BuscaDePedidoPorNumeroLoja,
   DesfechoDaTentativa,
-  PedidoEncontradoNoBling,
   TentativaRegistrada,
 } from './ports';
 
@@ -51,7 +51,7 @@ interface Dublês {
 }
 
 function dubles(options: {
-  pedidoEncontrado?: PedidoEncontradoNoBling | null;
+  pedidoEncontrado?: BuscaDePedidoPorNumeroLoja;
   buscaFalhou?: string;
   vendaLocalPedidoId?: string;
 } = {}): Dublês {
@@ -81,7 +81,7 @@ function dubles(options: {
             failure: { _tag: 'BlingProviderFailure' as const, type: 'SERVER_ERROR', status: 500, message: options.buscaFalhou, duplicateSale: false },
           };
         }
-        return { _tag: 'BlingOk' as const, value: options.pedidoEncontrado ?? null };
+        return { _tag: 'BlingOk' as const, value: options.pedidoEncontrado ?? { _tag: 'NenhumPedido' as const } };
       },
     },
   } as unknown as ReconciliacaoDeps;
@@ -120,7 +120,7 @@ describe('tentativaPodeSerReconciliada', () => {
 
 describe('reconciliarTentativa — sem bling_id, só pela referência local', () => {
   it('o Bling NÃO tem o pedido: nada foi criado, a tentativa vira falhou e a referência é LIBERADA', async () => {
-    const { deps, desfechos, numerosLojaConsultados } = dubles({ pedidoEncontrado: null });
+    const { deps, desfechos, numerosLojaConsultados } = dubles({ pedidoEncontrado: { _tag: 'NenhumPedido' } });
 
     const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps);
 
@@ -137,7 +137,7 @@ describe('reconciliarTentativa — sem bling_id, só pela referência local', ()
 
   it('os DOIS lados têm a venda: só a confirmação se perdeu — vira concluida e a referência é LIBERADA', async () => {
     const { deps, desfechos } = dubles({
-      pedidoEncontrado: { id: '918273', numeroLoja: REFERENCIA, situacao: 'Em aberto' },
+      pedidoEncontrado: { _tag: 'UmPedido', pedido: { id: '918273', numeroLoja: REFERENCIA, situacao: 'Em aberto' } },
       vendaLocalPedidoId: 'pedido-local-7',
     });
 
@@ -153,7 +153,7 @@ describe('reconciliarTentativa — sem bling_id, só pela referência local', ()
 
   it('o pedido existe no Bling e a venda NÃO existe aqui: continua bloqueada, mas agora com o bling_id descoberto', async () => {
     const { deps, desfechos } = dubles({
-      pedidoEncontrado: { id: '918273', numeroLoja: REFERENCIA, situacao: 'Em aberto' },
+      pedidoEncontrado: { _tag: 'UmPedido', pedido: { id: '918273', numeroLoja: REFERENCIA, situacao: 'Em aberto' } },
     });
 
     const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps);
@@ -188,7 +188,7 @@ describe('reconciliarTentativa — sem bling_id, só pela referência local', ()
 
   it('nunca escreve no Bling: a reconciliação é só leitura', async () => {
     const cancelamentos: string[] = [];
-    const { deps } = dubles({ pedidoEncontrado: { id: '918273', numeroLoja: REFERENCIA, situacao: 'Em aberto' } });
+    const { deps } = dubles({ pedidoEncontrado: { _tag: 'UmPedido', pedido: { id: '918273', numeroLoja: REFERENCIA, situacao: 'Em aberto' } } });
     const depsComEspiao = {
       ...deps,
       bling: {
@@ -203,5 +203,128 @@ describe('reconciliarTentativa — sem bling_id, só pela referência local', ()
     await reconciliarTentativa(scope, REFERENCIA, tentativa(), depsComEspiao);
 
     expect(cancelamentos).toEqual([]);
+  });
+});
+
+describe('6ª rodada — cardinalidade explícita da busca por numeroLoja (0/1/N)', () => {
+  it('ZERO correspondências exatas: resposta negativa CONFIRMADA — conclui como não criado e libera', async () => {
+    const { deps, desfechos } = dubles({ pedidoEncontrado: { _tag: 'NenhumPedido' } });
+
+    const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps);
+
+    expect(resultado._tag).toBe('NadaFoiCriado');
+    expect(desfechos).toEqual([{ estado: 'falhou' }]);
+  });
+
+  it('EXATAMENTE UMA: associa o bling_id e segue a máquina de reconciliação', async () => {
+    const { deps, desfechos } = dubles({
+      pedidoEncontrado: { _tag: 'UmPedido', pedido: { id: '918273', numeroLoja: REFERENCIA, situacao: 'Em aberto' } },
+    });
+
+    const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps);
+
+    expect(resultado._tag).toBe('PendenteNoBling');
+    expect(desfechos).toEqual([{ estado: 'indeterminada', blingPedidoId: '918273' }]);
+  });
+
+  it('MAIS DE UMA: permanece ambígua — NUNCA escolhe "o primeiro"', async () => {
+    const { deps, desfechos } = dubles({
+      pedidoEncontrado: { _tag: 'VariosPedidos', quantidade: 2, ids: ['918273', '918274'] },
+    });
+
+    const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps);
+
+    expect(resultado._tag).toBe('NaoReconciliavel');
+    // O ponto: nenhum desfecho é gravado. Associar a tentativa a um dos dois
+    // seria concluir a venda com o pedido errado em metade dos casos.
+    expect(desfechos).toEqual([]);
+
+    const resposta = respostaDaReconciliacao(resultado);
+    expect(resposta.status).toBe(409);
+    const corpo = await resposta.json();
+    expect(corpo.referenciaLiberada).toBe(false);
+    expect(corpo.mensagem).toContain('2 pedidos');
+  });
+});
+
+describe('6ª rodada — o caminho terminal de "Bling tem, ORBITA não tem"', () => {
+  function dublesComCancelamento(options: { cancelamentoFalha?: string } = {}) {
+    const cancelados: string[] = [];
+    const desfechos: DesfechoDaTentativa[] = [];
+    const deps = {
+      now: () => AGORA,
+      store: {
+        async registrarDesfechoDaTentativa(
+          _scope: VerifiedOrganizationScope,
+          _tentativaId: string,
+          desfecho: DesfechoDaTentativa,
+        ) {
+          desfechos.push(desfecho);
+        },
+        async findVendaManualJaRegistrada() {
+          return null;
+        },
+      },
+      bling: {
+        async buscarPedidoPorNumeroLoja() {
+          return {
+            _tag: 'BlingOk' as const,
+            value: { _tag: 'UmPedido' as const, pedido: { id: '918273', numeroLoja: REFERENCIA, situacao: 'Em aberto' } },
+          };
+        },
+        async cancelarPedidoVenda(id: string) {
+          if (options.cancelamentoFalha) {
+            return {
+              _tag: 'BlingFailed' as const,
+              failure: { _tag: 'BlingProviderFailure' as const, type: 'SERVER_ERROR', status: 500, message: options.cancelamentoFalha, duplicateSale: false },
+            };
+          }
+          cancelados.push(id);
+          return { _tag: 'BlingOk' as const, value: undefined };
+        },
+      },
+    } as unknown as ReconciliacaoDeps;
+    return { deps, cancelados, desfechos };
+  }
+
+  it('sem ação explícita, NÃO cancela nada — conferir é só leitura', async () => {
+    const { deps, cancelados } = dublesComCancelamento();
+
+    const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps);
+
+    expect(resultado._tag).toBe('PendenteNoBling');
+    expect(cancelados).toEqual([]);
+  });
+
+  it('com a ação explícita e cancelamento CONFIRMADO: encerra como falhou e LIBERA a referência', async () => {
+    const { deps, cancelados, desfechos } = dublesComCancelamento();
+
+    const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps, 'cancelar-no-bling');
+
+    expect(cancelados).toEqual(['918273']);
+    expect(resultado._tag).toBe('CanceladoNoBling');
+    // Grava o bling_id descoberto antes de cancelar, e só então encerra.
+    expect(desfechos).toEqual([
+      { estado: 'indeterminada', blingPedidoId: '918273' },
+      { estado: 'falhou', blingPedidoId: '918273' },
+    ]);
+
+    const resposta = respostaDaReconciliacao(resultado);
+    expect(resposta.status).toBe(200);
+    expect(await resposta.json()).toMatchObject({ referenciaLiberada: true, situacao: 'cancelado_no_bling' });
+  });
+
+  it('cancelamento FALHA: continua indeterminada e NÃO libera — só compensação confirmada encerra', async () => {
+    const { deps, desfechos } = dublesComCancelamento({ cancelamentoFalha: 'gateway fora do ar' });
+
+    const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps, 'cancelar-no-bling');
+
+    expect(resultado._tag).toBe('NaoReconciliavel');
+    // Nenhum `falhou` gravado: o pedido pode continuar existindo lá.
+    expect(desfechos).toEqual([{ estado: 'indeterminada', blingPedidoId: '918273' }]);
+
+    const resposta = respostaDaReconciliacao(resultado);
+    expect(resposta.status).toBe(502);
+    expect(await resposta.json()).toMatchObject({ referenciaLiberada: false });
   });
 });

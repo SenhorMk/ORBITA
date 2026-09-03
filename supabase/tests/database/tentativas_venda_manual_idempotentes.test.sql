@@ -1,5 +1,5 @@
 -- tentativas_venda_manual_idempotentes.test.sql
--- Ticket 30, fatia 3, migration 59 — endurecida nas 3ª, 4ª e 5ª rodadas.
+-- Ticket 30, fatia 3, migration 59 — endurecida nas 3ª, 4ª, 5ª e 6ª rodadas.
 --
 -- Prova a reivindicação atômica que fecha o gap de retentativa: sem isto,
 -- uma retentativa (humana, de proxy, de navegador) depois de um estado
@@ -20,10 +20,18 @@
 --    `(organizacao_id, referencia_local)`, impossibilidade de concluir
 --    tentativa alheia, GRANTs, `search_path` fixo e RLS.
 --
+-- **6ª rodada de revisão:** as asserções 42-46 fecham o caso do PREÇO. O
+-- fingerprint cobre o que o cliente pediu; ele não cobre o que a venda vale,
+-- porque preço e total são derivados no servidor. Uma tentativa `falhou`
+-- reaberta depois de o preço mudar reexecutaria a venda por outro valor sem
+-- ninguém confirmar o valor novo — agora é recusada.
+--
 -- REINTRODUZIR O DEFEITO: troque o `\ir` da migration 59 por nada. As
 -- asserções todas falham — a função nem existe. Para provar só a fatia do
 -- fingerprint, remova o ramo `if v_existente.fingerprint is distinct from
--- p_fingerprint` da função: 8-15, 18 e 23-24 falham.
+-- p_fingerprint` da função: 8-15, 18 e 23-24 falham. Para a fatia dos
+-- valores, remova o ramo `if v_existente.valores_fingerprint is distinct
+-- from p_valores_fingerprint`: 43 e 45 falham.
 
 begin;
 
@@ -55,14 +63,14 @@ insert into public.membros_organizacao (organizacao_id, user_id, papel)
 values ('59100000-0000-4000-8000-000000000001', '59000000-0000-4000-8000-000000000001', 'owner'),
        ('59100000-0000-4000-8000-000000000002', '59000000-0000-4000-8000-000000000002', 'owner');
 
-select plan(41);
+select plan(52);
 
 -- ----------------------------------------------------------------------------
 -- 1-4. Primeira reivindicação: tentativa nova.
 -- ----------------------------------------------------------------------------
 create temp table primeira as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-1'
+    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-1', 'valores-iguais'
 );
 
 select is((select estado from primeira), 'em_andamento', '1. primeira reivindicação: estado em_andamento');
@@ -77,7 +85,7 @@ select is((select fingerprint_conflitante from primeira), false, '4. primeira re
 -- ----------------------------------------------------------------------------
 create temp table segunda_em_andamento as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-1'
+    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-1', 'valores-iguais'
 );
 
 select is((select estado from segunda_em_andamento), 'em_andamento', '5. segunda reivindicação, mesmo conteúdo: continua em_andamento');
@@ -91,7 +99,7 @@ select is((select fingerprint_conflitante from segunda_em_andamento), false, '7.
 -- ----------------------------------------------------------------------------
 create temp table conflito as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-OUTRA'
+    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-OUTRA', 'valores-iguais'
 );
 
 select is((select fingerprint_conflitante from conflito), true, '8. mesma chave + conteúdo diferente: sinaliza conflito');
@@ -132,7 +140,7 @@ select public.concluir_tentativa_venda_manual(
 
 create temp table terceira_indeterminada as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-1'
+    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-1', 'valores-iguais'
 );
 
 select is((select estado from terceira_indeterminada), 'indeterminada', '16. terceira reivindicação: encontra o estado indeterminada gravado');
@@ -140,7 +148,7 @@ select is((select bling_pedido_id from terceira_indeterminada), '918273', '17. �
 
 create temp table indeterminada_com_outro_conteudo as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-OUTRA'
+    '59100000-0000-4000-8000-000000000001', 'referencia-a', 'fingerprint-venda-OUTRA', 'valores-iguais'
 );
 
 select is(
@@ -154,7 +162,7 @@ select is(
 -- ----------------------------------------------------------------------------
 create temp table referencia_b as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-b', 'fingerprint-venda-2'
+    '59100000-0000-4000-8000-000000000001', 'referencia-b', 'fingerprint-venda-2', 'valores-iguais'
 );
 
 select is((select estado from referencia_b), 'em_andamento', '19. referência diferente: tentativa nova, não vê a indeterminada da referência-a');
@@ -173,7 +181,7 @@ select public.concluir_tentativa_venda_manual(
 
 create temp table reaberta_apos_falha as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-b', 'fingerprint-venda-2'
+    '59100000-0000-4000-8000-000000000001', 'referencia-b', 'fingerprint-venda-2', 'valores-iguais'
 );
 
 select is((select estado from reaberta_apos_falha), 'em_andamento', '21. referência que falhou é reaberta como em_andamento, não bloqueada para sempre');
@@ -185,7 +193,7 @@ select public.concluir_tentativa_venda_manual(
 
 create temp table falhou_com_outro_conteudo as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000001', 'referencia-b', 'fingerprint-venda-COMPLETAMENTE-OUTRA'
+    '59100000-0000-4000-8000-000000000001', 'referencia-b', 'fingerprint-venda-COMPLETAMENTE-OUTRA', 'valores-iguais'
 );
 
 select is(
@@ -207,7 +215,7 @@ select is(
 -- ----------------------------------------------------------------------------
 create temp table org_b_mesma_referencia as
 select * from public.reivindicar_tentativa_venda_manual(
-    '59100000-0000-4000-8000-000000000002', 'referencia-a', 'fingerprint-da-org-b'
+    '59100000-0000-4000-8000-000000000002', 'referencia-a', 'fingerprint-da-org-b', 'valores-iguais'
 );
 
 select is((select estado from org_b_mesma_referencia), 'em_andamento', '25. org B usando a MESMA referencia_local: tentativa nova');
@@ -262,7 +270,7 @@ select is(
 -- 32-38. Superfície de privilégio das duas RPCs e da tabela.
 -- ----------------------------------------------------------------------------
 select is(
-    has_function_privilege('authenticated', 'public.reivindicar_tentativa_venda_manual(uuid,text,text)', 'EXECUTE'),
+    has_function_privilege('authenticated', 'public.reivindicar_tentativa_venda_manual(uuid,text,text,text)', 'EXECUTE'),
     false,
     '32. authenticated NÃO executa a reivindicação — só a service role, pelo servidor'
 );
@@ -328,6 +336,101 @@ select is(
 );
 
 reset role;
+
+-- ----------------------------------------------------------------------------
+-- 42-46. VALORES RESOLVIDOS (6ª rodada). A venda pedida é a mesma, mas os
+--        preços do cadastro mudaram entre as tentativas. Uma tentativa
+--        `falhou` NÃO pode reabrir em silêncio executando o valor novo: quem
+--        confirmou a venda confirmou um total.
+-- ----------------------------------------------------------------------------
+create temp table valores_nova as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'referencia-valores', 'fingerprint-venda-V', 'valores-de-ontem'
+);
+select is((select is_duplicate from valores_nova), false, '42. tentativa nova com snapshot de valores: criada normalmente');
+
+select public.concluir_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from valores_nova), 'falhou', null, null
+);
+
+create temp table valores_mudaram as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'referencia-valores', 'fingerprint-venda-V', 'valores-de-HOJE'
+);
+
+select is((select valores_divergentes from valores_mudaram), true, '43. mesma venda, preços diferentes: sinaliza divergência de valores');
+select is((select fingerprint_conflitante from valores_mudaram), false, '44. …e NÃO é conflito de conteúdo — o que o cliente pediu não mudou');
+select is(
+    (select estado from public.tentativas_venda_manual
+      where organizacao_id = '59100000-0000-4000-8000-000000000001' and referencia_local = 'referencia-valores'),
+    'falhou',
+    '45. …a tentativa continua falhou: não foi reaberta pelo preço novo'
+);
+
+create temp table valores_iguais_reabre as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'referencia-valores', 'fingerprint-venda-V', 'valores-de-ontem'
+);
+select is((select estado from valores_iguais_reabre), 'em_andamento', '46. com os MESMOS valores, a reabertura continua funcionando');
+
+-- ----------------------------------------------------------------------------
+-- 47-52. PENDÊNCIA IDÊNTICA (6ª rodada). Uma referência NOVA para uma venda
+--        que já tem outra tentativa sem desfecho é recusada: não dá para
+--        saber se é a mesma venda tentada de novo (navegador sem memória,
+--        outro dispositivo) ou uma segunda venda legitimamente idêntica —
+--        e as duas leituras erradas causam dano. É o que torna a proteção
+--        independente do `localStorage`.
+-- ----------------------------------------------------------------------------
+create temp table pendente_original as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'referencia-pendente-1', 'fingerprint-repetido', 'valores-iguais'
+);
+select public.concluir_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from pendente_original), 'indeterminada', null, '55555'
+);
+
+create temp table nova_referencia_mesma_venda as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'referencia-pendente-2', 'fingerprint-repetido', 'valores-iguais'
+);
+
+select is(
+    (select referencia_pendente from nova_referencia_mesma_venda),
+    'referencia-pendente-1',
+    '47. referência NOVA para venda com pendência idêntica: devolve a referência pendente'
+);
+select is((select tentativa_id from nova_referencia_mesma_venda), null, '48. …não abre tentativa nova');
+select is(
+    (select count(*) from public.tentativas_venda_manual
+      where organizacao_id = '59100000-0000-4000-8000-000000000001' and referencia_local = 'referencia-pendente-2'),
+    0::bigint,
+    '49. …e não deixa linha órfã no ledger'
+);
+
+-- Resolvida a pendência, a mesma venda pode ser aberta de novo: é o que
+-- permite uma segunda venda legitimamente idêntica depois da conferência.
+select public.concluir_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from pendente_original), 'concluida', null, '55555'
+);
+
+create temp table depois_de_resolver as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'referencia-pendente-3', 'fingerprint-repetido', 'valores-iguais'
+);
+
+select is((select referencia_pendente from depois_de_resolver), null, '50. resolvida a pendência, a mesma venda abre normalmente');
+select is((select estado from depois_de_resolver), 'em_andamento', '51. …como tentativa nova');
+
+-- A pendência de OUTRA organização não bloqueia esta.
+create temp table pendencia_de_outra_org as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000002', 'referencia-pendente-9', 'fingerprint-repetido', 'valores-iguais'
+);
+select is(
+    (select referencia_pendente from pendencia_de_outra_org),
+    null,
+    '52. a pendência de outra organização não bloqueia: o recorte é por organização'
+);
 
 select * from finish();
 rollback;

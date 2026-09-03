@@ -176,11 +176,13 @@ async function reivindicarTentativa(
   scope: VerifiedOrganizationScope,
   referenciaLocal: string,
   fingerprint: string,
+  valoresFingerprint: string,
 ): Promise<ReivindicacaoDeTentativa> {
   const { data, error } = await supabaseServer.rpc('reivindicar_tentativa_venda_manual', {
     p_organizacao_id: scope.organizationId,
     p_referencia_local: referenciaLocal,
     p_fingerprint: fingerprint,
+    p_valores_fingerprint: valoresFingerprint,
   });
 
   if (error) {
@@ -197,6 +199,12 @@ async function reivindicarTentativa(
   // vazar para esta (5ª rodada de revisão).
   if (linha.fingerprint_conflitante) {
     return { _tag: 'TentativaConflitante' };
+  }
+  if (linha.valores_divergentes) {
+    return { _tag: 'TentativaComValoresDivergentes' };
+  }
+  if (linha.referencia_pendente) {
+    return { _tag: 'TentativaComPendenciaIdentica', referenciaPendente: linha.referencia_pendente };
   }
 
   if (!linha.is_duplicate) {

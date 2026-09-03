@@ -11,7 +11,8 @@ import { NextResponse } from 'next/server';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 
-import type { DesfechoDaTentativa, ManualOrderDependencies, ManualOrderResponseBody } from './ports';
+import type { DesfechoDaTentativa, ManualOrderDependencies } from './ports';
+import { falhaDaVendaManual as fail, jsonDaVendaManual as json } from './resposta';
 
 /**
  * Resposta HTTP e desfecho da tentativa, juntos — o chamador (`handler.ts`)
@@ -24,14 +25,6 @@ import type { DesfechoDaTentativa, ManualOrderDependencies, ManualOrderResponseB
 export interface DesfechoDaFalha {
   readonly response: NextResponse;
   readonly desfecho: DesfechoDaTentativa;
-}
-
-function json(body: ManualOrderResponseBody, status: number): NextResponse {
-  return NextResponse.json(body, { status });
-}
-
-function fail(error: string, status: number, extra: Partial<ManualOrderResponseBody> = {}): NextResponse {
-  return json({ success: false, error, ...extra }, status);
 }
 
 /**

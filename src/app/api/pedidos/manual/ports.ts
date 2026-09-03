@@ -7,7 +7,7 @@
  */
 import type { NextResponse } from 'next/server';
 
-import type { BlingCallResult, PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
+import type { BlingCallResult, BuscaDePedidoPorNumeroLoja, PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { Dormir } from '@/services/filaDeRequisicoes';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
@@ -126,6 +126,7 @@ export interface ManualOrderStorePort {
     scope: VerifiedOrganizationScope,
     referenciaLocal: string,
     fingerprint: string,
+    valoresFingerprint: string,
   ): Promise<ReivindicacaoDeTentativa>;
   /**
    * Grava o desfecho final de uma tentativa já reivindicada.
@@ -183,6 +184,21 @@ export type ReivindicacaoDeTentativa =
    * venda que ninguém registrou.
    */
   | { readonly _tag: 'TentativaConflitante' }
+  /**
+   * A venda pedida é a mesma, mas os VALORES resolvidos no servidor mudaram
+   * entre as tentativas (6ª rodada de revisão). Uma tentativa `falhou` não
+   * reabre em silêncio executando o preço novo — quem confirmou a venda
+   * confirmou um total, e esse total mudou.
+   */
+  | { readonly _tag: 'TentativaComValoresDivergentes' }
+  /**
+   * Existe OUTRA tentativa sem desfecho para exatamente esta mesma venda (6ª
+   * rodada de revisão). Não dá para saber, do servidor, se esta submissão é a
+   * mesma venda tentada de novo por um cliente que perdeu a referência, ou uma
+   * segunda venda legitimamente idêntica — então nenhuma das duas: recusa e
+   * aponta a pendência, para ser resolvida antes.
+   */
+  | { readonly _tag: 'TentativaComPendenciaIdentica'; readonly referenciaPendente: string }
   | { readonly _tag: 'TentativaIndisponivel'; readonly causa: unknown };
 
 export interface DesfechoDaTentativa {
@@ -198,7 +214,7 @@ export interface DesfechoDaTentativa {
   readonly blingPedidoId?: string | null;
 }
 
-export type { BlingCallResult };
+export type { BlingCallResult, BuscaDePedidoPorNumeroLoja };
 
 export interface ManualOrderBlingPort {
   /** `GET /formas-pagamentos` — a forma marcada como padrão na conta do proprietário. */
@@ -228,7 +244,7 @@ export interface ManualOrderBlingPort {
    * referência" — uma resposta NEGATIVA confirmada, diferente de uma falha de
    * consulta, que vem como `BlingFailed`.
    */
-  buscarPedidoPorNumeroLoja(numeroLoja: string): Promise<BlingCallResult<PedidoEncontradoNoBling | null>>;
+  buscarPedidoPorNumeroLoja(numeroLoja: string): Promise<BlingCallResult<BuscaDePedidoPorNumeroLoja>>;
   /**
    * Compensação: marca como cancelado um pedido que o Bling aceitou e o ORBITA
    * não conseguiu gravar.
@@ -239,14 +255,6 @@ export interface ManualOrderBlingPort {
    * em vez de um esquecer.
    */
   cancelarPedidoVenda(pedidoBlingId: string): Promise<BlingCallResult<void>>;
-}
-
-/** O que a reconciliação precisa saber de um pedido achado no Bling. */
-export interface PedidoEncontradoNoBling {
-  readonly id: string;
-  readonly numeroLoja: string;
-  /** Nome da situação na conta do lojista (`Cancelado`, `Em aberto`, …), quando o Bling a informa. */
-  readonly situacao: string | null;
 }
 
 export interface ManualOrderAuthPort {

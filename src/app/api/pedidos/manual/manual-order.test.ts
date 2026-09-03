@@ -8,8 +8,8 @@ import {
   type ManualOrderDependencies,
   type ManualOrderProduto,
   type ManualOrderResponseBody,
+  type BuscaDePedidoPorNumeroLoja,
   type ManualOrderStorePort,
-  type PedidoEncontradoNoBling,
   type PersistManualOrderInput,
   type ReivindicacaoDeTentativa,
   type TentativaRegistrada,
@@ -161,7 +161,7 @@ function fakeBling(options: {
   alertas?: string[];
   cancelamentoFailure?: string;
   /** 5ª rodada — o que a busca por `numeroLoja` (reconciliação) encontra. */
-  pedidoEncontrado?: PedidoEncontradoNoBling | null;
+  pedidoEncontrado?: BuscaDePedidoPorNumeroLoja;
   buscaFailure?: string;
 } = {}): FakeBling {
   const payloads: PedidoVendaPayload[] = [];
@@ -214,7 +214,7 @@ function fakeBling(options: {
       if (options.buscaFailure) {
         return { _tag: 'BlingFailed' as const, failure: { _tag: 'BlingProviderFailure' as const, type: 'SERVER_ERROR', status: 500, message: options.buscaFailure, duplicateSale: false } };
       }
-      return { _tag: 'BlingOk' as const, value: options.pedidoEncontrado ?? null };
+      return { _tag: 'BlingOk' as const, value: options.pedidoEncontrado ?? { _tag: 'NenhumPedido' as const } };
     },
     async lancarEstoquePedido(pedidoBlingId: string) {
       if (options.estoqueFailure) {
@@ -847,26 +847,30 @@ describe('ticket 30, fatia 3 — 5ª rodada: a criação no Bling pode ter acont
     expect(store.persisted).toHaveLength(0);
   });
 
-  it('o Bling responde 5xx: também indeterminada — pode ter falhado DEPOIS de criar', async () => {
-    const store = fakeStore();
-    const bling = fakeBling({ createFailure: { message: 'Bad gateway', status: 502, type: 'HTTP_502' } });
-    const handler = createManualOrderHandler(deps({ store, bling }));
+  describe('6ª rodada — TODA falha sem prova contratual de ausência de efeito grava indeterminada', () => {
+    it.each([
+      ['429 — limitação de taxa; o contrato não prova que não processou', { message: 'Too many requests', status: 429, type: 'TOO_MANY_REQUESTS' }],
+      ['4xx com type não reconhecido', { message: 'Recusa desconhecida', status: 400, type: 'ALGUM_TIPO_NOVO' }],
+      ['4xx sem o envelope da v3 (type vira HTTP_<status>)', { message: 'texto solto', status: 400, type: 'HTTP_400' }],
+      ['404 RESOURCE_NOT_FOUND', { message: 'não encontrado', status: 404, type: 'RESOURCE_NOT_FOUND' }],
+      ['408', { message: 'request timeout', status: 408, type: 'HTTP_408' }],
+      ['502', { message: 'Bad gateway', status: 502, type: 'HTTP_502' }],
+      ['2xx com id ilegível — o pedido existe e não sabemos qual é', { message: 'sem id', status: 201, type: 'INVALID_RESPONSE' }],
+    ])('%s', async (_descricao, createFailure) => {
+      const store = fakeStore();
+      const bling = fakeBling({ createFailure });
+      const handler = createManualOrderHandler(deps({ store, bling }));
 
-    await handler(requestWith(corpoValido()));
+      const resposta = await handler(requestWith(corpoValido()));
+      const corpo = (await resposta.json()) as ManualOrderResponseBody;
 
-    expect(store.desfechosRegistrados).toEqual([{ estado: 'indeterminada' }]);
-  });
-
-  it('o Bling responde 2xx com id ilegível: indeterminada — o pedido existe e não sabemos qual é', async () => {
-    const store = fakeStore();
-    const bling = fakeBling({
-      createFailure: { message: 'O Bling respondeu sucesso sem informar o ID do pedido criado.', status: 201, type: 'INVALID_RESPONSE' },
+      expect(store.desfechosRegistrados).toEqual([{ estado: 'indeterminada' }]);
+      expect(corpo.estadoIndeterminado).toBe(true);
+      // Nada foi gravado localmente e nada foi cancelado: sem `bling_id`, não
+      // há o que cancelar — e cancelar às cegas seria pior.
+      expect(store.persisted).toHaveLength(0);
+      expect(bling.cancelados).toEqual([]);
     });
-    const handler = createManualOrderHandler(deps({ store, bling }));
-
-    await handler(requestWith(corpoValido()));
-
-    expect(store.desfechosRegistrados).toEqual([{ estado: 'indeterminada' }]);
   });
 
   it('o Bling RECUSA com 400: aí sim falhou (reabrível) — nada foi criado, e retentar é seguro', async () => {

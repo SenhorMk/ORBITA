@@ -1,10 +1,11 @@
 /**
- * Ticket 30, fatia 3 — 5ª rodada de revisão.
+ * Ticket 30, fatia 3 — 5ª e 6ª rodadas de revisão.
  *
- * A revisão pediu explicitamente o caso "enviei `createPedidoVenda`, o Bling
- * pode ter criado, e a resposta não chegou". Uma falha assim NÃO pode marcar a
- * tentativa como `falhou`/reabrível, porque "não recebi resposta" não é "não
- * criou". Este arquivo fixa a fronteira com exemplos concretos.
+ * A fronteira aqui decide se uma chave de idempotência pode REABRIR e
+ * autorizar uma nova criação externa. A 6ª rodada endureceu a política: faixa
+ * de status HTTP não é prova de ausência de efeito, então só um `error.type`
+ * do contrato da v3 que descreva recusa da REQUISIÇÃO, junto de um status
+ * `4xx`, conta como definitivo. Todo o resto é ambíguo — e ambíguo bloqueia.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -24,41 +25,69 @@ function falha(overrides: Partial<BlingProviderFailure>): BlingProviderFailure {
 }
 
 describe('classificarFalhaDeCriacaoNoBling', () => {
-  describe('o Bling recebeu, processou e RECUSOU → Definitiva (nada foi criado, seguro reabrir)', () => {
+  describe('o contrato PROVA recusa da requisição → Definitiva (nada foi criado, seguro reabrir)', () => {
     it.each([
-      ['400 VALIDATION_ERROR — payload recusado', falha({ status: 400, type: 'VALIDATION_ERROR' })],
-      ['400 recusa por venda duplicada — o caso comum e legítimo', falha({ status: 400, duplicateSale: true })],
-      ['401 UNAUTHENTICATED — nem chegou a avaliar o pedido', falha({ status: 401, type: 'UNAUTHENTICATED' })],
-      ['403 FORBIDDEN', falha({ status: 403, type: 'FORBIDDEN' })],
-      ['404 RESOURCE_NOT_FOUND', falha({ status: 404, type: 'RESOURCE_NOT_FOUND' })],
-      ['422 corpo inválido', falha({ status: 422, type: 'INVALID_REQUEST_BODY' })],
-      ['429 — limitação de taxa é recusa ANTES do processamento', falha({ status: 429, type: 'TOO_MANY_REQUESTS' })],
-      ['4xx com corpo fora do envelope padrão (type vira HTTP_<status>)', falha({ status: 400, type: 'HTTP_400' })],
+      ['VALIDATION_ERROR 400 — o corpo não passou na validação', falha({ type: 'VALIDATION_ERROR', status: 400 })],
+      ['BAD_REQUEST 400', falha({ type: 'BAD_REQUEST', status: 400 })],
+      ['MISSING_REQUIRED_FIELD_ERROR 400', falha({ type: 'MISSING_REQUIRED_FIELD_ERROR', status: 400 })],
+      ['EMPTY_REQUEST_BODY 400', falha({ type: 'EMPTY_REQUEST_BODY', status: 400 })],
+      ['INVALID_REQUEST_BODY 422', falha({ type: 'INVALID_REQUEST_BODY', status: 422 })],
+      ['INVALID_APIKEY_ERROR 401', falha({ type: 'INVALID_APIKEY_ERROR', status: 401 })],
+      ['UNAUTHENTICATED 401', falha({ type: 'UNAUTHENTICATED', status: 401 })],
+      ['UNAUTHORIZED 401', falha({ type: 'UNAUTHORIZED', status: 401 })],
+      ['FORBIDDEN 403', falha({ type: 'FORBIDDEN', status: 403 })],
+      ['METHOD_NOT_ALLOWED 405', falha({ type: 'METHOD_NOT_ALLOWED', status: 405 })],
+      [
+        'recusa por venda duplicada — é uma VALIDATION_ERROR, o caso comum e legítimo de retentativa',
+        falha({ type: 'VALIDATION_ERROR', status: 400, duplicateSale: true }),
+      ],
     ])('%s', (_descricao, entrada) => {
       expect(classificarFalhaDeCriacaoNoBling(entrada)).toBe('Definitiva');
     });
   });
 
-  describe('pode ter criado → Ambigua (bloqueia a chave, exige reconciliação)', () => {
+  describe('6ª rodada — sem prova contratual de ausência de efeito → Ambigua (bloqueia a chave)', () => {
     it.each([
       [
-        'INVALID_RESPONSE — o Bling respondeu SUCESSO e o id não foi legível: o pedido existe e não sabemos qual é',
-        falha({ status: 201, type: 'INVALID_RESPONSE' }),
+        '429 TOO_MANY_REQUESTS — a 5ª rodada chamava de definitivo por inferência; o contrato não afirma isso',
+        falha({ type: 'TOO_MANY_REQUESTS', status: 429 }),
       ],
       [
-        'INVALID_RESPONSE mesmo com status 4xx — o tipo sintético manda, qualquer que seja o status',
-        falha({ status: 400, type: 'INVALID_RESPONSE' }),
+        '4xx com type NÃO reconhecido — nada no contrato prova que a criação não teve efeito',
+        falha({ type: 'ALGUM_TIPO_NOVO_DO_PROVEDOR', status: 400 }),
       ],
-      ['408 — o servidor declara que não terminou de receber', falha({ status: 408, type: 'HTTP_408' })],
-      ['500 — pode ter falhado DEPOIS de criar', falha({ status: 500, type: 'SERVER_ERROR' })],
-      ['502 de gateway', falha({ status: 502, type: 'HTTP_502' })],
-      ['503 indisponível', falha({ status: 503, type: 'HTTP_503' })],
-      ['504 gateway timeout — o caso clássico de "criou e a resposta se perdeu"', falha({ status: 504, type: 'HTTP_504' })],
-      ['status 0 — não houve resposta HTTP nenhuma', falha({ status: 0, type: 'UNKNOWN_ERROR' })],
-      ['status fora da faixa HTTP conhecida', falha({ status: 999, type: 'UNKNOWN_ERROR' })],
-      ['status negativo — formato inesperado cai no lado seguro', falha({ status: -1, type: 'UNKNOWN_ERROR' })],
+      [
+        '4xx cujo corpo não é o envelope da v3 (type vira HTTP_<status>) — não há contrato para invocar',
+        falha({ type: 'HTTP_400', status: 400 }),
+      ],
+      ['RESOURCE_NOT_FOUND 404 — num POST de criação não é inequívoco o que faltou, nem quando', falha({ type: 'RESOURCE_NOT_FOUND', status: 404 })],
+      ['408 — o servidor declara que não terminou de receber', falha({ type: 'HTTP_408', status: 408 })],
+      ['500 SERVER_ERROR — pode ter falhado DEPOIS de criar', falha({ type: 'SERVER_ERROR', status: 500 })],
+      ['502 de gateway', falha({ type: 'HTTP_502', status: 502 })],
+      ['503 indisponível', falha({ type: 'HTTP_503', status: 503 })],
+      ['504 gateway timeout — o caso clássico de "criou e a resposta se perdeu"', falha({ type: 'HTTP_504', status: 504 })],
+      [
+        'INVALID_RESPONSE — o Bling respondeu SUCESSO e o id não foi legível: o pedido existe e não sabemos qual é',
+        falha({ type: 'INVALID_RESPONSE', status: 201 }),
+      ],
+      ['UNKNOWN_ERROR', falha({ type: 'UNKNOWN_ERROR', status: 0 })],
+      ['NOT_IMPLEMENTED', falha({ type: 'NOT_IMPLEMENTED', status: 501 })],
+      ['status 0 — não houve resposta HTTP nenhuma', falha({ type: 'VALIDATION_ERROR', status: 0 })],
+      ['status fora da faixa HTTP conhecida', falha({ type: 'VALIDATION_ERROR', status: 999 })],
+      ['status negativo — formato inesperado cai no lado seguro', falha({ type: 'VALIDATION_ERROR', status: -1 })],
+      ['status não inteiro', falha({ type: 'VALIDATION_ERROR', status: Number.NaN })],
     ])('%s', (_descricao, entrada) => {
       expect(classificarFalhaDeCriacaoNoBling(entrada)).toBe('Ambigua');
+    });
+  });
+
+  describe('os dois lados da conjunção são necessários — nunca um só', () => {
+    it('tipo de recusa reconhecido, mas status 5xx: Ambigua', () => {
+      expect(classificarFalhaDeCriacaoNoBling(falha({ type: 'VALIDATION_ERROR', status: 500 }))).toBe('Ambigua');
+    });
+
+    it('status 4xx, mas tipo não reconhecido: Ambigua', () => {
+      expect(classificarFalhaDeCriacaoNoBling(falha({ type: 'SERVER_ERROR', status: 400 }))).toBe('Ambigua');
     });
   });
 });

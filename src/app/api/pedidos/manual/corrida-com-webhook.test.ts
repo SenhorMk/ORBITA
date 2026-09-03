@@ -362,7 +362,7 @@ function blingDaVendaManual(): ManualOrderBlingPort {
     async createContato() { return { _tag: 'BlingOk', value: { id: 4321 } }; },
     async createPedidoVenda() { return { _tag: 'BlingOk', value: { id: BLING_PEDIDO_ID, alertas: [] } }; },
     async lancarEstoquePedido() { return { _tag: 'BlingOk', value: undefined }; },
-    async buscarPedidoPorNumeroLoja() { return { _tag: 'BlingOk', value: null }; },
+    async buscarPedidoPorNumeroLoja() { return { _tag: 'BlingOk', value: { _tag: 'NenhumPedido' } }; },
     async cancelarPedidoVenda(pedidoBlingId: string) {
       cancelados.push(pedidoBlingId);
       return { _tag: 'BlingOk', value: undefined };

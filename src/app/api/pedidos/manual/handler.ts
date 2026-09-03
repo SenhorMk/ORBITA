@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { type ManualOrderRequest } from '@/lib/config/manualOrderContract';
-import { fingerprintDaVendaManual } from '@/lib/config/manualOrderFingerprint';
+import { fingerprintDaVendaManual, fingerprintDosValoresResolvidos } from '@/lib/config/manualOrderFingerprint';
 import { pedidoVendaPayloadSchema, type PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
@@ -10,29 +10,19 @@ import {
   compensarNoBling,
   resolverAmbiguidadeDePersistencia,
   respostaCriacaoNoBlingIndeterminada,
-  respostaEstadoIndeterminado,
-  respostaVendaJaRegistrada,
 } from './compensacao';
 import { classificarFalhaDeCriacaoNoBling } from './classificacaoDeFalhaBling';
+import { decidirSobreTentativa } from './decisaoDeTentativa';
 import { prepararPedido } from './preparacao';
+import { falhaDaVendaManual as fail, jsonDaVendaManual as json } from './resposta';
 import type {
   ManualOrderCliente,
   ManualOrderDependencies,
-  ManualOrderResponseBody,
-  ReivindicacaoDeTentativa,
   ResolvedManualOrderItem,
 } from './ports';
 
 export * from './ports';
 export { compensarNoBling, resolverAmbiguidadeDePersistencia } from './compensacao';
-
-function json(body: ManualOrderResponseBody, status: number): NextResponse {
-  return NextResponse.json(body, { status });
-}
-
-function fail(error: string, status: number, extra: Partial<ManualOrderResponseBody> = {}): NextResponse {
-  return json({ success: false, error, ...extra }, status);
-}
 
 /** `format: date` do Bling — AAAA-MM-DD, sem componente de hora. */
 function toBlingDate(date: Date): string {
@@ -261,73 +251,35 @@ async function sincronizarComBling(
 }
 
 /**
- * `POST /api/pedidos/manual`.
+ * Registra o desfecho da tentativa quando a sincronização com o Bling não
+ * produziu um pedido, e devolve a resposta pronta. `null` significa "seguiu
+ * bem, continue".
  *
- * A venda só é gravada localmente depois que o Bling confirma a criação do
- * pedido, quando o envio ao ERP foi pedido. Falha parcial (a baixa de estoque
- * no Bling, que acontece depois do pedido já existir) vira aviso explícito na
- * resposta, nunca um `catch` silencioso nem um sucesso mascarado.
+ * Os dois desfechos exigem reações OPOSTAS no ledger, e é por isso que estão
+ * juntos aqui em vez de espalhados: `SyncRejected` grava `falhou`
+ * (REABRÍVEL — a recusa foi comprovada pelo contrato do Bling, então nada
+ * existe lá); `SyncIndeterminado` grava `indeterminada` (BLOQUEIA — o pedido
+ * pode existir, e sem `bling_id` não há o que cancelar nem o que gravar).
  */
-/**
- * Decide o que fazer com uma reivindicação de referência (ticket 30, fatia
- * 3, 3ª rodada): segue com a tentativa nova, ou devolve a resposta pronta
- * para um dos três casos em que a submissão NÃO deve chamar o Bling de novo.
- *
- * Discriminado por `tentativaId` em vez de `NextResponse | null` de
- * propósito — assim o chamador estreita o tipo por um campo real, sem
- * precisar de um `if` inalcançável para satisfazer o TypeScript.
- */
-function decidirSobreTentativa(
-  reivindicacao: ReivindicacaoDeTentativa,
-): { readonly tentativaId: string } | { readonly response: NextResponse } {
-  if (reivindicacao._tag === 'TentativaNova') {
-    return { tentativaId: reivindicacao.tentativaId };
+async function recusaDaSincronizacao(
+  sync: SyncResult,
+  scope: VerifiedOrganizationScope,
+  tentativaId: string,
+  deps: ManualOrderDependencies,
+): Promise<NextResponse | null> {
+  if (sync._tag === 'SyncRejected') {
+    await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, { estado: 'falhou' });
+    return sync.response;
   }
-  if (reivindicacao._tag === 'TentativaConcluida') {
-    return { response: respostaVendaJaRegistrada(reivindicacao.pedidoId, reivindicacao.blingPedidoId) };
+  if (sync._tag === 'SyncIndeterminado') {
+    // A referência fica bloqueada até a reconciliação
+    // (`POST /api/pedidos/manual/reconciliar`) perguntar ao Bling, por
+    // `numeroLoja`, se o pedido existe.
+    registrarFalhaInterna('pedidos.manual.bling.criar.ambiguo', sync.causa);
+    await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, { estado: 'indeterminada' });
+    return respostaCriacaoNoBlingIndeterminada();
   }
-  if (reivindicacao._tag === 'TentativaIndeterminada') {
-    return { response: respostaEstadoIndeterminado(reivindicacao.blingPedidoId) };
-  }
-  if (reivindicacao._tag === 'TentativaConflitante') {
-    // CONFLITO DE CONTEÚDO (5ª rodada de revisão). A referência já pertence a
-    // outra venda. Não executa e não devolve o desfecho da outra — devolvê-lo
-    // diria "já registrada" sobre uma venda que ninguém registrou. `409` é o
-    // status do conflito de estado do recurso.
-    return {
-      response: fail(
-        'Esta submissão reutiliza a referência de uma venda diferente da que está sendo enviada agora. '
-          + 'Por segurança, nada foi enviado ao Bling. Recarregue a tela para iniciar uma venda nova, '
-          + 'ou reenvie exatamente a mesma venda da tentativa anterior.',
-        409,
-      ),
-    };
-  }
-  if (reivindicacao._tag === 'TentativaIndisponivel') {
-    // FAIL CLOSED (4ª rodada de revisão): a infraestrutura de idempotência
-    // não respondeu — pode ser a migration 59 ainda não aplicada, pode ser
-    // uma falha de transporte. Não importa qual: sem conseguir reivindicar a
-    // referência, não há como garantir que uma retentativa não vai duplicar
-    // no Bling, então a venda NÃO PROSSEGUE. A versão anterior tratava
-    // "infraestrutura ausente" como "pode prosseguir sem a proteção" — essa
-    // troca é exatamente o que a revisão apontou como perigosa.
-    registrarFalhaInterna('pedidos.manual.tentativa.reivindicar', reivindicacao.causa);
-    return {
-      response: fail(
-        'Não foi possível confirmar que esta venda ainda não foi registrada. Por segurança, ela NÃO foi enviada ao Bling. Tente novamente em instantes.',
-        503,
-      ),
-    };
-  }
-  // 'TentativaEmAndamento' — uma tentativa concorrente com a MESMA
-  // referência está executando agora. Não é erro do cliente nem do
-  // servidor — é a mesma submissão, em voo, chegando duas vezes.
-  return {
-    response: fail(
-      'Esta venda já está sendo registrada por outra requisição em andamento com a mesma referência. Aguarde a resposta dela antes de tentar de novo.',
-      409,
-    ),
-  };
+  return null;
 }
 
 export function createManualOrderHandler(deps: ManualOrderDependencies) {
@@ -346,6 +298,13 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     // sustenta ("mesma chave + mesmo conteúdo") deixaria de valer contra um
     // cliente desatualizado, um proxy, ou uma chamada direta à API.
     const fingerprint = await fingerprintDaVendaManual(body);
+    // Os VALORES resolvidos (preços do cadastro + total derivado) entram
+    // separados (6ª rodada): eles não vêm do cliente, e uma mudança de preço
+    // entre tentativas não pode reabrir uma tentativa em silêncio.
+    const valoresFingerprint = await fingerprintDosValoresResolvidos(
+      itens.map((item) => ({ produtoId: item.produto.id, precoUnitario: item.produto.preco })),
+      total,
+    );
 
     // Ticket 30, fatia 3, 3ª rodada — reivindica a referência ANTES de
     // qualquer chamada ao Bling. Uma retentativa (humana, de proxy, de
@@ -354,7 +313,7 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     // pedido remoto — é isso que torna "não tente de novo" uma garantia do
     // sistema, não só uma instrução de texto.
     const decisao = decidirSobreTentativa(
-      await deps.store.reivindicarTentativa(scope, referenciaLocal, fingerprint),
+      await deps.store.reivindicarTentativa(scope, referenciaLocal, fingerprint, valoresFingerprint),
     );
     if ('response' in decisao) return decisao.response;
     const { tentativaId } = decisao;
@@ -363,23 +322,13 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
 
     if (body.syncBling) {
       const sync = await sincronizarComBling(scope, cliente, body, itens, total, dataStr, referenciaLocal, deps);
-      if (sync._tag === 'SyncRejected') {
-        // Recusa comprovada: nada existe no Bling, então a referência pode ser
-        // reaberta para uma retentativa da MESMA venda.
-        await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, { estado: 'falhou' });
-        return sync.response;
+      const recusa = await recusaDaSincronizacao(sync, scope, tentativaId, deps);
+      if (recusa) return recusa;
+      // O `_tag` restante é `Synced` — estreitado pelo retorno acima.
+      if (sync._tag === 'Synced') {
+        blingPedidoId = sync.blingPedidoId;
+        avisos.push(...sync.avisos);
       }
-      if (sync._tag === 'SyncIndeterminado') {
-        // O pedido PODE existir no Bling, e sem `bling_id` não há o que
-        // cancelar nem o que gravar. A referência fica bloqueada até a
-        // reconciliação (`POST /api/pedidos/manual/reconciliar`) perguntar ao
-        // Bling, por `numeroLoja`, se o pedido existe.
-        registrarFalhaInterna('pedidos.manual.bling.criar.ambiguo', sync.causa);
-        await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, { estado: 'indeterminada' });
-        return respostaCriacaoNoBlingIndeterminada();
-      }
-      blingPedidoId = sync.blingPedidoId;
-      avisos.push(...sync.avisos);
     }
 
     const resultado = await deps.store.persistVenda({

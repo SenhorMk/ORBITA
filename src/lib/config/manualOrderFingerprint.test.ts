@@ -61,16 +61,81 @@ describe('fingerprintDaVendaManual', () => {
     });
   });
 
-  it('ausente é distinto de vazio — observações não enviadas não colidem com observações em branco', () => {
-    const semObservacoes = serializacaoCanonicaDaVendaManual(venda());
-    const comObservacoesVazias = serializacaoCanonicaDaVendaManual(venda({ observacoes: '   ' }));
-    // O schema faz `trim()`, então '   ' vira ''. O marcador '-' distingue.
-    expect(semObservacoes).toContain('obs:-');
-    expect(comObservacoesVazias).toContain('obs:');
-    expect(semObservacoes).not.toBe(comObservacoesVazias);
+  it('ausente é distinto de vazio — observações não enviadas não colidem com observações em branco', async () => {
+    const semObservacoes = venda();
+    // O schema faz `trim()`, então '   ' vira ''. Na v2, ausente é `null` e
+    // vazio é `""` — dois valores JSON distintos, sem marcador nenhum.
+    const comObservacoesVazias = venda({ observacoes: '   ' });
+
+    expect(serializacaoCanonicaDaVendaManual(semObservacoes)).toContain('null');
+    expect(serializacaoCanonicaDaVendaManual(comObservacoesVazias)).toContain('""');
+    expect(await fingerprintDaVendaManual(semObservacoes)).not.toBe(await fingerprintDaVendaManual(comObservacoesVazias));
   });
 
   it('é um SHA-256 hexadecimal — 64 caracteres, cabendo numa coluna de tamanho fixo', async () => {
     expect(await fingerprintDaVendaManual(venda())).toMatch(/^[0-9a-f]{64}$/u);
+  });
+});
+
+describe('6ª rodada — injetividade: nenhum valor consegue imitar a estrutura', () => {
+  it('a COLISÃO real da v1: dois payloads diferentes que geravam a MESMA string', async () => {
+    // Não é um exemplo ilustrativo — é a colisão concreta que a v1 produzia.
+    // A v1 juntava os campos com `|` e prefixava cada um com `<nome>:`, então
+    // um texto livre contendo `|obs:` reconstruía a fronteira do campo
+    // seguinte:
+    //
+    //   A: formaRotulo = "X|obs:Y", observacoes ausente
+    //      → "…|formaRotulo:X|obs:Y|obs:-|itens:…"
+    //   B: formaRotulo = "X",       observacoes = "Y|obs:-"
+    //      → "…|formaRotulo:X|obs:Y|obs:-|itens:…"
+    //
+    // Strings idênticas ⇒ MESMO SHA-256 ⇒ duas vendas comercialmente
+    // diferentes tratadas como a mesma operação. O hash não protege contra
+    // isso: a colisão acontece ANTES dele.
+    const a = venda({ formaPagamentoRotulo: 'X|obs:Y' });
+    const b = venda({ formaPagamentoRotulo: 'X', observacoes: 'Y|obs:-' });
+
+    expect(serializacaoCanonicaDaVendaManual(a)).not.toBe(serializacaoCanonicaDaVendaManual(b));
+    expect(await fingerprintDaVendaManual(a)).not.toBe(await fingerprintDaVendaManual(b));
+  });
+
+  it('um valor que reproduz literalmente o formato dos itens não vira item', async () => {
+    const comTextoQueParaceItem = venda({ observacoes: `${PRODUTO_B}x9` });
+    const comItemDeVerdade = venda({
+      itens: [{ produtoId: PRODUTO_A, quantidade: 1 }, { produtoId: PRODUTO_B, quantidade: 9 }],
+    });
+
+    expect(await fingerprintDaVendaManual(comTextoQueParaceItem)).not.toBe(
+      await fingerprintDaVendaManual(comItemDeVerdade),
+    );
+  });
+
+  it('aspas e barras invertidas no texto livre são escapadas, não confundidas com estrutura', async () => {
+    const a = venda({ observacoes: 'ele disse "ok"' });
+    const b = venda({ observacoes: 'ele disse \\"ok\\"' });
+    const c = venda({ observacoes: 'ele disse ok' });
+
+    const [fa, fb, fc] = await Promise.all([
+      fingerprintDaVendaManual(a),
+      fingerprintDaVendaManual(b),
+      fingerprintDaVendaManual(c),
+    ]);
+    expect(new Set([fa, fb, fc]).size).toBe(3);
+  });
+
+  it('deslocar conteúdo de um campo para o vizinho muda o fingerprint', async () => {
+    // O teste de fronteira clássico de serialização por concatenação: mover
+    // caracteres da fronteira entre dois campos adjacentes.
+    const a = venda({ formaPagamentoRotulo: 'Cartao', observacoes: 'XYZ' });
+    const b = venda({ formaPagamentoRotulo: 'CartaoXYZ', observacoes: '' });
+
+    expect(await fingerprintDaVendaManual(a)).not.toBe(await fingerprintDaVendaManual(b));
+  });
+
+  it('a serialização é um JSON válido — a estrutura é verificável, não uma string opaca', () => {
+    const canonica = serializacaoCanonicaDaVendaManual(venda({ observacoes: 'com "aspas" e |pipes|' }));
+    const decodificado: unknown = JSON.parse(canonica);
+    expect(Array.isArray(decodificado)).toBe(true);
+    expect((decodificado as unknown[])[0]).toBe('v2');
   });
 });

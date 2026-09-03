@@ -22,14 +22,26 @@
  * ledger do outro, que é exatamente o recorte do servidor
  * `(organizacao_id, referencia_local)`.
  *
- * ## Por que é uma LISTA, e não um slot
+ * ## Por que é uma LISTA sem teto
  *
  * Pelo mesmo motivo, um eixo abaixo: dentro da MESMA organização, começar uma
  * venda diferente enquanto uma tentativa segue sem desfecho não pode apagar a
  * âncora da primeira — sem ela, não há como reconciliar aquela tentativa
- * depois (`POST /api/pedidos/manual/reconciliar` precisa da referência). A
- * lista é limitada: o que interessa é não perder as pendências recentes, não
- * guardar histórico.
+ * depois (`POST /api/pedidos/manual/reconciliar` precisa da referência).
+ *
+ * E **sem descarte por teto** (6ª rodada de revisão): a versão anterior
+ * truncava em cinco entradas, o que descartava a pendência mais antiga em
+ * silêncio. Uma tentativa ainda não resolvida não pode perder a referência,
+ * por mais antiga que seja — é ela que impede a duplicação.
+ *
+ * ## E se o `localStorage` não estiver disponível?
+ *
+ * A proteção **não depende deste arquivo**. Se a memória local falhar (aba
+ * anônima, quota, storage desligado), o servidor ainda recusa abrir uma
+ * segunda venda idêntica enquanto a primeira estiver sem desfecho — ver
+ * `TentativaComPendenciaIdentica` em `ports.ts` e o bloco `PENDENCIA IDENTICA`
+ * na migration 59. O que se perde aqui é a comodidade de retomar sozinho, não
+ * a garantia de não duplicar.
  *
  * ## Como uma retentativa é reconhecida
  *
@@ -55,12 +67,6 @@ export interface TentativaPendente {
   /** SHA-256 da intenção comercial, para reconhecer a MESMA venda. */
   readonly fingerprint: string;
 }
-
-/**
- * Teto da lista por organização. Pendências são raras (só sobram quando um
- * desfecho fica indeterminado); mais que isto é acúmulo, não memória útil.
- */
-const MAXIMO_DE_PENDENTES = 5;
 
 const PREFIXO = 'orbita:pedidos-manual:tentativa-pendente';
 
@@ -113,8 +119,19 @@ export function acharPendentePorFingerprint(
 export function registrarTentativaPendente(organizacaoId: string, tentativa: TentativaPendente): void {
   try {
     const semEsta = lerTentativasPendentes(organizacaoId).filter((t) => t.referencia !== tentativa.referencia);
-    const atualizada = [...semEsta, tentativa].slice(-MAXIMO_DE_PENDENTES);
-    window.localStorage.setItem(chaveDaOrganizacao(organizacaoId), JSON.stringify(atualizada));
+    // SEM TETO, e sem descarte (6ª rodada de revisão). A versão anterior
+    // truncava a lista em cinco (`slice(-5)`), o que descartava em silêncio a
+    // pendência mais antiga — justamente a âncora que impede uma retentativa
+    // de criar um segundo pedido, e a única forma de reconciliar aquela
+    // tentativa depois. Descartar aqui contradizia a invariância que este
+    // arquivo inteiro existe para sustentar.
+    //
+    // A lista não cresce sem limite na prática: uma entrada só sobrevive
+    // enquanto a tentativa está sem desfecho, e sai assim que o envio dá certo
+    // ou a reconciliação a libera. Um acúmulo grande é sinal de que há
+    // pendências reais para resolver — e essas aparecem no painel, em vez de
+    // sumirem.
+    window.localStorage.setItem(chaveDaOrganizacao(organizacaoId), JSON.stringify([...semEsta, tentativa]));
   } catch {
     // idem `lerTentativasPendentes`: sem memória local, sem proteção extra —
     // nunca um motivo para impedir a venda.

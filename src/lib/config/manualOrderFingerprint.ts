@@ -61,35 +61,53 @@ import type { ManualOrderRequest } from './manualOrderContract';
  */
 
 /**
- * Serialização canônica: determinística para o MESMO conteúdo, e diferente
- * para conteúdo diferente.
+ * Serialização canônica **estruturalmente inequívoca** (injetiva).
  *
- * - itens ordenados por `produtoId` (a ordem na tela não é intenção comercial);
- * - números por `String(n)`, que é totalmente especificado pelo ECMA-262
- *   (`Number::toString`) — mesma saída em qualquer engine, sem arredondar:
- *   arredondar colapsaria valores distintos em um só fingerprint, que é
- *   exatamente a direção insegura;
- * - ausente (`undefined`) distinto de vazio, pelo marcador `-`;
- * - prefixo de versão para que uma mudança futura na composição não colida
- *   com fingerprints já gravados.
+ * ## Por que a versão anterior não servia (6ª rodada de revisão)
+ *
+ * A `v1` concatenava campos com separadores literais:
+ *
+ * ```
+ * v1|cliente:<uuid>|...|obs:<texto>|itens:<produtoId>x<qtd>,<produtoId>x<qtd>
+ * ```
+ *
+ * `observacoes` e `formaPagamentoRotulo` são texto livre e entram inteiros na
+ * string — então o próprio usuário podia escrever `|`, `:`, `,` ou `x` e
+ * produzir uma string idêntica à de outra venda estruturalmente diferente. O
+ * SHA-256 não salva disso: ele só evita colisão DEPOIS da serialização, e duas
+ * estruturas distintas que geram a mesma string já colidiram antes do hash.
+ *
+ * ## O que a `v2` faz
+ *
+ * `JSON.stringify` sobre um array de posições fixas. A injetividade vem da
+ * própria gramática do JSON: toda string é delimitada por aspas e todo `"` ou
+ * `\` interno é escapado, então o conteúdo nunca pode ser confundido com a
+ * estrutura que o cerca. Dois valores diferentes em qualquer posição produzem
+ * documentos JSON diferentes, quaisquer que sejam os caracteres dentro deles.
+ *
+ * A ordem das posições é fixa no código (não depende de ordem de chaves de
+ * objeto), e `JSON.stringify` de números segue `Number::toString` do ECMA-262 —
+ * totalmente especificado, mesma saída em qualquer engine.
+ *
+ * Ausente é `null`, distinto de `''`. Itens continuam ordenados por
+ * `produtoId`, porque a ordem na tela não é intenção comercial.
  */
 export function serializacaoCanonicaDaVendaManual(body: ManualOrderRequest): string {
   const itens = [...body.itens]
     .sort((a, b) => (a.produtoId < b.produtoId ? -1 : a.produtoId > b.produtoId ? 1 : 0))
-    .map((item) => `${item.produtoId}x${String(item.quantidade)}`)
-    .join(',');
+    .map((item) => [item.produtoId, item.quantidade] as const);
 
-  return [
-    'v1',
-    `cliente:${body.clienteId}`,
-    `sync:${body.syncBling ? '1' : '0'}`,
-    `desconto:${String(body.desconto)}`,
-    `frete:${String(body.frete)}`,
-    `formaId:${body.formaPagamentoId === undefined ? '-' : String(body.formaPagamentoId)}`,
-    `formaRotulo:${body.formaPagamentoRotulo ?? '-'}`,
-    `obs:${body.observacoes ?? '-'}`,
-    `itens:${itens}`,
-  ].join('|');
+  return JSON.stringify([
+    'v2',
+    body.clienteId,
+    body.syncBling,
+    body.desconto,
+    body.frete,
+    body.formaPagamentoId ?? null,
+    body.formaPagamentoRotulo ?? null,
+    body.observacoes ?? null,
+    itens,
+  ]);
 }
 
 /**
@@ -104,6 +122,68 @@ export function serializacaoCanonicaDaVendaManual(body: ManualOrderRequest): str
  */
 export async function fingerprintDaVendaManual(body: ManualOrderRequest): Promise<string> {
   const canonica = serializacaoCanonicaDaVendaManual(body);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonica));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Item já resolvido contra o cadastro, com o preço em que o servidor confia.
+ * Espelha `ResolvedManualOrderItem` sem importar a camada de rota (o
+ * verificador de limites do monólito proíbe essa direção).
+ */
+export interface ValorResolvidoDeItem {
+  readonly produtoId: string;
+  readonly precoUnitario: number;
+}
+
+/**
+ * Impressão digital dos **valores efetivos** da venda — preços unitários
+ * resolvidos no servidor e total derivado (ticket 30, fatia 3 — 6ª rodada de
+ * revisão).
+ *
+ * ## A decisão de domínio que isto implementa
+ *
+ * O fingerprint do pedido (acima) cobre o que o cliente PEDIU. Ele não cobre o
+ * que a venda VALE, porque preço e total não vêm do cliente: são derivados do
+ * cadastro no servidor. A revisão apontou o caso que ficava aberto:
+ *
+ * 1. tentativa com referência R e produto P;
+ * 2. a tentativa falha definitivamente e fica reabrível;
+ * 3. **o preço de P muda no cadastro**;
+ * 4. retentativa com a mesma referência e o mesmo corpo;
+ * 5. o fingerprint do pedido continua idêntico — e a venda passaria a valer
+ *    outro valor.
+ *
+ * **A regra adotada: uma retentativa reexecuta a MESMA venda autorizada.** O
+ * usuário confirmou uma venda por um total que viu na tela; reexecutar por
+ * outro valor não é retentativa, é uma venda diferente usando a chave da
+ * anterior. Por isso os valores resolvidos são congelados na tentativa, e uma
+ * divergência **impede a reabertura silenciosa** — a submissão é recusada com
+ * uma mensagem que diz que os preços mudaram, e a venda precisa ser
+ * reconfirmada.
+ *
+ * A alternativa — reabrir executando o preço novo — foi descartada: ela muda
+ * pedido, total e título financeiro sem que ninguém tenha confirmado o valor
+ * novo, e o faz em silêncio.
+ *
+ * ## Onde a comparação acontece
+ *
+ * Só na REABERTURA de uma tentativa `falhou`. Nos outros estados a divergência
+ * não muda nada: `concluida` devolve o resultado que já existe (a venda
+ * aconteceu pelo valor da época, e é esse que vale), e `em_andamento` /
+ * `indeterminada` já bloqueiam por conta própria.
+ */
+export async function fingerprintDosValoresResolvidos(
+  itens: readonly ValorResolvidoDeItem[],
+  total: number,
+): Promise<string> {
+  const ordenados = [...itens]
+    .sort((a, b) => (a.produtoId < b.produtoId ? -1 : a.produtoId > b.produtoId ? 1 : 0))
+    .map((item) => [item.produtoId, item.precoUnitario] as const);
+
+  const canonica = JSON.stringify(['valores-v1', total, ordenados]);
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonica));
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, '0'))

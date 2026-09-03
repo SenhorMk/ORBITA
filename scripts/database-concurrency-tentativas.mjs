@@ -45,7 +45,7 @@ async function seed(client) {
   `, [ORG_ID, OWNER_ID]);
 }
 
-const SQL_REIVINDICAR = `select * from public.reivindicar_tentativa_venda_manual($1, $2, $3)`;
+const SQL_REIVINDICAR = `select * from public.reivindicar_tentativa_venda_manual($1, $2, $3, $4)`;
 
 /**
  * As duas conexoes reivindicam a MESMA venda — mesmo fingerprint. E o que
@@ -54,10 +54,12 @@ const SQL_REIVINDICAR = `select * from public.reivindicar_tentativa_venda_manual
  * diferente e esta coberto no pgTAP.
  */
 const FINGERPRINT_DA_MESMA_VENDA = 'fingerprint-da-corrida-de-reivindicacao';
+/** Os valores resolvidos tambem sao os mesmos: e a MESMA venda, nos dois lados. */
+const VALORES_DA_MESMA_VENDA = 'valores-da-corrida-de-reivindicacao';
 
 async function tentarReivindicar(client) {
   try {
-    const resultado = await client.query(SQL_REIVINDICAR, [ORG_ID, REFERENCIA, FINGERPRINT_DA_MESMA_VENDA]);
+    const resultado = await client.query(SQL_REIVINDICAR, [ORG_ID, REFERENCIA, FINGERPRINT_DA_MESMA_VENDA, VALORES_DA_MESMA_VENDA]);
     const linha = resultado.rows[0];
     return {
       ok: true,

@@ -20,18 +20,10 @@ import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope'
 import type {
   ManualOrderCliente,
   ManualOrderDependencies,
-  ManualOrderResponseBody,
   ManualOrderStorePort,
   ResolvedManualOrderItem,
 } from './ports';
-
-function json(body: ManualOrderResponseBody, status: number): NextResponse {
-  return NextResponse.json(body, { status });
-}
-
-function fail(error: string, status: number, extra: Partial<ManualOrderResponseBody> = {}): NextResponse {
-  return json({ success: false, error, ...extra }, status);
-}
+import { falhaDaVendaManual as fail } from './resposta';
 
 type ResolveItensResult =
   | { readonly _tag: 'ItensResolved'; readonly itens: readonly ResolvedManualOrderItem[] }

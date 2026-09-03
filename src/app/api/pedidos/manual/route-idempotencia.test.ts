@@ -69,6 +69,8 @@ let modoRegistrarVenda: 'ambiguo' | 'sucesso' = 'ambiguo';
  * ACK perdido na PRÓPRIA criação.
  */
 let criarPedidoLanca: Error | null = null;
+/** 6ª rodada — falha TIPADA da criação (status/type), para os casos ambíguos. */
+let criarPedidoFalha: { status: number; type: string } | null = null;
 
 vi.mock('@/lib/supabaseServer', () => ({
   supabaseServer: {
@@ -96,6 +98,25 @@ vi.mock('@/lib/supabaseServer', () => ({
                 bling_pedido_id: null,
                 is_duplicate: true,
                 fingerprint_conflitante: true,
+              }],
+              error: null,
+            });
+          }
+          // Espelha a migration 59: uma tentativa que FALHOU definitivamente
+          // (nada pendente no Bling) é reaberta pela reivindicação seguinte
+          // com o MESMO conteúdo, em vez de ficar bloqueada para sempre.
+          if (existente.estado === 'falhou') {
+            existente.estado = 'em_andamento';
+            existente.pedidoId = null;
+            existente.blingPedidoId = null;
+            return Promise.resolve({
+              data: [{
+                tentativa_id: `tentativa-${referencia}`,
+                estado: 'em_andamento',
+                pedido_id: null,
+                bling_pedido_id: null,
+                is_duplicate: false,
+                fingerprint_conflitante: false,
               }],
               error: null,
             });
@@ -205,6 +226,18 @@ vi.mock('@/services/bling', () => ({
       criarPedidoVenda: () => {
         chamadasDeCriarPedido += 1;
         if (criarPedidoLanca) return Promise.reject(criarPedidoLanca);
+        if (criarPedidoFalha) {
+          return Promise.resolve({
+            _tag: 'BlingFailed',
+            failure: {
+              _tag: 'BlingProviderFailure',
+              type: criarPedidoFalha.type,
+              status: criarPedidoFalha.status,
+              message: 'falha simulada da criação',
+              duplicateSale: false,
+            },
+          });
+        }
         return Promise.resolve({ _tag: 'BlingOk', value: { id: '918273', alertas: [] } });
       },
       buscarPedidoVendaPorNumeroLoja: () => Promise.resolve({ _tag: 'BlingOk', value: null }),
@@ -263,6 +296,7 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
     chamadasDeCriarPedido = 0;
     modoRegistrarVenda = 'ambiguo';
     criarPedidoLanca = null;
+    criarPedidoFalha = null;
     vi.useFakeTimers();
   });
 
@@ -449,5 +483,54 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
     for (const organizacao of organizacoesNoConcluir) {
       expect(organizacao).toBe(ORG_ID);
     }
+  });
+  it.each([
+    ['429 — a 5ª rodada reabria a chave aqui; a 6ª bloqueia', { status: 429, type: 'TOO_MANY_REQUESTS' }],
+    ['4xx com type desconhecido', { status: 400, type: 'ALGUM_TIPO_NOVO' }],
+    ['408', { status: 408, type: 'HTTP_408' }],
+    ['502', { status: 502, type: 'HTTP_502' }],
+    ['2xx com id ilegível', { status: 201, type: 'INVALID_RESPONSE' }],
+  ])(
+    '6ª rodada — falha ambígua da criação (%s): a retentativa com a MESMA referência não chama o Bling de novo',
+    async (_descricao, falhaDaCriacao) => {
+      modoRegistrarVenda = 'sucesso';
+      criarPedidoFalha = falhaDaCriacao;
+      const referencia = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      const { POST } = await import('./route');
+
+      const primeira = await resolverAvancandoORelogio(POST(requisicao({ referenciaLocal: referencia })));
+      const corpoPrimeira = await primeira.json();
+
+      expect(corpoPrimeira.estadoIndeterminado).toBe(true);
+      expect(chamadasDeCriarPedido).toBe(1);
+      expect(tentativasPorReferencia.get(`ORBITA-${referencia}`)?.estado).toBe('indeterminada');
+
+      // Mesmo com o Bling voltando ao normal, a chave continua bloqueada.
+      criarPedidoFalha = null;
+      const segunda = await POST(requisicao({ referenciaLocal: referencia }));
+      const corpoSegunda = await segunda.json();
+
+      expect(corpoSegunda.estadoIndeterminado).toBe(true);
+      expect(chamadasDeCriarPedido).toBe(1);
+    },
+  );
+
+  it('6ª rodada — uma recusa PROVADA pelo contrato (VALIDATION_ERROR 400) reabre a chave: retentar é seguro', async () => {
+    modoRegistrarVenda = 'sucesso';
+    criarPedidoFalha = { status: 400, type: 'VALIDATION_ERROR' };
+    const referencia = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const { POST } = await import('./route');
+
+    const primeira = await POST(requisicao({ referenciaLocal: referencia }));
+    expect(primeira.status).toBe(400);
+    expect(tentativasPorReferencia.get(`ORBITA-${referencia}`)?.estado).toBe('falhou');
+
+    // Corrigido o motivo da recusa, a MESMA referência pode ser reusada — é a
+    // contrapartida de não bloquear o que comprovadamente não teve efeito.
+    criarPedidoFalha = null;
+    const segunda = await POST(requisicao({ referenciaLocal: referencia }));
+
+    expect(segunda.status).toBe(201);
+    expect(chamadasDeCriarPedido).toBe(2);
   });
 });

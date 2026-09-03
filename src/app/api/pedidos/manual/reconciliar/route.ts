@@ -17,11 +17,22 @@ import { reconciliarTentativa, respostaDaReconciliacao, tentativaPodeSerReconcil
  * exatamente a proteção contra duplicação. Ver `reconciliacao.ts` para a
  * máquina de estados e para como se pergunta ao Bling sem ter o `bling_id`.
  *
- * **Só lê o Bling.** Nenhuma escrita no ERP acontece aqui.
+ * **Escrita no ERP só sob pedido explícito.** O padrão (`acao: 'conferir'`) é
+ * exclusivamente leitura. `acao: 'cancelar-no-bling'` é a intervenção
+ * operacional do 6º ponto da revisão — existe para que o desfecho "o pedido
+ * existe no Bling e a venda não existe aqui" tenha um terminal, em vez de
+ * ficar bloqueado para sempre —, e nunca acontece por conferência.
  */
 const corpoSchema = z.object({
   /** O UUID que o cliente guardou; a rota o converte na referência completa. */
   referenciaLocal: z.string().uuid('referenciaLocal precisa ser um UUID'),
+  /**
+   * `'conferir'` (padrão) é só leitura. `'cancelar-no-bling'` ESCREVE no ERP e
+   * por isso precisa ser pedida nomeadamente — é a intervenção explícita para
+   * o caso "o pedido existe no Bling e a venda não existe aqui", que a
+   * conferência sozinha não resolve (6ª rodada de revisão).
+   */
+  acao: z.enum(['conferir', 'cancelar-no-bling']).default('conferir'),
 });
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -62,5 +73,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ success: false, error: elegibilidade.motivo }, { status: elegibilidade.status });
   }
 
-  return respostaDaReconciliacao(await reconciliarTentativa(scope, referenciaLocal, tentativa, deps));
+  return respostaDaReconciliacao(
+    await reconciliarTentativa(scope, referenciaLocal, tentativa, deps, parsed.data.acao),
+  );
 }

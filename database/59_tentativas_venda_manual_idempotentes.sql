@@ -64,6 +64,12 @@ create table if not exists public.tentativas_venda_manual (
     -- mesma referência reenviada com outro cliente/produto/quantidade seria
     -- tratada como retentativa de uma venda que ninguém pediu.
     fingerprint       text not null,
+    -- 6ª rodada: impressão digital dos VALORES resolvidos no servidor (preços
+    -- unitários do cadastro + total derivado). O fingerprint acima cobre o que
+    -- o cliente pediu; este cobre o que a venda vale. Sem ele, uma tentativa
+    -- `falhou` reaberta depois de o preço mudar reexecutaria a venda por outro
+    -- valor, sem ninguém confirmar o valor novo.
+    valores_fingerprint text not null,
     estado            text not null default 'em_andamento'
                        check (estado in ('em_andamento', 'concluida', 'indeterminada', 'falhou')),
     pedido_id         uuid references public.pedidos(id) on delete set null,
@@ -83,6 +89,10 @@ alter table public.tentativas_venda_manual
     add column if not exists fingerprint text not null default '';
 alter table public.tentativas_venda_manual
     alter column fingerprint drop default;
+alter table public.tentativas_venda_manual
+    add column if not exists valores_fingerprint text not null default '';
+alter table public.tentativas_venda_manual
+    alter column valores_fingerprint drop default;
 
 revoke all on public.tentativas_venda_manual from public, anon;
 grant select on public.tentativas_venda_manual to authenticated;
@@ -90,6 +100,11 @@ grant all on public.tentativas_venda_manual to service_role, postgres;
 
 create index if not exists idx_tentativas_venda_manual_org_estado
     on public.tentativas_venda_manual(organizacao_id, estado);
+
+-- Suporta a busca por pendência idêntica (6ª rodada): "existe outra tentativa
+-- sem desfecho para exatamente esta venda?".
+create index if not exists idx_tentativas_venda_manual_org_fingerprint
+    on public.tentativas_venda_manual(organizacao_id, fingerprint, estado);
 
 alter table public.tentativas_venda_manual enable row level security;
 
@@ -116,11 +131,13 @@ create trigger tg_tentativas_venda_manual_updated_at
 -- reivindicar uma referência SEM conferir se o conteúdo é o mesmo — exatamente
 -- o furo que a 5ª rodada de revisão apontou.
 drop function if exists public.reivindicar_tentativa_venda_manual(uuid, text);
+drop function if exists public.reivindicar_tentativa_venda_manual(uuid, text, text);
 
 create or replace function public.reivindicar_tentativa_venda_manual(
     p_organizacao_id uuid,
     p_referencia_local text,
-    p_fingerprint text
+    p_fingerprint text,
+    p_valores_fingerprint text
 )
 returns table (
     tentativa_id uuid,
@@ -128,7 +145,12 @@ returns table (
     pedido_id uuid,
     bling_pedido_id text,
     is_duplicate boolean,
-    fingerprint_conflitante boolean
+    fingerprint_conflitante boolean,
+    valores_divergentes boolean,
+    -- Quando preenchida: existe OUTRA tentativa ainda sem desfecho para
+    -- exatamente esta mesma venda, e é preciso resolvê-la antes de abrir uma
+    -- nova. Ver o bloco `PENDENCIA IDENTICA` no corpo da função.
+    referencia_pendente text
 )
 language plpgsql
 security definer
@@ -137,10 +159,12 @@ as $$
 declare
     v_existente record;
     v_new_id uuid;
+    v_referencia_pendente text;
 begin
     if p_organizacao_id is null or p_referencia_local is null or p_referencia_local = ''
-       or p_fingerprint is null or p_fingerprint = '' then
-        raise exception 'Organizacao, referencia local e fingerprint sao obrigatorios.' using errcode = '22023';
+       or p_fingerprint is null or p_fingerprint = ''
+       or p_valores_fingerprint is null or p_valores_fingerprint = '' then
+        raise exception 'Organizacao, referencia local, fingerprint e valores sao obrigatorios.' using errcode = '22023';
     end if;
 
     -- ATOMICO POR CONSTRUCAO: tenta inserir DIRETO, mesmo mecanismo do
@@ -157,13 +181,42 @@ begin
     -- Postgres real com duas conexoes antes desta correcao: uma vencia, a
     -- outra lancava `duplicate key value violates unique constraint
     -- "uq_tentativas_venda_manual_org_referencia"` sem nenhum tratamento.
-    insert into public.tentativas_venda_manual (organizacao_id, referencia_local, fingerprint, estado)
-    values (p_organizacao_id, p_referencia_local, p_fingerprint, 'em_andamento')
+    insert into public.tentativas_venda_manual (organizacao_id, referencia_local, fingerprint, valores_fingerprint, estado)
+    values (p_organizacao_id, p_referencia_local, p_fingerprint, p_valores_fingerprint, 'em_andamento')
     on conflict (organizacao_id, referencia_local) do nothing
     returning id into v_new_id;
 
     if v_new_id is not null then
-        return query select v_new_id, 'em_andamento'::text, null::uuid, null::text, false, false;
+        -- PENDENCIA IDENTICA (6a rodada de revisao). A chave e nova, mas ja
+        -- existe OUTRA tentativa sem desfecho para exatamente esta mesma
+        -- venda. Nao da para saber, daqui, se isto e a mesma venda tentada de
+        -- novo (o navegador perdeu a referencia — localStorage indisponivel,
+        -- outro dispositivo) ou uma segunda venda legitimamente identica. As
+        -- duas sao possiveis, e tratar como retentativa apagaria uma venda
+        -- real, enquanto tratar como nova poderia duplicar um pedido no ERP.
+        --
+        -- Entao nenhuma das duas: recusa e devolve a referencia pendente, para
+        -- que ela seja resolvida (reconciliada) primeiro. E o que torna a
+        -- protecao independente do navegador — sem isto, um cliente sem
+        -- memoria local viraria criacao externa duplicada.
+        select t.referencia_local into v_referencia_pendente
+        from public.tentativas_venda_manual t
+        where t.organizacao_id = p_organizacao_id
+          and t.fingerprint = p_fingerprint
+          and t.estado in ('em_andamento', 'indeterminada')
+          and t.id <> v_new_id
+        order by t.created_at
+        limit 1;
+
+        if v_referencia_pendente is not null then
+            -- A linha recem-inserida e nossa e ainda nao produziu efeito
+            -- nenhum: remove-la deixa o ledger exatamente como estava.
+            delete from public.tentativas_venda_manual where id = v_new_id;
+            return query select null::uuid, null::text, null::uuid, null::text, false, false, false, v_referencia_pendente;
+            return;
+        end if;
+
+        return query select v_new_id, 'em_andamento'::text, null::uuid, null::text, false, false, false, null::text;
         return;
     end if;
 
@@ -176,7 +229,8 @@ begin
            tentativas_venda_manual.estado,
            tentativas_venda_manual.pedido_id,
            tentativas_venda_manual.bling_pedido_id,
-           tentativas_venda_manual.fingerprint
+           tentativas_venda_manual.fingerprint,
+           tentativas_venda_manual.valores_fingerprint
     into v_existente
     from public.tentativas_venda_manual
     where organizacao_id = p_organizacao_id
@@ -189,11 +243,19 @@ begin
     -- venda ja foi registrada" sobre uma venda que ninguem registrou.
     -- Nenhum id sai daqui: o resultado da outra operacao nao e desta.
     if v_existente.fingerprint is distinct from p_fingerprint then
-        return query select null::uuid, null::text, null::uuid, null::text, true, true;
+        return query select null::uuid, null::text, null::uuid, null::text, true, true, false, null::text;
         return;
     end if;
 
     if v_existente.estado = 'falhou' then
+        -- 6a rodada: a venda pedida e a mesma, mas os VALORES resolvidos
+        -- mudaram (o preco do cadastro mudou entre as tentativas). Reabrir
+        -- aqui reexecutaria por outro valor, sem ninguem ter confirmado o
+        -- valor novo. Recusa, para a venda ser reconfirmada.
+        if v_existente.valores_fingerprint is distinct from p_valores_fingerprint then
+            return query select null::uuid, null::text, null::uuid, null::text, true, false, true, null::text;
+            return;
+        end if;
         -- Falha DEFINITIVA anterior, com a compensacao CONFIRMADA (a
         -- aplicacao so grava 'falhou' quando o Bling nao tem nada pendente —
         -- ver a maquina de estados em `compensacao.ts`). Seguro reabrir a
@@ -201,17 +263,17 @@ begin
         update public.tentativas_venda_manual
         set estado = 'em_andamento', pedido_id = null, bling_pedido_id = null
         where id = v_existente.id;
-        return query select v_existente.id, 'em_andamento'::text, null::uuid, null::text, false, false;
+        return query select v_existente.id, 'em_andamento'::text, null::uuid, null::text, false, false, false, null::text;
         return;
     end if;
 
-    return query select v_existente.id, v_existente.estado, v_existente.pedido_id, v_existente.bling_pedido_id, true, false;
+    return query select v_existente.id, v_existente.estado, v_existente.pedido_id, v_existente.bling_pedido_id, true, false, false, null::text;
     return;
 end;
 $$;
 
-revoke all on function public.reivindicar_tentativa_venda_manual(uuid, text, text) from public, anon, authenticated;
-grant execute on function public.reivindicar_tentativa_venda_manual(uuid, text, text) to service_role;
+revoke all on function public.reivindicar_tentativa_venda_manual(uuid, text, text, text) from public, anon, authenticated;
+grant execute on function public.reivindicar_tentativa_venda_manual(uuid, text, text, text) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- 3. Conclusão — grava o desfecho final da tentativa, para a próxima

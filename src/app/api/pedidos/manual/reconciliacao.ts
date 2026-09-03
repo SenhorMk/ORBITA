@@ -60,10 +60,24 @@ export type ReconciliacaoDeps = Pick<ManualOrderDependencies, 'store' | 'bling' 
 /** Idade mínima para reconciliar uma tentativa ainda `em_andamento`. */
 const IDADE_MINIMA_PARA_RECONCILIAR_EM_ANDAMENTO_MS = 2 * 60 * 1000;
 
+/**
+ * O que a reconciliação deve FAZER, além de diagnosticar.
+ *
+ * - `'conferir'` (padrão): **só leitura**. Pergunta ao Bling e conclui a
+ *   tentativa apenas quando a resposta é determinante por si só.
+ * - `'cancelar-no-bling'`: a intervenção operacional explícita para o único
+ *   desfecho que a conferência não resolve sozinha — o pedido existe no Bling
+ *   e a venda não existe no ORBITA. **Escreve no ERP** e por isso nunca é o
+ *   padrão: precisa ser pedida nomeadamente.
+ */
+export type AcaoDeReconciliacao = 'conferir' | 'cancelar-no-bling';
+
 export type ResultadoDaReconciliacao =
   | { readonly _tag: 'NadaFoiCriado'; readonly tentativaId: string }
   | { readonly _tag: 'VendaConfirmada'; readonly tentativaId: string; readonly pedidoId: string; readonly blingPedidoId: string }
   | { readonly _tag: 'PendenteNoBling'; readonly tentativaId: string; readonly blingPedidoId: string }
+  /** Cancelamento CONFIRMADO no Bling: nada ficou pendente lá, e a chave foi liberada. */
+  | { readonly _tag: 'CanceladoNoBling'; readonly tentativaId: string; readonly blingPedidoId: string }
   | { readonly _tag: 'NaoReconciliavel'; readonly motivo: string; readonly status: number };
 
 /**
@@ -111,6 +125,7 @@ export async function reconciliarTentativa(
   referenciaLocal: string,
   tentativa: TentativaRegistrada,
   deps: ReconciliacaoDeps,
+  acao: AcaoDeReconciliacao = 'conferir',
 ): Promise<ResultadoDaReconciliacao> {
   const busca = await deps.bling.buscarPedidoPorNumeroLoja(referenciaLocal);
 
@@ -123,9 +138,28 @@ export async function reconciliarTentativa(
     };
   }
 
-  const pedidoNoBling = busca.value;
+  const encontrado = busca.value;
 
-  if (pedidoNoBling === null) {
+  // CARDINALIDADE EXPLÍCITA (6ª rodada de revisão). Mais de um pedido com a
+  // MESMA referência não deveria existir — ver a unicidade do `numeroLoja`
+  // abaixo — e por isso mesmo não pode ser resolvido escolhendo "o primeiro":
+  // associar a tentativa ao pedido errado conclui a venda errada.
+  if (encontrado._tag === 'VariosPedidos') {
+    registrarFalhaInterna(
+      'pedidos.manual.reconciliar.varios',
+      new Error(`${encontrado.quantidade} pedidos no Bling com a mesma referência: ${encontrado.ids.join(', ')}`),
+    );
+    return {
+      _tag: 'NaoReconciliavel',
+      motivo:
+        `Foram encontrados ${encontrado.quantidade} pedidos no Bling com esta mesma referência. `
+        + 'Não é possível concluir automaticamente qual deles corresponde a esta venda — '
+        + 'a tentativa continua bloqueada e precisa de conferência manual no Bling.',
+      status: 409,
+    };
+  }
+
+  if (encontrado._tag === 'NenhumPedido') {
     // Resposta NEGATIVA confirmada: o Bling respondeu, e não existe pedido com
     // esta referência. Nada foi criado — a tentativa pode ser encerrada e a
     // referência liberada para uma retentativa da mesma venda.
@@ -133,6 +167,7 @@ export async function reconciliarTentativa(
     return { _tag: 'NadaFoiCriado', tentativaId: tentativa.id };
   }
 
+  const pedidoNoBling = encontrado.pedido;
   const jaRegistrada = await deps.store.findVendaManualJaRegistrada(scope, pedidoNoBling.id);
   if (jaRegistrada !== null) {
     // Os dois lados têm a venda: o que se perdeu foi só a confirmação.
@@ -149,14 +184,63 @@ export async function reconciliarTentativa(
     };
   }
 
-  // O pedido existe no Bling e a venda não existe aqui. A tentativa continua
-  // bloqueada — mas agora com o `bling_id` que faltava gravado nela, que é o
-  // que torna a resolução manual possível.
+  // O pedido existe no Bling e a venda não existe aqui — o único desfecho que
+  // a conferência não resolve sozinha. Grava o `bling_id` descoberto de
+  // qualquer forma: é ele que torna a resolução possível, e sem ele a
+  // tentativa fica cega.
   await deps.store.registrarDesfechoDaTentativa(scope, tentativa.id, {
     estado: 'indeterminada',
     blingPedidoId: pedidoNoBling.id,
   });
-  return { _tag: 'PendenteNoBling', tentativaId: tentativa.id, blingPedidoId: pedidoNoBling.id };
+
+  if (acao === 'conferir') {
+    return { _tag: 'PendenteNoBling', tentativaId: tentativa.id, blingPedidoId: pedidoNoBling.id };
+  }
+
+  return cancelarNoBlingEEncerrar(scope, tentativa, pedidoNoBling.id, deps);
+}
+
+/**
+ * A intervenção operacional explícita: cancela no Bling o pedido órfão e
+ * encerra a tentativa (ticket 30 — 6ª rodada de revisão).
+ *
+ * É o caminho que faltava para o terceiro desfecho não terminar em "fica
+ * bloqueada para sempre". Depois de um cancelamento CONFIRMADO, o Bling não
+ * tem mais nada pendente para esta referência, e a chave pode ser reaberta com
+ * segurança — a venda é registrada de novo pelo fluxo normal.
+ *
+ * **Idempotente.** Cancelar um pedido já cancelado é inócuo no Bling, e a
+ * elegibilidade é reavaliada antes (uma tentativa já `falhou` ou `concluida`
+ * nem chega aqui, ver `tentativaPodeSerReconciliada`). Repetir a intervenção
+ * converge para o mesmo estado em vez de acumular efeito.
+ *
+ * **Só grava `falhou` com o cancelamento confirmado.** Se o cancelamento
+ * falhar, a tentativa permanece `indeterminada` — é a mesma regra da máquina
+ * de estados de `compensacao.ts`: só uma compensação CONFIRMADA prova que
+ * nada ficou pendente lá.
+ */
+async function cancelarNoBlingEEncerrar(
+  scope: VerifiedOrganizationScope,
+  tentativa: TentativaRegistrada,
+  blingPedidoId: string,
+  deps: ReconciliacaoDeps,
+): Promise<ResultadoDaReconciliacao> {
+  const cancelamento = await deps.bling.cancelarPedidoVenda(blingPedidoId);
+
+  if (cancelamento._tag === 'BlingFailed') {
+    registrarFalhaInterna('pedidos.manual.reconciliar.cancelar', new Error(cancelamento.failure.message));
+    return {
+      _tag: 'NaoReconciliavel',
+      motivo:
+        `O pedido ${blingPedidoId} existe no Bling e o cancelamento automático falhou `
+        + `(${cancelamento.failure.message}). A tentativa continua bloqueada de propósito: `
+        + 'cancele o pedido no Bling manualmente e confira de novo.',
+      status: 502,
+    };
+  }
+
+  await deps.store.registrarDesfechoDaTentativa(scope, tentativa.id, { estado: 'falhou', blingPedidoId });
+  return { _tag: 'CanceladoNoBling', tentativaId: tentativa.id, blingPedidoId };
 }
 
 /** Corpo de resposta de `POST /api/pedidos/manual/reconciliar`. */
@@ -164,7 +248,7 @@ export interface RespostaDaReconciliacao {
   readonly success: boolean;
   /** `true` quando a referência foi liberada e o cliente pode esquecê-la. */
   readonly referenciaLiberada: boolean;
-  readonly situacao: 'nada_foi_criado' | 'venda_confirmada' | 'pendente_no_bling' | 'nao_reconciliavel';
+  readonly situacao: 'nada_foi_criado' | 'venda_confirmada' | 'pendente_no_bling' | 'cancelado_no_bling' | 'nao_reconciliavel';
   readonly mensagem: string;
   readonly pedidoId?: string;
   readonly blingPedidoId?: string;
@@ -205,6 +289,21 @@ export function respostaDaReconciliacao(resultado: ResultadoDaReconciliacao): Ne
     );
   }
 
+  if (resultado._tag === 'CanceladoNoBling') {
+    return NextResponse.json(
+      {
+        success: true,
+        referenciaLiberada: true,
+        situacao: 'cancelado_no_bling',
+        mensagem:
+          `O pedido ${resultado.blingPedidoId} foi cancelado no Bling e nada ficou pendente lá. `
+          + 'Esta venda pode ser registrada de novo.',
+        blingPedidoId: resultado.blingPedidoId,
+      } satisfies RespostaDaReconciliacao,
+      { status: 200 },
+    );
+  }
+
   return NextResponse.json(
     {
       success: false,
@@ -212,8 +311,8 @@ export function respostaDaReconciliacao(resultado: ResultadoDaReconciliacao): Ne
       situacao: 'pendente_no_bling',
       mensagem:
         `Conferido no Bling: o pedido ${resultado.blingPedidoId} existe lá, mas a venda não foi gravada no ORBITA. `
-        + 'Esta tentativa continua bloqueada de propósito — resolver exige decidir entre cancelar o pedido no Bling '
-        + 'ou registrar a venda aqui, e nenhuma das duas coisas pode ser feita automaticamente.',
+        + 'Esta tentativa continua bloqueada de propósito. Para encerrá-la, peça o cancelamento do pedido no '
+        + 'Bling — é uma ação explícita, e não acontece por conferência.',
       blingPedidoId: resultado.blingPedidoId,
     } satisfies RespostaDaReconciliacao,
     { status: 409 },

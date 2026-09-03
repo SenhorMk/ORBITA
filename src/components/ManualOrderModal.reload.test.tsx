@@ -206,3 +206,107 @@ describe('useManualOrderSubmit — a referência sobrevive, e sobrevive delimita
     instancia.unmount();
   });
 });
+
+describe('6ª rodada — nenhuma âncora não resolvida é descartada', () => {
+  beforeEach(() => {
+    chamadasFetch.length = 0;
+    responderSucesso = false;
+    window.localStorage.clear();
+  });
+
+  it('SEIS pendências: a mais antiga continua lembrada — nada de descarte por teto', async () => {
+    // A versão anterior truncava em cinco (`slice(-5)`): ao registrar a sexta,
+    // a primeira sumia — e com ela a única forma de reconciliar aquela
+    // tentativa e de impedir que uma retentativa criasse um segundo pedido.
+    const referencias: unknown[] = [];
+    for (let venda = 1; venda <= 6; venda += 1) {
+      await submeterEDescartar({ itens: [{ ...ITEM, quantidade: venda }] });
+      referencias.push(ultimaReferenciaEnviada());
+    }
+
+    expect(new Set(referencias).size).toBe(6);
+
+    // Retentar a PRIMEIRA venda (a mais antiga) tem de reencontrar a âncora
+    // dela — é a que a versão anterior descartava.
+    await submeterEDescartar({ itens: [{ ...ITEM, quantidade: 1 }] });
+    expect(ultimaReferenciaEnviada()).toBe(referencias[0]);
+
+    // E a mais recente também continua lá.
+    await submeterEDescartar({ itens: [{ ...ITEM, quantidade: 6 }] });
+    expect(ultimaReferenciaEnviada()).toBe(referencias[5]);
+  });
+
+  it('todas as seis continuam no armazenamento, nenhuma sobrescrita', async () => {
+    for (let venda = 1; venda <= 6; venda += 1) {
+      await submeterEDescartar({ itens: [{ ...ITEM, quantidade: venda }] });
+    }
+
+    const guardadas = JSON.parse(
+      window.localStorage.getItem(`orbita:pedidos-manual:tentativa-pendente:${ORG_A}`) ?? '[]',
+    ) as unknown[];
+    expect(guardadas).toHaveLength(6);
+  });
+});
+
+describe('6ª rodada — localStorage indisponível ou corrompido', () => {
+  beforeEach(() => {
+    chamadasFetch.length = 0;
+    responderSucesso = false;
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('escrita que lança (quota/modo privado): a venda continua funcionando', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+
+    await submeterEDescartar();
+
+    // Não trava o envio: a venda é registrada, e a proteção contra duplicação
+    // passa a depender do servidor (que recusa uma segunda venda idêntica
+    // enquanto a primeira estiver sem desfecho).
+    expect(chamadasFetch).toHaveLength(1);
+    expect(chamadasFetch[0].body.referenciaLocal).toBeTruthy();
+  });
+
+  it('leitura que lança: cai para "sem memória local" em vez de quebrar', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError: storage bloqueado');
+    });
+
+    await submeterEDescartar();
+    await submeterEDescartar();
+
+    // Sem memória entre instâncias, cada envio gera referência própria — a
+    // degradação honesta. É exatamente por isso que a garantia de não
+    // duplicar NÃO mora aqui: o servidor recusa a segunda venda idêntica
+    // enquanto a primeira não tiver desfecho.
+    expect(chamadasFetch).toHaveLength(2);
+    expect(chamadasFetch[1].body.referenciaLocal).not.toBe(chamadasFetch[0].body.referenciaLocal);
+  });
+
+  it('conteúdo corrompido no armazenamento não quebra nem é reaproveitado', async () => {
+    window.localStorage.setItem(`orbita:pedidos-manual:tentativa-pendente:${ORG_A}`, '{isto não é json');
+
+    await submeterEDescartar();
+
+    expect(chamadasFetch).toHaveLength(1);
+    expect(chamadasFetch[0].body.referenciaLocal).toBeTruthy();
+  });
+
+  it('entradas com formato inesperado são ignoradas, as válidas sobrevivem', async () => {
+    await submeterEDescartar();
+    const referenciaValida = ultimaReferenciaEnviada();
+
+    const chave = `orbita:pedidos-manual:tentativa-pendente:${ORG_A}`;
+    const validas = JSON.parse(window.localStorage.getItem(chave) ?? '[]') as unknown[];
+    window.localStorage.setItem(chave, JSON.stringify([{ lixo: true }, null, 'texto', ...validas]));
+
+    await submeterEDescartar();
+    expect(ultimaReferenciaEnviada()).toBe(referenciaValida);
+  });
+});
