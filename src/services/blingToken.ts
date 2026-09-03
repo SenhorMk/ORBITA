@@ -40,11 +40,30 @@ export interface TokenDoBling {
 /** Qual passo falhou. */
 export type MotivoDoErroDeToken =
   | 'sem-conexao'
+  | 'armazenamento-falhou'
   | 'credencial-ausente'
   | 'credencial-invalida'
   | 'lock-indisponivel'
   | 'troca-recusada'
+  | 'troca-falhou'
   | 'concorrencia-expirada';
+
+/** Frase pública de cada motivo, quando a falha vem de uma porta que rejeitou. */
+const MENSAGEM_POR_MOTIVO: Readonly<Record<MotivoDoErroDeToken, string>> = {
+  'sem-conexao': 'Bling nao conectado para esta organizacao. Conclua os passos 1 e 2 em Integracoes.',
+  'armazenamento-falhou':
+    'Não foi possível consultar as credenciais do Bling agora. Tente de novo em alguns instantes.',
+  'credencial-ausente': 'Credenciais do Bling incompletas para esta organização.',
+  'credencial-invalida':
+    'As credenciais do Bling guardadas para esta organização não estão no formato esperado. '
+    + 'Reconecte a conta em "Conectar APIs".',
+  'lock-indisponivel':
+    'Não foi possível coordenar a renovação do token do Bling. Tente de novo em alguns instantes.',
+  'troca-recusada': 'O Bling recusou a renovação do token.',
+  'troca-falhou': 'Não foi possível falar com o Bling para renovar o token. Tente de novo.',
+  'concorrencia-expirada':
+    'A renovação do token do Bling por outro processo não terminou a tempo. Tente de novo.',
+};
 
 /**
  * Falha da capacidade de token, com o passo identificado.
@@ -56,8 +75,14 @@ export type MotivoDoErroDeToken =
 export class ErroDeTokenDoBling extends Error {
   readonly motivo: MotivoDoErroDeToken;
 
-  constructor(motivo: MotivoDoErroDeToken, mensagem: string) {
-    super(mensagem);
+  /**
+   * @param motivo qual passo falhou — é por ele que o chamador decide, e não
+   *   pela mensagem.
+   * @param mensagem frase pública, já sem diagnóstico interno.
+   * @param opcoes `cause` guarda a rejeição original da porta, para o log.
+   */
+  constructor(motivo: MotivoDoErroDeToken, mensagem: string, opcoes?: { cause?: unknown }) {
+    super(mensagem, opcoes);
     this.name = 'ErroDeTokenDoBling';
     this.motivo = motivo;
   }
@@ -79,12 +104,12 @@ const credenciaisSchema = z.object({
   client_id: z.string().min(1).optional(),
   client_secret: z.string().min(1).optional(),
   refresh_token: z.string().min(1).optional(),
-  token_expires_at: z
-    .string()
-    .min(1)
-    .refine((valor) => Number.isFinite(new Date(valor).getTime()), {
-      message: 'token_expires_at não é uma data parseável',
-    })
+  // ISO explícito, e **um** parse: o valor já chega como epoch. Antes eram dois
+  // — um `refine` com o `Date` permissivo e outro na comparação —, e o
+  // permissivo aceita coisas que ninguém quer, como `'2026'`.
+  token_expires_at: z.iso
+    .datetime({ offset: true })
+    .transform((valor) => new Date(valor).getTime())
     .optional(),
 });
 
@@ -98,9 +123,17 @@ export function lerCredenciais(bruto: unknown): Credenciais | null {
 
 /** Sem data de validade, trata-se como vigente — é o que o código sempre fez. */
 function vencido(credenciais: Credenciais, agora: () => number): boolean {
-  if (!credenciais.token_expires_at) return false;
-  return agora() >= new Date(credenciais.token_expires_at).getTime();
+  if (credenciais.token_expires_at === undefined) return false;
+  return agora() >= credenciais.token_expires_at;
 }
+
+/** O que a busca da conexão encontrou. */
+export type ResultadoDaConexao =
+  | { readonly _tag: 'Encontrada'; readonly conexaoId: string }
+  /** A organização realmente não tem conexão Bling. */
+  | { readonly _tag: 'SemConexao' }
+  /** A consulta falhou — o banco recusou, caiu, expirou. */
+  | { readonly _tag: 'Indisponivel'; readonly causa: unknown };
 
 /** Resultado de disputar o lock de renovação. */
 export type ResultadoDoLock =
@@ -117,8 +150,7 @@ export type ResultadoDoLock =
  * e deixar as outras reais.
  */
 export interface ArmazenamentoDeCredenciais {
-  /** `null` quando a organização não tem conexão Bling. */
-  readonly acharConexaoId: (organizacaoId: string) => Promise<string | null>;
+  readonly acharConexaoId: (organizacaoId: string) => Promise<ResultadoDaConexao>;
   readonly ler: (organizacaoId: string, conexaoId: string) => Promise<unknown>;
   readonly gravar: (
     organizacaoId: string,
@@ -132,12 +164,24 @@ export interface ArmazenamentoDeCredenciais {
 /** A troca OAuth propriamente dita, injetada para o teste não sair na rede. */
 export type TrocaDeToken = (entrada: BlingRefreshTokenInput) => Promise<BlingOAuthTokenExchangeResult>;
 
+/**
+ * Tudo o que a capacidade precisa, sem padrão escondido para o externo.
+ *
+ * `armazenamento` e `trocarToken` são **obrigatórios** de propósito: um
+ * padrão real aqui permitiria montar a capacidade meio dublada e meio ligada
+ * à produção sem nada avisar. Só o que é interno — relógio, espera, número de
+ * tentativas — tem padrão.
+ */
 export interface OpcoesDoToken {
+  /** Organização dona da conexão; entra em toda leitura e gravação. */
   readonly organizacaoId: string;
+  /** Onde a credencial mora. Ver `ArmazenamentoDeCredenciais`. */
   readonly armazenamento: ArmazenamentoDeCredenciais;
+  /** A troca OAuth. Injetada para nenhum teste sair na rede sem querer. */
   readonly trocarToken: TrocaDeToken;
   /** Conexão já conhecida, quando o chamador a tem. */
   readonly conexaoId?: string;
+  /** Relógio, injetável para as provas de expiração não dependerem do real. */
   readonly agora?: () => number;
   /** Espera entre tentativas enquanto outro processo detém o lock. */
   readonly dormir?: (ms: number) => Promise<void>;
@@ -153,6 +197,14 @@ const INTERVALO_ENTRE_TENTATIVAS_MS = 2000;
  *
  * `blingCredenciaisSupabase.ts` monta a composição de produção; os testes
  * montam a deles **por inteiro**, nunca campo a campo.
+ *
+ * A instância guarda o `conexaoId` depois de resolvê-lo uma vez: dentro de uma
+ * mesma organização ele não muda, e repetir a consulta a cada chamada seria
+ * uma ida à rede por token entregue.
+ *
+ * **Toda falha sai como `ErroDeTokenDoBling`** — inclusive rejeição de porta,
+ * convertida com a causa original em `cause`. Antes o contrato dizia isso e o
+ * código não cumpria: só os caminhos decididos aqui eram tipados.
  */
 export class TokenDoBlingOrquestrado implements TokenDoBling {
   private readonly organizacaoId: string;
@@ -199,7 +251,9 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
 
   async renovar(): Promise<string> {
     const conexaoId = await this.resolverConexao();
-    const lock = await this.armazenamento.tentarLock(conexaoId);
+    const lock = await this.chamarPorta('lock-indisponivel', () =>
+      this.armazenamento.tentarLock(conexaoId),
+    );
 
     if (lock._tag === 'Indisponivel') {
       // **Falhar ao disputar não é "outro está renovando".** Tratar as duas
@@ -215,32 +269,73 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
       return await this.esperarOutroProcessoRenovar(conexaoId);
     }
 
+    // Solto em sucesso **e** em falha: um lock retido depois de um erro trava a
+    // renovação de todo mundo até o timeout do banco.
+    //
+    // **Qual falha prevalece:** a da operação. Um `finally` com `await` cru
+    // deixaria a falha do unlock substituir a da renovação, e o chamador
+    // receberia "não consegui soltar o lock" no lugar de "o Bling recusou o
+    // token" — a causa raiz sumiria atrás da limpeza.
     try {
-      return await this.renovarComLock(conexaoId);
-    } finally {
-      // Solto em sucesso **e** em falha: um lock retido depois de um erro trava
-      // a renovação de todo mundo até o timeout do banco.
-      await this.armazenamento.soltarLock(conexaoId);
+      const token = await this.renovarComLock(conexaoId);
+      await this.chamarPorta('lock-indisponivel', () => this.armazenamento.soltarLock(conexaoId));
+      return token;
+    } catch (falhaDaOperacao: unknown) {
+      await this.armazenamento.soltarLock(conexaoId).catch(() => {});
+      throw falhaDaOperacao;
     }
   }
 
   private async resolverConexao(): Promise<string> {
-    if (!this.conexaoId) {
-      this.conexaoId = (await this.armazenamento.acharConexaoId(this.organizacaoId)) ?? undefined;
+    if (this.conexaoId) return this.conexaoId;
+
+    const encontrada = await this.chamarPorta('armazenamento-falhou', () =>
+      this.armazenamento.acharConexaoId(this.organizacaoId),
+    );
+
+    if (encontrada._tag === 'Indisponivel') {
+      // **Falha de infraestrutura não é "sem conexão".** Confundir as duas
+      // mandava o lojista reconectar uma conta que já estava conectada, e
+      // escondia que o problema era do banco.
+      throw new ErroDeTokenDoBling(
+        'armazenamento-falhou',
+        'Não foi possível consultar a conexão com o Bling agora. Tente de novo em alguns instantes.',
+      );
     }
 
-    if (!this.conexaoId) {
+    if (encontrada._tag === 'SemConexao') {
       throw new ErroDeTokenDoBling(
         'sem-conexao',
         'Bling nao conectado para esta organizacao. Conclua os passos 1 e 2 em Integracoes.',
       );
     }
 
+    this.conexaoId = encontrada.conexaoId;
     return this.conexaoId;
   }
 
+  /**
+   * Executa uma porta convertendo rejeição em falha tipada.
+   *
+   * Sem isto o contrato mentia: `ErroDeTokenDoBling` cobria os caminhos que
+   * **este** módulo decide, e qualquer rejeição das portas — banco fora, cofre
+   * indisponível, rede — atravessava crua para o chamador.
+   */
+  private async chamarPorta<T>(motivo: MotivoDoErroDeToken, acao: () => Promise<T>): Promise<T> {
+    try {
+      return await acao();
+    } catch (causa: unknown) {
+      if (causa instanceof ErroDeTokenDoBling) throw causa;
+      throw new ErroDeTokenDoBling(motivo, MENSAGEM_POR_MOTIVO[motivo], { cause: causa });
+    }
+  }
+
   private async lerDoCofre(conexaoId: string): Promise<Credenciais> {
-    const credenciais = lerCredenciais(await this.armazenamento.ler(this.organizacaoId, conexaoId));
+    const bruto = await this.chamarPorta('armazenamento-falhou', () =>
+      this.armazenamento.ler(this.organizacaoId, conexaoId),
+    );
+
+    const credenciais = lerCredenciais(bruto);
     if (!credenciais) {
       throw new ErroDeTokenDoBling(
         'credencial-invalida',
@@ -256,7 +351,11 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
     for (let tentativa = 0; tentativa < this.tentativasDeEspera; tentativa += 1) {
       await this.dormir(INTERVALO_ENTRE_TENTATIVAS_MS);
 
-      const credenciais = lerCredenciais(await this.armazenamento.ler(this.organizacaoId, conexaoId));
+      const bruto = await this.chamarPorta('armazenamento-falhou', () =>
+        this.armazenamento.ler(this.organizacaoId, conexaoId),
+      );
+
+      const credenciais = lerCredenciais(bruto);
       if (credenciais?.access_token && !vencido(credenciais, this.agora)) {
         return credenciais.access_token;
       }
@@ -278,11 +377,13 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
       );
     }
 
-    const renovado = await this.trocarToken({
-      clientId: credenciais.client_id,
-      clientSecret: credenciais.client_secret,
-      refreshToken: credenciais.refresh_token,
-    });
+    const renovado = await this.chamarPorta('troca-falhou', () =>
+      this.trocarToken({
+        clientId: credenciais.client_id!,
+        clientSecret: credenciais.client_secret!,
+        refreshToken: credenciais.refresh_token!,
+      }),
+    );
 
     if (renovado._tag === 'BlingOAuthTokenExchangeFailed') {
       throw new ErroDeTokenDoBling(
@@ -291,7 +392,8 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
       );
     }
 
-    await this.armazenamento.gravar(this.organizacaoId, conexaoId, {
+    await this.chamarPorta('armazenamento-falhou', () =>
+      this.armazenamento.gravar(this.organizacaoId, conexaoId, {
       client_id: credenciais.client_id,
       client_secret: credenciais.client_secret,
       access_token: renovado.access_token,
@@ -299,7 +401,8 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
       // renovação falhar com `invalid_grant`, e a conta cai sozinha.
       refresh_token: renovado.refresh_token,
       token_expires_at: new Date(this.agora() + renovado.expires_in * 1000).toISOString(),
-    });
+      }),
+    );
 
     return renovado.access_token;
   }

@@ -5,14 +5,18 @@ import {
   TokenDoBlingOrquestrado,
   lerCredenciais,
   type ArmazenamentoDeCredenciais,
+  type ResultadoDaConexao,
   type ResultadoDoLock,
   type TrocaDeToken,
 } from './blingToken';
+import type { BlingRefreshTokenInput } from './blingOAuth';
 
 /**
  * Ticket 31 — obtenção e renovação do token.
  *
- * **Nada aqui toca a rede.** A versão anterior deste arquivo dublava o
+ * **Nenhum caso deste arquivo toca a rede** — e a afirmação para por aqui: o
+ * guarda abaixo é local a esta suíte, e não um bloqueio global das 153. A
+ * versão anterior deste arquivo dublava o
  * armazenamento e deixava a troca OAuth entrar por import direto: um dos casos
  * fazia `POST` de verdade em `api.bling.com.br/Api/v3/oauth/token`, e o
  * `.catch()` que eu tinha posto só engolia a resposta — a requisição saía. O
@@ -22,19 +26,22 @@ import {
  */
 
 interface Estado {
-  conexaoId: string | null;
+  conexao: ResultadoDaConexao;
   credenciais: unknown;
   lock: ResultadoDoLock;
 }
 
+/** Rejeições programáveis, uma por porta. */
+type PortaQueRejeita = 'acharConexaoId' | 'ler' | 'gravar' | 'tentarLock' | 'soltarLock';
+
 function armazenamentoFalso(inicial: Partial<Estado> = {}) {
   const estado: Estado = {
-    // `??` aqui apagaria o caso que interessa: `null` é "não há conexão", e não
-    // "não informado".
-    conexaoId: 'conexaoId' in inicial ? (inicial.conexaoId ?? null) : 'conexao-1',
+    conexao: inicial.conexao ?? { _tag: 'Encontrada', conexaoId: 'conexao-1' },
     credenciais: inicial.credenciais ?? { access_token: 'token-valido' },
     lock: inicial.lock ?? { _tag: 'Adquirido' },
   };
+
+  const rejeicoes = new Map<PortaQueRejeita, unknown>();
 
   const chamadas = { acharConexaoId: 0, ler: 0, tentarLock: 0, soltarLock: 0 };
   const atrasos = { acharConexaoId: 0, ler: 0 };
@@ -44,27 +51,43 @@ function armazenamentoFalso(inicial: Partial<Estado> = {}) {
     acharConexaoId: async () => {
       chamadas.acharConexaoId += 1;
       if (atrasos.acharConexaoId) await new Promise((r) => setTimeout(r, atrasos.acharConexaoId));
-      return estado.conexaoId;
+      talvezRejeitar('acharConexaoId');
+      return estado.conexao;
     },
     ler: async () => {
       chamadas.ler += 1;
       if (atrasos.ler) await new Promise((r) => setTimeout(r, atrasos.ler));
+      talvezRejeitar('ler');
       return estado.credenciais;
     },
     gravar: async (organizacaoId, conexaoId, credenciais) => {
+      talvezRejeitar('gravar');
       gravacoes.push({ organizacaoId, conexaoId, credenciais });
       estado.credenciais = credenciais;
     },
     tentarLock: async () => {
       chamadas.tentarLock += 1;
+      talvezRejeitar('tentarLock');
       return estado.lock;
     },
     soltarLock: async () => {
       chamadas.soltarLock += 1;
+      talvezRejeitar('soltarLock');
     },
   };
 
-  return { armazenamento, chamadas, atrasos, estado, gravacoes };
+  function talvezRejeitar(porta: PortaQueRejeita): void {
+    if (rejeicoes.has(porta)) throw rejeicoes.get(porta);
+  }
+
+  return {
+    armazenamento,
+    chamadas,
+    atrasos,
+    estado,
+    gravacoes,
+    fazerRejeitar: (porta: PortaQueRejeita, causa: unknown) => rejeicoes.set(porta, causa),
+  };
 }
 
 const emMs = (delta: number) => new Date(Date.now() + delta).toISOString();
@@ -76,6 +99,21 @@ const CREDENCIAL_COMPLETA = {
   refresh_token: 'refresh-antigo',
   token_expires_at: emMs(-60_000),
 };
+
+/** Troca OAuth bem-sucedida que **guarda a entrada recebida**. */
+function trocaQueRegistra() {
+  const entradas: BlingRefreshTokenInput[] = [];
+  const trocar: TrocaDeToken = async (entrada) => {
+    entradas.push(entrada);
+    return {
+      _tag: 'BlingOAuthTokenExchangeSucceeded',
+      access_token: 'token-novinho',
+      refresh_token: 'refresh-rotacionado',
+      expires_in: 3600,
+    };
+  };
+  return { trocar, entradas };
+}
 
 /** Troca OAuth bem-sucedida, com refresh token **rotacionado**. */
 const trocaBemSucedida: TrocaDeToken = async () => ({
@@ -91,10 +129,13 @@ let saidasDeRede: string[];
 beforeEach(() => {
   saidasDeRede = [];
   fetchOriginal = globalThis.fetch;
+  // SAFETY: o guarda só precisa registrar o destino e rejeitar; ele nunca
+  // devolve uma `Response`, então a assinatura completa de `fetch` não é
+  // exercitada. O original é restaurado no `afterEach`.
   globalThis.fetch = (async (entrada: unknown) => {
     saidasDeRede.push(String(entrada));
     throw new Error('a suíte de token não pode sair na rede');
-  }) as typeof globalThis.fetch;
+  }) as unknown as typeof globalThis.fetch;
 });
 
 afterEach(() => {
@@ -136,7 +177,7 @@ describe('obter', () => {
   });
 
   it('recusa quando não há conexão, com motivo nomeado', async () => {
-    const { armazenamento } = armazenamentoFalso({ conexaoId: null });
+    const { armazenamento } = armazenamentoFalso({ conexao: { _tag: 'SemConexao' } });
 
     await expect(criar(armazenamento).obter()).rejects.toMatchObject({ motivo: 'sem-conexao' });
   });
@@ -185,16 +226,26 @@ describe('renovar', () => {
     // bem-sucedida, porque a única que existia saía na rede e falhava.
     const { armazenamento, gravacoes, chamadas } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
     const agora = () => 1_000_000;
+    const oauth = trocaQueRegistra();
 
     const token = new TokenDoBlingOrquestrado({
       organizacaoId: 'org-1',
       conexaoId: 'conexao-1',
       armazenamento,
-      trocarToken: trocaBemSucedida,
+      trocarToken: oauth.trocar,
       agora,
     });
 
     expect(await token.renovar()).toBe('token-novinho');
+
+    // **A entrada entregue ao OAuth.** Antes o dublê ignorava os argumentos,
+    // e uma regressão em `clientId`, `clientSecret` ou `refreshToken` passaria
+    // sem ninguém notar — inclusive mandar o token novo no lugar do antigo.
+    expect(oauth.entradas).toEqual([{
+      clientId: 'id-do-app',
+      clientSecret: 'segredo-do-app',
+      refreshToken: 'refresh-antigo',
+    }]);
 
     expect(gravacoes).toHaveLength(1);
     const gravacao = gravacoes[0];
@@ -288,15 +339,111 @@ describe('renovar', () => {
     await expect(token.renovar()).rejects.toMatchObject({ motivo: 'concorrencia-expirada' });
   });
 
-  it('a falha é sempre `ErroDeTokenDoBling`', async () => {
-    const { armazenamento } = armazenamentoFalso({ conexaoId: null });
+  it('solta o lock quando a gravação falha, e a falha da gravação prevalece', async () => {
+    const { armazenamento, chamadas, fazerRejeitar } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
+    fazerRejeitar('gravar', new Error('cofre fora do ar'));
+
     const token = new TokenDoBlingOrquestrado({
       organizacaoId: 'org-1',
       armazenamento,
       trocarToken: trocaBemSucedida,
     });
 
-    await expect(token.renovar()).rejects.toBeInstanceOf(ErroDeTokenDoBling);
+    await expect(token.renovar()).rejects.toMatchObject({ motivo: 'armazenamento-falhou' });
+    expect(chamadas.soltarLock).toBe(1);
+  });
+
+  it('a falha da operação prevalece sobre a falha ao soltar o lock', async () => {
+    // Um `finally` com `await` cru deixaria a falha do unlock substituir a da
+    // renovação, e o chamador receberia "não consegui soltar o lock" no lugar
+    // da causa raiz.
+    const { armazenamento, fazerRejeitar } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
+    fazerRejeitar('soltarLock', new Error('unlock recusado'));
+
+    const token = new TokenDoBlingOrquestrado({
+      organizacaoId: 'org-1',
+      armazenamento,
+      trocarToken: async () => ({ _tag: 'BlingOAuthTokenExchangeFailed', reason: 'http', status: 400 }),
+    });
+
+    await expect(token.renovar()).rejects.toMatchObject({ motivo: 'troca-recusada' });
+  });
+
+  it('falha ao soltar o lock aparece quando a renovação deu certo', async () => {
+    // No caminho feliz não há causa raiz para preservar, e um unlock recusado
+    // trava a renovação de todo mundo: ele precisa aparecer.
+    const { armazenamento, fazerRejeitar } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
+    fazerRejeitar('soltarLock', new Error('unlock recusado'));
+
+    const token = new TokenDoBlingOrquestrado({
+      organizacaoId: 'org-1',
+      armazenamento,
+      trocarToken: trocaBemSucedida,
+    });
+
+    await expect(token.renovar()).rejects.toMatchObject({ motivo: 'lock-indisponivel' });
+  });
+});
+
+/**
+ * O contrato dizia "a falha é sempre `ErroDeTokenDoBling`" e era maior que o
+ * código: ele cobria os caminhos que o módulo **decide**, e qualquer rejeição de
+ * porta — banco fora, cofre indisponível, rede — atravessava crua. O caso antigo
+ * percorria só `sem-conexao`, então não notava.
+ */
+describe('rejeição de porta vira falha tipada', () => {
+  const casos = [
+    { porta: 'acharConexaoId', motivo: 'armazenamento-falhou' },
+    { porta: 'ler', motivo: 'armazenamento-falhou' },
+    { porta: 'tentarLock', motivo: 'lock-indisponivel' },
+  ] as const;
+
+  for (const caso of casos) {
+    it(caso.porta + ' rejeitando vira ' + caso.motivo, async () => {
+      const { armazenamento, fazerRejeitar } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
+      fazerRejeitar(caso.porta, new Error('infraestrutura fora'));
+
+      const token = new TokenDoBlingOrquestrado({
+        organizacaoId: 'org-1',
+        armazenamento,
+        trocarToken: trocaBemSucedida,
+      });
+
+      const erro: unknown = await token.renovar().catch((e: unknown) => e);
+      expect(erro).toBeInstanceOf(ErroDeTokenDoBling);
+      expect(erro).toMatchObject({ motivo: caso.motivo });
+      // A causa original fica guardada para o log, sem ir para a mensagem.
+      expect((erro as Error).cause).toBeInstanceOf(Error);
+    });
+  }
+
+  it('a troca OAuth rejeitando vira troca-falhou, distinta de troca-recusada', async () => {
+    // Recusa é o Bling dizendo não; rejeição é não ter conseguido perguntar.
+    const { armazenamento } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
+
+    const token = new TokenDoBlingOrquestrado({
+      organizacaoId: 'org-1',
+      armazenamento,
+      trocarToken: async () => { throw new Error('rede caiu'); },
+    });
+
+    await expect(token.renovar()).rejects.toMatchObject({ motivo: 'troca-falhou' });
+  });
+
+  it('falha de infraestrutura na busca da conexão não vira "sem conexão"', async () => {
+    // Confundir as duas mandava o lojista reconectar uma conta que já estava
+    // conectada, escondendo que o problema era do banco.
+    const { armazenamento } = armazenamentoFalso({
+      conexao: { _tag: 'Indisponivel', causa: new Error('banco fora') },
+    });
+
+    const token = new TokenDoBlingOrquestrado({
+      organizacaoId: 'org-1',
+      armazenamento,
+      trocarToken: trocaBemSucedida,
+    });
+
+    await expect(token.obter()).rejects.toMatchObject({ motivo: 'armazenamento-falhou' });
   });
 });
 
