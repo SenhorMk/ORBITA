@@ -410,6 +410,46 @@ describe('renovar', () => {
     expect(chamadas.soltarLock).toBe(1);
   });
 
+  it('com operação e unlock falhando, a perdedora não desaparece', async () => {
+    // A falha da renovação prevalece — ela é a causa raiz. Mas o unlock recusado
+    // prende o lock até o timeout do banco, e sem registro o sintoma aparece
+    // depois como lentidão sem explicação. A tabela de decisão do método de
+    // verificação exige: "falha da operação; unlock registrado separadamente".
+    const { armazenamento, chamadas, fazerRejeitar } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
+    fazerRejeitar('soltarLock', new Error('unlock recusado'));
+
+    const secundarias: string[] = [];
+
+    const token = new TokenDoBlingOrquestrado({
+      organizacaoId: 'org-1',
+      armazenamento,
+      trocarToken: async () => ({ _tag: 'BlingOAuthTokenExchangeFailed', reason: 'http', status: 400 }),
+      registrarFalhaSecundaria: (falha) => secundarias.push(falha.motivo),
+    });
+
+    // O público continua sendo a causa raiz.
+    esperarFalha(await token.renovar(), 'troca-recusada');
+    // E a perdedora ficou observável.
+    expect(secundarias).toEqual(['lock-indisponivel']);
+    // Uma liberação só, mesmo com as duas falhando.
+    expect(chamadas.soltarLock).toBe(1);
+  });
+
+  it('sem falha secundária, nada é registrado à toa', async () => {
+    const { armazenamento } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
+    const secundarias: string[] = [];
+
+    const token = new TokenDoBlingOrquestrado({
+      organizacaoId: 'org-1',
+      armazenamento,
+      trocarToken: async () => ({ _tag: 'BlingOAuthTokenExchangeFailed', reason: 'http', status: 400 }),
+      registrarFalhaSecundaria: (falha) => secundarias.push(falha.motivo),
+    });
+
+    esperarFalha(await token.renovar(), 'troca-recusada');
+    expect(secundarias).toEqual([]);
+  });
+
   it('falha ao soltar o lock aparece quando a renovação deu certo', async () => {
     // No caminho feliz não há causa raiz para preservar, e um unlock recusado
     // trava a renovação de todo mundo: ele precisa aparecer.

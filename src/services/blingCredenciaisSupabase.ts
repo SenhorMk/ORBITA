@@ -89,5 +89,9 @@ export function tokenDoBlingReal(organizacaoId: string, conexaoId?: string): Tok
     conexaoId,
     armazenamento: ARMAZENAMENTO_SUPABASE,
     trocarToken: (entrada) => refreshBlingToken(entrada),
+    // A falha que perde a precedência ainda precisa aparecer: um unlock
+    // recusado prende o lock até o timeout do banco.
+    registrarFalhaSecundaria: (falha) =>
+      registrarFalhaInterna(`bling.token.secundaria.${falha.motivo}`, erroRegistravel(falha.causa)),
   });
 }

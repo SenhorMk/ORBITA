@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 
 import {
   erroRegistravel,
@@ -80,27 +82,57 @@ describe('lerResultadoDoLock', () => {
   });
 });
 
-describe('erroRegistravel', () => {
-  it('preserva o código do Postgres, que é vocabulário fechado', () => {
-    const erro = erroRegistravel(ERRO_DO_POSTGREST);
-    expect(erro).toBeInstanceOf(Error);
-    expect(erro.message).toContain('42501');
+describe('erroRegistravel — conferido na saída do logger', () => {
+  // **A prova é o que o log registra, não o objeto intermediário.**
+  //
+  // A versão anterior conferia `erroRegistravel(...).message`, e ficava verde
+  // enquanto o log saía com `codigo: undefined`: `registrarFalhaInterna` lê
+  // `erro.code` e ignora `Error.message`. Um teste sobre o valor de retorno de
+  // um helper não prova o que o sistema registra.
+  function registrar(erro: unknown): Record<string, unknown> {
+    const espia = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      registrarFalhaInterna('teste.credenciais', erroRegistravel(erro));
+      const linha = espia.mock.calls.at(-1)?.[0];
+      if (typeof linha !== 'string') throw new Error('o logger não escreveu nada');
+      return JSON.parse(linha) as Record<string, unknown>;
+    } finally {
+      espia.mockRestore();
+    }
+  }
+
+  it('o código do Postgres chega ao log', () => {
+    const registrado = registrar(ERRO_DO_POSTGREST);
+    expect(registrado.codigo).toBe('42501');
+    expect(registrado.operacao).toBe('teste.credenciais');
   });
 
-  it('não carrega `details` nem `hint`, que trazem valor de linha', () => {
+  it('details e hint não chegam ao log', () => {
     // CWE-209, a política do ticket 22: o código diz o que aconteceu; `details`
     // e `hint` do Postgres citam a linha que causou o erro.
-    const erro = erroRegistravel(ERRO_DO_POSTGREST);
-    expect(erro.message).not.toContain('linha 7');
-    expect(erro.message).not.toContain('policy');
-    expect(erro.message).not.toContain('permission denied');
+    const registrado = JSON.stringify(registrar(ERRO_DO_POSTGREST));
+    expect(registrado).not.toContain('linha 7');
+    expect(registrado).not.toContain('policy');
+    expect(registrado).not.toContain('permission denied');
   });
 
-  it('vira `Error` mesmo sem código, para a classe chegar ao log', () => {
-    // `registrarFalhaInterna` grava a classe por `instanceof Error`; um objeto
-    // simples do PostgREST virava sempre `UnknownError`.
-    expect(erroRegistravel({ message: 'sem code' })).toBeInstanceOf(Error);
-    expect(erroRegistravel(null)).toBeInstanceOf(Error);
-    expect(erroRegistravel('texto').message).toContain('sem-codigo');
+  it('a classe do erro chega ao log — não vira UnknownError', () => {
+    // O objeto do PostgREST é objeto simples; sem virar `Error`, o log gravava
+    // `UnknownError` e perdia a distinção entre falhas.
+    expect(registrar(ERRO_DO_POSTGREST).erro).toBe('Error');
+  });
+
+  it('código fora da forma do SQLSTATE não é inventado no log', () => {
+    // `PGRST116` tem oito caracteres e o logger o descarta. Deixar a mensagem
+    // afirmar um código que o log não tem seria a mesma classe de defeito:
+    // afirmação maior que o registro.
+    const registrado = registrar({ code: 'PGRST116', message: 'nada encontrado' });
+    expect(registrado.codigo).toBeUndefined();
+    expect(JSON.stringify(registrado)).not.toContain('PGRST116');
+  });
+
+  it('erro sem código vira Error registrável mesmo assim', () => {
+    expect(registrar({ message: 'sem code' }).erro).toBe('Error');
+    expect(registrar(null).codigo).toBeUndefined();
   });
 });

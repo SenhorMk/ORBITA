@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import type { ResultadoDaConexao, ResultadoDoLock } from './blingToken';
 
 /**
@@ -31,12 +33,38 @@ export interface RespostaDoSupabase<T> {
  * fora de propósito.
  */
 export function erroRegistravel(erro: unknown): Error {
-  const codigo =
-    typeof erro === 'object' && erro !== null && 'code' in erro && typeof erro.code === 'string'
-      ? erro.code
-      : 'sem-codigo';
+  const codigo = codigoDeSqlstate(erro);
 
-  return new Error(`Supabase recusou a operação (${codigo}).`);
+  // O código vai na **propriedade `code`**, não só na mensagem.
+  // `registrarFalhaInterna` lê `erro.code` e ignora `Error.message` — uma versão
+  // anterior devolvia o código apenas no texto, o log saía com
+  // `codigo: undefined`, e o teste continuava verde porque conferia a mensagem
+  // do objeto intermediário em vez da saída do logger.
+  const registravel = new Error(
+    codigo ? `Supabase recusou a operação (${codigo}).` : 'Supabase recusou a operação.',
+  );
+  if (codigo) Object.assign(registravel, { code: codigo });
+
+  return registravel;
+}
+
+/**
+ * Código do erro **na forma que o logger aceita**, ou `undefined`.
+ *
+ * A validação é a mesma de `codigoTecnicoValidado` em `falhaInterna.ts`:
+ * SQLSTATE de cinco caracteres `[0-9A-Z]`. Chamar o código de "vocabulário
+ * fechado" e aceitar qualquer string era contradição — e um código fora da
+ * forma seria descartado pelo logger de qualquer jeito, deixando a mensagem
+ * afirmar algo que o log não tem.
+ *
+ * `PGRST116` e afins ficam de fora por terem oito caracteres; é limite do
+ * formato do logger, não descuido daqui.
+ */
+function codigoDeSqlstate(erro: unknown): string | undefined {
+  if (typeof erro !== 'object' || erro === null || !('code' in erro)) return undefined;
+
+  const bruto = (erro as { code?: unknown }).code;
+  return typeof bruto === 'string' && /^[0-9A-Z]{5}$/u.test(bruto) ? bruto : undefined;
 }
 
 /** Traduz a consulta da conexão. `error` **não** é ausência de conexão. */
@@ -56,4 +84,46 @@ export function lerResultadoDaConexao(resposta: RespostaDoSupabase<{ id?: string
 export function lerResultadoDoLock(resposta: RespostaDoSupabase<boolean>): ResultadoDoLock {
   if (resposta.error) return { _tag: 'Indisponivel', causa: resposta.error };
   return resposta.data ? { _tag: 'Adquirido' } : { _tag: 'Ocupado' };
+}
+
+/**
+ * As credenciais, lidas em vez de afirmadas.
+ *
+ * O cofre devolve `Record<string, unknown>`, e o código antigo alcançava os
+ * campos com `as string` em cada uso: um `access_token` numérico viraria string
+ * por decreto.
+ *
+ * `token_expires_at` é ISO **explícito** e transformado uma única vez em epoch.
+ * Antes eram dois parses — um `refine` com o `Date` permissivo e outro na
+ * comparação —, e o permissivo aceita coisas como `'2026'`.
+ */
+export const credenciaisSchema = z.object({
+  access_token: z.string().min(1).optional(),
+  client_id: z.string().min(1).optional(),
+  client_secret: z.string().min(1).optional(),
+  refresh_token: z.string().min(1).optional(),
+  token_expires_at: z.iso
+    .datetime({ offset: true })
+    .transform((valor) => new Date(valor).getTime())
+    .optional(),
+});
+
+export type Credenciais = z.infer<typeof credenciaisSchema>;
+
+/** Credenciais com os três campos que a renovação exige. */
+type CredenciaisParaRenovar = Credenciais & {
+  client_id: string;
+  client_secret: string;
+  refresh_token: string;
+};
+
+/** Estreita em vez de afirmar com `!` nos três campos. */
+export function completasParaRenovar(credenciais: Credenciais): credenciais is CredenciaisParaRenovar {
+  return Boolean(credenciais.client_id && credenciais.client_secret && credenciais.refresh_token);
+}
+
+/** Sem data de validade, trata-se como vigente — é o que o código sempre fez. */
+export function vencido(credenciais: Credenciais, agora: () => number): boolean {
+  if (credenciais.token_expires_at === undefined) return false;
+  return agora() >= credenciais.token_expires_at;
 }

@@ -1,6 +1,10 @@
-import { z } from 'zod';
-
 import type { BlingOAuthTokenExchangeResult, BlingRefreshTokenInput } from './blingOAuth';
+import {
+  completasParaRenovar,
+  credenciaisSchema,
+  vencido,
+  type Credenciais,
+} from './blingCredenciaisContrato';
 
 /**
  * Obtenção e renovação do token OAuth do Bling.
@@ -90,48 +94,6 @@ function falhar(motivo: MotivoDaFalhaDeToken, causa?: unknown): ResultadoDoToken
   return { _tag: 'TokenFalhou', falha: { motivo, mensagem: MENSAGEM_POR_MOTIVO[motivo], causa } };
 }
 
-/**
- * As credenciais, lidas em vez de afirmadas.
- *
- * O cofre devolve `Record<string, unknown>`, e o código antigo alcançava os
- * campos com `as string` em cada uso: um `access_token` numérico viraria string
- * por decreto.
- *
- * `token_expires_at` é ISO **explícito** e transformado uma única vez em epoch.
- * Antes eram dois parses — um `refine` com o `Date` permissivo e outro na
- * comparação —, e o permissivo aceita coisas como `'2026'`.
- */
-const credenciaisSchema = z.object({
-  access_token: z.string().min(1).optional(),
-  client_id: z.string().min(1).optional(),
-  client_secret: z.string().min(1).optional(),
-  refresh_token: z.string().min(1).optional(),
-  token_expires_at: z.iso
-    .datetime({ offset: true })
-    .transform((valor) => new Date(valor).getTime())
-    .optional(),
-});
-
-type Credenciais = z.infer<typeof credenciaisSchema>;
-
-/** Credenciais com os três campos que a renovação exige. */
-type CredenciaisParaRenovar = Credenciais & {
-  client_id: string;
-  client_secret: string;
-  refresh_token: string;
-};
-
-/** Estreita em vez de afirmar com `!` nos três campos. */
-function completasParaRenovar(credenciais: Credenciais): credenciais is CredenciaisParaRenovar {
-  return Boolean(credenciais.client_id && credenciais.client_secret && credenciais.refresh_token);
-}
-
-/** Sem data de validade, trata-se como vigente — é o que o código sempre fez. */
-function vencido(credenciais: Credenciais, agora: () => number): boolean {
-  if (credenciais.token_expires_at === undefined) return false;
-  return agora() >= credenciais.token_expires_at;
-}
-
 /** O que a busca da conexão encontrou. */
 export type ResultadoDaConexao =
   | { readonly _tag: 'Encontrada'; readonly conexaoId: string }
@@ -193,6 +155,18 @@ export interface OpcoesDoToken {
   readonly dormir?: (ms: number) => Promise<void>;
   /** Tentativas de esperar o outro processo publicar o token. */
   readonly tentativasDeEspera?: number;
+  /**
+   * Onde a falha **secundária** é registrada quando ela perde a precedência.
+   *
+   * Só existe um caso: a renovação falhou **e** o unlock falhou. O resultado
+   * público continua sendo a falha da renovação, que é a causa raiz — mas o
+   * unlock recusado deixa o lock preso até o timeout do banco, e sem isto ele
+   * desapareceria sem deixar rastro, aparecendo depois como lentidão sem
+   * explicação.
+   *
+   * Padrão: descarta. A produção passa `registrarFalhaInterna`.
+   */
+  readonly registrarFalhaSecundaria?: (falha: FalhaDeToken) => void;
 }
 
 const TENTATIVAS_PADRAO = 15;
@@ -221,6 +195,7 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
   private readonly agora: () => number;
   private readonly dormir: (ms: number) => Promise<void>;
   private readonly tentativasDeEspera: number;
+  private readonly registrarFalhaSecundaria: (falha: FalhaDeToken) => void;
 
   /** @param opcoes ver `OpcoesDoToken`; as dependências externas não têm padrão. */
   constructor(opcoes: OpcoesDoToken) {
@@ -231,6 +206,7 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
     this.agora = opcoes.agora ?? Date.now;
     this.dormir = opcoes.dormir ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.tentativasDeEspera = opcoes.tentativasDeEspera ?? TENTATIVAS_PADRAO;
+    this.registrarFalhaSecundaria = opcoes.registrarFalhaSecundaria ?? (() => {});
   }
 
   /** @inheritdoc */
@@ -294,7 +270,16 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
     // A falha da operação prevalece: ela é a causa raiz, e a limpeza é
     // consequência. No caminho feliz não há causa a preservar, e aí um unlock
     // recusado precisa aparecer — ele trava a renovação de todo mundo.
-    if (renovacao._tag === 'TokenFalhou') return renovacao;
+    if (renovacao._tag === 'TokenFalhou') {
+      // **A perdedora não desaparece.** Com as duas falhando, o público continua
+      // sendo a renovação, mas o unlock recusado deixa o lock preso; sem
+      // registro, o sintoma aparece depois como lentidão sem explicação.
+      if (!liberacao.ok && liberacao.falha._tag === 'TokenFalhou') {
+        this.registrarFalhaSecundaria(liberacao.falha.falha);
+      }
+      return renovacao;
+    }
+
     if (!liberacao.ok) return liberacao.falha;
     return renovacao;
   }
