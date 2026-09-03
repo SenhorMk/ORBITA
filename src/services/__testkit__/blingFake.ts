@@ -93,7 +93,7 @@ export class BlingFake {
   aguardarAborto(indice: number, timeoutMs = 5_000): Promise<void> {
     if (this.abortadas.includes(indice)) return Promise.resolve();
 
-    return new Promise<void>((resolve, rejeitar) => {
+    const promessa = new Promise<void>((resolve, rejeitar) => {
       const espera = {
         resolve,
         rejeitar,
@@ -107,6 +107,14 @@ export class BlingFake {
       existentes.push(espera);
       this.aguardando.set(indice, existentes);
     });
+
+    // Marca a rejeicao como observada sem consumi-la: quem faz `await` continua
+    // recebendo o erro, e uma espera que ninguem aguardou — porque uma asercao
+    // anterior falhou, por exemplo — nao derruba o processo do Vitest com
+    // `unhandledRejection`, escondendo a falha original.
+    promessa.catch(() => {});
+
+    return promessa;
   }
 
   private removerEspera(indice: number, espera: EsperaDeAborto): void {

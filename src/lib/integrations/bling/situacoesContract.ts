@@ -98,19 +98,37 @@ function normalizar(texto: string): string {
 }
 
 /**
+ * Descrições que o módulo de pedidos de venda tem.
+ *
+ * Conjunto fechado, e não substring: o spec oficial exemplifica
+ * `descricao: "Pedidos de Venda"`, e as variações aqui cobrem singular e plural.
+ * Qualquer outra coisa — devolução, proposta, orçamento — fica de fora de
+ * propósito.
+ */
+const DESCRICOES_DE_PEDIDO_DE_VENDA = new Set([
+  'pedidos de venda',
+  'pedido de venda',
+  'pedidos de vendas',
+  'pedidos venda',
+]);
+
+/**
  * Acha o módulo de **pedidos de venda** entre os módulos da conta.
  *
  * O spec oficial exemplifica esse módulo como `nome: "Vendas"`,
- * `descricao: "Pedidos de Venda"`. A descrição é o critério forte — exige as
- * duas palavras, para não casar com "Pedidos de compra". O nome é o reserva.
+ * `descricao: "Pedidos de Venda"`. A descrição é o critério forte, conferida
+ * por igualdade contra um conjunto fechado; o nome é o reserva.
  */
 export function encontrarModuloDePedidosDeVenda(
   modulos: readonly ModuloSistema[],
 ): ModuloSistema | null {
-  const porDescricao = modulos.find((modulo) => {
-    const descricao = normalizar(modulo.descricao ?? '');
-    return descricao.includes('pedido') && descricao.includes('venda');
-  });
+  // Casar por substring era largo demais: uma conta que liste "Devolução de
+  // Pedidos de Venda" **antes** de "Pedidos de Venda" faria o `find` escolher a
+  // devolução, e o cancelamento aplicaria ao pedido uma situação de outro
+  // módulo. O critério passa a ser a descrição inteira, normalizada.
+  const porDescricao = modulos.find((modulo) =>
+    DESCRICOES_DE_PEDIDO_DE_VENDA.has(normalizar(modulo.descricao ?? '')),
+  );
   if (porDescricao) return porDescricao;
 
   return modulos.find((modulo) => normalizar(modulo.nome ?? '') === 'vendas') ?? null;

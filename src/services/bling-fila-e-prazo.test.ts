@@ -77,6 +77,16 @@ afterAll(async () => {
   await fake.parar();
 });
 
+describe('a organização é obrigatória', () => {
+  it('recusa construir cliente sem organização, em vez de consultar escopo vazio', () => {
+    // O guarda morava em `getAccessToken` e em `forceRefreshToken`, e a extração
+    // da capacidade de token o levou junto. Sem ele, `organizacaoId` ausente
+    // virava `''`, a consulta não achava conexão nenhuma, e o usuário recebia
+    // "Bling não conectado" para um defeito de escopo no chamador.
+    expect(() => BlingClient.forOrganization('')).toThrow(/Organizacao verificada e obrigatoria/u);
+  });
+});
+
 describe('o prazo alcança o token e o backoff', () => {
   it('a capacidade de token fica dentro da seam, e não entrega token depois do prazo', async () => {
     // Obtenção e renovação são **a mesma** capacidade, então dublar uma sem a

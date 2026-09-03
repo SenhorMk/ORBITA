@@ -102,6 +102,40 @@ describe('encontrarModuloDePedidosDeVenda', () => {
     expect(encontrarModuloDePedidosDeVenda(modulos)).toBeNull();
   });
 
+  it('não escolhe a devolução, mesmo quando ela vem primeiro', () => {
+    // O `find` devolve o primeiro casamento. Com comparação por substring,
+    // "Devolução de Pedidos de Venda" contém "pedido" e "venda" e seria
+    // escolhida — e o cancelamento aplicaria ao pedido uma situação de outro
+    // módulo.
+    const modulos = lerModulos({
+      data: [
+        { id: 111, nome: 'Devoluções', descricao: 'Devolução de Pedidos de Venda' },
+        { id: 222, nome: 'Vendas', descricao: 'Pedidos de Venda' },
+      ],
+    })!;
+
+    expect(encontrarModuloDePedidosDeVenda(modulos)?.id).toBe(222);
+  });
+
+  it('devolve null quando só existe a devolução', () => {
+    const modulos = lerModulos({
+      data: [{ id: 111, nome: 'Devoluções', descricao: 'Devolução de Pedidos de Venda' }],
+    })!;
+
+    expect(encontrarModuloDePedidosDeVenda(modulos)).toBeNull();
+  });
+
+  it('não casa com proposta comercial nem com orçamento', () => {
+    const modulos = lerModulos({
+      data: [
+        { id: 1, nome: 'Propostas', descricao: 'Propostas comerciais de venda' },
+        { id: 2, nome: 'Orçamentos', descricao: 'Orçamentos de pedidos de venda' },
+      ],
+    })!;
+
+    expect(encontrarModuloDePedidosDeVenda(modulos)).toBeNull();
+  });
+
   it('cai no nome quando a descrição não ajuda', () => {
     const modulos = lerModulos({ data: [{ id: 7, nome: 'Vendas', descricao: 'Módulo comercial' }] })!;
     expect(encontrarModuloDePedidosDeVenda(modulos)?.id).toBe(7);

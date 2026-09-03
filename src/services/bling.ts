@@ -147,19 +147,27 @@ export class BlingClient implements BlingPort {
   static readonly TEMPO_LIMITE_OPERACAO_MS = 20_000;
 
   private baseUrl = process.env.BLING_API_BASE_URL || 'https://api.bling.com.br/Api/v3';
-  private oauthUrl = process.env.BLING_OAUTH_URL || 'https://www.bling.com.br/Api/v3/oauth/token';
 
-  private refreshTokenPromise: Promise<string> | null = null;
   private readonly fila: FilaDeRequisicoes;
-
-  private readonly organizacaoId?: string;
-  private conexaoId?: string;
   private readonly portas: PortasDoClienteBling;
 
-  private constructor(organizacaoId?: string, conexaoId?: string, portas?: PortasDoClienteBling) {
-    this.organizacaoId = organizacaoId;
-    this.conexaoId = conexaoId;
-    this.portas = portas ?? portasReais(organizacaoId ?? '', conexaoId);
+  /**
+   * @param organizacaoId organização já verificada. **Obrigatória**: sem ela não
+   *   há credencial para descobrir, e deixar passar produziria consulta com
+   *   escopo vazio em vez de falha.
+   * @param conexaoId conexão já conhecida, quando o chamador a tem.
+   * @param portas composição alternativa — ver `comPortas`.
+   */
+  private constructor(organizacaoId: string, conexaoId?: string, portas?: PortasDoClienteBling) {
+    // O guarda existia antes em `getAccessToken` e em `forceRefreshToken`, e a
+    // extração da capacidade de token o levou junto. Sem ele, `organizacaoId`
+    // ausente virava `''` e o usuário recebia "Bling não conectado" para um
+    // defeito de escopo no chamador.
+    if (!organizacaoId) {
+      throw new Error('Organizacao verificada e obrigatoria para operacoes com o Bling.');
+    }
+
+    this.portas = portas ?? portasReais(organizacaoId, conexaoId);
     this.fila = new FilaDeRequisicoes({ dormir: this.portas.dormir });
   }
 
@@ -290,6 +298,11 @@ export class BlingClient implements BlingPort {
       });
 
       if (response.status === 429) {
+        // A resposta é descartada, então o corpo precisa ser solto: no undici a
+        // conexão só volta ao pool depois de o corpo ser lido ou cancelado, e
+        // uma rajada de 429 deixaria corpos pendurados até esgotar o pool.
+        void response.body?.cancel().catch(() => {});
+
         // Conferir **antes** de entrar no backoff: sem isto, uma chamada já
         // fora do prazo dormia o intervalo inteiro só para descobrir na volta
         // que não deveria ter esperado.
@@ -302,6 +315,10 @@ export class BlingClient implements BlingPort {
       }
 
       if ((response.status === 401 || response.status === 403) && retries === 0) {
+        // Mesmo motivo do 429: a resposta é descartada e o corpo precisa ser
+        // solto para a conexão voltar ao pool.
+        void response.body?.cancel().catch(() => {});
+
         // A renovação é o passo mais caro e o **menos** interrompível: ela faz
         // polling de lock com `await` de banco. Começar uma já fora do prazo é
         // o pior gasto possível, e é o único ponto onde ainda dá para evitar.
