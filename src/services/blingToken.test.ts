@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  ErroDeTokenDoBling,
   TokenDoBlingOrquestrado,
-  lerCredenciais,
   type ArmazenamentoDeCredenciais,
   type ResultadoDaConexao,
   type ResultadoDoLock,
+  type MotivoDaFalhaDeToken,
+  type ResultadoDoToken,
   type TrocaDeToken,
 } from './blingToken';
 import type { BlingRefreshTokenInput } from './blingOAuth';
@@ -90,6 +90,32 @@ function armazenamentoFalso(inicial: Partial<Estado> = {}) {
   };
 }
 
+
+/** O token entregue, ou uma falha do teste dizendo o motivo que veio no lugar. */
+function tokenDe(resultado: ResultadoDoToken): string {
+  if (resultado._tag === 'TokenFalhou') {
+    throw new Error('esperava token, veio falha: ' + resultado.falha.motivo);
+  }
+  return resultado.token;
+}
+
+/** A falha, ou uma falha do teste dizendo que veio token. */
+function falhaDe(resultado: ResultadoDoToken) {
+  if (resultado._tag === 'TokenObtido') {
+    throw new Error('esperava falha, veio o token ' + resultado.token);
+  }
+  return resultado.falha;
+}
+
+/** Confere motivo e a presença da causa guardada para diagnóstico. */
+function esperarFalha(resultado: ResultadoDoToken, motivo: MotivoDaFalhaDeToken, comCausa = true) {
+  const falha = falhaDe(resultado);
+  expect(falha.motivo).toBe(motivo);
+  expect(falha.mensagem).not.toBe('');
+  if (comCausa) expect(falha.causa).toBeDefined();
+  return falha;
+}
+
 const emMs = (delta: number) => new Date(Date.now() + delta).toISOString();
 
 const CREDENCIAL_COMPLETA = {
@@ -143,23 +169,33 @@ afterEach(() => {
   expect(saidasDeRede).toEqual([]);
 });
 
-describe('lerCredenciais', () => {
-  it('lê os campos que interessam e descarta o resto', () => {
-    expect(lerCredenciais({ access_token: 'abc', lixo: 1 })).toEqual({ access_token: 'abc' });
+describe('a leitura das credenciais', () => {
+  // `lerCredenciais` deixou de ser exportado: ele não tinha consumidor de
+  // produção fora deste módulo, e existir só para o teste transformava decisão
+  // interna em contrato. O comportamento continua provado — pelo que a
+  // capacidade faz com uma credencial malformada.
+  const comCredencial = (credenciais: unknown) => {
+    const { armazenamento } = armazenamentoFalso({ credenciais });
+    return new TokenDoBlingOrquestrado({ organizacaoId: 'org-1', armazenamento, trocarToken: trocaBemSucedida });
+  };
+
+  it('recusa campo com tipo errado, em vez de afirmar', async () => {
+    // O código antigo alcançava os campos com `as string`: um `access_token`
+    // numérico viraria string por decreto.
+    esperarFalha(await comCredencial({ access_token: 42 }).obter(), 'credencial-invalida');
   });
 
-  it('recusa o que não tem a forma esperada, em vez de afirmar', () => {
-    expect(lerCredenciais({ access_token: 42 })).toBeNull();
-    expect(lerCredenciais(null)).toBeNull();
-    expect(lerCredenciais('texto')).toBeNull();
-  });
-
-  it('recusa validade que não é data parseável', () => {
+  it('recusa validade que não é ISO', async () => {
     // Antes, `new Date('ontem').getTime()` dava `NaN`, `agora() >= NaN` dava
     // `false`, e um token com validade ilegível passava por vigente **para
-    // sempre**. Falha silenciosa, do tipo que só aparece como "o Bling parou".
-    expect(lerCredenciais({ access_token: 'abc', token_expires_at: 'ontem' })).toBeNull();
-    expect(lerCredenciais({ access_token: 'abc', token_expires_at: emMs(60_000) })).not.toBeNull();
+    // sempre**.
+    esperarFalha(await comCredencial({ access_token: 'abc', token_expires_at: 'ontem' }).obter(), 'credencial-invalida');
+    // E `'2026'` também não passa: o `Date` permissivo aceitava.
+    esperarFalha(await comCredencial({ access_token: 'abc', token_expires_at: '2026' }).obter(), 'credencial-invalida');
+  });
+
+  it('aceita ISO com offset e usa a validade', async () => {
+    expect(tokenDe(await comCredencial({ access_token: 'abc', token_expires_at: emMs(60_000) }).obter())).toBe('abc');
   });
 });
 
@@ -172,26 +208,27 @@ describe('obter', () => {
       credenciais: { access_token: 'token-valido', token_expires_at: emMs(60_000) },
     });
 
-    expect(await criar(armazenamento).obter()).toBe('token-valido');
+    expect(tokenDe(await criar(armazenamento).obter())).toBe('token-valido');
     expect(chamadas.tentarLock).toBe(0);
   });
 
   it('recusa quando não há conexão, com motivo nomeado', async () => {
     const { armazenamento } = armazenamentoFalso({ conexao: { _tag: 'SemConexao' } });
 
-    await expect(criar(armazenamento).obter()).rejects.toMatchObject({ motivo: 'sem-conexao' });
+    // Sem causa: não houve rejeição de porta, a conta realmente não tem conexão.
+    esperarFalha(await criar(armazenamento).obter(), 'sem-conexao', false);
   });
 
   it('recusa credencial em formato inesperado, sem confundir com "não conectado"', async () => {
     const { armazenamento } = armazenamentoFalso({ credenciais: { access_token: 42 } });
 
-    await expect(criar(armazenamento).obter()).rejects.toMatchObject({ motivo: 'credencial-invalida' });
+    esperarFalha(await criar(armazenamento).obter(), 'credencial-invalida');
   });
 
   it('renova e devolve o token novo quando o vigente venceu', async () => {
     const { armazenamento, chamadas } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
 
-    expect(await criar(armazenamento).obter()).toBe('token-novinho');
+    expect(tokenDe(await criar(armazenamento).obter())).toBe('token-novinho');
     expect(chamadas.tentarLock).toBe(1);
   });
 
@@ -202,7 +239,7 @@ describe('obter', () => {
     const controle = new AbortController();
     setTimeout(() => controle.abort(new Error('prazo')), 20);
 
-    await expect(criar(armazenamento).obter(controle.signal)).rejects.toThrow(/prazo/u);
+    esperarFalha(await criar(armazenamento).obter(controle.signal), 'prazo-esgotado');
     expect(chamadas.acharConexaoId).toBe(1);
     expect(chamadas.ler).toBe(0);
   });
@@ -214,7 +251,7 @@ describe('obter', () => {
     const controle = new AbortController();
     setTimeout(() => controle.abort(new Error('prazo')), 20);
 
-    await expect(criar(armazenamento).obter(controle.signal)).rejects.toThrow(/prazo/u);
+    esperarFalha(await criar(armazenamento).obter(controle.signal), 'prazo-esgotado');
     expect(chamadas.ler).toBe(1);
     expect(chamadas.tentarLock).toBe(0);
   });
@@ -236,7 +273,7 @@ describe('renovar', () => {
       agora,
     });
 
-    expect(await token.renovar()).toBe('token-novinho');
+    expect(tokenDe(await token.renovar())).toBe('token-novinho');
 
     // **A entrada entregue ao OAuth.** Antes o dublê ignorava os argumentos,
     // e uma regressão em `clientId`, `clientSecret` ou `refreshToken` passaria
@@ -277,7 +314,7 @@ describe('renovar', () => {
       trocarToken: async () => ({ _tag: 'BlingOAuthTokenExchangeFailed', reason: 'http', status: 400 }),
     });
 
-    await expect(token.renovar()).rejects.toMatchObject({ motivo: 'troca-recusada' });
+    esperarFalha(await token.renovar(), 'troca-recusada');
     expect(chamadas.soltarLock).toBe(1);
     expect(gravacoes).toHaveLength(0);
   });
@@ -296,7 +333,7 @@ describe('renovar', () => {
       trocarToken: trocaBemSucedida,
     });
 
-    await expect(token.renovar()).rejects.toMatchObject({ motivo: 'lock-indisponivel' });
+    esperarFalha(await token.renovar(), 'lock-indisponivel');
     // Não esperou ninguém, e não soltou lock que não tinha.
     expect(chamadas.ler).toBe(0);
     expect(chamadas.soltarLock).toBe(0);
@@ -317,7 +354,7 @@ describe('renovar', () => {
       },
     });
 
-    expect(await token.renovar()).toBe('publicado-pelo-outro');
+    expect(tokenDe(await token.renovar())).toBe('publicado-pelo-outro');
     // Não soltou um lock que pertence ao outro processo.
     expect(chamadas.soltarLock).toBe(0);
   });
@@ -336,7 +373,8 @@ describe('renovar', () => {
       tentativasDeEspera: 3,
     });
 
-    await expect(token.renovar()).rejects.toMatchObject({ motivo: 'concorrencia-expirada' });
+    // Sem causa: esgotaram as tentativas, nada rejeitou.
+    esperarFalha(await token.renovar(), 'concorrencia-expirada', false);
   });
 
   it('solta o lock quando a gravação falha, e a falha da gravação prevalece', async () => {
@@ -349,7 +387,7 @@ describe('renovar', () => {
       trocarToken: trocaBemSucedida,
     });
 
-    await expect(token.renovar()).rejects.toMatchObject({ motivo: 'armazenamento-falhou' });
+    esperarFalha(await token.renovar(), 'armazenamento-falhou');
     expect(chamadas.soltarLock).toBe(1);
   });
 
@@ -357,7 +395,7 @@ describe('renovar', () => {
     // Um `finally` com `await` cru deixaria a falha do unlock substituir a da
     // renovação, e o chamador receberia "não consegui soltar o lock" no lugar
     // da causa raiz.
-    const { armazenamento, fazerRejeitar } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
+    const { armazenamento, chamadas, fazerRejeitar } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
     fazerRejeitar('soltarLock', new Error('unlock recusado'));
 
     const token = new TokenDoBlingOrquestrado({
@@ -366,13 +404,16 @@ describe('renovar', () => {
       trocarToken: async () => ({ _tag: 'BlingOAuthTokenExchangeFailed', reason: 'http', status: 400 }),
     });
 
-    await expect(token.renovar()).rejects.toMatchObject({ motivo: 'troca-recusada' });
+    esperarFalha(await token.renovar(), 'troca-recusada');
+    // **Exatamente uma** liberação, mesmo com a operação falhando: repetir o
+    // RPC, que libera só por `conexao_id`, pode apagar o lock de outro.
+    expect(chamadas.soltarLock).toBe(1);
   });
 
   it('falha ao soltar o lock aparece quando a renovação deu certo', async () => {
     // No caminho feliz não há causa raiz para preservar, e um unlock recusado
     // trava a renovação de todo mundo: ele precisa aparecer.
-    const { armazenamento, fazerRejeitar } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
+    const { armazenamento, chamadas, fazerRejeitar } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
     fazerRejeitar('soltarLock', new Error('unlock recusado'));
 
     const token = new TokenDoBlingOrquestrado({
@@ -381,7 +422,9 @@ describe('renovar', () => {
       trocarToken: trocaBemSucedida,
     });
 
-    await expect(token.renovar()).rejects.toMatchObject({ motivo: 'lock-indisponivel' });
+    esperarFalha(await token.renovar(), 'lock-indisponivel');
+    // Uma só, mesmo tendo falhado: o `catch` da versão anterior chamava de novo.
+    expect(chamadas.soltarLock).toBe(1);
   });
 });
 
@@ -409,11 +452,10 @@ describe('rejeição de porta vira falha tipada', () => {
         trocarToken: trocaBemSucedida,
       });
 
-      const erro: unknown = await token.renovar().catch((e: unknown) => e);
-      expect(erro).toBeInstanceOf(ErroDeTokenDoBling);
-      expect(erro).toMatchObject({ motivo: caso.motivo });
-      // A causa original fica guardada para o log, sem ir para a mensagem.
-      expect((erro as Error).cause).toBeInstanceOf(Error);
+      const falha = esperarFalha(await token.renovar(), caso.motivo);
+      // A causa original fica guardada para diagnóstico, sem ir para a mensagem.
+      expect(falha.causa).toBeInstanceOf(Error);
+      expect(falha.mensagem).not.toContain('infraestrutura fora');
     });
   }
 
@@ -427,7 +469,54 @@ describe('rejeição de porta vira falha tipada', () => {
       trocarToken: async () => { throw new Error('rede caiu'); },
     });
 
-    await expect(token.renovar()).rejects.toMatchObject({ motivo: 'troca-falhou' });
+    const falha = esperarFalha(await token.renovar(), 'troca-falhou');
+    expect(falha.causa).toBeInstanceOf(Error);
+  });
+
+  it('a gravação rejeitando guarda a causa', async () => {
+    const { armazenamento, fazerRejeitar } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
+    fazerRejeitar('gravar', new Error('cofre fora'));
+
+    const token = new TokenDoBlingOrquestrado({
+      organizacaoId: 'org-1',
+      armazenamento,
+      trocarToken: trocaBemSucedida,
+    });
+
+    const falha = esperarFalha(await token.renovar(), 'armazenamento-falhou');
+    expect(falha.causa).toBeInstanceOf(Error);
+  });
+
+  it('o unlock rejeitando guarda a causa', async () => {
+    const { armazenamento, fazerRejeitar } = armazenamentoFalso({ credenciais: CREDENCIAL_COMPLETA });
+    fazerRejeitar('soltarLock', new Error('unlock recusado'));
+
+    const token = new TokenDoBlingOrquestrado({
+      organizacaoId: 'org-1',
+      armazenamento,
+      trocarToken: trocaBemSucedida,
+    });
+
+    const falha = esperarFalha(await token.renovar(), 'lock-indisponivel');
+    expect(falha.causa).toBeInstanceOf(Error);
+  });
+
+  it('o `dormir` rejeitando não atravessa cru', async () => {
+    // `dormir` é injetável, e uma rejeição dele escapava do contrato.
+    const { armazenamento } = armazenamentoFalso({
+      credenciais: { access_token: 'antigo', token_expires_at: emMs(-1) },
+      lock: { _tag: 'Ocupado' },
+    });
+
+    const token = new TokenDoBlingOrquestrado({
+      organizacaoId: 'org-1',
+      armazenamento,
+      trocarToken: trocaBemSucedida,
+      dormir: async () => { throw new Error('temporizador quebrou'); },
+    });
+
+    const falha = esperarFalha(await token.renovar(), 'concorrencia-expirada');
+    expect(falha.causa).toBeInstanceOf(Error);
   });
 
   it('falha de infraestrutura na busca da conexão não vira "sem conexão"', async () => {
@@ -443,7 +532,7 @@ describe('rejeição de porta vira falha tipada', () => {
       trocarToken: trocaBemSucedida,
     });
 
-    await expect(token.obter()).rejects.toMatchObject({ motivo: 'armazenamento-falhou' });
+    esperarFalha(await token.obter(), 'armazenamento-falhou');
   });
 });
 

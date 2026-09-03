@@ -208,7 +208,11 @@ export class BlingClient implements BlingPort {
    * organizacao criado no Ticket 28.
    */
   async forceRefreshToken(): Promise<string> {
-    return await this.portas.token.renovar();
+    const resultado = await this.portas.token.renovar();
+    if (resultado._tag === 'TokenObtido') return resultado.token;
+
+    registrarFalhaInterna(`bling.token.${resultado.falha.motivo}`, resultado.falha.causa);
+    throw new Error(resultado.falha.mensagem);
   }
 
   // `_doForceRefreshToken` (renovacao por `user_id` em `integracoes_bling`) foi
@@ -229,8 +233,23 @@ export class BlingClient implements BlingPort {
    *    produziu os bugs dos tickets 26, 27 e 28: dois lados coerentes consigo
    *    mesmos e divergentes entre si.
    */
+  /**
+   * Token para a requisição, traduzindo a falha tipada em exceção.
+   *
+   * A tradução acontece **aqui** de propósito: `fetchWithAuth` e seus chamadores
+   * são a geração anterior, que sinaliza por exceção. A fronteira nova devolve
+   * valor; converter na borda evita espalhar um segundo estilo pelo cliente
+   * inteiro, e deixa o ponto de conversão visível num lugar só.
+   *
+   * A `causa` da falha vai para o log, não para a mensagem: ela guarda a
+   * rejeição original da porta, que pode carregar diagnóstico interno.
+   */
   private async getAccessToken(signal?: AbortSignal): Promise<string> {
-    return await this.portas.token.obter(signal);
+    const resultado = await this.portas.token.obter(signal);
+    if (resultado._tag === 'TokenObtido') return resultado.token;
+
+    registrarFalhaInterna(`bling.token.${resultado.falha.motivo}`, resultado.falha.causa);
+    throw new Error(resultado.falha.mensagem);
   }
 
   /** Espaça as requisições ao Bling. Ver `FilaDeRequisicoes`. */

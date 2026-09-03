@@ -48,8 +48,8 @@ function portasDeTeste(over: { dormir?: PortasDoClienteBling['dormir']; token?: 
   return {
     dormir: over.dormir ?? esperar,
     token: {
-      obter: over.token?.obter ?? (async () => 'token-de-teste'),
-      renovar: over.token?.renovar ?? (async () => 'token-renovado'),
+      obter: over.token?.obter ?? (async () => ({ _tag: 'TokenObtido', token: 'token-de-teste' })),
+      renovar: over.token?.renovar ?? (async () => ({ _tag: 'TokenObtido', token: 'token-renovado' })),
     },
   };
 }
@@ -94,9 +94,9 @@ describe('o prazo alcança o token e o backoff', () => {
         obter: async (signal) => {
           // Simula o custo real: a leitura da credencial é ida à rede.
           await new Promise((r) => setTimeout(r, 300));
-          signal?.throwIfAborted();
+          if (signal?.aborted) return { _tag: 'TokenFalhou', falha: { motivo: 'prazo-esgotado', mensagem: 'prazo' } };
           tokensEntregues += 1;
-          return 'token-renovado';
+          return { _tag: 'TokenObtido', token: 'token-renovado' };
         },
       },
     }));

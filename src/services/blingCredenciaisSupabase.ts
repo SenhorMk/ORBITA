@@ -19,7 +19,7 @@ import {
  * três razões diferentes — e um teste da orquestração acabou saindo na rede,
  * porque o OAuth vinha por import direto.
  */
-export const ARMAZENAMENTO_SUPABASE: ArmazenamentoDeCredenciais = {
+const ARMAZENAMENTO_SUPABASE: ArmazenamentoDeCredenciais = {
   acharConexaoId: async (organizacaoId): Promise<ResultadoDaConexao> => {
     const { data, error } = await supabaseServer
       .from('conexoes_integracao')
