@@ -6,10 +6,13 @@ import { refreshBlingToken } from './blingOAuth';
 import {
   TokenDoBlingOrquestrado,
   type ArmazenamentoDeCredenciais,
-  type ResultadoDaConexao,
-  type ResultadoDoLock,
   type TokenDoBling,
 } from './blingToken';
+import {
+  erroRegistravel,
+  lerResultadoDaConexao,
+  lerResultadoDoLock,
+} from './blingCredenciaisContrato';
 
 /**
  * A composição de **produção** da capacidade de token.
@@ -18,50 +21,52 @@ import {
  * cofre e OAuth concretos; lá é a ordem dos passos. Juntos, o módulo mudava por
  * três razões diferentes — e um teste da orquestração acabou saindo na rede,
  * porque o OAuth vinha por import direto.
+ *
+ * A **tradução** de `{ data, error }` para os tipos do domínio mora em
+ * `blingCredenciaisContrato.ts`, que não depende de infraestrutura e por isso
+ * pode ser provado direto.
  */
+
 const ARMAZENAMENTO_SUPABASE: ArmazenamentoDeCredenciais = {
-  acharConexaoId: async (organizacaoId): Promise<ResultadoDaConexao> => {
-    const { data, error } = await supabaseServer
+  acharConexaoId: async (organizacaoId) => {
+    const resposta = await supabaseServer
       .from('conexoes_integracao')
       .select('id')
       .eq('organizacao_id', organizacaoId)
       .eq('provedor', 'bling')
       .maybeSingle();
 
-    if (error) {
+    const resultado = lerResultadoDaConexao(resposta);
+    if (resultado._tag === 'Indisponivel') {
       // **Falha de infraestrutura não é "sem conexão".** O `error` era
       // descartado, e o `null` resultante virava "conclua os passos 1 e 2 em
       // Integrações" — mandando o lojista reconectar uma conta que já estava
       // conectada, enquanto o problema real era do banco.
-      registrarFalhaInterna('bling.token.achar-conexao', error);
-      return { _tag: 'Indisponivel', causa: error };
+      registrarFalhaInterna('bling.token.achar-conexao', erroRegistravel(resposta.error));
     }
-
-    return data?.id ? { _tag: 'Encontrada', conexaoId: data.id } : { _tag: 'SemConexao' };
+    return resultado;
   },
 
   ler: (organizacaoId, conexaoId) => credentialsVault.getDecryptedCredentials(organizacaoId, conexaoId),
 
   gravar: async (organizacaoId, conexaoId, credenciais) => {
+    // `saveEncryptedCredentials` lança quando o upsert falha, então uma
+    // gravação recusada vira rejeição — e não um sucesso silencioso com o
+    // refresh token novo perdido.
     await credentialsVault.saveEncryptedCredentials(organizacaoId, conexaoId, credenciais);
   },
 
-  tentarLock: async (conexaoId): Promise<ResultadoDoLock> => {
-    const { data, error } = await supabaseServer.rpc('acquire_conexao_token_lock', {
+  tentarLock: async (conexaoId) => {
+    const resposta = await supabaseServer.rpc('acquire_conexao_token_lock', {
       p_conexao_id: conexaoId,
       p_timeout_seconds: 30,
     });
 
-    if (error) {
-      // O erro **não** é impresso cru: um erro do Postgres carrega `details` e
-      // `hint`, que trazem valor de linha (CWE-209, a política do ticket 22).
-      // E ele deixou de virar "outro processo está renovando": falhar ao
-      // disputar o lock é outra coisa, e o chamador precisa distinguir.
-      registrarFalhaInterna('bling.token.lock', error);
-      return { _tag: 'Indisponivel', causa: error };
+    const resultado = lerResultadoDoLock(resposta);
+    if (resultado._tag === 'Indisponivel') {
+      registrarFalhaInterna('bling.token.lock', erroRegistravel(resposta.error));
     }
-
-    return data ? { _tag: 'Adquirido' } : { _tag: 'Ocupado' };
+    return resultado;
   },
 
   soltarLock: async (conexaoId) => {
@@ -71,7 +76,7 @@ const ARMAZENAMENTO_SUPABASE: ArmazenamentoDeCredenciais = {
       // Um unlock recusado deixa a renovação de todo mundo travada até o
       // timeout do banco. O erro era descartado em silêncio: ninguém ficava
       // sabendo, e o sintoma aparecia depois como lentidão sem causa.
-      registrarFalhaInterna('bling.token.soltar-lock', error);
+      registrarFalhaInterna('bling.token.soltar-lock', erroRegistravel(error));
       throw new Error('Falha ao liberar o lock de renovação do token do Bling.');
     }
   },
