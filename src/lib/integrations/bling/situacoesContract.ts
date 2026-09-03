@@ -98,14 +98,14 @@ function normalizar(texto: string): string {
 }
 
 /**
- * Descrições que o módulo de pedidos de venda tem.
+ * Descrições exatas conhecidas do módulo de pedidos de venda.
  *
- * Conjunto fechado, e não substring: o spec oficial exemplifica
- * `descricao: "Pedidos de Venda"`, e as variações aqui cobrem singular e plural.
- * Qualquer outra coisa — devolução, proposta, orçamento — fica de fora de
- * propósito.
+ * O spec oficial exemplifica `descricao: "Pedidos de Venda"`; as variações aqui
+ * cobrem singular e plural. Casar por igualdade é o critério mais forte, e por
+ * isso vem primeiro — mas **não** é o único, porque esta lista é suposição a
+ * partir de um exemplo, e a descrição real da conta pode ser outra.
  */
-const DESCRICOES_DE_PEDIDO_DE_VENDA = new Set([
+const DESCRICOES_EXATAS = new Set([
   'pedidos de venda',
   'pedido de venda',
   'pedidos de vendas',
@@ -113,23 +113,48 @@ const DESCRICOES_DE_PEDIDO_DE_VENDA = new Set([
 ]);
 
 /**
+ * Palavras que denunciam um módulo **diferente** do de pedidos de venda.
+ *
+ * "Devolução de Pedidos de Venda" contém "pedido" e "venda" e casaria por
+ * substring; a lista existe para que o critério largo continue existindo sem
+ * pegar o módulo errado.
+ */
+const TERMOS_DE_OUTRO_MODULO = ['devolucao', 'retorno', 'compra', 'proposta', 'orcamento', 'transferencia'];
+
+/**
  * Acha o módulo de **pedidos de venda** entre os módulos da conta.
  *
- * O spec oficial exemplifica esse módulo como `nome: "Vendas"`,
- * `descricao: "Pedidos de Venda"`. A descrição é o critério forte, conferida
- * por igualdade contra um conjunto fechado; o nome é o reserva.
+ * Três critérios, do mais forte para o mais largo, porque os dois extremos
+ * falham de jeitos diferentes e igualmente caros:
+ *
+ * 1. **descrição exata** conhecida;
+ * 2. **descrição que contém "pedido" e "venda"** e nenhuma palavra de outro
+ *    módulo — e só quando ela for **única**, porque duas candidatas significam
+ *    que não dá para saber qual é;
+ * 3. **`nome` igual a "vendas"**, o reserva.
+ *
+ * Casar só por substring escolhia a devolução quando ela vinha antes na lista.
+ * Casar só por igualdade não acha uma conta cuja descrição fuja das quatro
+ * formas conhecidas — e aí o cancelamento para de funcionar por inteiro, que é
+ * pior do que escolher errado, porque é o caminho da compensação.
  */
 export function encontrarModuloDePedidosDeVenda(
   modulos: readonly ModuloSistema[],
 ): ModuloSistema | null {
-  // Casar por substring era largo demais: uma conta que liste "Devolução de
-  // Pedidos de Venda" **antes** de "Pedidos de Venda" faria o `find` escolher a
-  // devolução, e o cancelamento aplicaria ao pedido uma situação de outro
-  // módulo. O critério passa a ser a descrição inteira, normalizada.
-  const porDescricao = modulos.find((modulo) =>
-    DESCRICOES_DE_PEDIDO_DE_VENDA.has(normalizar(modulo.descricao ?? '')),
+  const porDescricaoExata = modulos.find((modulo) =>
+    DESCRICOES_EXATAS.has(normalizar(modulo.descricao ?? '')),
   );
-  if (porDescricao) return porDescricao;
+  if (porDescricaoExata) return porDescricaoExata;
+
+  const candidatas = modulos.filter((modulo) => {
+    const descricao = normalizar(modulo.descricao ?? '');
+    if (!descricao.includes('pedido') || !descricao.includes('venda')) return false;
+    return !TERMOS_DE_OUTRO_MODULO.some((termo) => descricao.includes(termo));
+  });
+  // Ambiguidade não se resolve por ordem de lista: com duas candidatas, a
+  // escolha seria arbitrária, e errar aqui aplica ao pedido a situação de outro
+  // módulo. Melhor devolver nada e deixar a mensagem dizer isso.
+  if (candidatas.length === 1) return candidatas[0] ?? null;
 
   return modulos.find((modulo) => normalizar(modulo.nome ?? '') === 'vendas') ?? null;
 }

@@ -136,6 +136,42 @@ describe('encontrarModuloDePedidosDeVenda', () => {
     expect(encontrarModuloDePedidosDeVenda(modulos)).toBeNull();
   });
 
+  it('aceita descrição fora da lista exata, desde que não seja de outro módulo', () => {
+    // O critério largo continua existindo de propósito. Exigir igualdade contra
+    // as quatro formas que eu conheço trocaria "escolher errado" por "não achar
+    // nada" — e não achar nada quebra a compensação inteira, que é o caminho
+    // que não pode falhar.
+    const modulos = lerModulos({
+      data: [{ id: 42, nome: 'Comercial', descricao: 'Pedidos de venda e serviços' }],
+    })!;
+
+    expect(encontrarModuloDePedidosDeVenda(modulos)?.id).toBe(42);
+  });
+
+  it('com duas candidatas largas, não escolhe por ordem de lista', () => {
+    // Ambiguidade não se resolve pegando a primeira: errar aqui aplica ao
+    // pedido a situação de outro módulo. Sem `nome` de reserva, devolve null.
+    const modulos = lerModulos({
+      data: [
+        { id: 1, nome: 'Comercial', descricao: 'Pedidos de venda no balcão' },
+        { id: 2, nome: 'Externo', descricao: 'Pedidos de venda por representante' },
+      ],
+    })!;
+
+    expect(encontrarModuloDePedidosDeVenda(modulos)).toBeNull();
+  });
+
+  it('com duas candidatas largas, o nome "Vendas" desempata', () => {
+    const modulos = lerModulos({
+      data: [
+        { id: 1, nome: 'Comercial', descricao: 'Pedidos de venda no balcão' },
+        { id: 2, nome: 'Vendas', descricao: 'Pedidos de venda por representante' },
+      ],
+    })!;
+
+    expect(encontrarModuloDePedidosDeVenda(modulos)?.id).toBe(2);
+  });
+
   it('cai no nome quando a descrição não ajuda', () => {
     const modulos = lerModulos({ data: [{ id: 7, nome: 'Vendas', descricao: 'Módulo comercial' }] })!;
     expect(encontrarModuloDePedidosDeVenda(modulos)?.id).toBe(7);
