@@ -64,7 +64,7 @@ Base: `https://api.bling.com.br/Api/v3`. Autenticação: `Authorization: Bearer 
 | Contas a pagar/receber | `GET/POST /contas/pagar`, `GET /contas/receber` |
 | Contas financeiras | `GET /contas-financeiras` |
 | NF-e | `POST /nfe` |
-| Situações de módulo | `GET /situacoes/modulos` |
+| Situações de módulo | `GET /situacoes/modulos` (os **módulos**) e `GET /situacoes/modulos/{idModuloSistema}` (as **situações** de um deles) |
 
 O Ticket 10 não expande esse conjunto de recursos (fora de escopo — apenas
 OAuth/conexão/credenciais/webhook/sync); o inventário acima documenta o que o
@@ -213,6 +213,30 @@ o payload é montado e validado antes do envio.
 | `total`, `totalProdutos` | `readOnly` | o Bling calcula; o valor do cliente não é aceito |
 | `situacao` | `{ id, valor }` | ids são **por conta** (`GET /situacoes/modulos/{id}`). O ORBITA **não envia** `situacao`, para não fixar um número que pode não existir na conta |
 
+
+## Situações: dois recursos, não um (corrigido no Ticket 31)
+
+Conferido em 2026-09-02 contra o OpenAPI oficial
+(`https://developer.bling.com.br/build/assets/openapi-BvBfsn8J.json`, o mesmo
+documento que o portal `developer.bling.com.br/referencia` carrega).
+
+| Rota | Devolve | Schemas oficiais |
+|---|---|---|
+| `GET /situacoes/modulos` | os **módulos**: `{ id, nome, descricao, criarSituacoes }` | `SituacoesModuloBaseDTO` + `SituacoesModuloDTO` |
+| `GET /situacoes/modulos/{idModuloSistema}` | as **situações** daquele módulo: `{ id, nome, idHerdado?, cor? }` | `SituacoesDTO` + `SituacoesDadosDTO` |
+
+**A lista de módulos não carrega as situações dentro de si.** O adapter
+procurava um campo `situacoes` na resposta da primeira rota, não achava, e
+devolvia `[]` em **qualquer** conta — o que fazia a compensação da venda manual
+e o botão de cancelar pedido concluírem que a conta não tinha a situação
+"Cancelado". Divergência viva entre 30/08 e 02/09/2026.
+
+**Os ids de módulo são por conta.** `idModuloSistema` é `integer` com exemplo
+`12345678` no spec. O `9` que estava fixo no código era o exemplo de
+`SituacoesDTO.id` — id de *situação*, de outro schema. O módulo de pedidos de
+venda é descoberto pelo rótulo, que o spec exemplifica como `nome: "Vendas"`,
+`descricao: "Pedidos de Venda"`.
+
 **Resposta `201`:** apenas `data.id` (mais `alertas[]` e `rastreamento`
 opcionais). **Não existe `data.numero`** na criação.
 
@@ -260,7 +284,7 @@ Endpoints que o ORBITA realmente chama, extraídos de `src/services/bling.ts`:
 | Estoque | `/estoques`, `/estoques/saldos`, `/depositos` |
 | Financeiro | `/contas/pagar`, `/contas/receber`, `/contas-financeiras`, `/formas-pagamentos` |
 | Fiscal | `/nfe` |
-| Configuração | `/situacoes/modulos` |
+| Configuração | `/situacoes/modulos`, `/situacoes/modulos/{idModuloSistema}` |
 
 O cadastro do aplicativo precisa declarar escopos que cubram essa lista, **e** o
 usuário do Bling que autoriza precisa ter permissão sobre todos eles. Faltando

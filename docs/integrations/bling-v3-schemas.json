@@ -1323,6 +1323,59 @@
           "somenteLeitura": true
         }
       }
+    },
+    "SituacoesModuloBaseDTO": {
+      "obrigatorios": [
+        "id"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        }
+      }
+    },
+    "SituacoesModuloDTO": {
+      "obrigatorios": [
+        "criarSituacoes",
+        "descricao",
+        "nome"
+      ],
+      "campos": {
+        "nome": {
+          "tipo": "string"
+        },
+        "descricao": {
+          "tipo": "string"
+        },
+        "criarSituacoes": {
+          "tipo": "boolean"
+        }
+      }
+    },
+    "SituacoesDTO": {
+      "obrigatorios": [
+        "id",
+        "nome"
+      ],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "nome": {
+          "tipo": "string"
+        }
+      }
+    },
+    "SituacoesDadosDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "idHerdado": {
+          "tipo": "integer"
+        },
+        "cor": {
+          "tipo": "string"
+        }
+      }
     }
   },
   "escrita": {
@@ -1337,5 +1390,18 @@
     "POST /produtos": [
       "ProdutosDadosDTO"
     ]
-  }
+  },
+  "capturasAdicionais": [
+    {
+      "capturadoEm": "2026-09-02",
+      "url": "https://developer.bling.com.br/build/assets/openapi-BvBfsn8J.json",
+      "schemas": [
+        "SituacoesModuloBaseDTO",
+        "SituacoesModuloDTO",
+        "SituacoesDTO",
+        "SituacoesDadosDTO"
+      ],
+      "motivo": "Ticket 31: a descoberta das situacoes de pedido de venda passou a ter guarda de contrato."
+    }
+  ]
 }

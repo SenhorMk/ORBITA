@@ -1,7 +1,4 @@
 import { BlingPedido, BlingCliente, BlingProduto, BlingCategoria } from '../types';
-import { supabaseServer } from '../lib/supabaseServer';
-import { credentialsVault } from '../lib/integrations/credentialsVault';
-import { refreshBlingToken } from './blingOAuth';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { descreverErro } from '../lib/erroLegivel';
 import type {
@@ -17,8 +14,78 @@ import {
   type BlingCallResult,
   type PedidoVendaPayload,
 } from '../lib/integrations/bling/pedidoVendaContract';
+import {
+  encontrarModuloDePedidosDeVenda,
+  encontrarSituacaoDeCancelamento,
+  lerModulos,
+  lerSituacoes,
+  type Situacao,
+} from '../lib/integrations/bling/situacoesContract';
+import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
+import { FilaDeRequisicoes, esperar, type Dormir } from './filaDeRequisicoes';
+import type { TokenDoBling } from './blingToken';
+import { tokenDoBlingReal } from './blingCredenciaisSupabase';
+
+
+/**
+ * As peças externas que o cliente usa além do HTTP com o Bling.
+ *
+ * **Completas, sempre.** Uma versão anterior aceitava peças parciais e
+ * completava o resto com a infraestrutura real — o que permitia um teste rodar
+ * meio dublado e meio contra Supabase e cofre de verdade, sem nada avisando. É
+ * o pior dos dois mundos: nem isolado nem real.
+ *
+ * A construção normal usa exatamente esta composição, montada em
+ * `portasReais`. A porta não existe para o teste; ela existe porque este é o
+ * limite entre falar com o Bling e descobrir com que credencial falar.
+ */
+export interface PortasDoClienteBling {
+  /** Espera cancelável, usada na fila e no backoff de 429. */
+  readonly dormir: Dormir;
+  /** Obtenção e renovação do token, como uma capacidade só. */
+  readonly token: TokenDoBling;
+}
+
+/** A composição de produção, e a mesma que os testes trocam por inteiro. */
+export function portasReais(organizacaoId: string, conexaoId?: string): PortasDoClienteBling {
+  return { dormir: esperar, token: tokenDoBlingReal(organizacaoId, conexaoId) };
+}
 
 const orgClientCache = new Map<string, BlingClient>();
+
+
+
+/**
+ * Frase pública para uma falha HTTP do Bling, derivada **só do status**.
+ *
+ * Vocabulário fechado, escrito aqui: nada do corpo da resposta do provedor
+ * chega ao usuário — e **nada dele vai para o log tampouco**. O corpo sequer é
+ * lido: `falhaPublicaDoBling` cancela o fluxo da resposta. Uma versão anterior
+ * deste comentário dizia que ele "vai inteiro para o log", e era falso duas
+ * vezes: `registrarFalhaInterna` grava a classe do erro, não o conteúdo, e o
+ * texto nunca chega até lá.
+ *
+ * O status entra na frase de propósito — é número, não texto de terceiro, e é
+ * o que permite alguém correlacionar a queixa com o log, onde ele aparece no
+ * rótulo da operação.
+ */
+function mensagemPublicaDeStatusDoBling(status: number, oQue: string): string {
+  if (status === 404) {
+    return `O Bling não encontrou o recurso necessário para ${oQue} (HTTP 404).`;
+  }
+  if (status === 429) {
+    return `O Bling está limitando as requisições no momento (HTTP 429), e por isso não deu para ${oQue}. `
+      + 'Tente de novo em alguns instantes.';
+  }
+  if (status >= 500) {
+    return `O Bling está indisponível no momento (HTTP ${status}), e por isso não deu para ${oQue}. `
+      + 'Tente de novo em alguns instantes.';
+  }
+  if (status === 401 || status === 403) {
+    return `O Bling recusou o acesso necessário para ${oQue}. Reconecte a conta em "Conectar APIs".`;
+  }
+  return `O Bling recusou ${oQue} (HTTP ${status}).`;
+}
 
 /**
  * Corpo de `POST`/`PUT /produtos`, com os quatro obrigatorios do OpenAPI
@@ -64,19 +131,55 @@ export class BlingLeituraError extends Error {
 }
 
 export class BlingClient implements BlingPort {
+  /**
+   * Teto de uma **operação** conduzida por `comOrcamento`, do começo ao fim.
+   *
+   * Não é o teto de uma requisição: cobre todas as que a operação fizer, mais
+   * as esperas entre elas. Hoje são duas operações, e a maior tem três
+   * requisições — as duas leituras da descoberta e o `PATCH` que cancela o
+   * pedido. O nome anterior dizia "situações" e descrevia só a primeira.
+   *
+   * Generoso de propósito: `enforceRateLimit` espaça as requisições em 340 ms,
+   * o backoff de 429 pode somar segundos, e um teto apertado transformaria
+   * lentidão em falha justamente no caminho da compensação, que é o que não
+   * pode falhar por pressa.
+   */
+  static readonly TEMPO_LIMITE_OPERACAO_MS = 20_000;
+
   private baseUrl = process.env.BLING_API_BASE_URL || 'https://api.bling.com.br/Api/v3';
-  private oauthUrl = process.env.BLING_OAUTH_URL || 'https://www.bling.com.br/Api/v3/oauth/token';
 
-  private refreshTokenPromise: Promise<string> | null = null;
-  private lastRequestTime: number = 0;
-  private requestQueuePromise: Promise<void> = Promise.resolve();
+  private readonly fila: FilaDeRequisicoes;
+  private readonly portas: PortasDoClienteBling;
 
-  private readonly organizacaoId?: string;
-  private conexaoId?: string;
+  /**
+   * @param organizacaoId organização já verificada. **Obrigatória**: sem ela não
+   *   há credencial para descobrir, e deixar passar produziria consulta com
+   *   escopo vazio em vez de falha.
+   * @param conexaoId conexão já conhecida, quando o chamador a tem.
+   * @param portas composição alternativa — ver `comPortas`.
+   */
+  private constructor(organizacaoId: string, conexaoId?: string, portas?: PortasDoClienteBling) {
+    // O guarda existia antes em `getAccessToken` e em `forceRefreshToken`, e a
+    // extração da capacidade de token o levou junto. Sem ele, `organizacaoId`
+    // ausente virava `''` e o usuário recebia "Bling não conectado" para um
+    // defeito de escopo no chamador.
+    if (!organizacaoId) {
+      throw new Error('Organizacao verificada e obrigatoria para operacoes com o Bling.');
+    }
 
-  private constructor(organizacaoId?: string, conexaoId?: string) {
-    this.organizacaoId = organizacaoId;
-    this.conexaoId = conexaoId;
+    this.portas = portas ?? portasReais(organizacaoId, conexaoId);
+    this.fila = new FilaDeRequisicoes({ dormir: this.portas.dormir });
+  }
+
+  /**
+   * Cliente com portas trocadas, **sem cache**.
+   *
+   * O cache existe para reaproveitar token entre chamadas da mesma organização;
+   * um cliente com portas próprias não é o mesmo cliente, e guardá-lo lá
+   * contaminaria quem pedisse o normal depois.
+   */
+  static comPortas(organizacaoId: string, portas: PortasDoClienteBling): BlingClient {
+    return new BlingClient(organizacaoId, undefined, portas);
   }
 
   /**
@@ -113,91 +216,11 @@ export class BlingClient implements BlingPort {
    * organizacao criado no Ticket 28.
    */
   async forceRefreshToken(): Promise<string> {
-    if (!this.organizacaoId) {
-      throw new Error('Organizacao verificada e obrigatoria para operacoes com o Bling.');
-    }
-    return await this._forceRefreshTokenForOrg();
-  }
+    const resultado = await this.portas.token.renovar();
+    if (resultado._tag === 'TokenObtido') return resultado.token;
 
-  private async _forceRefreshTokenForOrg(): Promise<string> {
-    if (!this.organizacaoId) {
-      throw new Error('OrganizacaoId é obrigatório.');
-    }
-
-    // Localizar conexao_id se não especificado
-    if (!this.conexaoId) {
-      const { data: conn } = await supabaseServer
-        .from('conexoes_integracao')
-        .select('id')
-        .eq('organizacao_id', this.organizacaoId)
-        .eq('provedor', 'bling')
-        .maybeSingle();
-
-      if (conn?.id) {
-        this.conexaoId = conn.id;
-      }
-    }
-
-    if (!this.conexaoId) {
-      throw new Error('Nenhuma conexao Bling encontrada para esta organizacao.');
-    }
-
-    const { data: lockAcquired, error: lockError } = await supabaseServer
-      .rpc('acquire_conexao_token_lock', {
-        p_conexao_id: this.conexaoId,
-        p_timeout_seconds: 30,
-      });
-
-    if (lockError) {
-      console.error('Erro ao adquirir lock de conexao Bling:', lockError);
-    }
-
-    if (!lockAcquired) {
-      // Polling aguardando liberação
-      for (let i = 0; i < 15; i++) {
-        await new Promise(r => setTimeout(r, 2000));
-        const creds = await credentialsVault.getDecryptedCredentials(this.organizacaoId, this.conexaoId);
-        if (creds?.access_token && creds?.token_expires_at) {
-          if (new Date() < new Date(creds.token_expires_at as string)) {
-            return creds.access_token as string;
-          }
-        }
-      }
-      throw new Error('Timeout esperando outro processo renovar token Bling da organizacao.');
-    }
-
-    try {
-      const creds = await credentialsVault.getDecryptedCredentials(this.organizacaoId, this.conexaoId);
-      if (!creds?.client_id || !creds?.client_secret || !creds?.refresh_token) {
-        throw new Error('Credenciais Bling incompletas no cofre da organizacao.');
-      }
-
-      const refreshResult = await refreshBlingToken({
-        clientId: creds.client_id as string,
-        clientSecret: creds.client_secret as string,
-        refreshToken: creds.refresh_token as string,
-      });
-
-      if (refreshResult._tag === 'BlingOAuthTokenExchangeFailed') {
-        throw new Error(`Falha ao renovar token Bling: ${refreshResult.reason}`);
-      }
-
-      const newExpiresAt = new Date(Date.now() + refreshResult.expires_in * 1000).toISOString();
-
-      await credentialsVault.saveEncryptedCredentials(this.organizacaoId, this.conexaoId, {
-        client_id: creds.client_id,
-        client_secret: creds.client_secret,
-        access_token: refreshResult.access_token,
-        refresh_token: refreshResult.refresh_token,
-        token_expires_at: newExpiresAt,
-      });
-
-      return refreshResult.access_token;
-    } finally {
-      await supabaseServer.rpc('release_conexao_token_lock', {
-        p_conexao_id: this.conexaoId,
-      });
-    }
+    registrarFalhaInterna(`bling.token.${resultado.falha.motivo}`, resultado.falha.causa);
+    throw new Error(resultado.falha.mensagem);
   }
 
   // `_doForceRefreshToken` (renovacao por `user_id` em `integracoes_bling`) foi
@@ -218,70 +241,51 @@ export class BlingClient implements BlingPort {
    *    produziu os bugs dos tickets 26, 27 e 28: dois lados coerentes consigo
    *    mesmos e divergentes entre si.
    */
-  private async getAccessToken(): Promise<string> {
-    if (!this.organizacaoId) {
-      throw new Error('Organizacao verificada e obrigatoria para operacoes com o Bling.');
-    }
+  /**
+   * Token para a requisição, traduzindo a falha tipada em exceção.
+   *
+   * A tradução acontece **aqui** de propósito: `fetchWithAuth` e seus chamadores
+   * são a geração anterior, que sinaliza por exceção. A fronteira nova devolve
+   * valor; converter na borda evita espalhar um segundo estilo pelo cliente
+   * inteiro, e deixa o ponto de conversão visível num lugar só.
+   *
+   * A `causa` da falha vai para o log, não para a mensagem: ela guarda a
+   * rejeição original da porta, que pode carregar diagnóstico interno.
+   */
+  private async getAccessToken(signal?: AbortSignal): Promise<string> {
+    const resultado = await this.portas.token.obter(signal);
+    if (resultado._tag === 'TokenObtido') return resultado.token;
 
-    if (!this.conexaoId) {
-      const { data: conn } = await supabaseServer
-        .from('conexoes_integracao')
-        .select('id')
-        .eq('organizacao_id', this.organizacaoId)
-        .eq('provedor', 'bling')
-        .maybeSingle();
-
-      if (conn?.id) {
-        this.conexaoId = conn.id;
-      }
-    }
-
-    if (!this.conexaoId) {
-      throw new Error('Bling nao conectado para esta organizacao. Conclua os passos 1 e 2 em Integracoes.');
-    }
-
-    const creds = await credentialsVault.getDecryptedCredentials(this.organizacaoId, this.conexaoId);
-    if (!creds?.access_token) {
-      throw new Error('Bling nao conectado para esta organizacao. Conclua os passos 1 e 2 em Integracoes.');
-    }
-
-    if (creds.token_expires_at && new Date() >= new Date(creds.token_expires_at as string)) {
-      return await this.forceRefreshToken();
-    }
-
-    return creds.access_token as string;
+    registrarFalhaInterna(`bling.token.${resultado.falha.motivo}`, resultado.falha.causa);
+    throw new Error(resultado.falha.mensagem);
   }
 
-  // Fila para garantir no mínimo 2 segundos entre requisições
-  private async enforceRateLimit(): Promise<void> {
-    const delay = 340;
-    const previousPromise = this.requestQueuePromise;
-
-    let resolveNext: () => void;
-    this.requestQueuePromise = new Promise(res => { resolveNext = res; });
-
-    await previousPromise;
-
-    const now = Date.now();
-    const timeSinceLast = now - this.lastRequestTime;
-    const timeToWait = Math.max(0, delay - timeSinceLast);
-
-    if (timeToWait > 0) {
-      await new Promise(resolve => setTimeout(resolve, timeToWait));
-    }
-
-    this.lastRequestTime = Date.now();
-    resolveNext!();
+  /** Espaça as requisições ao Bling. Ver `FilaDeRequisicoes`. */
+  private async enforceRateLimit(signal?: AbortSignal): Promise<void> {
+    await this.fila.aguardarVez(signal);
   }
 
   // Fetch autenticado com auto-refresh em caso de 401 Unauthorized
   // Fetch autenticado com auto-refresh em caso de 401 Unauthorized e retry em caso de 429
   private async fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
-    let token = await this.getAccessToken();
+    // Quem passa `signal` está sob orçamento de tempo (ver `comOrcamento`).
+    //
+    // O que estas conferências garantem, exatamente: nenhuma **requisição
+    // nova**, nenhuma leitura de credencial nova e nenhuma tentativa nova
+    // começam depois do prazo, e as duas esperas puramente temporais — fila do
+    // rate limit e backoff de 429 — são interrompidas no meio.
+    //
+    // O que elas **não** garantem: uma renovação de token já iniciada segue até
+    // o fim, porque `forceRefreshToken` faz *polling* de lock com `await` de
+    // banco, que não é cancelável. Esse é o resíduo conhecido.
+    options.signal?.throwIfAborted();
+
+    let token = await this.getAccessToken(options.signal ?? undefined);
     let retries = 0;
 
     while (retries < 2) {
-      await this.enforceRateLimit();
+      options.signal?.throwIfAborted();
+      await this.enforceRateLimit(options.signal ?? undefined);
 
       const response = await fetch(url, {
         ...options,
@@ -294,14 +298,31 @@ export class BlingClient implements BlingPort {
       });
 
       if (response.status === 429) {
+        // A resposta é descartada, então o corpo precisa ser solto: no undici a
+        // conexão só volta ao pool depois de o corpo ser lido ou cancelado, e
+        // uma rajada de 429 deixaria corpos pendurados até esgotar o pool.
+        void response.body?.cancel().catch(() => {});
+
+        // Conferir **antes** de entrar no backoff: sem isto, uma chamada já
+        // fora do prazo dormia o intervalo inteiro só para descobrir na volta
+        // que não deveria ter esperado.
+        options.signal?.throwIfAborted();
         retries++;
         const retryAfter = parseInt(response.headers.get('Retry-After') || '1', 10);
         console.warn(`⚠️ Rate Limit atingido (HTTP 429). Aguardando retry com backoff...`);
-        await new Promise(resolve => setTimeout(resolve, retryAfter * 1000 * Math.pow(2, retries - 1)));
+        await this.portas.dormir(retryAfter * 1000 * Math.pow(2, retries - 1), options.signal ?? undefined);
         continue;
       }
 
       if ((response.status === 401 || response.status === 403) && retries === 0) {
+        // Mesmo motivo do 429: a resposta é descartada e o corpo precisa ser
+        // solto para a conexão voltar ao pool.
+        void response.body?.cancel().catch(() => {});
+
+        // A renovação é o passo mais caro e o **menos** interrompível: ela faz
+        // polling de lock com `await` de banco. Começar uma já fora do prazo é
+        // o pior gasto possível, e é o único ponto onde ainda dá para evitar.
+        options.signal?.throwIfAborted();
         console.warn(`⚠️ Bling v3 retornou HTTP ${response.status}. Renovando token OAuth v3 para atualizar escopos/permissões...`);
         try {
           token = await this.forceRefreshToken();
@@ -854,39 +875,63 @@ export class BlingClient implements BlingPort {
    * numérico, então casar pelo nome é o único caminho que a API oferece.
    */
   async cancelarPedidoVenda(idPedido: string): Promise<BlingCallResult<void>> {
-    let situacoes: unknown;
-    try {
-      situacoes = await this.getSituacoesModulo(9);
-    } catch (erro: unknown) {
+    // **Um** orçamento para a compensação inteira — descoberta e mutação.
+    //
+    // Antes o prazo cobria só a descoberta e terminava antes do `PATCH`, que é
+    // justamente o passo que cancela o pedido. Uma espera ou uma exceção ali
+    // deixava a venda manual sem devolver a instrução de cancelar à mão, que é
+    // o que impede a próxima tentativa de criar um segundo pedido órfão. O teto
+    // estava em toda parte menos onde importava.
+    return this.comOrcamento('bling.pedido.cancelar', 'cancelar o pedido', (prazo) =>
+      this.cancelarPedidoVendaComPrazo(idPedido, prazo),
+    );
+  }
+
+  private async cancelarPedidoVendaComPrazo(
+    idPedido: string,
+    prazo: AbortSignal,
+  ): Promise<BlingCallResult<void>> {
+    const situacoesResult = await this.descobrirSituacoesDePedidoDeVenda(prazo);
+    if (situacoesResult._tag === 'BlingFailed') return situacoesResult;
+
+    const cancelado = encontrarSituacaoDeCancelamento(situacoesResult.value);
+    if (!cancelado) {
+      // Só **aqui** a conta pode ser mencionada, porque só aqui a leitura deu
+      // certo: os módulos vieram, o módulo de vendas foi identificado, as
+      // situações foram lidas, e nenhuma se chama "Cancelado". A mensagem lista
+      // o que existe para que a pessoa confira sem adivinhar.
+      const nomes = situacoesResult.value.map((situacao) => situacao.nome).join(', ');
       return blingFailure(
         'RESOURCE_NOT_FOUND',
-        0,
-        `Não foi possível ler as situações de venda para cancelar: ${descreverErro(erro)}`,
+        200,
+        'Nenhuma situação de pedido de venda chamada "Cancelado" foi encontrada na conta do Bling. '
+          + `As situações cadastradas são: ${nomes || 'nenhuma'}.`,
       );
     }
 
-    const lista = Array.isArray(situacoes) ? (situacoes as Array<{ id?: number; nome?: string }>) : [];
-    const cancelado = lista.find((s) => {
-      const nome = (s.nome ?? '').trim().toLowerCase();
-      return nome === 'cancelado' || nome === 'cancelada';
-    });
-
-    if (!cancelado?.id) {
-      return blingFailure(
-        'RESOURCE_NOT_FOUND',
-        0,
-        'A conta do Bling não tem uma situação de venda chamada "Cancelado".',
-      );
-    }
+    // Entre a descoberta e a mutação houve leitura de corpo e busca em lista.
+    // Se o prazo estourou nesse meio, o `PATCH` não chega a sair: mandar uma
+    // mutação já fora do orçamento é o pior caso, porque o efeito aconteceria
+    // sem ninguém esperando a resposta.
+    prazo.throwIfAborted();
 
     const url = `${this.baseUrl}/pedidos/vendas/${encodeURIComponent(idPedido)}/situacoes/${encodeURIComponent(String(cancelado.id))}`;
     const response = await this.fetchWithAuth(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
+      signal: prazo,
     });
 
     if (!response.ok) {
-      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+      // Também redigido: esta mensagem sai na resposta pública da venda manual,
+      // dentro do "o cancelamento automático também falhou (…)". O que a pessoa
+      // precisa dali é a instrução de cancelar à mão, e ela não depende do
+      // texto do provedor.
+      return this.falhaPublicaDoBling(
+        'bling.pedido.cancelar',
+        'cancelar o pedido',
+        response,
+      );
     }
 
     return { _tag: 'BlingOk', value: undefined };
@@ -1072,26 +1117,224 @@ export class BlingClient implements BlingPort {
     }
   }
 
-  // Buscar lista de situações de um módulo (9 = Pedidos de Venda)
-  async getSituacoesModulo(idModulo: number = 9): Promise<unknown> {
-    const url = `${this.baseUrl}/situacoes/modulos`;
-    const response = await this.fetchWithAuth(url);
+  /**
+   * As situações do módulo de **pedidos de venda** desta conta.
+   *
+   * Ticket 31. A versão anterior chamava `GET /situacoes/modulos` — a lista de
+   * **módulos** — e procurava um campo `situacoes` dentro de cada módulo. Esse
+   * campo não existe nessa rota, então a função devolvia `[]` em **qualquer**
+   * conta, e quem dependia dela concluía que a conta não tinha a situação
+   * procurada. Dois recursos ficaram sem funcionar por causa disso: a
+   * compensação da venda manual e o botão de cancelar pedido da listagem.
+   *
+   * São duas chamadas porque são dois recursos, e o id do módulo é por conta:
+   *
+   *   1. `GET /situacoes/modulos` → acha o módulo de pedidos de venda pelo nome;
+   *   2. `GET /situacoes/modulos/{idModuloSistema}` → as situações dele.
+   *
+   * Cada ponto de falha tem mensagem própria. A conta do lojista só é
+   * mencionada quando a leitura funcionou e o dado realmente não está lá.
+   */
+  async obterSituacoesDePedidoDeVenda(): Promise<BlingCallResult<readonly Situacao[]>> {
+    return this.comOrcamento('bling.situacoes.descobrir', 'ler as situações de venda', (prazo) =>
+      this.descobrirSituacoesDePedidoDeVenda(prazo),
+    );
+  }
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Erro na API Bling ao buscar situações (HTTP ${response.status}): ${errorText}`);
+  /**
+   * Roda uma conversa com o Bling sob **um** orçamento de tempo, devolvendo
+   * falha tipada em vez de exceção.
+   *
+   * Duas coisas que o `AbortSignal` sozinho não faz, e que são o motivo deste
+   * invólucro existir:
+   *
+   * **1. O prazo precisa valer fora do `fetch`.** `fetchWithAuth` lê a
+   * credencial no cofre (rede + banco), espera na fila do rate limit, dorme no
+   * backoff de 429 e pode renovar o token — que faz *polling* de até 30 s
+   * esperando um lock. Um `signal` de `fetch` não interrompe nada disso, então
+   * o prazo corre por fora, contra a operação inteira. O `signal` continua indo
+   * ao `fetch` porque é ele que solta o socket.
+   *
+   * **2. `fetchWithAuth` lança.** Em 401/403 ele tenta renovar o token, e a
+   * falha da renovação vira exceção. Quem chama isto de dentro de um tratamento
+   * de erro — a compensação da venda manual — rejeitaria de dentro do próprio
+   * `catch`, e o usuário perderia a instrução de cancelar o pedido à mão.
+   *
+   * **Limite conhecido:** o que já estava em voo quando o prazo estoura termina
+   * sozinho, fora do ciclo da requisição — não dá para cancelar um `await` de
+   * banco. O que este teto garante é **resposta** dentro do orçamento, não
+   * interrupção do trabalho. `fetchWithAuth` confere o `signal` antes de cada
+   * tentativa, então nenhuma requisição **nova** começa depois do prazo.
+   *
+   * A mensagem do erro nunca entra na resposta: aqui dentro cai o que o cofre e
+   * o Postgres lançam, e `descreverErro` de um erro do Postgres carrega
+   * `details` e `hint` — valor de linha (CWE-209, a política do ticket 22,
+   * critério 13).
+   */
+  private async comOrcamento<T>(
+    operacao: string,
+    oQue: string,
+    trabalho: (prazo: AbortSignal) => Promise<BlingCallResult<T>>,
+  ): Promise<BlingCallResult<T>> {
+    // `AbortController` próprio em vez de `AbortSignal.timeout`: o timer deste
+    // dá para cancelar. Com `AbortSignal.timeout` o temporizador continua vivo
+    // até disparar mesmo quando a chamada terminou em 50 ms, e cada chamada
+    // deixava um timer e um listener pendurados — irrelevante numa, somado numa
+    // sincronização inteira, não.
+    const controle = new AbortController();
+    const temporizador = setTimeout(
+      () => controle.abort(new Error(`prazo esgotado ao ${oQue} no Bling`)),
+      BlingClient.TEMPO_LIMITE_OPERACAO_MS,
+    );
+    const prazo = controle.signal;
+
+    let aoAbortar: (() => void) | undefined;
+
+    try {
+      return await Promise.race([
+        trabalho(prazo),
+        new Promise<never>((_, rejeitar) => {
+          aoAbortar = () => rejeitar(prazo.reason);
+          prazo.addEventListener('abort', aoAbortar, { once: true });
+        }),
+      ]);
+    } catch (erro: unknown) {
+      registrarFalhaInterna(operacao, erro);
+      return blingFailure(
+        'UNKNOWN_ERROR',
+        0,
+        `Não foi possível falar com o Bling para ${oQue}. `
+          + 'Confira a conexão em "Conectar APIs" e tente de novo.',
+      );
+    } finally {
+      clearTimeout(temporizador);
+      if (aoAbortar) prazo.removeEventListener('abort', aoAbortar);
+    }
+  }
+
+  private async descobrirSituacoesDePedidoDeVenda(
+    prazo: AbortSignal,
+  ): Promise<BlingCallResult<readonly Situacao[]>> {
+    const respostaModulos = await this.fetchWithAuth(`${this.baseUrl}/situacoes/modulos`, { signal: prazo });
+    if (!respostaModulos.ok) {
+      return this.falhaPublicaDoBling(
+        'bling.situacoes.ler-modulos',
+        'ler as situações de venda',
+        respostaModulos,
+      );
     }
 
-    const data = await response.json();
-    // Filtra para retornar apenas as situações do módulo especificado
-    if (data && data.data && Array.isArray(data.data)) {
-      const modulo = (data.data as Array<{ id: number; situacoes?: unknown }>).find((m) => m.id === idModulo);
-      if (modulo && modulo.situacoes) {
-        return modulo.situacoes;
-      }
+    const modulos = lerModulos(await this.lerCorpoJson(respostaModulos));
+    if (modulos === null) {
+      return blingFailure(
+        'INVALID_RESPONSE',
+        respostaModulos.status,
+        'O Bling respondeu a lista de módulos em um formato que o ORBITA não reconhece.',
+      );
     }
 
-    return [];
+    const modulo = encontrarModuloDePedidosDeVenda(modulos);
+    if (!modulo) {
+      return blingFailure(
+        'RESOURCE_NOT_FOUND',
+        respostaModulos.status,
+        'O ORBITA não identificou o módulo de pedidos de venda entre os módulos que o Bling devolveu.',
+      );
+    }
+
+    const respostaSituacoes = await this.fetchWithAuth(
+      `${this.baseUrl}/situacoes/modulos/${encodeURIComponent(String(modulo.id))}`,
+      { signal: prazo },
+    );
+    if (!respostaSituacoes.ok) {
+      return this.falhaPublicaDoBling(
+        'bling.situacoes.ler-situacoes',
+        'ler as situações de venda',
+        respostaSituacoes,
+      );
+    }
+
+    const situacoes = lerSituacoes(await this.lerCorpoJson(respostaSituacoes));
+    if (situacoes === null) {
+      return blingFailure(
+        'INVALID_RESPONSE',
+        respostaSituacoes.status,
+        'O Bling respondeu as situações do módulo de vendas em um formato que o ORBITA não reconhece.',
+      );
+    }
+
+    return { _tag: 'BlingOk', value: situacoes };
+  }
+
+  /**
+   * Resposta HTTP recusada pelo Bling, traduzida em falha **pública** —
+   * ou seja, com a razão do provedor removida.
+   *
+   * Serve tanto leitura quanto mutação: os dois `GET` da descoberta e o
+   * `PATCH` que cancela o pedido passam por aqui. O nome anterior dizia
+   * "leitura" e já era falso quando o `PATCH` entrou.
+   *
+   * `parseBlingFailure` monta a mensagem a partir do corpo que o provedor
+   * mandou: `description`/`message` do envelope, os `fields[]` — que ecoam o
+   * que foi enviado — e, quando o corpo não é o envelope da v3, os primeiros
+   * 300 caracteres crus. Isso é **texto livre de terceiro** indo para uma
+   * resposta pública: uma página de erro de proxy, um host interno, um valor
+   * submetido de volta. Publicar isso é o mesmo risco que a política do ticket
+   * 22 (critério 13) fechou do lado do Postgres, só que pela outra ponta.
+   *
+   * A mensagem pública é montada a partir do **status** — número, vocabulário
+   * fechado —, e nunca do corpo. O `type` também não sai: é `error.type` do
+   * corpo, string livre do provedor.
+   *
+   * **O que fica registrado, dito com precisão.** Uma versão anterior deste
+   * comentário afirmava que "a falha completa vai para o log", e era falso:
+   * `registrarFalhaInterna` grava a **classe** do erro e um código técnico
+   * validado, não o conteúdo. O corpo do provedor, portanto, **não é guardado
+   * em lugar nenhum** — some da resposta e some do log.
+   *
+   * Isso é escolha, não descuido: guardar texto livre de terceiro num log que
+   * ninguém redige seria trocar uma superfície de vazamento por outra. O que dá
+   * para correlacionar é o **status**, que entra no rótulo da operação. Se um
+   * dia o diagnóstico exigir mais, o lugar de decidir é o ticket 32, junto com
+   * os outros chamadores de `parseBlingFailure`.
+   *
+   * @param operacao rótulo da telemetria — `bling.situacoes.ler-modulos`,
+   *   `bling.situacoes.ler-situacoes`, `bling.pedido.cancelar`. Identifica o
+   *   **passo**, não o método público que o chamou, e recebe o status junto.
+   * @param oQue trecho em infinitivo que entra na frase mostrada ao usuário
+   *   ("não deu para ${oQue}"). É texto nosso, nunca do provedor.
+   */
+  private falhaPublicaDoBling(
+    operacao: string,
+    oQue: string,
+    response: Response,
+  ): BlingCallResult<never> {
+    const { status } = response;
+
+    // O corpo **não é lido**. Antes vinha um `await response.text()` de cada
+    // chamador, só para o valor ser descartado aqui — trabalho e memória gastos
+    // com um texto que não vai para lugar nenhum, e um `await` a mais que pode
+    // falhar por conta própria (corpo truncado, conexão caída) e mascarar um
+    // status HTTP que já estava perfeitamente conhecido.
+    //
+    // Cancelar o fluxo em vez de consumi-lo solta a conexão de imediato. A
+    // rejeição é **observada e engolida de propósito**: se o cancelamento
+    // falhar, isso não pode virar rejeição solta nem, pior, mascarar um status
+    // que já é conhecido. O motivo do fracasso do cancelamento não muda nada do
+    // que o chamador precisa saber.
+    void response.body?.cancel().catch(() => {});
+
+    registrarFalhaInterna(`${operacao}.http-${status}`, new Error(`HTTP ${status}`));
+    return blingFailure(`HTTP_${status}`, status, mensagemPublicaDeStatusDoBling(status, oQue));
+  }
+
+  /** Corpo JSON de uma resposta `ok`, ou `undefined` quando não é JSON. */
+  private async lerCorpoJson(response: Response): Promise<unknown> {
+    try {
+      return await response.json();
+    } catch {
+      return undefined;
+    }
   }
 
   // ── Contas a pagar com contrato oficial e falha tipada (Ticket 33) ─────

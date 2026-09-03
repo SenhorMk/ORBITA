@@ -40,7 +40,7 @@ import {
  */
 let fronteira = new FronteiraDeAutorizacao();
 const falharCom = new Error('duplicate key value violates unique constraint "produtos_bling_id_key"');
-const getSituacoesModuloMock = vi.fn();
+const obterSituacoesMock = vi.fn();
 const getClientesMock = vi.fn();
 const createContatoMock = vi.fn();
 const deleteContatoMock = vi.fn();
@@ -58,7 +58,7 @@ vi.mock('@/lib/supabaseServer', () => ({
 vi.mock('@/services/bling', () => ({
   bling: {
     forVerifiedOrganization: () => ({
-      getSituacoesModulo: getSituacoesModuloMock,
+      obterSituacoesDePedidoDeVenda: obterSituacoesMock,
       getClientes: getClientesMock,
       createContato: createContatoMock,
       deleteContato: deleteContatoMock,
@@ -136,7 +136,7 @@ function textoImpresso(espia: { mock: { calls: unknown[][] } }): string {
 async function cenarioLimpo(): Promise<void> {
   vi.clearAllMocks();
   for (const duble of [
-    getSituacoesModuloMock,
+    obterSituacoesMock,
     getClientesMock,
     createContatoMock,
     deleteContatoMock,
@@ -166,7 +166,7 @@ describe('critério 13 — nenhuma rota migrada devolve diagnóstico interno', (
   afterEach(() => vi.restoreAllMocks());
 
   it('GET /api/bling/situacoes', async () => {
-    getSituacoesModuloMock.mockRejectedValue(falharCom);
+    obterSituacoesMock.mockRejectedValue(falharCom);
     const { GET } = await import('./bling/situacoes/route');
 
     const resposta = await GET(requisicao('https://orbita.test/api/bling/situacoes'));
@@ -308,7 +308,7 @@ describe('critério 13 — os ramos que a primeira auditoria não olhou', () => 
 
   it('GET /api/bling/situacoes não imprime o erro cru no console', async () => {
     const console_error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    getSituacoesModuloMock.mockRejectedValue(falharCom);
+    obterSituacoesMock.mockRejectedValue(falharCom);
     const { GET } = await import('./bling/situacoes/route');
 
     await GET(requisicao('https://orbita.test/api/bling/situacoes'));
