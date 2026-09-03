@@ -12,10 +12,14 @@ import type { TokenDoBling } from './blingToken';
  * a descoberta das situações; aqui é o comportamento do `enforceRateLimit`
  * quando um participante desiste no meio.
  *
+ * **A fila espaça, não serializa.** Ela garante a ordem em que as vezes são
+ * tomadas e o intervalo mínimo entre elas; a requisição HTTP segue sozinha
+ * depois, e duas podem estar no ar ao mesmo tempo.
+ *
  * Existe por causa de uma regressão que **passou** por 1441 testes: ao tornar a
  * fila abortável, quem desistia resolvia a própria porta na hora, e o sucessor
- * ultrapassava um predecessor que ainda estava requisitando. Nenhum teste
- * exercitava três chamadas concorrentes, então a ordem quebrou em silêncio.
+ * tomava a vez antes da hora dele. Nenhum teste exercitava três participantes,
+ * então a ordem quebrou em silêncio.
  */
 
 const fake = new BlingFake();
@@ -74,12 +78,16 @@ afterAll(async () => {
 });
 
 describe('o prazo alcança o token e o backoff', () => {
-  it('a renovação fica dentro da seam, e não é chamada depois do prazo', async () => {
+  it('a capacidade de token fica dentro da seam, e não entrega token depois do prazo', async () => {
     // Obtenção e renovação são **a mesma** capacidade, então dublar uma sem a
     // outra deixou de ser possível — era isso que obrigava a substituir método
     // por método com `Object.defineProperty` e fazia a prova desviar da linha
     // em questão.
-    let renovacoes = 0;
+    // O contador mede o que a capacidade **concluiu**, e o nome diz isso: a
+    // versão anterior chamava isto de `renovacoes` e contava o término de
+    // `obter`, que não é a mesma coisa. A prova de que a renovação em si não
+    // começa fora do prazo está em `blingToken.test.ts`, onde ela é observável.
+    let tokensEntregues = 0;
 
     const cliente = BlingClient.comPortas(`${ORG}-${Math.random()}`, portasDeTeste({
       token: {
@@ -87,7 +95,7 @@ describe('o prazo alcança o token e o backoff', () => {
           // Simula o custo real: a leitura da credencial é ida à rede.
           await new Promise((r) => setTimeout(r, 300));
           signal?.throwIfAborted();
-          renovacoes += 1;
+          tokensEntregues += 1;
           return 'token-renovado';
         },
       },
@@ -101,11 +109,11 @@ describe('o prazo alcança o token e o backoff', () => {
       expect(resultado._tag).toBe('BlingFailed');
 
       // Esperar o trabalho de fundo assentar antes de afirmar: a chamada volta
-      // em 80 ms, antes de a credencial responder, e `renovacoes === 0`
-      // apareceria de qualquer jeito. A asserção seria sobre o relógio.
+      // em 80 ms, antes de a credencial responder, e o contador ficaria em zero
+      // de qualquer jeito. A asserção seria sobre o relógio.
       await new Promise((r) => setTimeout(r, 600));
 
-      expect(renovacoes).toBe(0);
+      expect(tokensEntregues).toBe(0);
       expect(fake.recebidas).toHaveLength(0);
     } finally {
       Object.defineProperty(BlingClient, 'TEMPO_LIMITE_OPERACAO_MS', { value: original, configurable: true });

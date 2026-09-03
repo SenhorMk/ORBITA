@@ -23,7 +23,8 @@ import {
 } from '../lib/integrations/bling/situacoesContract';
 import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 import { FilaDeRequisicoes, esperar, type Dormir } from './filaDeRequisicoes';
-import { TokenDoBlingSupabase, type TokenDoBling } from './blingToken';
+import type { TokenDoBling } from './blingToken';
+import { tokenDoBlingReal } from './blingCredenciaisSupabase';
 
 
 /**
@@ -47,7 +48,7 @@ export interface PortasDoClienteBling {
 
 /** A composição de produção, e a mesma que os testes trocam por inteiro. */
 export function portasReais(organizacaoId: string, conexaoId?: string): PortasDoClienteBling {
-  return { dormir: esperar, token: new TokenDoBlingSupabase({ organizacaoId, conexaoId }) };
+  return { dormir: esperar, token: tokenDoBlingReal(organizacaoId, conexaoId) };
 }
 
 const orgClientCache = new Map<string, BlingClient>();
