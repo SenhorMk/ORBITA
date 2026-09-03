@@ -115,6 +115,16 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
  * (migration 53) faz tudo de uma vez: ou a venda inteira existe, ou nada
  * existe. A RPC revalida cliente e produtos contra a organização e recusa
  * estoque negativo.
+ *
+ * **A corrida com o webhook (ticket 30, migration 57).** Quando a venda é
+ * sincronizada, o pedido nasce no Bling **antes** desta gravação — a ordem não
+ * pode ser invertida, porque o `bling_id` só existe depois da criação remota.
+ * O Bling então dispara `order.created`, e o webhook grava a linha em
+ * `pedidos` em menos de um segundo, quase sempre **primeiro**. Por isso a RPC
+ * **assume** a linha do webhook em vez de inserir outra: mesma organização,
+ * mesmo `bling_id`, mesmo pedido. `uq_pedidos_org_bling` continua no lugar, e
+ * assumir uma linha que **já é** venda manual continua sendo `23505` — que cai
+ * no `catch` do handler e dispara a compensação, como qualquer outra falha.
  */
 async function persistVenda(input: PersistManualOrderInput): Promise<{ pedidoId: string }> {
   const { data, error } = await supabaseServer.rpc('registrar_venda_manual', {

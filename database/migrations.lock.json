@@ -295,6 +295,11 @@
       "order": 59,
       "path": "../database/56_baixa_estoque_com_ator.sql",
       "sha256": "ebf80da5afc22f8672e2534156ce30c2932763ac1f5647e37d2b68eb968787da"
+    },
+    {
+      "order": 60,
+      "path": "../database/57_venda_manual_assume_linha_do_webhook.sql",
+      "sha256": "e4df539ca872ce14842720375c9513d4cf63f3fd585bfb55d063dd7bec3d419d"
     }
   ],
   "references": [
