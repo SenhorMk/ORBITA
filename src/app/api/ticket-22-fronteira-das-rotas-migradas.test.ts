@@ -115,6 +115,35 @@ describe('GET /api/bling/situacoes — portão puro removido', () => {
     const { GET } = await import('./bling/situacoes/route');
     expect((await GET(requisicao('https://orbita.test/api/bling/situacoes'))).status).toBe(200);
   });
+
+  // Ticket 31 — o status da rota diz de quem é o problema.
+  //
+  // `502` para toda falha era largo demais: alerta que classifica 5xx como
+  // indisponibilidade do provedor acusaria o Bling fora do ar em casos onde
+  // ele respondeu 200 a tudo, e o diagnóstico começaria no lugar errado.
+  it('devolve 502 quando o Bling recusou de verdade', async () => {
+    sessaoDe(MEMBER_ID);
+    vinculoDe('member');
+    obterSituacoesMock.mockResolvedValue({
+      _tag: 'BlingFailed',
+      failure: { _tag: 'BlingProviderFailure', type: 'HTTP_503', status: 503, message: 'indisponível', duplicateSale: false },
+    });
+    const { GET } = await import('./bling/situacoes/route');
+    expect((await GET(requisicao('https://orbita.test/api/bling/situacoes'))).status).toBe(502);
+  });
+
+  it('devolve 500 quando a falha é deste lado, e não do Bling', async () => {
+    // Módulo de vendas não identificado: o Bling respondeu 200 a tudo, e o
+    // status da falha é o da leitura que deu certo.
+    sessaoDe(MEMBER_ID);
+    vinculoDe('member');
+    obterSituacoesMock.mockResolvedValue({
+      _tag: 'BlingFailed',
+      failure: { _tag: 'BlingProviderFailure', type: 'RESOURCE_NOT_FOUND', status: 200, message: 'módulo não identificado', duplicateSale: false },
+    });
+    const { GET } = await import('./bling/situacoes/route');
+    expect((await GET(requisicao('https://orbita.test/api/bling/situacoes'))).status).toBe(500);
+  });
 });
 
 describe('POST /api/produtos/delete — papel legado virou capacidade', () => {

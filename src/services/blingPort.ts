@@ -94,6 +94,19 @@ export interface BlingPort {
    * Substitui `getSituacoesModulo(idModulo)`, que lia a rota errada e devolvia
    * `[]` em qualquer conta. O id do módulo é por conta e passou a ser
    * descoberto, então não há mais parâmetro a passar.
+   *
+   * **Nunca lança:** devolve `BlingCallResult`, e o ramo `BlingFailed` precisa
+   * ser tratado. Envolver a chamada em `try/catch` e seguir com a lista vazia
+   * reproduz o defeito de origem deste ticket, em que lista vazia por engano
+   * virava "a conta não tem a situação".
+   *
+   * **Lista vazia é resposta legítima:** significa módulo encontrado e sem
+   * situações cadastradas. Formato irreconhecível vem como falha, não como
+   * `[]` — a distinção é o conserto do ticket.
+   *
+   * **Tem teto de tempo próprio** (`BlingClient.TEMPO_LIMITE_OPERACAO_MS`), que
+   * cobre as duas requisições e as esperas entre elas. O chamador não precisa
+   * impor o dele.
    */
   obterSituacoesDePedidoDeVenda(): Promise<BlingCallResult<readonly Situacao[]>>;
 }
