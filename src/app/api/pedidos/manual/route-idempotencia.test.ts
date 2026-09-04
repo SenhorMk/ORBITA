@@ -28,7 +28,7 @@
  *      a ROTA usa essa atomicidade corretamente — não é a mesma prova,
  *      complementa ela.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project-ref.supabase.co';
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'public-key-12345678901234567890';
@@ -290,28 +290,6 @@ function requisicao(overrides: Partial<ReturnType<typeof corpoValido>> & Record<
   });
 }
 
-/**
- * Resolve uma promessa da rota avançando o relógio falso em FATIAS.
- *
- * A janela de confirmação usa `setTimeout` real (`dormirDeVerdade`), mas o
- * handler só chega até ela depois de operações assíncronas nativas — entre
- * elas o `crypto.subtle.digest` do fingerprint (5ª rodada) —, que não resolvem
- * numa única drenagem de microtasks. Avançar 3s de uma vez, antes de o código
- * ter registrado o `setTimeout`, passa por cima de um timer que ainda não
- * existe e a promessa nunca resolve. Fatiar o avanço dá ao código a chance de
- * alcançar cada espera.
- */
-async function resolverAvancandoORelogio<T>(promessa: Promise<T>): Promise<T> {
-  let pendente = true;
-  const observada = promessa.finally(() => {
-    pendente = false;
-  });
-  for (let fatia = 0; fatia < 40 && pendente; fatia += 1) {
-    await vi.advanceTimersByTimeAsync(200);
-  }
-  return observada;
-}
-
 describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real)', () => {
   beforeEach(() => {
     tentativasPorReferencia.clear();
@@ -320,18 +298,23 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
     modoRegistrarVenda = 'ambiguo';
     criarPedidoLanca = null;
     criarPedidoFalha = null;
-    vi.useFakeTimers();
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
+  // Este teste e o de concorrência abaixo atravessam a janela de confirmação
+  // REAL (0/400/800/1600ms ≈ 2,8s). A versão anterior usava relógio falso para
+  // pular essa espera, com um laço que avançava o tempo em fatias — e isso
+  // ERA FRÁGIL: o laço tinha um teto de iterações, e quando a máquina estava
+  // carregada (a CI, por exemplo) a promessa ainda não tinha resolvido ao fim
+  // dele; o `await` seguinte então esperava para sempre, porque ninguém mais
+  // avançava o relógio. Passava aqui e estourava 15s na CI.
+  //
+  // Esperar 2,8s de verdade é lento e determinístico. A troca vale: o que se
+  // prova aqui é comportamento sob ambiguidade, não velocidade.
   it('ambiguidade nunca resolvida: a ROTA devolve estadoIndeterminado, e a retentativa com a MESMA referência não chama o Bling de novo', async () => {
     const { POST } = await import('./route');
 
     // Primeira chamada: dispara a janela de confirmação real (0/400/800/1600ms).
-    const respostaPrimeira = await resolverAvancandoORelogio(POST(requisicao()));
+    const respostaPrimeira = await POST(requisicao());
     const corpoPrimeira = await respostaPrimeira.json();
 
     expect(respostaPrimeira.status).toBe(500);
@@ -348,7 +331,7 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
     expect(corpoSegunda.estadoIndeterminado).toBe(true);
     // O ponto inteiro do teste: NENHUMA segunda chamada a criarPedidoVenda.
     expect(chamadasDeCriarPedido).toBe(1);
-  });
+  }, 30000);
 
   it('4ª rodada — DUAS requisições HTTP SIMULTÂNEAS com a MESMA referenciaLocal: uma única chamada ao Bling', async () => {
     modoRegistrarVenda = 'sucesso';
@@ -463,7 +446,7 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
     const { POST } = await import('./route');
 
     // O pedido PODE ter sido criado no Bling — a resposta é que não chegou.
-    const primeira = await resolverAvancandoORelogio(POST(requisicao({ referenciaLocal: referencia })));
+    const primeira = await POST(requisicao({ referenciaLocal: referencia }));
     const corpoPrimeira = await primeira.json();
 
     expect(primeira.status).toBe(500);
@@ -521,7 +504,7 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
       const referencia = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
       const { POST } = await import('./route');
 
-      const primeira = await resolverAvancandoORelogio(POST(requisicao({ referenciaLocal: referencia })));
+      const primeira = await POST(requisicao({ referenciaLocal: referencia }));
       const corpoPrimeira = await primeira.json();
 
       expect(corpoPrimeira.estadoIndeterminado).toBe(true);
@@ -570,12 +553,10 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
     modoRegistrarVenda = 'ambiguo';
     const { POST } = await import('./route');
 
-    const [respostaA, respostaB] = await resolverAvancandoORelogio(
-      Promise.all([
-        POST(requisicao({ referenciaLocal: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })),
-        POST(requisicao({ referenciaLocal: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' })),
-      ]),
-    );
+    const [respostaA, respostaB] = await Promise.all([
+      POST(requisicao({ referenciaLocal: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })),
+      POST(requisicao({ referenciaLocal: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' })),
+    ]);
     const [corpoA, corpoB] = await Promise.all([respostaA.json(), respostaB.json()]);
 
     const respostas = [
@@ -591,7 +572,7 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
     // primeira estiver irresolvida.
     expect(chamadasDeCriarPedido).toBe(1);
     expect(recusadas[0].corpo.error).toContain('venda igual a esta');
-  });
+  }, 30000);
 
   it('7ª rodada — resolvida a pendência, uma segunda venda legitimamente idêntica volta a ser possível', async () => {
     modoRegistrarVenda = 'sucesso';
