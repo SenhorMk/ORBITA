@@ -63,7 +63,7 @@ insert into public.membros_organizacao (organizacao_id, user_id, papel)
 values ('59100000-0000-4000-8000-000000000001', '59000000-0000-4000-8000-000000000001', 'owner'),
        ('59100000-0000-4000-8000-000000000002', '59000000-0000-4000-8000-000000000002', 'owner');
 
-select plan(52);
+select plan(69);
 
 -- ----------------------------------------------------------------------------
 -- 1-4. Primeira reivindicação: tentativa nova.
@@ -275,7 +275,7 @@ select is(
     '32. authenticated NÃO executa a reivindicação — só a service role, pelo servidor'
 );
 select is(
-    has_function_privilege('authenticated', 'public.concluir_tentativa_venda_manual(uuid,uuid,text,uuid,text)', 'EXECUTE'),
+    has_function_privilege('authenticated', 'public.concluir_tentativa_venda_manual(uuid,uuid,text,uuid,text,text)', 'EXECUTE'),
     false,
     '33. authenticated NÃO executa a conclusão'
 );
@@ -430,6 +430,148 @@ select is(
     (select referencia_pendente from pendencia_de_outra_org),
     null,
     '52. a pendência de outra organização não bloqueia: o recorte é por organização'
+);
+
+-- ----------------------------------------------------------------------------
+-- 53-58. EXCLUSÃO MÚTUA DE PENDÊNCIA (7ª rodada), agora imposta pelo BANCO.
+--        A guarda da 6ª rodada era inserir-consultar-apagar, que não vale sob
+--        concorrência: em READ COMMITTED cada transação não enxerga a linha
+--        não commitada da outra. O índice único PARCIAL substitui isso.
+-- ----------------------------------------------------------------------------
+select has_index(
+    'public', 'tentativas_venda_manual', 'uq_tentativas_venda_manual_pendencia_por_fingerprint',
+    '53. existe índice único parcial de pendência por fingerprint'
+);
+select is(
+    (select indisunique from pg_index where indexrelid = 'public.uq_tentativas_venda_manual_pendencia_por_fingerprint'::regclass),
+    true,
+    '54. …e ele é ÚNICO, não apenas um índice de busca'
+);
+select isnt(
+    (select indpred from pg_index where indexrelid = 'public.uq_tentativas_venda_manual_pendencia_por_fingerprint'::regclass),
+    null,
+    '55. …e é PARCIAL — é o predicado que libera a venda idêntica depois de resolvida'
+);
+
+create temp table exclusao_primeira as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'exclusao-ref-1', 'fingerprint-exclusao', 'valores-exclusao'
+);
+select isnt((select tentativa_id from exclusao_primeira), null, '56. primeira referência do fingerprint: autorizada');
+
+-- A inserção direta de uma segunda pendência para o mesmo fingerprint é
+-- recusada pelo próprio banco, sem depender de nenhuma função.
+select throws_ok(
+    $q$insert into public.tentativas_venda_manual (organizacao_id, referencia_local, fingerprint, valores_fingerprint, estado)
+       values ('59100000-0000-4000-8000-000000000001', 'invasora-direta', 'fingerprint-exclusao', 'valores-exclusao', 'em_andamento')$q$,
+    '23505',
+    null,
+    '57. o banco recusa uma SEGUNDA pendência para o mesmo fingerprint, mesmo por INSERT direto'
+);
+
+create temp table exclusao_segunda as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'exclusao-ref-2', 'fingerprint-exclusao', 'valores-exclusao'
+);
+select is(
+    (select referencia_pendente from exclusao_segunda),
+    'exclusao-ref-1',
+    '58. referência DIFERENTE, mesma venda: recusada apontando a pendência'
+);
+
+-- ----------------------------------------------------------------------------
+-- 59-62. CAS em `concluir` (7ª rodada). Idade não é sincronização: quem chega
+--        depois e opina sobre tentativa alheia precisa provar que o estado não
+--        mudou entre ler e decidir.
+-- ----------------------------------------------------------------------------
+select lives_ok(
+    format(
+        $q$select public.concluir_tentativa_venda_manual(%L, %L, 'indeterminada', null, null, 'em_andamento')$q$,
+        '59100000-0000-4000-8000-000000000001', (select tentativa_id from exclusao_primeira)
+    ),
+    '59. CAS com o estado esperado correto: escreve'
+);
+select throws_ok(
+    format(
+        $q$select public.concluir_tentativa_venda_manual(%L, %L, 'falhou', null, null, 'em_andamento')$q$,
+        '59100000-0000-4000-8000-000000000001', (select tentativa_id from exclusao_primeira)
+    ),
+    '40001',
+    null,
+    '60. CAS com estado esperado DESATUALIZADO: recusa em vez de sobrescrever'
+);
+select is(
+    (select estado from public.tentativas_venda_manual where id = (select tentativa_id from exclusao_primeira)),
+    'indeterminada',
+    '61. …e o estado permanece o que era, não o que a escrita perdida queria'
+);
+select lives_ok(
+    format(
+        $q$select public.concluir_tentativa_venda_manual(%L, %L, 'falhou', null, null)$q$,
+        '59100000-0000-4000-8000-000000000001', (select tentativa_id from exclusao_primeira)
+    ),
+    '62. sem estado esperado, a escrita é incondicional — é o caminho de quem PRODUZIU o efeito'
+);
+
+-- ----------------------------------------------------------------------------
+-- 63-69. INTERVENÇÕES: auditoria imutável + claim de concorrência (7ª rodada).
+-- ----------------------------------------------------------------------------
+create temp table intervencao as
+select public.reivindicar_intervencao_venda_manual(
+    '59100000-0000-4000-8000-000000000001',
+    (select tentativa_id from exclusao_primeira),
+    'cancelar-no-bling',
+    '59000000-0000-4000-8000-000000000001',
+    '918273'
+) as id;
+
+select isnt((select id from intervencao), null, '63. a intervenção é reivindicada e devolve um id');
+select is(
+    (select ator_id from public.intervencoes_venda_manual where id = (select id from intervencao)),
+    '59000000-0000-4000-8000-000000000001'::uuid,
+    '64. …com o ator verificado registrado'
+);
+
+select throws_ok(
+    format(
+        $q$select public.reivindicar_intervencao_venda_manual(%L, %L, 'cancelar-no-bling', %L, '918273')$q$,
+        '59100000-0000-4000-8000-000000000001',
+        (select tentativa_id from exclusao_primeira),
+        '59000000-0000-4000-8000-000000000001'
+    ),
+    '55006',
+    null,
+    '65. uma SEGUNDA intervenção em voo para a mesma tentativa é recusada — o claim'
+);
+
+select throws_ok(
+    format($q$delete from public.intervencoes_venda_manual where id = %L$q$, (select id from intervencao)),
+    '42501',
+    null,
+    '66. o registro de intervenção não pode ser apagado'
+);
+select throws_ok(
+    format($q$update public.intervencoes_venda_manual set ator_id = gen_random_uuid() where id = %L$q$, (select id from intervencao)),
+    '42501',
+    null,
+    '67. …nem ter reescrito o que afirma sobre a solicitação'
+);
+
+select lives_ok(
+    format(
+        $q$select public.encerrar_intervencao_venda_manual(%L, %L, 'confirmada', 'cancelado no Bling')$q$,
+        '59100000-0000-4000-8000-000000000001', (select id from intervencao)
+    ),
+    '68. o desfecho pode ser gravado uma vez'
+);
+select throws_ok(
+    format(
+        $q$select public.encerrar_intervencao_venda_manual(%L, %L, 'falhou', 'tentando reescrever')$q$,
+        '59100000-0000-4000-8000-000000000001', (select id from intervencao)
+    ),
+    'P0002',
+    null,
+    '69. …e não pode ser reescrito depois'
 );
 
 select * from finish();

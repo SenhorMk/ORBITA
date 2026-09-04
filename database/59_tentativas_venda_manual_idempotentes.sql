@@ -101,10 +101,34 @@ grant all on public.tentativas_venda_manual to service_role, postgres;
 create index if not exists idx_tentativas_venda_manual_org_estado
     on public.tentativas_venda_manual(organizacao_id, estado);
 
--- Suporta a busca por pendência idêntica (6ª rodada): "existe outra tentativa
--- sem desfecho para exatamente esta venda?".
-create index if not exists idx_tentativas_venda_manual_org_fingerprint
-    on public.tentativas_venda_manual(organizacao_id, fingerprint, estado);
+-- ---------------------------------------------------------------------------
+-- EXCLUSAO MUTUA DE PENDENCIA (7ª rodada de revisão) — a invariância central
+-- desta migration, e agora imposta pelo BANCO, não por leitura-e-decisão.
+--
+-- "Numa organização, enquanto existir uma tentativa `em_andamento` ou
+--  `indeterminada` para o fingerprint X, no máximo UMA referência pode
+--  existir para X."
+--
+-- Por que um índice único PARCIAL, e não a consulta que havia antes: a versão
+-- da 6ª rodada inseria a referência nova e SÓ DEPOIS procurava outra pendência
+-- com o mesmo fingerprint, apagando a recém-inserida se achasse. Isso protege
+-- contra a MESMA referência (o índice de `(organizacao_id, referencia_local)`
+-- faz isso), e NÃO protege contra referências DIFERENTES: em `READ COMMITTED`,
+-- A insere `RA/X` e B insere `RB/X`, e o `SELECT` de cada uma não enxerga a
+-- linha ainda não commitada da outra. As duas passavam, e as duas chegariam ao
+-- Bling. **Reproduzido contra PostgreSQL real com duas conexões** — ver
+-- `scripts/database-concurrency-pendencia.mjs`, modo `dois-vencedores`.
+--
+-- Com o índice parcial, a segunda inserção BLOQUEIA no índice até a primeira
+-- transação decidir, e então falha com `23505` — que a função trata,
+-- devolvendo a referência pendente. O predicado `where estado in (...)` é o
+-- que permite que uma segunda venda legitimamente idêntica volte a existir
+-- assim que a pendência anterior for resolvida: `concluida`/`falhou` saem do
+-- índice.
+-- ---------------------------------------------------------------------------
+create unique index if not exists uq_tentativas_venda_manual_pendencia_por_fingerprint
+    on public.tentativas_venda_manual(organizacao_id, fingerprint)
+    where estado in ('em_andamento', 'indeterminada');
 
 alter table public.tentativas_venda_manual enable row level security;
 
@@ -181,41 +205,47 @@ begin
     -- Postgres real com duas conexoes antes desta correcao: uma vencia, a
     -- outra lancava `duplicate key value violates unique constraint
     -- "uq_tentativas_venda_manual_org_referencia"` sem nenhum tratamento.
-    insert into public.tentativas_venda_manual (organizacao_id, referencia_local, fingerprint, valores_fingerprint, estado)
-    values (p_organizacao_id, p_referencia_local, p_fingerprint, p_valores_fingerprint, 'em_andamento')
-    on conflict (organizacao_id, referencia_local) do nothing
-    returning id into v_new_id;
+    -- ATOMICO POR CONSTRUCAO, em DUAS dimensoes:
+    --
+    --   1. `on conflict (organizacao_id, referencia_local)` — a MESMA
+    --      referencia reenviada nao insere linha nova;
+    --   2. o indice unico PARCIAL de pendencia — duas referencias DIFERENTES
+    --      para a MESMA venda nao podem coexistir sem desfecho. A segunda
+    --      bloqueia no indice ate a primeira decidir, e entao levanta `23505`,
+    --      tratado logo abaixo.
+    --
+    -- Nenhuma das duas e "consulta e depois decide": as duas sao o proprio
+    -- banco recusando, que e a unica forma de valer sob concorrencia real.
+    begin
+        insert into public.tentativas_venda_manual (organizacao_id, referencia_local, fingerprint, valores_fingerprint, estado)
+        values (p_organizacao_id, p_referencia_local, p_fingerprint, p_valores_fingerprint, 'em_andamento')
+        on conflict (organizacao_id, referencia_local) do nothing
+        returning id into v_new_id;
+    exception
+        when unique_violation then
+            -- So pode ser o indice parcial de pendencia: o conflito da
+            -- referencia e absorvido pelo `on conflict` acima. Ja existe
+            -- outra tentativa sem desfecho para exatamente esta venda.
+            --
+            -- Nao da para saber, daqui, se isto e a mesma venda tentada de
+            -- novo (o navegador perdeu a referencia, ou e outro dispositivo)
+            -- ou uma segunda venda legitimamente identica. As duas sao
+            -- possiveis: tratar como retentativa apagaria uma venda real,
+            -- tratar como nova poderia duplicar um pedido no ERP. Entao
+            -- nenhuma das duas — recusa e aponta a pendencia, para ser
+            -- resolvida primeiro.
+            select t.referencia_local into v_referencia_pendente
+            from public.tentativas_venda_manual t
+            where t.organizacao_id = p_organizacao_id
+              and t.fingerprint = p_fingerprint
+              and t.estado in ('em_andamento', 'indeterminada')
+            limit 1;
 
-    if v_new_id is not null then
-        -- PENDENCIA IDENTICA (6a rodada de revisao). A chave e nova, mas ja
-        -- existe OUTRA tentativa sem desfecho para exatamente esta mesma
-        -- venda. Nao da para saber, daqui, se isto e a mesma venda tentada de
-        -- novo (o navegador perdeu a referencia — localStorage indisponivel,
-        -- outro dispositivo) ou uma segunda venda legitimamente identica. As
-        -- duas sao possiveis, e tratar como retentativa apagaria uma venda
-        -- real, enquanto tratar como nova poderia duplicar um pedido no ERP.
-        --
-        -- Entao nenhuma das duas: recusa e devolve a referencia pendente, para
-        -- que ela seja resolvida (reconciliada) primeiro. E o que torna a
-        -- protecao independente do navegador — sem isto, um cliente sem
-        -- memoria local viraria criacao externa duplicada.
-        select t.referencia_local into v_referencia_pendente
-        from public.tentativas_venda_manual t
-        where t.organizacao_id = p_organizacao_id
-          and t.fingerprint = p_fingerprint
-          and t.estado in ('em_andamento', 'indeterminada')
-          and t.id <> v_new_id
-        order by t.created_at
-        limit 1;
-
-        if v_referencia_pendente is not null then
-            -- A linha recem-inserida e nossa e ainda nao produziu efeito
-            -- nenhum: remove-la deixa o ledger exatamente como estava.
-            delete from public.tentativas_venda_manual where id = v_new_id;
             return query select null::uuid, null::text, null::uuid, null::text, false, false, false, v_referencia_pendente;
             return;
-        end if;
+    end;
 
+    if v_new_id is not null then
         return query select v_new_id, 'em_andamento'::text, null::uuid, null::text, false, false, false, null::text;
         return;
     end if;
@@ -260,9 +290,24 @@ begin
         -- aplicacao so grava 'falhou' quando o Bling nao tem nada pendente —
         -- ver a maquina de estados em `compensacao.ts`). Seguro reabrir a
         -- MESMA referencia para uma nova tentativa.
-        update public.tentativas_venda_manual
-        set estado = 'em_andamento', pedido_id = null, bling_pedido_id = null
-        where id = v_existente.id;
+        -- Reabrir e voltar a ocupar o indice parcial de pendencia. Se outra
+        -- tentativa sem desfecho ja ocupa este fingerprint, a reabertura tem
+        -- de ser recusada pelo mesmo motivo de sempre.
+        begin
+            update public.tentativas_venda_manual
+            set estado = 'em_andamento', pedido_id = null, bling_pedido_id = null
+            where id = v_existente.id;
+        exception
+            when unique_violation then
+                select t.referencia_local into v_referencia_pendente
+                from public.tentativas_venda_manual t
+                where t.organizacao_id = p_organizacao_id
+                  and t.fingerprint = p_fingerprint
+                  and t.estado in ('em_andamento', 'indeterminada')
+                limit 1;
+                return query select null::uuid, null::text, null::uuid, null::text, false, false, false, v_referencia_pendente;
+                return;
+        end;
         return query select v_existente.id, 'em_andamento'::text, null::uuid, null::text, false, false, false, null::text;
         return;
     end if;
@@ -288,13 +333,26 @@ grant execute on function public.reivindicar_tentativa_venda_manual(uuid, text, 
 -- se uma escrita externa pode acontecer, e a rota de reconciliacao da 5ª
 -- rodada passa a resolver tentativas a partir de dado vindo do cliente.
 drop function if exists public.concluir_tentativa_venda_manual(uuid, text, uuid, text);
+-- A assinatura de 5 argumentos (sem CAS) tambem sai: com o parametro novo
+-- tendo default, mante-la deixaria uma chamada de 5 argumentos ambigua entre
+-- as duas.
+drop function if exists public.concluir_tentativa_venda_manual(uuid, uuid, text, uuid, text);
 
 create or replace function public.concluir_tentativa_venda_manual(
     p_organizacao_id uuid,
     p_tentativa_id uuid,
     p_estado text,
     p_pedido_id uuid default null,
-    p_bling_pedido_id text default null
+    p_bling_pedido_id text default null,
+    -- 7ª rodada: compare-and-set. Quando informado, a escrita so acontece se
+    -- o estado atual for exatamente este.
+    --
+    -- Quem PRODUZIU o efeito (o handler da venda) escreve incondicionalmente:
+    -- ele sabe o que aconteceu. Quem chega DEPOIS e opina sobre uma tentativa
+    -- alheia (a reconciliacao) precisa provar que o mundo nao mudou entre ler
+    -- e decidir — idade nao e sincronizacao, e sem CAS a reconciliacao podia
+    -- sobrescrever o desfecho de uma requisicao que ainda estava em voo.
+    p_estado_esperado text default null
 )
 returns void
 language plpgsql
@@ -318,10 +376,18 @@ begin
         pedido_id = coalesce(p_pedido_id, pedido_id),
         bling_pedido_id = coalesce(p_bling_pedido_id, bling_pedido_id)
     where id = p_tentativa_id
-      and organizacao_id = p_organizacao_id;
+      and organizacao_id = p_organizacao_id
+      and (p_estado_esperado is null or estado = p_estado_esperado);
 
     get diagnostics v_afetadas = row_count;
     if v_afetadas = 0 then
+        if p_estado_esperado is not null then
+            -- CAS perdeu: alguem mudou o estado entre a leitura e esta
+            -- escrita. Quem chamou tem de reler e decidir de novo, nunca
+            -- insistir por cima.
+            raise exception 'Estado da tentativa mudou desde a leitura (esperado %).', p_estado_esperado
+                using errcode = '40001';
+        end if;
         -- Nao existe, ou e de outra organizacao. As duas coisas sao a mesma
         -- resposta de proposito: distinguir revelaria a existencia de uma
         -- tentativa alheia.
@@ -330,5 +396,193 @@ begin
 end;
 $$;
 
-revoke all on function public.concluir_tentativa_venda_manual(uuid, uuid, text, uuid, text) from public, anon, authenticated;
-grant execute on function public.concluir_tentativa_venda_manual(uuid, uuid, text, uuid, text) to service_role;
+revoke all on function public.concluir_tentativa_venda_manual(uuid, uuid, text, uuid, text, text) from public, anon, authenticated;
+grant execute on function public.concluir_tentativa_venda_manual(uuid, uuid, text, uuid, text, text) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 4. Intervenções operacionais sobre uma tentativa (7ª rodada de revisão).
+--
+-- Duas necessidades que se resolvem com a MESMA estrutura:
+--
+--   **Auditoria.** "O estado da tentativa mudou" não é rastro: não diz quem
+--   pediu, o que foi pedido, sobre qual pedido do Bling, quando, nem no que
+--   deu. `updated_at` guarda o instante da última escrita e nada mais — e é
+--   sobrescrito pela escrita seguinte. Uma intervenção que dispara efeito
+--   externo no ERP precisa de registro próprio e imutável.
+--
+--   **Concorrência.** Duas requisições simultâneas de `cancelar-no-bling`
+--   sobre a mesma tentativa não podem produzir duas intervenções externas não
+--   coordenadas. O índice parcial abaixo é o claim: a primeira insere, a
+--   segunda bate no índice e é recusada. NÃO se apoia em "cancelar duas vezes
+--   no Bling é inócuo" — o contrato da v3 não afirma isso em lugar nenhum.
+-- ---------------------------------------------------------------------------
+create table if not exists public.intervencoes_venda_manual (
+    id                uuid primary key default gen_random_uuid(),
+    organizacao_id    uuid not null references public.organizacoes(id) on delete cascade,
+    tentativa_id      uuid not null references public.tentativas_venda_manual(id) on delete cascade,
+    -- Repetida aqui de propósito: a tentativa pode ser removida (cascade da
+    -- organização) e o rastro não deve virar um id órfão sem significado.
+    referencia_local  text not null,
+    acao              text not null check (acao in ('cancelar-no-bling')),
+    -- O pedido no ERP sobre o qual a intervenção age. Nunca o payload da
+    -- venda: rastro de intervenção não é lugar de dado comercial.
+    bling_pedido_id   text,
+    -- Ator do escopo VERIFICADO da requisição — nunca vindo do corpo.
+    ator_id           uuid not null,
+    solicitada_em     timestamptz not null default now(),
+    concluida_em      timestamptz,
+    resultado         text check (resultado in ('confirmada', 'falhou', 'ambigua')),
+    -- Motivo legível quando o provedor recusa: mensagem do Bling, não
+    -- diagnóstico interno nem segredo.
+    detalhe           text,
+    created_at        timestamptz not null default now()
+);
+
+-- O CLAIM: no máximo UMA intervenção em voo por tentativa. Uma segunda
+-- requisição simultânea bate aqui e é recusada antes de tocar o ERP.
+create unique index if not exists uq_intervencao_em_voo_por_tentativa
+    on public.intervencoes_venda_manual(tentativa_id)
+    where resultado is null;
+
+create index if not exists idx_intervencoes_venda_manual_org
+    on public.intervencoes_venda_manual(organizacao_id, solicitada_em desc);
+
+revoke all on public.intervencoes_venda_manual from public, anon;
+grant select on public.intervencoes_venda_manual to authenticated;
+grant all on public.intervencoes_venda_manual to service_role, postgres;
+
+alter table public.intervencoes_venda_manual enable row level security;
+
+drop policy if exists "Acesso a intervencoes_venda_manual por organizacao" on public.intervencoes_venda_manual;
+create policy "Acesso a intervencoes_venda_manual por organizacao"
+    on public.intervencoes_venda_manual
+    for select
+    to authenticated
+    using (public.usuario_pertence_a_organizacao(organizacao_id));
+
+-- IMUTABILIDADE. O registro só pode ser fechado (resultado/detalhe/conclusão);
+-- nada do que ele afirma sobre a solicitação pode ser reescrito, e nenhuma
+-- linha pode ser apagada. Sem isto, "auditável" seria só uma palavra.
+create or replace function public.fn_intervencao_venda_manual_imutavel()
+returns trigger
+language plpgsql
+as $$
+begin
+    if tg_op = 'DELETE' then
+        raise exception 'Registro de intervencao e imutavel: remocao proibida.' using errcode = '42501';
+    end if;
+
+    if new.id is distinct from old.id
+       or new.organizacao_id is distinct from old.organizacao_id
+       or new.tentativa_id is distinct from old.tentativa_id
+       or new.referencia_local is distinct from old.referencia_local
+       or new.acao is distinct from old.acao
+       or new.ator_id is distinct from old.ator_id
+       or new.solicitada_em is distinct from old.solicitada_em
+       or new.created_at is distinct from old.created_at then
+        raise exception 'Registro de intervencao e imutavel: so o desfecho pode ser gravado.' using errcode = '42501';
+    end if;
+
+    if old.resultado is not null then
+        raise exception 'Intervencao ja encerrada: desfecho nao pode ser reescrito.' using errcode = '42501';
+    end if;
+
+    return new;
+end;
+$$;
+
+drop trigger if exists tg_intervencao_venda_manual_imutavel on public.intervencoes_venda_manual;
+create trigger tg_intervencao_venda_manual_imutavel
+    before update or delete on public.intervencoes_venda_manual
+    for each row execute function public.fn_intervencao_venda_manual_imutavel();
+
+-- ---------------------------------------------------------------------------
+-- 5. Reivindicar a intervenção (o claim) e encerrá-la.
+-- ---------------------------------------------------------------------------
+create or replace function public.reivindicar_intervencao_venda_manual(
+    p_organizacao_id uuid,
+    p_tentativa_id uuid,
+    p_acao text,
+    p_ator_id uuid,
+    p_bling_pedido_id text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_referencia text;
+    v_id uuid;
+begin
+    if p_organizacao_id is null or p_tentativa_id is null or p_ator_id is null then
+        raise exception 'Organizacao, tentativa e ator sao obrigatorios.' using errcode = '22023';
+    end if;
+
+    -- A tentativa tem de ser DESTA organizacao: `security definer` ignora RLS,
+    -- entao o predicado aqui e a unica barreira.
+    select t.referencia_local into v_referencia
+    from public.tentativas_venda_manual t
+    where t.id = p_tentativa_id and t.organizacao_id = p_organizacao_id;
+
+    if v_referencia is null then
+        raise exception 'Tentativa de venda manual nao encontrada nesta organizacao.' using errcode = 'P0002';
+    end if;
+
+    begin
+        insert into public.intervencoes_venda_manual
+            (organizacao_id, tentativa_id, referencia_local, acao, ator_id, bling_pedido_id)
+        values (p_organizacao_id, p_tentativa_id, v_referencia, p_acao, p_ator_id, p_bling_pedido_id)
+        returning id into v_id;
+    exception
+        when unique_violation then
+            -- Ja existe uma intervencao EM VOO para esta tentativa. Recusa sem
+            -- tocar o ERP: duas intervencoes externas nao coordenadas sobre o
+            -- mesmo pedido e exatamente o que o claim existe para impedir.
+            raise exception 'Ja existe uma intervencao em andamento para esta tentativa.' using errcode = '55006';
+    end;
+
+    return v_id;
+end;
+$$;
+
+revoke all on function public.reivindicar_intervencao_venda_manual(uuid, uuid, text, uuid, text) from public, anon, authenticated;
+grant execute on function public.reivindicar_intervencao_venda_manual(uuid, uuid, text, uuid, text) to service_role;
+
+create or replace function public.encerrar_intervencao_venda_manual(
+    p_organizacao_id uuid,
+    p_intervencao_id uuid,
+    p_resultado text,
+    p_detalhe text default null,
+    p_bling_pedido_id text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_afetadas integer;
+begin
+    if p_resultado not in ('confirmada', 'falhou', 'ambigua') then
+        raise exception 'Resultado de intervencao invalido: %', p_resultado using errcode = '22023';
+    end if;
+
+    update public.intervencoes_venda_manual
+    set resultado = p_resultado,
+        detalhe = p_detalhe,
+        bling_pedido_id = coalesce(p_bling_pedido_id, bling_pedido_id),
+        concluida_em = now()
+    where id = p_intervencao_id
+      and organizacao_id = p_organizacao_id
+      and resultado is null;
+
+    get diagnostics v_afetadas = row_count;
+    if v_afetadas = 0 then
+        raise exception 'Intervencao nao encontrada nesta organizacao, ou ja encerrada.' using errcode = 'P0002';
+    end if;
+end;
+$$;
+
+revoke all on function public.encerrar_intervencao_venda_manual(uuid, uuid, text, text, text) from public, anon, authenticated;
+grant execute on function public.encerrar_intervencao_venda_manual(uuid, uuid, text, text, text) to service_role;

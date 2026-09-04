@@ -351,6 +351,8 @@ function lojaEmMemoria(comTomada: boolean): ManualOrderStorePort {
     },
     async registrarDesfechoDaTentativa() { /* nada a verificar aqui */ },
     async lerTentativaPorReferencia() { return null; },
+    async reivindicarIntervencao() { return { _tag: 'IntervencaoReivindicada', intervencaoId: 'intervencao-1' }; },
+    async encerrarIntervencao() { /* este teste não exercita intervenção */ },
   };
 }
 

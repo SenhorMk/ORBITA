@@ -6,34 +6,40 @@ import {
 } from './database-lab.mjs';
 import { runManualOrderRaceRehearsal } from './database-concurrency.mjs';
 import { runTentativaClaimRaceRehearsal } from './database-concurrency-tentativas.mjs';
+import { runPendenciaIdenticaRaceRehearsal } from './database-concurrency-pendencia.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
  * Sobe seu proprio laboratorio descartavel (nao reaproveita o de
  * `database-lab.mjs` — este script roda DEPOIS que aquele ja derrubou o seu),
- * aplica a cadeia canonica de migrations, dispara os dois rehearsals de
- * concorrencia do ticket 30 (a tomada da linha do webhook, e a reivindicacao
- * de tentativa — 3ª e 4ª rodadas de revisao), e derruba o laboratorio de
- * novo. Reusa so as pecas ja testadas de `database-lab.mjs` — nao adiciona um
+ * aplica a cadeia canonica de migrations, dispara os tres rehearsals de
+ * concorrencia do ticket 30 — a tomada da linha do webhook (3ª rodada), a
+ * reivindicacao da MESMA referencia (4ª), e a exclusao mutua entre
+ * referencias DIFERENTES com o mesmo fingerprint (7ª) — e derruba o
+ * laboratorio de novo. Reusa so as pecas ja testadas de `database-lab.mjs` — nao adiciona um
  * passo novo a orquestracao generica de la, que tem teste proprio com fakes.
  */
 const [start] = databaseLabCycleSteps('concurrency rehearsal');
 
 let outcomeVenda;
 let outcomeTentativa;
+let outcomePendencia;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
     outcomeVenda = started;
     outcomeTentativa = started;
+    outcomePendencia = started;
   } else {
     const applied = await applyCanonicalMigrations({});
     if (applied._tag === 'err') {
       outcomeVenda = applied;
       outcomeTentativa = applied;
+      outcomePendencia = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
+      outcomePendencia = await runPendenciaIdenticaRaceRehearsal();
     }
   }
 } finally {
@@ -61,6 +67,18 @@ if (outcomeTentativa._tag === 'err') {
     `[database-concurrency] atomicidade da reivindicação de tentativa provada com bloqueio observado no Postgres `
       + `(wait_event=${outcomeTentativa.value.bloqueioObservadoNoPostgres}): vencedora ${outcomeTentativa.value.vencedoraTentativaId}, `
       + `perdedora graciosa=${outcomeTentativa.value.perdedoraGraciosa}, linhas na tabela=${outcomeTentativa.value.linhasNaTabela}`,
+  );
+}
+
+if (outcomePendencia._tag === 'err') {
+  console.error(`[database-concurrency] ${outcomePendencia.error._tag}: ${failureMessage(outcomePendencia.error)}`);
+  falhou = true;
+} else {
+  console.log(
+    `[database-concurrency] exclusão mútua de pendência idêntica provada com bloqueio observado no Postgres `
+      + `(wait_event=${outcomePendencia.value.bloqueioObservadoNoPostgres}): referências DIFERENTES para a MESMA venda, `
+      + `vencedora ${outcomePendencia.value.vencedora}, perdedora apontou ${outcomePendencia.value.perdedoraApontou}, `
+      + `tentativas no fingerprint=${outcomePendencia.value.tentativasNoFingerprint}`,
   );
 }
 

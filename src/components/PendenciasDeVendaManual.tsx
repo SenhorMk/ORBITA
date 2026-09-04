@@ -30,15 +30,26 @@ import {
 
 interface RespostaDeReconciliacao {
   readonly referenciaLiberada?: boolean;
+  readonly situacao?: string;
   readonly mensagem?: string;
   readonly error?: string;
 }
 
-async function conferirNoServidor(referencia: string): Promise<RespostaDeReconciliacao> {
+/**
+ * As três coisas que se pode pedir sobre uma pendência.
+ *
+ * `conferir` é só leitura e é o único caminho automático. As outras duas são
+ * DECISÕES: uma afirma que o pedido nunca existiu (o sistema não deduz isso de
+ * uma listagem vazia — ver `evidence/30-visibilidade-do-bling-*.md`), e a
+ * outra escreve no ERP. Nenhuma acontece sem ser pedida nomeadamente.
+ */
+type AcaoDePendencia = 'conferir' | 'encerrar-como-nao-criada' | 'cancelar-no-bling';
+
+async function pedirAoServidor(referencia: string, acao: AcaoDePendencia): Promise<RespostaDeReconciliacao> {
   const resposta = await fetchWithAuth('/api/pedidos/manual/reconciliar', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ referenciaLocal: referencia }),
+    body: JSON.stringify({ referenciaLocal: referencia, acao }),
   });
   return (await resposta.json()) as RespostaDeReconciliacao;
 }
@@ -54,6 +65,8 @@ export function PendenciasDeVendaManual({
   const [mensagem, setMensagem] = useState<string | null>(null);
   /** Releitura forçada depois de uma conferência mudar o armazenamento. */
   const [, relerArmazenamento] = useReducer((versao: number) => versao + 1, 0);
+  /** Última situação relatada por pendência — decide quais decisões oferecer. */
+  const [situacaoPorReferencia, setSituacaoPorReferencia] = useState<Record<string, string>>({});
 
   // Lido durante a renderização, de propósito, em vez de copiado para estado
   // dentro de um `useEffect`: sincronizar um armazenamento externo para dentro
@@ -65,12 +78,13 @@ export function PendenciasDeVendaManual({
     ? lerTentativasPendentes(organizacaoId)
     : [];
 
-  const conferir = async (referencia: string) => {
+  const pedir = async (referencia: string, acao: AcaoDePendencia) => {
     if (!organizacaoId) return;
     setConferindo(referencia);
     setMensagem(null);
     try {
-      const corpo = await conferirNoServidor(referencia);
+      const corpo = await pedirAoServidor(referencia, acao);
+      setSituacaoPorReferencia((anterior) => ({ ...anterior, [referencia]: corpo.situacao ?? '' }));
       // Só esquece com desfecho conhecido. `referenciaLiberada: false` (o
       // pedido existe no Bling e não existe aqui) mantém a pendência de
       // propósito — ela ainda precisa de uma decisão humana.
@@ -102,17 +116,46 @@ export function PendenciasDeVendaManual({
             {pendentes.map((pendente) => (
               <li key={pendente.referencia} className="flex items-center justify-between gap-3 text-xs">
                 <code className="text-amber-100/80 truncate">{pendente.referencia}</code>
-                <button
-                  type="button"
-                  onClick={() => conferir(pendente.referencia)}
-                  disabled={conferindo !== null}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-50 transition-colors flex-shrink-0"
-                >
-                  {conferindo === pendente.referencia
-                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    : <Search className="w-3.5 h-3.5" />}
-                  Conferir no Bling
-                </button>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => pedir(pendente.referencia, 'conferir')}
+                    disabled={conferindo !== null}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
+                  >
+                    {conferindo === pendente.referencia
+                      ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      : <Search className="w-3.5 h-3.5" />}
+                    Conferir no Bling
+                  </button>
+
+                  {/* A conferência não achou pedido. Isso NÃO prova que ele não
+                      existe — o Bling não garante visibilidade imediata —, então
+                      encerrar é uma decisão de quem conferiu no ERP. */}
+                  {situacaoPorReferencia[pendente.referencia] === 'nenhum_pedido_visivel' && (
+                    <button
+                      type="button"
+                      onClick={() => pedir(pendente.referencia, 'encerrar-como-nao-criada')}
+                      disabled={conferindo !== null}
+                      className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
+                    >
+                      Confirmei no Bling: não existe
+                    </button>
+                  )}
+
+                  {/* O pedido existe lá e a venda não existe aqui. Cancelar
+                      ESCREVE no ERP, e por isso é um pedido explícito. */}
+                  {situacaoPorReferencia[pendente.referencia] === 'pendente_no_bling' && (
+                    <button
+                      type="button"
+                      onClick={() => pedir(pendente.referencia, 'cancelar-no-bling')}
+                      disabled={conferindo !== null}
+                      className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 disabled:opacity-50 transition-colors"
+                    >
+                      Cancelar o pedido no Bling
+                    </button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

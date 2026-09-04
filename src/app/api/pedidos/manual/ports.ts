@@ -139,6 +139,40 @@ export interface ManualOrderStorePort {
     scope: VerifiedOrganizationScope,
     tentativaId: string,
     desfecho: DesfechoDaTentativa,
+    /**
+     * Compare-and-set (7ª rodada de revisão). Quando informado, a escrita só
+     * acontece se o estado atual for exatamente este; caso contrário lança.
+     *
+     * Quem PRODUZIU o efeito (o handler da venda) escreve sem CAS: ele sabe o
+     * que aconteceu. Quem chega DEPOIS e opina sobre uma tentativa alheia (a
+     * reconciliação) passa o estado que leu — sem isso, uma reconciliação
+     * disparada por idade poderia sobrescrever o desfecho de uma requisição
+     * ainda em voo. **Idade não é sincronização.**
+     */
+    estadoEsperado?: TentativaRegistrada['estado'],
+  ): Promise<void>;
+  /**
+   * Reivindica o direito de executar uma intervenção operacional sobre a
+   * tentativa (7ª rodada de revisão).
+   *
+   * É um CLAIM, não um log: no máximo uma intervenção em voo por tentativa,
+   * imposto por índice único parcial. Duas requisições simultâneas de
+   * cancelamento não podem produzir duas chamadas ao ERP — e isso **não** se
+   * apoia em "cancelar duas vezes é inócuo", que o contrato do Bling não
+   * afirma.
+   */
+  reivindicarIntervencao(
+    scope: VerifiedOrganizationScope,
+    tentativaId: string,
+    acao: 'cancelar-no-bling',
+    blingPedidoId: string | null,
+  ): Promise<ReivindicacaoDeIntervencao>;
+  /** Fecha o registro de intervenção com o desfecho. O rastro é imutável depois disto. */
+  encerrarIntervencao(
+    scope: VerifiedOrganizationScope,
+    intervencaoId: string,
+    resultado: 'confirmada' | 'falhou' | 'ambigua',
+    detalhe: string | null,
   ): Promise<void>;
   /**
    * Lê uma tentativa pela referência local, dentro da organização verificada.
@@ -153,6 +187,13 @@ export interface ManualOrderStorePort {
     referenciaLocal: string,
   ): Promise<TentativaRegistrada | null>;
 }
+
+/** O que a reivindicação de intervenção devolve. */
+export type ReivindicacaoDeIntervencao =
+  | { readonly _tag: 'IntervencaoReivindicada'; readonly intervencaoId: string }
+  /** Já existe uma intervenção em voo para esta tentativa: nada foi executado. */
+  | { readonly _tag: 'IntervencaoJaEmAndamento' }
+  | { readonly _tag: 'IntervencaoIndisponivel'; readonly causa: unknown };
 
 /** Uma linha de `tentativas_venda_manual`, como a reconciliação precisa vê-la. */
 export interface TentativaRegistrada {

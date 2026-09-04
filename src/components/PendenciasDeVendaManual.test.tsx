@@ -67,7 +67,9 @@ describe('PendenciasDeVendaManual', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /conferir no bling/i }));
 
-    await waitFor(() => expect(chamadas).toEqual([{ referenciaLocal: REFERENCIA }]));
+    // A ação vai explícita no corpo: `conferir` é o único caminho automático,
+    // e é só leitura.
+    await waitFor(() => expect(chamadas).toEqual([{ referenciaLocal: REFERENCIA, acao: 'conferir' }]));
   });
 
   it('desfecho CONHECIDO (referenciaLiberada): esquece a pendência e mostra o que aconteceu', async () => {
@@ -120,5 +122,49 @@ describe('PendenciasDeVendaManual', () => {
       <PendenciasDeVendaManual open organizacaoId="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+  it('7ª rodada — consulta vazia oferece a DECISÃO explícita, e não encerra sozinha', async () => {
+    semearPendencia();
+    respostaDoServidor = {
+      referenciaLiberada: false,
+      situacao: 'nenhum_pedido_visivel',
+      mensagem: 'A consulta ao Bling não encontrou nenhum pedido com esta referência.',
+    };
+    render(<PendenciasDeVendaManual open organizacaoId={ORG} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /conferir no bling/i }));
+
+    // A ausência não encerra nada por conta própria — a pendência continua.
+    await waitFor(() => expect(screen.getByRole('button', { name: /confirmei no bling/i })).toBeTruthy());
+    expect(window.localStorage.getItem(CHAVE)).toContain(REFERENCIA);
+
+    // A decisão é pedida nomeadamente.
+    respostaDoServidor = { referenciaLiberada: true, situacao: 'encerrada_como_nao_criada', mensagem: 'Encerrada.' };
+    await userEvent.click(screen.getByRole('button', { name: /confirmei no bling/i }));
+
+    await waitFor(() => expect(chamadas[1]).toEqual({ referenciaLocal: REFERENCIA, acao: 'encerrar-como-nao-criada' }));
+    expect(window.localStorage.getItem(CHAVE)).toBeNull();
+  });
+
+  it('7ª rodada — pedido órfão no Bling oferece o cancelamento, que ESCREVE no ERP e é explícito', async () => {
+    semearPendencia();
+    respostaDoServidor = {
+      referenciaLiberada: false,
+      situacao: 'pendente_no_bling',
+      mensagem: 'O pedido 918273 existe lá, mas a venda não foi gravada no ORBITA.',
+    };
+    render(<PendenciasDeVendaManual open organizacaoId={ORG} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /conferir no bling/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /cancelar o pedido no bling/i })).toBeTruthy());
+
+    // A conferência sozinha nunca cancelou nada: a primeira chamada foi
+    // 'conferir', só leitura.
+    expect(chamadas[0]).toEqual({ referenciaLocal: REFERENCIA, acao: 'conferir' });
+
+    respostaDoServidor = { referenciaLiberada: true, situacao: 'cancelado_no_bling', mensagem: 'Cancelado.' };
+    await userEvent.click(screen.getByRole('button', { name: /cancelar o pedido no bling/i }));
+
+    await waitFor(() => expect(chamadas[1]).toEqual({ referenciaLocal: REFERENCIA, acao: 'cancelar-no-bling' }));
   });
 });

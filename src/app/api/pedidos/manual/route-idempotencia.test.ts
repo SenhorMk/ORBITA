@@ -86,6 +86,29 @@ vi.mock('@/lib/supabaseServer', () => ({
         // por uma corrida de fato dentro do mock.
         const fingerprint = String(args?.p_fingerprint ?? '');
         const existente = tentativasPorReferencia.get(referencia);
+
+        // 7ª rodada — espelha o índice único PARCIAL da migration 59: enquanto
+        // existir uma tentativa sem desfecho para este fingerprint, nenhuma
+        // OUTRA referência pode ser aberta para a mesma venda.
+        if (!existente) {
+          for (const [outraReferencia, outra] of tentativasPorReferencia) {
+            if (outra.fingerprint === fingerprint && (outra.estado === 'em_andamento' || outra.estado === 'indeterminada')) {
+              return Promise.resolve({
+                data: [{
+                  tentativa_id: null,
+                  estado: null,
+                  pedido_id: null,
+                  bling_pedido_id: null,
+                  is_duplicate: false,
+                  fingerprint_conflitante: false,
+                  valores_divergentes: false,
+                  referencia_pendente: outraReferencia,
+                }],
+                error: null,
+              });
+            }
+          }
+        }
         if (existente) {
           // Espelha a migration 59: conteúdo diferente na mesma chave é
           // CONFLITO, e o desfecho da outra operação não sai daqui.
@@ -530,6 +553,57 @@ describe('POST /api/pedidos/manual — idempotência de ponta a ponta (rota real
     criarPedidoFalha = null;
     const segunda = await POST(requisicao({ referenciaLocal: referencia }));
 
+    expect(segunda.status).toBe(201);
+    expect(chamadasDeCriarPedido).toBe(2);
+  });
+  it('7ª rodada — DUAS requisições SIMULTÂNEAS, mesma venda e referências DIFERENTES: uma única chamada ao Bling', async () => {
+    // A regressão que a revisão pediu. A guarda da 6ª rodada (inserir,
+    // consultar, apagar) passava neste teste por acidente quando as chamadas
+    // eram sequenciais, e falhava sob concorrência real — porque em READ
+    // COMMITTED cada transação não enxerga a linha não commitada da outra.
+    // A prova de banco está em `scripts/database-concurrency-pendencia.mjs`;
+    // aqui prova-se que a ROTA usa essa exclusão corretamente.
+    // Modo AMBÍGUO de propósito: é o que deixa a primeira tentativa
+    // IRRESOLVIDA (`indeterminada`), que é a condição sob a qual o invariante
+    // vale. Com a primeira já concluída, uma segunda venda idêntica é
+    // legítima — e o teste seguinte prova justamente isso.
+    modoRegistrarVenda = 'ambiguo';
+    const { POST } = await import('./route');
+
+    const [respostaA, respostaB] = await resolverAvancandoORelogio(
+      Promise.all([
+        POST(requisicao({ referenciaLocal: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })),
+        POST(requisicao({ referenciaLocal: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' })),
+      ]),
+    );
+    const [corpoA, corpoB] = await Promise.all([respostaA.json(), respostaB.json()]);
+
+    const respostas = [
+      { status: respostaA.status, corpo: corpoA },
+      { status: respostaB.status, corpo: corpoB },
+    ];
+    // A vencedora segue o fluxo (e acaba indeterminada, 500); a perdedora é
+    // recusada no portão, antes de qualquer chamada ao ERP.
+    const recusadas = respostas.filter((r) => r.status === 409);
+
+    expect(recusadas).toHaveLength(1);
+    // O invariante: a segunda venda idêntica NÃO chega ao Bling enquanto a
+    // primeira estiver irresolvida.
+    expect(chamadasDeCriarPedido).toBe(1);
+    expect(recusadas[0].corpo.error).toContain('venda igual a esta');
+  });
+
+  it('7ª rodada — resolvida a pendência, uma segunda venda legitimamente idêntica volta a ser possível', async () => {
+    modoRegistrarVenda = 'sucesso';
+    const { POST } = await import('./route');
+
+    // Primeira venda: conclui normalmente (sai do índice de pendência).
+    const primeira = await POST(requisicao({ referenciaLocal: 'f1f1f1f1-f1f1-4f1f-8f1f-f1f1f1f1f1f1' }));
+    expect(primeira.status).toBe(201);
+
+    // Segunda venda IDÊNTICA, referência nova: numa loja física, vender duas
+    // vezes a mesma coisa é rotina, e tem de continuar possível.
+    const segunda = await POST(requisicao({ referenciaLocal: 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2f2' }));
     expect(segunda.status).toBe(201);
     expect(chamadasDeCriarPedido).toBe(2);
   });

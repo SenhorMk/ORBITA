@@ -17,6 +17,7 @@ import type {
   ManualOrderStorePort,
   PersistManualOrderInput,
   PersistVendaResult,
+  ReivindicacaoDeIntervencao,
   ReivindicacaoDeTentativa,
   TentativaRegistrada,
 } from './ports';
@@ -128,7 +129,62 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
     reivindicarTentativa,
     registrarDesfechoDaTentativa,
     lerTentativaPorReferencia,
+    reivindicarIntervencao,
+    encerrarIntervencao,
   };
+}
+
+/**
+ * Reivindica o direito de intervir — o claim que impede duas intervenções
+ * externas simultâneas sobre a mesma tentativa (7ª rodada de revisão).
+ *
+ * `55006` (`lock_not_available`) é o índice único parcial recusando uma
+ * segunda intervenção em voo. Vira um valor, não uma exceção, porque o
+ * chamador precisa distinguir "já tem alguém fazendo" de "não deu para saber".
+ */
+async function reivindicarIntervencao(
+  scope: VerifiedOrganizationScope,
+  tentativaId: string,
+  acao: 'cancelar-no-bling',
+  blingPedidoId: string | null,
+): Promise<ReivindicacaoDeIntervencao> {
+  const { data, error } = await supabaseServer.rpc('reivindicar_intervencao_venda_manual', {
+    p_organizacao_id: scope.organizationId,
+    p_tentativa_id: tentativaId,
+    p_acao: acao,
+    p_ator_id: scope.actorId,
+    p_bling_pedido_id: blingPedidoId,
+  });
+
+  if (error?.code === '55006') return { _tag: 'IntervencaoJaEmAndamento' };
+  if (error) {
+    return { _tag: 'IntervencaoIndisponivel', causa: new Error(`Falha ao reivindicar a intervenção: ${error.message}`) };
+  }
+  if (typeof data !== 'string') {
+    return { _tag: 'IntervencaoIndisponivel', causa: new Error('reivindicar_intervencao_venda_manual não devolveu id') };
+  }
+  return { _tag: 'IntervencaoReivindicada', intervencaoId: data };
+}
+
+/** Fecha o rastro de auditoria da intervenção. Depois disto ele é imutável. */
+async function encerrarIntervencao(
+  scope: VerifiedOrganizationScope,
+  intervencaoId: string,
+  resultado: 'confirmada' | 'falhou' | 'ambigua',
+  detalhe: string | null,
+): Promise<void> {
+  const { error } = await supabaseServer.rpc('encerrar_intervencao_venda_manual', {
+    p_organizacao_id: scope.organizationId,
+    p_intervencao_id: intervencaoId,
+    p_resultado: resultado,
+    p_detalhe: detalhe,
+  });
+
+  if (error) {
+    // O efeito externo já aconteceu; perder o fecho do rastro não pode
+    // derrubar a resposta, mas não pode passar em silêncio.
+    registrarFalhaInterna('pedidos.manual.intervencao.encerrar', error);
+  }
 }
 
 /**
@@ -233,6 +289,7 @@ async function registrarDesfechoDaTentativa(
   scope: VerifiedOrganizationScope,
   tentativaId: string,
   desfecho: DesfechoDaTentativa,
+  estadoEsperado?: TentativaRegistrada['estado'],
 ): Promise<void> {
   const { error } = await supabaseServer.rpc('concluir_tentativa_venda_manual', {
     p_organizacao_id: scope.organizationId,
@@ -240,7 +297,15 @@ async function registrarDesfechoDaTentativa(
     p_estado: desfecho.estado,
     p_pedido_id: desfecho.pedidoId ?? null,
     p_bling_pedido_id: desfecho.blingPedidoId ?? null,
+    p_estado_esperado: estadoEsperado ?? null,
   });
+
+  // `40001` é o CAS perdendo: alguém mudou o estado entre a leitura e esta
+  // escrita. Não é falha a ser engolida — quem chamou precisa saber que a
+  // escrita NÃO aconteceu, para não relatar um desfecho que não existe.
+  if (error?.code === '40001') {
+    throw new Error('O estado da tentativa mudou durante a operação; nada foi gravado.');
+  }
 
   if (error && error.code !== '42P01') {
     // Não deixa a venda cair por causa do REGISTRO do desfecho — a venda em

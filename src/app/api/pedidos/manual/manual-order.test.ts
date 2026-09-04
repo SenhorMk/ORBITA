@@ -102,6 +102,10 @@ function fakeStore(options: {
     async lerTentativaPorReferencia() {
       return options.tentativaRegistrada ?? null;
     },
+    async reivindicarIntervencao() {
+      return { _tag: 'IntervencaoReivindicada', intervencaoId: 'intervencao-fake-1' };
+    },
+    async encerrarIntervencao() { /* sem intervenção neste nível */ },
     async findClienteById(scope, clienteId) {
       const found = clientesPorOrg[scope.organizationId];
       return found && found.id === clienteId ? found : null;
