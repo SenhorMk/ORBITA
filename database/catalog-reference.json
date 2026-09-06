@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "fingerprint": "b5b39df61bfce34b91c0544f760d801a265372a0835685dae00be01f2e5e5c4d",
+  "fingerprint": "9069c4b7be0d5d3a35885c4ce27511fc208cb034b0b0529d6b2b9f595df7abe2",
   "counts": {
     "relations": 55,
-    "columns": 573,
+    "columns": 574,
     "policies": 73,
-    "functions": 94,
+    "functions": 96,
     "constraints": 259,
     "indexes": 218,
     "triggers": 53

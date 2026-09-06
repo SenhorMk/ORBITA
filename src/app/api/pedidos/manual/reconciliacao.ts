@@ -42,11 +42,10 @@
  * não de uma reconciliação automática.
  */
 
-import { NextResponse } from 'next/server';
-
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 
+import { cancelarNoBlingEEncerrar } from './intervencaoDeCancelamento';
 import type { ManualOrderDependencies, TentativaRegistrada } from './ports';
 
 /**
@@ -90,6 +89,12 @@ export type ResultadoDaReconciliacao =
   | { readonly _tag: 'PendenteNoBling'; readonly tentativaId: string; readonly blingPedidoId: string }
   /** Cancelamento CONFIRMADO no Bling: nada ficou pendente lá, e a chave foi liberada. */
   | { readonly _tag: 'CanceladoNoBling'; readonly tentativaId: string; readonly blingPedidoId: string }
+  /**
+   * O cancelamento foi despachado e a resposta não chegou. Pode ter acontecido.
+   * A intervenção fica `ambigua`, o claim NÃO é liberado, e nenhuma nova
+   * mutação sobre este pedido é permitida até alguém descobrir o que houve.
+   */
+  | { readonly _tag: 'CancelamentoAmbiguo'; readonly tentativaId: string; readonly blingPedidoId: string }
   | { readonly _tag: 'NaoReconciliavel'; readonly motivo: string; readonly status: number };
 
 /**
@@ -139,6 +144,37 @@ export async function reconciliarTentativa(
   deps: ReconciliacaoDeps,
   acao: AcaoDeReconciliacao = 'conferir',
 ): Promise<ResultadoDaReconciliacao> {
+  // FENCING (8ª rodada de revisão). Uma tentativa `em_andamento` velha pode
+  // ter um executor original AINDA VIVO. Idade não é sincronização, e CAS
+  // sozinho não é fencing: ele protegia só o sentido "handler conclui e a
+  // reconciliação perde". No sentido inverso — reconciliação vence, libera o
+  // fingerprint, e o handler antigo retoma e grava incondicionalmente — não
+  // havia nada. Reproduzido contra Postgres real; ver
+  // `scripts/database-concurrency-fencing.mjs`.
+  //
+  // Tomar a posse avança a época, e com isso o executor anterior deixa de
+  // poder escrever (`55P03`).
+  let epoca = tentativa.epoca;
+  if (tentativa.estado === 'em_andamento') {
+    const posse = await deps.store.assumirTentativaParaReconciliacao(scope, tentativa.id, tentativa.epoca);
+    if (posse._tag === 'PosseNegada') {
+      return {
+        _tag: 'NaoReconciliavel',
+        motivo: 'Esta venda mudou de estado enquanto era conferida. Confira de novo para ver a situação atual.',
+        status: 409,
+      };
+    }
+    if (posse._tag === 'PosseIndisponivel') {
+      registrarFalhaInterna('pedidos.manual.reconciliar.posse', posse.causa);
+      return {
+        _tag: 'NaoReconciliavel',
+        motivo: 'Não foi possível assumir esta venda para conferência agora. Tente de novo em instantes.',
+        status: 503,
+      };
+    }
+    epoca = posse.epoca;
+  }
+
   const busca = await deps.bling.buscarPedidoPorNumeroLoja(referenciaLocal);
 
   if (busca._tag === 'BlingFailed') {
@@ -192,7 +228,7 @@ export async function reconciliarTentativa(
 
     // A decisão humana, pedida nomeadamente: alguém conferiu no ERP e assume
     // que o pedido não existe. Só então a chave é liberada.
-    await deps.store.registrarDesfechoDaTentativa(scope, tentativa.id, { estado: 'falhou' }, tentativa.estado);
+    await deps.store.registrarDesfechoDaTentativa(scope, tentativa.id, { estado: 'falhou' }, undefined, epoca);
     return { _tag: 'EncerradaComoNaoCriada', tentativaId: tentativa.id };
   }
 
@@ -204,9 +240,8 @@ export async function reconciliarTentativa(
       scope,
       tentativa.id,
       { estado: 'concluida', pedidoId: jaRegistrada.pedidoId, blingPedidoId: pedidoNoBling.id },
-      // CAS: se o handler original concluiu entre a leitura e agora, ele
-      // sabia mais do que nós — a escrita dele fica, e esta é recusada.
-      tentativa.estado,
+      undefined,
+      epoca,
     );
     return {
       _tag: 'VendaConfirmada',
@@ -224,186 +259,13 @@ export async function reconciliarTentativa(
     scope,
     tentativa.id,
     { estado: 'indeterminada', blingPedidoId: pedidoNoBling.id },
-    tentativa.estado,
+    undefined,
+    epoca,
   );
 
   if (acao !== 'cancelar-no-bling') {
     return { _tag: 'PendenteNoBling', tentativaId: tentativa.id, blingPedidoId: pedidoNoBling.id };
   }
 
-  return cancelarNoBlingEEncerrar(scope, tentativa, pedidoNoBling.id, deps);
-}
-
-/**
- * A intervenção operacional explícita: cancela no Bling o pedido órfão e
- * encerra a tentativa (ticket 30 — 6ª rodada de revisão).
- *
- * É o caminho que faltava para o terceiro desfecho não terminar em "fica
- * bloqueada para sempre". Depois de um cancelamento CONFIRMADO, o Bling não
- * tem mais nada pendente para esta referência, e a chave pode ser reaberta com
- * segurança — a venda é registrada de novo pelo fluxo normal.
- *
- * **Idempotente.** Cancelar um pedido já cancelado é inócuo no Bling, e a
- * elegibilidade é reavaliada antes (uma tentativa já `falhou` ou `concluida`
- * nem chega aqui, ver `tentativaPodeSerReconciliada`). Repetir a intervenção
- * converge para o mesmo estado em vez de acumular efeito.
- *
- * **Só grava `falhou` com o cancelamento confirmado.** Se o cancelamento
- * falhar, a tentativa permanece `indeterminada` — é a mesma regra da máquina
- * de estados de `compensacao.ts`: só uma compensação CONFIRMADA prova que
- * nada ficou pendente lá.
- */
-async function cancelarNoBlingEEncerrar(
-  scope: VerifiedOrganizationScope,
-  tentativa: TentativaRegistrada,
-  blingPedidoId: string,
-  deps: ReconciliacaoDeps,
-): Promise<ResultadoDaReconciliacao> {
-  // CLAIM ANTES DO EFEITO (7ª rodada de revisão). Duas requisições simultâneas
-  // de cancelamento sobre a mesma tentativa não podem produzir duas chamadas
-  // ao ERP. A exclusão é NOSSA — índice único parcial de intervenção em voo —
-  // e não delegada a uma suposta idempotência do provedor, que o contrato do
-  // Bling não afirma em lugar nenhum.
-  //
-  // O claim é, ao mesmo tempo, o registro de auditoria: quem pediu, o quê,
-  // sobre qual pedido, quando. Ver `intervencoes_venda_manual`.
-  const claim = await deps.store.reivindicarIntervencao(scope, tentativa.id, 'cancelar-no-bling', blingPedidoId);
-
-  if (claim._tag === 'IntervencaoJaEmAndamento') {
-    return {
-      _tag: 'NaoReconciliavel',
-      motivo: 'Já existe um cancelamento em andamento para esta venda. Aguarde o resultado dele.',
-      status: 409,
-    };
-  }
-  if (claim._tag === 'IntervencaoIndisponivel') {
-    registrarFalhaInterna('pedidos.manual.reconciliar.claim', claim.causa);
-    return {
-      _tag: 'NaoReconciliavel',
-      motivo: 'Não foi possível registrar esta intervenção agora, então ela NÃO foi executada. Tente de novo em instantes.',
-      status: 503,
-    };
-  }
-
-  const cancelamento = await deps.bling.cancelarPedidoVenda(blingPedidoId);
-
-  if (cancelamento._tag === 'BlingFailed') {
-    registrarFalhaInterna('pedidos.manual.reconciliar.cancelar', new Error(cancelamento.failure.message));
-    await deps.store.encerrarIntervencao(scope, claim.intervencaoId, 'falhou', cancelamento.failure.message);
-    return {
-      _tag: 'NaoReconciliavel',
-      motivo:
-        `O pedido ${blingPedidoId} existe no Bling e o cancelamento automático falhou `
-        + `(${cancelamento.failure.message}). A tentativa continua bloqueada de propósito: `
-        + 'cancele o pedido no Bling manualmente e confira de novo.',
-      status: 502,
-    };
-  }
-
-  await deps.store.registrarDesfechoDaTentativa(
-    scope,
-    tentativa.id,
-    { estado: 'falhou', blingPedidoId },
-    'indeterminada',
-  );
-  await deps.store.encerrarIntervencao(scope, claim.intervencaoId, 'confirmada', null);
-  return { _tag: 'CanceladoNoBling', tentativaId: tentativa.id, blingPedidoId };
-}
-
-/** Corpo de resposta de `POST /api/pedidos/manual/reconciliar`. */
-export interface RespostaDaReconciliacao {
-  readonly success: boolean;
-  /** `true` quando a referência foi liberada e o cliente pode esquecê-la. */
-  readonly referenciaLiberada: boolean;
-  readonly situacao:
-    | 'nenhum_pedido_visivel'
-    | 'encerrada_como_nao_criada'
-    | 'venda_confirmada'
-    | 'pendente_no_bling'
-    | 'cancelado_no_bling'
-    | 'nao_reconciliavel';
-  readonly mensagem: string;
-  readonly pedidoId?: string;
-  readonly blingPedidoId?: string;
-}
-
-/** Traduz o desfecho da reconciliação para a resposta HTTP. */
-export function respostaDaReconciliacao(resultado: ResultadoDaReconciliacao): NextResponse {
-  if (resultado._tag === 'NaoReconciliavel') {
-    return NextResponse.json(
-      { success: false, referenciaLiberada: false, situacao: 'nao_reconciliavel', mensagem: resultado.motivo } satisfies RespostaDaReconciliacao,
-      { status: resultado.status },
-    );
-  }
-
-  if (resultado._tag === 'NenhumPedidoVisivel') {
-    return NextResponse.json(
-      {
-        success: false,
-        referenciaLiberada: false,
-        situacao: 'nenhum_pedido_visivel',
-        mensagem:
-          'A consulta ao Bling não encontrou nenhum pedido com esta referência — mas isso NÃO prova que ele '
-          + 'não foi criado: o Bling não garante que um pedido recém-criado apareça imediatamente na listagem. '
-          + 'A venda continua bloqueada. Confira no Bling e, se confirmar que o pedido não existe, encerre '
-          + 'esta tentativa explicitamente.',
-      } satisfies RespostaDaReconciliacao,
-      { status: 409 },
-    );
-  }
-
-  if (resultado._tag === 'EncerradaComoNaoCriada') {
-    return NextResponse.json(
-      {
-        success: true,
-        referenciaLiberada: true,
-        situacao: 'encerrada_como_nao_criada',
-        mensagem: 'Tentativa encerrada como não realizada, por conferência manual. A venda pode ser registrada de novo.',
-      } satisfies RespostaDaReconciliacao,
-      { status: 200 },
-    );
-  }
-
-  if (resultado._tag === 'VendaConfirmada') {
-    return NextResponse.json(
-      {
-        success: true,
-        referenciaLiberada: true,
-        situacao: 'venda_confirmada',
-        mensagem: 'Conferido no Bling: a venda foi registrada nos dois lados. Só a confirmação tinha se perdido.',
-        pedidoId: resultado.pedidoId,
-        blingPedidoId: resultado.blingPedidoId,
-      } satisfies RespostaDaReconciliacao,
-      { status: 200 },
-    );
-  }
-
-  if (resultado._tag === 'CanceladoNoBling') {
-    return NextResponse.json(
-      {
-        success: true,
-        referenciaLiberada: true,
-        situacao: 'cancelado_no_bling',
-        mensagem:
-          `O pedido ${resultado.blingPedidoId} foi cancelado no Bling e nada ficou pendente lá. `
-          + 'Esta venda pode ser registrada de novo.',
-        blingPedidoId: resultado.blingPedidoId,
-      } satisfies RespostaDaReconciliacao,
-      { status: 200 },
-    );
-  }
-
-  return NextResponse.json(
-    {
-      success: false,
-      referenciaLiberada: false,
-      situacao: 'pendente_no_bling',
-      mensagem:
-        `Conferido no Bling: o pedido ${resultado.blingPedidoId} existe lá, mas a venda não foi gravada no ORBITA. `
-        + 'Esta tentativa continua bloqueada de propósito. Para encerrá-la, peça o cancelamento do pedido no '
-        + 'Bling — é uma ação explícita, e não acontece por conferência.',
-      blingPedidoId: resultado.blingPedidoId,
-    } satisfies RespostaDaReconciliacao,
-    { status: 409 },
-  );
+  return cancelarNoBlingEEncerrar(scope, tentativa, pedidoNoBling.id, deps, epoca);
 }

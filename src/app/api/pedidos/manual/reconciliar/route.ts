@@ -1,15 +1,20 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 import { criarManualOrderDependencies, newLocalReference } from '../dependencias';
-import { reconciliarTentativa, respostaDaReconciliacao, tentativaPodeSerReconciliada } from '../reconciliacao';
+import {
+  reconciliarTentativa,
+  tentativaPodeSerReconciliada,
+  type AcaoDeReconciliacao,
+} from '../reconciliacao';
+import { respostaDaReconciliacao } from '../respostaDaReconciliacao';
 
 /**
  * `POST /api/pedidos/manual/reconciliar` — o caminho de saída de uma tentativa
- * de venda manual que ficou indeterminada (ticket 30, fatia 3 — 5ª rodada de
- * revisão).
+ * de venda manual que ficou indeterminada (ticket 30, fatia 3).
  *
  * Bloquear uma tentativa cujo desfecho ninguém confirmou é o comportamento
  * seguro; sem esta rota, seria também um beco sem saída, cuja única "solução"
@@ -17,23 +22,65 @@ import { reconciliarTentativa, respostaDaReconciliacao, tentativaPodeSerReconcil
  * exatamente a proteção contra duplicação. Ver `reconciliacao.ts` para a
  * máquina de estados e para como se pergunta ao Bling sem ter o `bling_id`.
  *
- * **Escrita no ERP só sob pedido explícito.** O padrão (`acao: 'conferir'`) é
- * exclusivamente leitura. `acao: 'cancelar-no-bling'` é a intervenção
- * operacional do 6º ponto da revisão — existe para que o desfecho "o pedido
- * existe no Bling e a venda não existe aqui" tenha um terminal, em vez de
- * ficar bloqueado para sempre —, e nunca acontece por conferência.
+ * **Escrita no ERP só sob pedido explícito, e só por quem administra.**
+ * `conferir` é leitura e basta `organization:access`; qualquer ação que mude o
+ * mundo exige `organization:manage` (8ª rodada de revisão).
  */
+
+/**
+ * A ação de encerrar uma tentativa que a API não conseguiu provar inexistente
+ * **ainda não foi aprovada como comportamento de produto**.
+ *
+ * Ela é um override humano: "conferi direto no Bling, aceito que a API não
+ * provou a ausência, e confirmo que este pedido não existe; libere esta
+ * tentativa". Isso é decisão da proprietária — envolve aceitar que uma pessoa
+ * assuma uma afirmação que o provedor não sustenta (ver
+ * `evidence/30-visibilidade-do-bling-e-ausencia-2026-09-03.md`) — e ela não
+ * foi tomada.
+ *
+ * Enquanto não for, a rota **reconhece** a ação, para que o caminho fique
+ * testável de ponta a ponta, e **recusa executá-la**. Virar `true` é uma
+ * decisão de produto, não uma correção técnica.
+ */
+export const OVERRIDE_ENCERRAR_APROVADO_PELA_PROPRIETARIA = false;
+
 const corpoSchema = z.object({
   /** O UUID que o cliente guardou; a rota o converte na referência completa. */
   referenciaLocal: z.string().uuid('referenciaLocal precisa ser um UUID'),
   /**
-   * `'conferir'` (padrão) é só leitura. `'cancelar-no-bling'` ESCREVE no ERP e
-   * por isso precisa ser pedida nomeadamente — é a intervenção explícita para
-   * o caso "o pedido existe no Bling e a venda não existe aqui", que a
-   * conferência sozinha não resolve (6ª rodada de revisão).
+   * `'conferir'` (padrão) é só leitura. As demais mudam estado ou escrevem no
+   * ERP e precisam ser pedidas nomeadamente — nunca acontecem por conferência.
    */
-  acao: z.enum(['conferir', 'cancelar-no-bling']).default('conferir'),
+  acao: z.enum(['conferir', 'cancelar-no-bling', 'encerrar-como-nao-criada']).default('conferir'),
 });
+
+/** Só `conferir` é leitura; o resto muda o mundo e exige gestão. */
+function exigeGestao(acao: AcaoDeReconciliacao): boolean {
+  return acao !== 'conferir';
+}
+
+function negado(mensagem: string, status: number): NextResponse {
+  return NextResponse.json({ success: false, error: mensagem }, { status });
+}
+
+/**
+ * Autoriza a ação pelo escopo VERIFICADO — o papel vem do vínculo persistido,
+ * nunca do corpo, da query nem de qualquer coisa que o cliente controle.
+ */
+function autorizar(scope: VerifiedOrganizationScope, acao: AcaoDeReconciliacao): NextResponse | null {
+  if (exigeGestao(acao) && !escopoTemCapacidade(scope, 'organization:manage')) {
+    return negado('Esta ação exige permissão de gestão da organização.', 403);
+  }
+  if (acao === 'encerrar-como-nao-criada' && !OVERRIDE_ENCERRAR_APROVADO_PELA_PROPRIETARIA) {
+    return negado(
+      'Encerrar uma venda que a consulta ao Bling não conseguiu descartar ainda não está liberado: '
+        + 'depende de uma decisão da proprietária sobre permitir essa confirmação manual. '
+        + 'Por enquanto, a venda permanece bloqueada.',
+      403,
+    );
+  }
+  return null;
+}
 
 export async function POST(request: Request): Promise<NextResponse> {
   const scopeResult = await resolveVerifiedOrganizationScope(request);
@@ -44,13 +91,20 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     rawBody = await request.json();
   } catch {
-    return NextResponse.json({ success: false, error: 'Corpo da requisição não é um JSON válido.' }, { status: 400 });
+    return negado('Corpo da requisição não é um JSON válido.', 400);
   }
 
   const parsed = corpoSchema.safeParse(rawBody);
   if (!parsed.success) {
-    return NextResponse.json({ success: false, error: 'Referência da venda inválida.' }, { status: 400 });
+    return negado('Referência da venda inválida.', 400);
   }
+  const { acao } = parsed.data;
+
+  // Autorização ANTES de qualquer leitura de ledger, chamada ao provedor ou
+  // reivindicação de claim: um papel sem gestão não deve nem conseguir
+  // descobrir o que existe, muito menos disparar efeito.
+  const recusa = autorizar(scope, acao);
+  if (recusa) return recusa;
 
   const deps = criarManualOrderDependencies(scope);
   // A mesma montagem da criação (`ORBITA-<uuid>`), porque é essa a string que
@@ -62,18 +116,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     // Não existe NESTA organização. Não distingue "nunca existiu" de "é de
     // outra organização" — distinguir revelaria a existência de uma tentativa
     // alheia.
-    return NextResponse.json(
-      { success: false, error: 'Não há nenhuma venda pendente com esta referência.' },
-      { status: 404 },
-    );
+    return negado('Não há nenhuma venda pendente com esta referência.', 404);
   }
 
   const elegibilidade = tentativaPodeSerReconciliada(tentativa, deps.now());
   if (!elegibilidade.pode) {
-    return NextResponse.json({ success: false, error: elegibilidade.motivo }, { status: elegibilidade.status });
+    return negado(elegibilidade.motivo, elegibilidade.status);
   }
 
-  return respostaDaReconciliacao(
-    await reconciliarTentativa(scope, referenciaLocal, tentativa, deps, parsed.data.acao),
-  );
+  return respostaDaReconciliacao(await reconciliarTentativa(scope, referenciaLocal, tentativa, deps, acao));
 }

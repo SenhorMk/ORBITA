@@ -63,9 +63,9 @@ const RECUSAS: Readonly<Record<string, { readonly mensagem: string; readonly sta
  */
 export function decidirSobreTentativa(
   reivindicacao: ReivindicacaoDeTentativa,
-): { readonly tentativaId: string } | { readonly response: NextResponse } {
+): { readonly tentativaId: string; readonly epoca: number } | { readonly response: NextResponse } {
   if (reivindicacao._tag === 'TentativaNova') {
-    return { tentativaId: reivindicacao.tentativaId };
+    return { tentativaId: reivindicacao.tentativaId, epoca: reivindicacao.epoca };
   }
   if (reivindicacao._tag === 'TentativaConcluida') {
     return { response: respostaVendaJaRegistrada(reivindicacao.pedidoId, reivindicacao.blingPedidoId) };

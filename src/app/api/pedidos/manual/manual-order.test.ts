@@ -94,7 +94,7 @@ function fakeStore(options: {
     fingerprintsReivindicados,
     async reivindicarTentativa(_scope, _referencia, fingerprint) {
       fingerprintsReivindicados.push(fingerprint);
-      return options.reivindicacaoForcada ?? { _tag: 'TentativaNova', tentativaId: 'tentativa-fake-1' };
+      return options.reivindicacaoForcada ?? { _tag: 'TentativaNova', tentativaId: 'tentativa-fake-1', epoca: 1 };
     },
     async registrarDesfechoDaTentativa(_scope, _tentativaId, desfecho) {
       desfechosRegistrados.push(desfecho);
@@ -106,6 +106,8 @@ function fakeStore(options: {
       return { _tag: 'IntervencaoReivindicada', intervencaoId: 'intervencao-fake-1' };
     },
     async encerrarIntervencao() { /* sem intervenção neste nível */ },
+    async assumirTentativaParaReconciliacao() { return { _tag: 'PosseTomada', epoca: 2 }; },
+    async finalizarIntervencaoETentativa() { return { _tag: 'Persistiu' }; },
     async findClienteById(scope, clienteId) {
       const found = clientesPorOrg[scope.organizationId];
       return found && found.id === clienteId ? found : null;

@@ -7,6 +7,12 @@ import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope'
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 
 import { classificarErroDePersistencia } from './classificacaoDeFalha';
+import {
+  assumirTentativaParaReconciliacao,
+  encerrarIntervencao,
+  finalizarIntervencaoETentativa,
+  reivindicarIntervencao,
+} from './dependenciasDeReconciliacao';
 import type {
   DesfechoDaTentativa,
   Dormir,
@@ -17,7 +23,6 @@ import type {
   ManualOrderStorePort,
   PersistManualOrderInput,
   PersistVendaResult,
-  ReivindicacaoDeIntervencao,
   ReivindicacaoDeTentativa,
   TentativaRegistrada,
 } from './ports';
@@ -131,60 +136,9 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
     lerTentativaPorReferencia,
     reivindicarIntervencao,
     encerrarIntervencao,
+    assumirTentativaParaReconciliacao,
+    finalizarIntervencaoETentativa,
   };
-}
-
-/**
- * Reivindica o direito de intervir — o claim que impede duas intervenções
- * externas simultâneas sobre a mesma tentativa (7ª rodada de revisão).
- *
- * `55006` (`lock_not_available`) é o índice único parcial recusando uma
- * segunda intervenção em voo. Vira um valor, não uma exceção, porque o
- * chamador precisa distinguir "já tem alguém fazendo" de "não deu para saber".
- */
-async function reivindicarIntervencao(
-  scope: VerifiedOrganizationScope,
-  tentativaId: string,
-  acao: 'cancelar-no-bling',
-  blingPedidoId: string | null,
-): Promise<ReivindicacaoDeIntervencao> {
-  const { data, error } = await supabaseServer.rpc('reivindicar_intervencao_venda_manual', {
-    p_organizacao_id: scope.organizationId,
-    p_tentativa_id: tentativaId,
-    p_acao: acao,
-    p_ator_id: scope.actorId,
-    p_bling_pedido_id: blingPedidoId,
-  });
-
-  if (error?.code === '55006') return { _tag: 'IntervencaoJaEmAndamento' };
-  if (error) {
-    return { _tag: 'IntervencaoIndisponivel', causa: new Error(`Falha ao reivindicar a intervenção: ${error.message}`) };
-  }
-  if (typeof data !== 'string') {
-    return { _tag: 'IntervencaoIndisponivel', causa: new Error('reivindicar_intervencao_venda_manual não devolveu id') };
-  }
-  return { _tag: 'IntervencaoReivindicada', intervencaoId: data };
-}
-
-/** Fecha o rastro de auditoria da intervenção. Depois disto ele é imutável. */
-async function encerrarIntervencao(
-  scope: VerifiedOrganizationScope,
-  intervencaoId: string,
-  resultado: 'confirmada' | 'falhou' | 'ambigua',
-  detalhe: string | null,
-): Promise<void> {
-  const { error } = await supabaseServer.rpc('encerrar_intervencao_venda_manual', {
-    p_organizacao_id: scope.organizationId,
-    p_intervencao_id: intervencaoId,
-    p_resultado: resultado,
-    p_detalhe: detalhe,
-  });
-
-  if (error) {
-    // O efeito externo já aconteceu; perder o fecho do rastro não pode
-    // derrubar a resposta, mas não pode passar em silêncio.
-    registrarFalhaInterna('pedidos.manual.intervencao.encerrar', error);
-  }
 }
 
 /**
@@ -201,7 +155,7 @@ async function lerTentativaPorReferencia(
 ): Promise<TentativaRegistrada | null> {
   const { data, error } = await supabaseServer
     .from('tentativas_venda_manual')
-    .select('id, estado, pedido_id, bling_pedido_id, updated_at')
+    .select('id, estado, pedido_id, bling_pedido_id, updated_at, epoca')
     .eq('organizacao_id', scope.organizationId)
     .eq('referencia_local', referenciaLocal)
     .maybeSingle();
@@ -215,6 +169,7 @@ async function lerTentativaPorReferencia(
     pedidoId: data.pedido_id ?? null,
     blingPedidoId: data.bling_pedido_id ?? null,
     atualizadaEm: data.updated_at,
+    epoca: data.epoca,
   };
 }
 
@@ -264,7 +219,7 @@ async function reivindicarTentativa(
   }
 
   if (!linha.is_duplicate) {
-    return { _tag: 'TentativaNova', tentativaId: linha.tentativa_id };
+    return { _tag: 'TentativaNova', tentativaId: linha.tentativa_id, epoca: linha.epoca };
   }
   if (linha.estado === 'concluida') {
     return { _tag: 'TentativaConcluida', pedidoId: linha.pedido_id, blingPedidoId: linha.bling_pedido_id ?? null };
@@ -290,6 +245,7 @@ async function registrarDesfechoDaTentativa(
   tentativaId: string,
   desfecho: DesfechoDaTentativa,
   estadoEsperado?: TentativaRegistrada['estado'],
+  epocaEsperada?: number,
 ): Promise<void> {
   const { error } = await supabaseServer.rpc('concluir_tentativa_venda_manual', {
     p_organizacao_id: scope.organizationId,
@@ -298,7 +254,15 @@ async function registrarDesfechoDaTentativa(
     p_pedido_id: desfecho.pedidoId ?? null,
     p_bling_pedido_id: desfecho.blingPedidoId ?? null,
     p_estado_esperado: estadoEsperado ?? null,
+    p_epoca_esperada: epocaEsperada ?? null,
   });
+
+  // `55P03` é o FENCING: a tentativa foi tomada por outro executor. Nunca pode
+  // virar silêncio — quem chamou precisa saber que deixou de ser dono, para
+  // não relatar um desfecho que não foi gravado.
+  if (error?.code === '55P03') {
+    throw new Error('Esta tentativa foi assumida por uma conferência; o registro não foi gravado.');
+  }
 
   // `40001` é o CAS perdendo: alguém mudou o estado entre a leitura e esta
   // escrita. Não é falha a ser engolida — quem chamou precisa saber que a

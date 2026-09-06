@@ -63,7 +63,7 @@ insert into public.membros_organizacao (organizacao_id, user_id, papel)
 values ('59100000-0000-4000-8000-000000000001', '59000000-0000-4000-8000-000000000001', 'owner'),
        ('59100000-0000-4000-8000-000000000002', '59000000-0000-4000-8000-000000000002', 'owner');
 
-select plan(69);
+select plan(89);
 
 -- ----------------------------------------------------------------------------
 -- 1-4. Primeira reivindicação: tentativa nova.
@@ -275,7 +275,7 @@ select is(
     '32. authenticated NÃO executa a reivindicação — só a service role, pelo servidor'
 );
 select is(
-    has_function_privilege('authenticated', 'public.concluir_tentativa_venda_manual(uuid,uuid,text,uuid,text,text)', 'EXECUTE'),
+    has_function_privilege('authenticated', 'public.concluir_tentativa_venda_manual(uuid,uuid,text,uuid,text,text,integer)', 'EXECUTE'),
     false,
     '33. authenticated NÃO executa a conclusão'
 );
@@ -544,11 +544,17 @@ select throws_ok(
     '65. uma SEGUNDA intervenção em voo para a mesma tentativa é recusada — o claim'
 );
 
-select throws_ok(
-    format($q$delete from public.intervencoes_venda_manual where id = %L$q$, (select id from intervencao)),
-    '42501',
-    null,
-    '66. o registro de intervenção não pode ser apagado'
+-- 8ª rodada: DELETE deixou de ser bloqueado. Medido contra Postgres real, o
+-- bloqueio travava o ciclo de vida inteiro — apagar a tentativa E apagar a
+-- ORGANIZAÇÃO falhavam com 42501, porque o cascade batia no gatilho. A
+-- imutabilidade que importa (não reescrever o que o registro afirma) segue
+-- valendo, e é o que a asserção 67 fixa.
+select is(
+    (select count(*) from pg_trigger t
+      where t.tgrelid = 'public.intervencoes_venda_manual'::regclass
+        and not t.tgisinternal and (t.tgtype::int & 8) <> 0),
+    0::bigint,
+    '66. o registro NÃO tem gatilho de DELETE travando o ciclo de vida'
 );
 select throws_ok(
     format($q$update public.intervencoes_venda_manual set ator_id = gen_random_uuid() where id = %L$q$, (select id from intervencao)),
@@ -572,6 +578,239 @@ select throws_ok(
     'P0002',
     null,
     '69. …e não pode ser reescrito depois'
+);
+
+-- ----------------------------------------------------------------------------
+-- 70-77. FENCING POR ÉPOCA (8ª rodada). CAS unilateral protegia só um sentido:
+--        handler conclui, reconciliação perde. O inverso — reconciliação vence,
+--        libera o fingerprint, e o handler antigo retoma e grava
+--        incondicionalmente — ficava aberto. Reproduzido contra Postgres real
+--        em `scripts/database-concurrency-fencing.mjs` (modo `sem-fencing`).
+-- ----------------------------------------------------------------------------
+create temp table fenc as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'fenc-ref-1', 'fingerprint-fenc', 'valores-fenc'
+);
+
+select is((select epoca from fenc), 1, '70. a reivindicação devolve a época vigente');
+
+-- A reconciliação toma a posse: a época avança.
+create temp table posse as
+select public.assumir_tentativa_para_reconciliacao(
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from fenc), 1
+) as epoca;
+
+select is((select epoca from posse), 2, '71. tomar a posse avança a época');
+
+-- O executor ANTERIOR, com a época velha, deixa de poder escrever.
+select throws_ok(
+    format(
+        $q$select public.concluir_tentativa_venda_manual(%L, %L, 'concluida', null, '111', null, 1)$q$,
+        '59100000-0000-4000-8000-000000000001', (select tentativa_id from fenc)
+    ),
+    '55P03',
+    null,
+    '72. o executor cercado NÃO consegue concluir — nem sucesso, nem falha'
+);
+
+-- Tomar a posse duas vezes com a mesma época também é recusado: só um dono.
+select throws_ok(
+    format(
+        $q$select public.assumir_tentativa_para_reconciliacao(%L, %L, 1)$q$,
+        '59100000-0000-4000-8000-000000000001', (select tentativa_id from fenc)
+    ),
+    '55P03',
+    null,
+    '73. quem chega com a época velha não toma a posse de novo'
+);
+
+-- E o novo dono escreve normalmente.
+select lives_ok(
+    format(
+        $q$select public.concluir_tentativa_venda_manual(%L, %L, 'falhou', null, null, null, 2)$q$,
+        '59100000-0000-4000-8000-000000000001', (select tentativa_id from fenc)
+    ),
+    '74. o dono vigente escreve normalmente'
+);
+
+select is(
+    (select estado from public.tentativas_venda_manual where id = (select tentativa_id from fenc)),
+    'falhou',
+    '75. …e o estado é o do dono vigente, não o do executor cercado'
+);
+
+-- Reabrir uma tentativa também troca de dono: a época avança de novo.
+create temp table reaberta_fenc as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'fenc-ref-1', 'fingerprint-fenc', 'valores-fenc'
+);
+select is((select epoca from reaberta_fenc), 3, '76. reabrir avança a época — é um dono novo');
+
+select throws_ok(
+    format(
+        $q$select public.concluir_tentativa_venda_manual(%L, %L, 'concluida', null, null, null, 2)$q$,
+        '59100000-0000-4000-8000-000000000001', (select tentativa_id from fenc)
+    ),
+    '55P03',
+    null,
+    '77. …e o dono da rodada anterior fica cercado por sua vez'
+);
+
+-- ----------------------------------------------------------------------------
+-- 78-81. INTERVENÇÃO AMBÍGUA não libera o claim (8ª rodada). O índice anterior
+--        cobria só `resultado is null`; gravar `ambigua` liberava outra
+--        intervenção para repetir a mutação sobre o mesmo pedido.
+-- ----------------------------------------------------------------------------
+create temp table tent_amb as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'amb-ref-1', 'fingerprint-amb', 'valores-amb'
+);
+
+create temp table interv_amb as
+select public.reivindicar_intervencao_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from tent_amb),
+    'cancelar-no-bling', '59000000-0000-4000-8000-000000000001', '777'
+) as id;
+
+select lives_ok(
+    format(
+        $q$select public.encerrar_intervencao_venda_manual(%L, %L, 'ambigua', 'ACK perdido')$q$,
+        '59100000-0000-4000-8000-000000000001', (select id from interv_amb)
+    ),
+    '78. a intervenção pode ser encerrada como ambígua'
+);
+
+select throws_ok(
+    format(
+        $q$select public.reivindicar_intervencao_venda_manual(%L, %L, 'cancelar-no-bling', %L, '777')$q$,
+        '59100000-0000-4000-8000-000000000001',
+        (select tentativa_id from tent_amb),
+        '59000000-0000-4000-8000-000000000001'
+    ),
+    '55006',
+    null,
+    '79. uma intervenção AMBÍGUA continua bloqueando o claim — nada de repetir a mutação'
+);
+
+-- Já `falhou` (recusa provada, nada mudou no ERP) libera para tentar de novo.
+create temp table tent_falha as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'falha-ref-1', 'fingerprint-falha', 'valores-falha'
+);
+create temp table interv_falha as
+select public.reivindicar_intervencao_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from tent_falha),
+    'cancelar-no-bling', '59000000-0000-4000-8000-000000000001', '888'
+) as id;
+select public.encerrar_intervencao_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select id from interv_falha), 'falhou', 'recusado pelo contrato'
+);
+
+select lives_ok(
+    format(
+        $q$select public.reivindicar_intervencao_venda_manual(%L, %L, 'cancelar-no-bling', %L, '888')$q$,
+        '59100000-0000-4000-8000-000000000001',
+        (select tentativa_id from tent_falha),
+        '59000000-0000-4000-8000-000000000001'
+    ),
+    '80. uma recusa PROVADA (`falhou`) libera o claim: nada mudou no ERP'
+);
+
+select is(
+    (select count(*) from public.intervencoes_venda_manual
+      where tentativa_id = (select tentativa_id from tent_falha)),
+    2::bigint,
+    '81. …e as duas intervenções ficam registradas, não sobrescritas'
+);
+
+-- ----------------------------------------------------------------------------
+-- 82-85. FINALIZAÇÃO ATÔMICA (8ª rodada). Depois de um efeito externo
+--        confirmado, tentativa e intervenção fecham na MESMA transação — ou
+--        as duas valem, ou nenhuma vale.
+-- ----------------------------------------------------------------------------
+create temp table tent_fin as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'fin-ref-1', 'fingerprint-fin', 'valores-fin'
+);
+create temp table interv_fin as
+select public.reivindicar_intervencao_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from tent_fin),
+    'cancelar-no-bling', '59000000-0000-4000-8000-000000000001', '999'
+) as id;
+
+select lives_ok(
+    format(
+        $q$select public.finalizar_intervencao_e_tentativa(%L, %L, %L, 'confirmada', 'falhou', '999', null, 1)$q$,
+        '59100000-0000-4000-8000-000000000001',
+        (select id from interv_fin),
+        (select tentativa_id from tent_fin)
+    ),
+    '82. finaliza tentativa e intervenção juntas'
+);
+select is(
+    (select estado from public.tentativas_venda_manual where id = (select tentativa_id from tent_fin)),
+    'falhou',
+    '83. …a tentativa fechou'
+);
+select is(
+    (select resultado from public.intervencoes_venda_manual where id = (select id from interv_fin)),
+    'confirmada',
+    '84. …e a auditoria fechou junto'
+);
+
+-- Época errada: a transação inteira é recusada, e NADA fica gravado pela metade.
+create temp table tent_fin2 as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'fin-ref-2', 'fingerprint-fin2', 'valores-fin2'
+);
+create temp table interv_fin2 as
+select public.reivindicar_intervencao_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from tent_fin2),
+    'cancelar-no-bling', '59000000-0000-4000-8000-000000000001', '1000'
+) as id;
+
+select throws_ok(
+    format(
+        $q$select public.finalizar_intervencao_e_tentativa(%L, %L, %L, 'confirmada', 'falhou', '1000', null, 99)$q$,
+        '59100000-0000-4000-8000-000000000001',
+        (select id from interv_fin2),
+        (select tentativa_id from tent_fin2)
+    ),
+    '55P03',
+    null,
+    '85. com época errada, a finalização inteira é recusada — nada pela metade'
+);
+
+-- ----------------------------------------------------------------------------
+-- 86-89. AUDITORIA × CICLO DE VIDA (8ª rodada). Medido: a versão anterior
+--        bloqueava com `42501` tanto apagar a tentativa quanto apagar a
+--        ORGANIZAÇÃO — um log "imutável" que travava o lifecycle inteiro.
+-- ----------------------------------------------------------------------------
+select is(
+    (select count(*) from pg_trigger t
+      where t.tgrelid = 'public.intervencoes_venda_manual'::regclass
+        and not t.tgisinternal
+        and (t.tgtype::int & 8) <> 0),
+    0::bigint,
+    '86. não há mais gatilho de DELETE bloqueando o ciclo de vida'
+);
+
+select is(
+    (select confdeltype from pg_constraint
+      where conrelid = 'public.intervencoes_venda_manual'::regclass
+        and confrelid = 'public.tentativas_venda_manual'::regclass),
+    'n',
+    '87. `tentativa_id` é ON DELETE SET NULL: o rastro sobrevive à tentativa'
+);
+
+select lives_ok(
+    format($q$delete from public.tentativas_venda_manual where id = %L$q$, (select tentativa_id from tent_fin)),
+    '88. apagar a tentativa é permitido…'
+);
+select is(
+    (select count(*) from public.intervencoes_venda_manual where id = (select id from interv_fin)),
+    1::bigint,
+    '89. …e o registro de intervenção continua lá, com a referência preservada'
 );
 
 select * from finish();

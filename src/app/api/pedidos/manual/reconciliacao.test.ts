@@ -17,10 +17,10 @@ import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope'
 
 import {
   reconciliarTentativa,
-  respostaDaReconciliacao,
   tentativaPodeSerReconciliada,
   type ReconciliacaoDeps,
 } from './reconciliacao';
+import { respostaDaReconciliacao } from './respostaDaReconciliacao';
 import type {
   BuscaDePedidoPorNumeroLoja,
   DesfechoDaTentativa,
@@ -40,6 +40,7 @@ function tentativa(overrides: Partial<TentativaRegistrada> = {}): TentativaRegis
     // O caso difícil por padrão: NENHUM bling_id — o ACK da criação se perdeu.
     blingPedidoId: null,
     atualizadaEm: '2026-09-03T11:00:00.000Z',
+    epoca: 1,
     ...overrides,
   };
 }
@@ -252,10 +253,18 @@ describe('6ª rodada — cardinalidade explícita da busca por numeroLoja (0/1/N
 });
 
 describe('6ª rodada — o caminho terminal de "Bling tem, ORBITA não tem"', () => {
-  function dublesComCancelamento(options: { cancelamentoFalha?: string; claimOcupado?: boolean } = {}) {
+  function dublesComCancelamento(options: {
+    cancelamentoFalha?: string;
+    cancelamentoFalhaStatus?: number;
+    cancelamentoFalhaTipo?: string;
+    cancelamentoLanca?: Error;
+    claimOcupado?: boolean;
+    finalizacaoFalha?: string;
+  } = {}) {
     const cancelados: string[] = [];
     const desfechos: DesfechoDaTentativa[] = [];
     const intervencoes: Array<Record<string, unknown>> = [];
+    const finalizacoes: Array<Record<string, unknown>> = [];
     const deps = {
       now: () => AGORA,
       store: {
@@ -286,6 +295,19 @@ describe('6ª rodada — o caminho terminal de "Bling tem, ORBITA não tem"', ()
         ) {
           intervencoes.push({ fase: 'encerrada', resultado });
         },
+        async assumirTentativaParaReconciliacao() {
+          return { _tag: 'PosseTomada' as const, epoca: 2 };
+        },
+        async finalizarIntervencaoETentativa(input: Record<string, unknown>) {
+          if (options.finalizacaoFalha) {
+            return { _tag: 'NaoPersistiu' as const, causa: new Error(options.finalizacaoFalha) };
+          }
+          finalizacoes.push({
+            resultadoIntervencao: input.resultadoIntervencao,
+            estadoTentativa: input.estadoTentativa,
+          });
+          return { _tag: 'Persistiu' as const };
+        },
       },
       bling: {
         async buscarPedidoPorNumeroLoja() {
@@ -295,18 +317,25 @@ describe('6ª rodada — o caminho terminal de "Bling tem, ORBITA não tem"', ()
           };
         },
         async cancelarPedidoVenda(id: string) {
+          cancelados.push(id);
+          if (options.cancelamentoLanca) throw options.cancelamentoLanca;
           if (options.cancelamentoFalha) {
             return {
               _tag: 'BlingFailed' as const,
-              failure: { _tag: 'BlingProviderFailure' as const, type: 'SERVER_ERROR', status: 500, message: options.cancelamentoFalha, duplicateSale: false },
+              failure: {
+                _tag: 'BlingProviderFailure' as const,
+                type: options.cancelamentoFalhaTipo ?? 'SERVER_ERROR',
+                status: options.cancelamentoFalhaStatus ?? 500,
+                message: options.cancelamentoFalha,
+                duplicateSale: false,
+              },
             };
           }
-          cancelados.push(id);
           return { _tag: 'BlingOk' as const, value: undefined };
         },
       },
     } as unknown as ReconciliacaoDeps;
-    return { deps, cancelados, desfechos, intervencoes };
+    return { deps, cancelados, desfechos, intervencoes, finalizacoes };
   }
 
   it('sem ação explícita, NÃO cancela nada — conferir é só leitura', async () => {
@@ -319,22 +348,16 @@ describe('6ª rodada — o caminho terminal de "Bling tem, ORBITA não tem"', ()
   });
 
   it('com a ação explícita e cancelamento CONFIRMADO: encerra como falhou e LIBERA a referência', async () => {
-    const { deps, cancelados, desfechos, intervencoes } = dublesComCancelamento();
+    const { deps, cancelados, intervencoes, finalizacoes } = dublesComCancelamento();
 
     const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps, 'cancelar-no-bling');
 
     expect(cancelados).toEqual(['918273']);
     expect(resultado._tag).toBe('CanceladoNoBling');
-    // Grava o bling_id descoberto antes de cancelar, e só então encerra.
-    expect(desfechos).toEqual([
-      { estado: 'indeterminada', blingPedidoId: '918273' },
-      { estado: 'falhou', blingPedidoId: '918273' },
-    ]);
-    // O claim foi reivindicado e encerrado como confirmado: é o rastro.
-    expect(intervencoes).toEqual([
-      { fase: 'reivindicada', acao: 'cancelar-no-bling', blingPedidoId: '918273' },
-      { fase: 'encerrada', resultado: 'confirmada' },
-    ]);
+    // O claim foi reivindicado (é o rastro de auditoria) …
+    expect(intervencoes[0]).toEqual({ fase: 'reivindicada', acao: 'cancelar-no-bling', blingPedidoId: '918273' });
+    // … e o fecho é ATÔMICO: tentativa e intervenção numa transação só.
+    expect(finalizacoes).toEqual([{ resultadoIntervencao: 'confirmada', estadoTentativa: 'falhou' }]);
 
     const resposta = respostaDaReconciliacao(resultado);
     expect(resposta.status).toBe(200);
@@ -342,15 +365,19 @@ describe('6ª rodada — o caminho terminal de "Bling tem, ORBITA não tem"', ()
   });
 
   it('cancelamento FALHA: continua indeterminada e NÃO libera — só compensação confirmada encerra', async () => {
-    const { deps, desfechos, intervencoes } = dublesComCancelamento({ cancelamentoFalha: 'gateway fora do ar' });
+    const { deps, finalizacoes } = dublesComCancelamento({
+      cancelamentoFalha: 'produto invalido',
+      cancelamentoFalhaStatus: 400,
+      cancelamentoFalhaTipo: 'VALIDATION_ERROR',
+    });
 
     const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps, 'cancelar-no-bling');
 
     expect(resultado._tag).toBe('NaoReconciliavel');
-    // Nenhum `falhou` gravado: o pedido pode continuar existindo lá.
-    expect(desfechos).toEqual([{ estado: 'indeterminada', blingPedidoId: '918273' }]);
-    // E o rastro registra a falha, em vez de sumir.
-    expect(intervencoes[1]).toMatchObject({ fase: 'encerrada', resultado: 'falhou' });
+    // Recusa PROVADA pelo contrato: nada mudou no ERP, então a intervenção
+    // fecha como `falhou` (liberando o claim para tentar de novo) e a
+    // tentativa segue indeterminada.
+    expect(finalizacoes).toEqual([{ resultadoIntervencao: 'falhou', estadoTentativa: 'indeterminada' }]);
 
     const resposta = respostaDaReconciliacao(resultado);
     expect(resposta.status).toBe(502);
@@ -440,9 +467,10 @@ describe('7ª rodada — visibilidade atrasada: a ausência nunca libera a chave
   });
 });
 
-describe('7ª rodada — CAS: a reconciliação não sobrescreve quem produziu o efeito', () => {
-  it('a reconciliação passa o estado que leu, para o banco recusar se ele mudou', async () => {
-    const chamadas: Array<{ estadoEsperado: unknown }> = [];
+describe('8ª rodada — fencing: a reconciliação toma a posse antes de opinar', () => {
+  it('uma tentativa EM ANDAMENTO é assumida (época avança) antes de qualquer escrita', async () => {
+    const chamadas: Array<{ epocaEsperada: unknown }> = [];
+    const posses: Array<{ epocaLida: number }> = [];
     const deps = {
       now: () => AGORA,
       store: {
@@ -450,9 +478,18 @@ describe('7ª rodada — CAS: a reconciliação não sobrescreve quem produziu o
           _scope: VerifiedOrganizationScope,
           _tentativaId: string,
           _desfecho: DesfechoDaTentativa,
-          estadoEsperado?: string,
+          _estadoEsperado?: string,
+          epocaEsperada?: number,
         ) {
-          chamadas.push({ estadoEsperado });
+          chamadas.push({ epocaEsperada });
+        },
+        async assumirTentativaParaReconciliacao(
+          _scope: VerifiedOrganizationScope,
+          _tentativaId: string,
+          epocaLida: number,
+        ) {
+          posses.push({ epocaLida });
+          return { _tag: 'PosseTomada' as const, epoca: epocaLida + 1 };
         },
         async findVendaManualJaRegistrada() {
           return { pedidoId: 'pedido-local-1' };
@@ -468,20 +505,46 @@ describe('7ª rodada — CAS: a reconciliação não sobrescreve quem produziu o
       },
     } as unknown as ReconciliacaoDeps;
 
-    await reconciliarTentativa(scope, REFERENCIA, tentativa({ estado: 'em_andamento' }), deps);
+    await reconciliarTentativa(scope, REFERENCIA, tentativa({ estado: 'em_andamento', epoca: 7 }), deps);
 
-    // Idade não é sincronização: sem passar o estado lido, uma reconciliação
-    // disparada por idade sobrescreveria o desfecho de uma requisição ainda em
-    // voo. O CAS é o que impede isso, e é imposto pelo banco.
-    expect(chamadas).toEqual([{ estadoEsperado: 'em_andamento' }]);
+    // Toma a posse com a época que leu …
+    expect(posses).toEqual([{ epocaLida: 7 }]);
+    // … e escreve com a época NOVA. O executor anterior, que ainda carrega a
+    // época 7, passa a ter as escritas recusadas pelo banco. CAS sozinho não
+    // fazia isso: protegia só o sentido inverso.
+    expect(chamadas).toEqual([{ epocaEsperada: 8 }]);
   });
 
-  it('quando o CAS perde, a reconciliação NÃO relata sucesso — propaga a falha', async () => {
+  it('se outro executor tomou a posse primeiro, a reconciliação NÃO age', async () => {
+    const cancelados: string[] = [];
     const deps = {
       now: () => AGORA,
       store: {
+        async assumirTentativaParaReconciliacao() { return { _tag: 'PosseNegada' as const }; },
+        async registrarDesfechoDaTentativa() { throw new Error('não deveria escrever'); },
+        async findVendaManualJaRegistrada() { return null; },
+      },
+      bling: {
+        async buscarPedidoPorNumeroLoja() { throw new Error('não deveria nem consultar'); },
+        async cancelarPedidoVenda(id: string) { cancelados.push(id); return { _tag: 'BlingOk' as const, value: undefined }; },
+      },
+    } as unknown as ReconciliacaoDeps;
+
+    const resultado = await reconciliarTentativa(
+      scope, REFERENCIA, tentativa({ estado: 'em_andamento' }), deps, 'cancelar-no-bling',
+    );
+
+    expect(resultado._tag).toBe('NaoReconciliavel');
+    expect(cancelados).toEqual([]);
+  });
+
+  it('quando a escrita é cercada, a reconciliação NÃO relata sucesso — propaga a falha', async () => {
+    const deps = {
+      now: () => AGORA,
+      store: {
+        async assumirTentativaParaReconciliacao() { return { _tag: 'PosseTomada' as const, epoca: 2 }; },
         async registrarDesfechoDaTentativa() {
-          throw new Error('O estado da tentativa mudou durante a operação; nada foi gravado.');
+          throw new Error('Esta tentativa foi assumida por uma conferência; o registro não foi gravado.');
         },
         async findVendaManualJaRegistrada() {
           return { pedidoId: 'pedido-local-1' };
@@ -499,7 +562,7 @@ describe('7ª rodada — CAS: a reconciliação não sobrescreve quem produziu o
 
     await expect(
       reconciliarTentativa(scope, REFERENCIA, tentativa({ estado: 'em_andamento' }), deps),
-    ).rejects.toThrow(/estado da tentativa mudou/iu);
+    ).rejects.toThrow(/assumida por uma conferência/iu);
   });
 });
 
@@ -541,4 +604,184 @@ describe('7ª rodada — claim: duas intervenções simultâneas, uma só chamad
     } as unknown as ReconciliacaoDeps;
     return { deps, cancelados };
   }
+});
+
+describe('8ª rodada — ACK perdido do PRÓPRIO cancelamento', () => {
+  function dubles8(options: {
+    cancelamentoLanca?: Error;
+    cancelamentoFalha?: string;
+    status?: number;
+    tipo?: string;
+    finalizacaoFalha?: string;
+  } = {}) {
+    const cancelados: string[] = [];
+    const finalizacoes: Array<Record<string, unknown>> = [];
+    const deps = {
+      now: () => AGORA,
+      store: {
+        async registrarDesfechoDaTentativa() { /* irrelevante aqui */ },
+        async assumirTentativaParaReconciliacao() { return { _tag: 'PosseTomada' as const, epoca: 2 }; },
+        async findVendaManualJaRegistrada() { return null; },
+        async reivindicarIntervencao() {
+          return { _tag: 'IntervencaoReivindicada' as const, intervencaoId: 'intervencao-8' };
+        },
+        async encerrarIntervencao() { /* substituído pela finalização atômica */ },
+        async finalizarIntervencaoETentativa(input: Record<string, unknown>) {
+          if (options.finalizacaoFalha) {
+            return { _tag: 'NaoPersistiu' as const, causa: new Error(options.finalizacaoFalha) };
+          }
+          finalizacoes.push({
+            resultadoIntervencao: input.resultadoIntervencao,
+            estadoTentativa: input.estadoTentativa,
+          });
+          return { _tag: 'Persistiu' as const };
+        },
+      },
+      bling: {
+        async buscarPedidoPorNumeroLoja() {
+          return {
+            _tag: 'BlingOk' as const,
+            value: { _tag: 'UmPedido' as const, pedido: { id: '918273', numeroLoja: REFERENCIA, situacao: 'Em aberto' } },
+          };
+        },
+        async cancelarPedidoVenda(id: string) {
+          cancelados.push(id);
+          if (options.cancelamentoLanca) throw options.cancelamentoLanca;
+          if (options.cancelamentoFalha) {
+            return {
+              _tag: 'BlingFailed' as const,
+              failure: {
+                _tag: 'BlingProviderFailure' as const,
+                type: options.tipo ?? 'SERVER_ERROR',
+                status: options.status ?? 500,
+                message: options.cancelamentoFalha,
+                duplicateSale: false,
+              },
+            };
+          }
+          return { _tag: 'BlingOk' as const, value: undefined };
+        },
+      },
+    } as unknown as ReconciliacaoDeps;
+    return { deps, cancelados, finalizacoes };
+  }
+
+  it.each([
+    ['a chamada LANÇA (timeout/conexão perdida)', { cancelamentoLanca: new Error('ETIMEDOUT') }],
+    ['5xx — pode ter cancelado antes de falhar', { cancelamentoFalha: 'bad gateway', status: 502, tipo: 'HTTP_502' }],
+    ['429 — o contrato não prova que não processou', { cancelamentoFalha: 'rate limit', status: 429, tipo: 'TOO_MANY_REQUESTS' }],
+    ['408', { cancelamentoFalha: 'timeout', status: 408, tipo: 'HTTP_408' }],
+    ['4xx com tipo desconhecido', { cancelamentoFalha: 'algo', status: 400, tipo: 'TIPO_NOVO' }],
+  ])('%s: a intervenção fica AMBÍGUA, não `falhou`', async (_descricao, opcoes) => {
+    const { deps, cancelados, finalizacoes } = dubles8(opcoes);
+
+    const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps, 'cancelar-no-bling');
+
+    expect(cancelados).toEqual(['918273']);
+    // `falhou` liberaria o claim e deixaria outra intervenção repetir o PATCH
+    // sobre um pedido que pode já ter sido cancelado. "Não recebi resposta"
+    // não é "não cancelou".
+    expect(finalizacoes).toEqual([{ resultadoIntervencao: 'ambigua', estadoTentativa: 'indeterminada' }]);
+    expect(resultado._tag).toBe('CancelamentoAmbiguo');
+
+    const resposta = respostaDaReconciliacao(resultado);
+    expect(resposta.status).toBe(409);
+    const corpo = await resposta.json();
+    expect(corpo.referenciaLiberada).toBe(false);
+    expect(corpo.situacao).toBe('cancelamento_ambiguo');
+  });
+
+  it('uma intervenção AMBÍGUA em aberto impede outra tentativa de cancelar', async () => {
+    // O claim continua ocupado (o índice parcial cobre `ambigua`), então a
+    // reivindicação seguinte é recusada — sem tocar o ERP.
+    const cancelados: string[] = [];
+    const deps = {
+      now: () => AGORA,
+      store: {
+        async registrarDesfechoDaTentativa() { /* irrelevante */ },
+        async assumirTentativaParaReconciliacao() { return { _tag: 'PosseTomada' as const, epoca: 2 }; },
+        async findVendaManualJaRegistrada() { return null; },
+        async reivindicarIntervencao() { return { _tag: 'IntervencaoJaEmAndamento' as const }; },
+        async encerrarIntervencao() { /* nunca */ },
+        async finalizarIntervencaoETentativa() { return { _tag: 'Persistiu' as const }; },
+      },
+      bling: {
+        async buscarPedidoPorNumeroLoja() {
+          return {
+            _tag: 'BlingOk' as const,
+            value: { _tag: 'UmPedido' as const, pedido: { id: '918273', numeroLoja: REFERENCIA, situacao: 'Em aberto' } },
+          };
+        },
+        async cancelarPedidoVenda(id: string) { cancelados.push(id); return { _tag: 'BlingOk' as const, value: undefined }; },
+      },
+    } as unknown as ReconciliacaoDeps;
+
+    const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps, 'cancelar-no-bling');
+
+    expect(resultado._tag).toBe('NaoReconciliavel');
+    expect(cancelados).toEqual([]);
+    expect(respostaDaReconciliacao(resultado).status).toBe(409);
+  });
+});
+
+describe('8ª rodada — falha de persistência DEPOIS do efeito externo', () => {
+  function dublesComFalhaDePersistencia(cancelamentoOk: boolean) {
+    const cancelados: string[] = [];
+    const deps = {
+      now: () => AGORA,
+      store: {
+        async registrarDesfechoDaTentativa() { /* irrelevante */ },
+        async assumirTentativaParaReconciliacao() { return { _tag: 'PosseTomada' as const, epoca: 2 }; },
+        async findVendaManualJaRegistrada() { return null; },
+        async reivindicarIntervencao() {
+          return { _tag: 'IntervencaoReivindicada' as const, intervencaoId: 'intervencao-9' };
+        },
+        async encerrarIntervencao() { /* substituído */ },
+        async finalizarIntervencaoETentativa() {
+          // O banco caiu DEPOIS de o efeito externo já ter acontecido.
+          return { _tag: 'NaoPersistiu' as const, causa: new Error('conexão perdida ao gravar') };
+        },
+      },
+      bling: {
+        async buscarPedidoPorNumeroLoja() {
+          return {
+            _tag: 'BlingOk' as const,
+            value: { _tag: 'UmPedido' as const, pedido: { id: '918273', numeroLoja: REFERENCIA, situacao: 'Em aberto' } },
+          };
+        },
+        async cancelarPedidoVenda(id: string) {
+          cancelados.push(id);
+          if (cancelamentoOk) return { _tag: 'BlingOk' as const, value: undefined };
+          throw new Error('ETIMEDOUT');
+        },
+      },
+    } as unknown as ReconciliacaoDeps;
+    return { deps, cancelados };
+  }
+
+  it('cancelamento CONFIRMADO + gravação local falha: NÃO diz que liberou', async () => {
+    const { deps, cancelados } = dublesComFalhaDePersistencia(true);
+
+    const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps, 'cancelar-no-bling');
+
+    expect(cancelados).toEqual(['918273']);
+    // O ponto: efeito externo confirmado, registro local perdido — e a
+    // resposta NÃO afirma sucesso nem liberação.
+    expect(resultado._tag).toBe('NaoReconciliavel');
+    const resposta = respostaDaReconciliacao(resultado);
+    expect(resposta.status).toBe(503);
+    const corpo = await resposta.json();
+    expect(corpo.success).toBe(false);
+    expect(corpo.referenciaLiberada).toBe(false);
+    expect(corpo.mensagem).toContain('NÃO repita');
+  });
+
+  it('cancelamento AMBÍGUO + gravação local falha: também não libera', async () => {
+    const { deps } = dublesComFalhaDePersistencia(false);
+
+    const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps, 'cancelar-no-bling');
+
+    expect(resultado._tag).toBe('NaoReconciliavel');
+    expect(respostaDaReconciliacao(resultado).status).toBe(503);
+  });
 });

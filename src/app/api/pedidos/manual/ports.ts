@@ -150,7 +150,31 @@ export interface ManualOrderStorePort {
      * ainda em voo. **Idade não é sincronização.**
      */
     estadoEsperado?: TentativaRegistrada['estado'],
+    /**
+     * Fencing token (8ª rodada de revisão). Quem produziu o efeito apresenta a
+     * época que recebeu ao reivindicar; se a tentativa foi tomada por uma
+     * reconciliação nesse meio-tempo, a escrita é RECUSADA em vez de gravar
+     * por cima. CAS sozinho protegia só o sentido inverso.
+     */
+    epocaEsperada?: number,
   ): Promise<void>;
+  /**
+   * Toma a posse de uma tentativa antiga para reconciliar (8ª rodada).
+   * Avança a época, cercando o executor anterior. Devolve a época nova.
+   */
+  assumirTentativaParaReconciliacao(
+    scope: VerifiedOrganizationScope,
+    tentativaId: string,
+    epocaEsperada: number,
+  ): Promise<TomadaDePosse>;
+  /**
+   * Finaliza tentativa e intervenção numa transação só (8ª rodada).
+   *
+   * Depois de um efeito externo confirmado, a gravação local não pode ser
+   * fire-and-forget: se falhar, a resposta não pode dizer que a referência foi
+   * liberada. Ou as duas pontas valem, ou nenhuma vale e o chamador sabe.
+   */
+  finalizarIntervencaoETentativa(input: FinalizacaoDeIntervencao): Promise<FinalizacaoResultado>;
   /**
    * Reivindica o direito de executar uma intervenção operacional sobre a
    * tentativa (7ª rodada de revisão).
@@ -188,6 +212,33 @@ export interface ManualOrderStorePort {
   ): Promise<TentativaRegistrada | null>;
 }
 
+/** Resultado de tentar tomar a posse de uma tentativa. */
+export type TomadaDePosse =
+  | { readonly _tag: 'PosseTomada'; readonly epoca: number }
+  /** Outro executor tomou a posse primeiro, ou a tentativa mudou. */
+  | { readonly _tag: 'PosseNegada' }
+  | { readonly _tag: 'PosseIndisponivel'; readonly causa: unknown };
+
+export interface FinalizacaoDeIntervencao {
+  readonly scope: VerifiedOrganizationScope;
+  readonly intervencaoId: string;
+  readonly tentativaId: string;
+  readonly resultadoIntervencao: 'confirmada' | 'falhou' | 'ambigua';
+  readonly estadoTentativa: 'concluida' | 'indeterminada' | 'falhou';
+  readonly blingPedidoId: string | null;
+  readonly detalhe: string | null;
+  readonly epocaEsperada: number | null;
+}
+
+/**
+ * `NaoPersistiu` é a diferença entre "deu certo" e "o efeito externo
+ * aconteceu e não conseguimos registrar" — e é o que impede a resposta de
+ * dizer que a referência foi liberada quando ela não foi.
+ */
+export type FinalizacaoResultado =
+  | { readonly _tag: 'Persistiu' }
+  | { readonly _tag: 'NaoPersistiu'; readonly causa: unknown };
+
 /** O que a reivindicação de intervenção devolve. */
 export type ReivindicacaoDeIntervencao =
   | { readonly _tag: 'IntervencaoReivindicada'; readonly intervencaoId: string }
@@ -203,6 +254,8 @@ export interface TentativaRegistrada {
   readonly blingPedidoId: string | null;
   /** Quando a tentativa mudou de estado pela última vez — a idade de uma `em_andamento` travada. */
   readonly atualizadaEm: string;
+  /** Época vigente: quem não a apresenta nas escritas deixou de ser dono. */
+  readonly epoca: number;
 }
 
 /**
@@ -214,7 +267,7 @@ export interface TentativaRegistrada {
  * disponível — falha fechada, nunca aberta.
  */
 export type ReivindicacaoDeTentativa =
-  | { readonly _tag: 'TentativaNova'; readonly tentativaId: string }
+  | { readonly _tag: 'TentativaNova'; readonly tentativaId: string; readonly epoca: number }
   | { readonly _tag: 'TentativaConcluida'; readonly pedidoId: string; readonly blingPedidoId: string | null }
   | { readonly _tag: 'TentativaIndeterminada'; readonly blingPedidoId: string | null }
   | { readonly _tag: 'TentativaEmAndamento' }

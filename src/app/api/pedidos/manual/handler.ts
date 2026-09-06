@@ -265,10 +265,11 @@ async function recusaDaSincronizacao(
   sync: SyncResult,
   scope: VerifiedOrganizationScope,
   tentativaId: string,
+  epoca: number,
   deps: ManualOrderDependencies,
 ): Promise<NextResponse | null> {
   if (sync._tag === 'SyncRejected') {
-    await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, { estado: 'falhou' });
+    await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, { estado: 'falhou' }, undefined, epoca);
     return sync.response;
   }
   if (sync._tag === 'SyncIndeterminado') {
@@ -276,10 +277,43 @@ async function recusaDaSincronizacao(
     // (`POST /api/pedidos/manual/reconciliar`) perguntar ao Bling, por
     // `numeroLoja`, se o pedido existe.
     registrarFalhaInterna('pedidos.manual.bling.criar.ambiguo', sync.causa);
-    await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, { estado: 'indeterminada' });
+    await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, { estado: 'indeterminada' }, undefined, epoca);
     return respostaCriacaoNoBlingIndeterminada();
   }
   return null;
+}
+
+/**
+ * Fecha a tentativa como concluída e devolve o 201.
+ *
+ * A época vai junto: se esta tentativa foi assumida por uma conferência
+ * enquanto a requisição estava em voo, a escrita é RECUSADA em vez de gravar
+ * por cima (8ª rodada de revisão) — e aí a exceção sobe, em vez de responder
+ * um sucesso que não ficou registrado.
+ */
+async function concluirVendaGravada(
+  pedidoId: string,
+  contexto: {
+    readonly scope: VerifiedOrganizationScope;
+    readonly tentativaId: string;
+    readonly epoca: number;
+    readonly blingPedidoId: string | null;
+    readonly total: number;
+    readonly avisos: readonly string[];
+  },
+  deps: ManualOrderDependencies,
+): Promise<NextResponse> {
+  await deps.store.registrarDesfechoDaTentativa(
+    contexto.scope,
+    contexto.tentativaId,
+    { estado: 'concluida', pedidoId, blingPedidoId: contexto.blingPedidoId },
+    undefined,
+    contexto.epoca,
+  );
+  return json(
+    { success: true, pedidoId, blingPedidoId: contexto.blingPedidoId, total: contexto.total, avisos: contexto.avisos },
+    201,
+  );
 }
 
 export function createManualOrderHandler(deps: ManualOrderDependencies) {
@@ -316,13 +350,13 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
       await deps.store.reivindicarTentativa(scope, referenciaLocal, fingerprint, valoresFingerprint),
     );
     if ('response' in decisao) return decisao.response;
-    const { tentativaId } = decisao;
+    const { tentativaId, epoca } = decisao;
 
     let blingPedidoId: string | null = null;
 
     if (body.syncBling) {
       const sync = await sincronizarComBling(scope, cliente, body, itens, total, dataStr, referenciaLocal, deps);
-      const recusa = await recusaDaSincronizacao(sync, scope, tentativaId, deps);
+      const recusa = await recusaDaSincronizacao(sync, scope, tentativaId, epoca, deps);
       if (recusa) return recusa;
       // O `_tag` restante é `Synced` — estreitado pelo retorno acima.
       if (sync._tag === 'Synced') {
@@ -346,12 +380,7 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     });
 
     if (resultado._tag === 'PersistVendaOk') {
-      await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, {
-        estado: 'concluida',
-        pedidoId: resultado.pedidoId,
-        blingPedidoId,
-      });
-      return json({ success: true, pedidoId: resultado.pedidoId, blingPedidoId, total, avisos }, 201);
+      return concluirVendaGravada(resultado.pedidoId, { scope, tentativaId, epoca, blingPedidoId, total, avisos }, deps);
     }
 
     // Definitiva ou ambígua: as duas devolvem `{ response, desfecho }` — o
@@ -363,7 +392,7 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     const { response, desfecho } = resultado._tag === 'PersistVendaFalhouDefinitivamente'
       ? await compensarNoBling(scope, blingPedidoId, resultado.causa, deps)
       : await resolverAmbiguidadeDePersistencia(scope, blingPedidoId, resultado.causa, deps);
-    await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, desfecho);
+    await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, desfecho, undefined, epoca);
     return response;
   };
 }

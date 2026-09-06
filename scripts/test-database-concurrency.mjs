@@ -7,6 +7,7 @@ import {
 import { runManualOrderRaceRehearsal } from './database-concurrency.mjs';
 import { runTentativaClaimRaceRehearsal } from './database-concurrency-tentativas.mjs';
 import { runPendenciaIdenticaRaceRehearsal } from './database-concurrency-pendencia.mjs';
+import { runFencingRehearsal } from './database-concurrency-fencing.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -24,22 +25,26 @@ const [start] = databaseLabCycleSteps('concurrency rehearsal');
 let outcomeVenda;
 let outcomeTentativa;
 let outcomePendencia;
+let outcomeFencing;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
     outcomeVenda = started;
     outcomeTentativa = started;
     outcomePendencia = started;
+    outcomeFencing = started;
   } else {
     const applied = await applyCanonicalMigrations({});
     if (applied._tag === 'err') {
       outcomeVenda = applied;
       outcomeTentativa = applied;
       outcomePendencia = applied;
+      outcomeFencing = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
       outcomePendencia = await runPendenciaIdenticaRaceRehearsal();
+      outcomeFencing = await runFencingRehearsal();
     }
   }
 } finally {
@@ -79,6 +84,17 @@ if (outcomePendencia._tag === 'err') {
       + `(wait_event=${outcomePendencia.value.bloqueioObservadoNoPostgres}): referências DIFERENTES para a MESMA venda, `
       + `vencedora ${outcomePendencia.value.vencedora}, perdedora apontou ${outcomePendencia.value.perdedoraApontou}, `
       + `tentativas no fingerprint=${outcomePendencia.value.tentativasNoFingerprint}`,
+  );
+}
+
+if (outcomeFencing._tag === 'err') {
+  console.error(`[database-concurrency] ${outcomeFencing.error._tag}: ${failureMessage(outcomeFencing.error)}`);
+  falhou = true;
+} else {
+  console.log(
+    `[database-concurrency] fencing provado: a reconciliação tomou a posse (época ${outcomeFencing.value.epocaDoOriginal} → `
+      + `${outcomeFencing.value.epocaDepoisDaTomada}) e a escrita do executor anterior foi recusada com `
+      + `${outcomeFencing.value.escritaDoZumbiRecusadaCom}; estado final ${outcomeFencing.value.estadoFinal}`,
   );
 }
 
