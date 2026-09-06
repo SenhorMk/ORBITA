@@ -9,6 +9,7 @@ import {
   reconciliarTentativa,
   tentativaPodeSerReconciliada,
   type AcaoDeReconciliacao,
+  type ResolucaoPedida,
 } from '../reconciliacao';
 import { respostaDaReconciliacao } from '../respostaDaReconciliacao';
 
@@ -22,9 +23,16 @@ import { respostaDaReconciliacao } from '../respostaDaReconciliacao';
  * exatamente a proteção contra duplicação. Ver `reconciliacao.ts` para a
  * máquina de estados e para como se pergunta ao Bling sem ter o `bling_id`.
  *
- * **Escrita no ERP só sob pedido explícito, e só por quem administra.**
- * `conferir` é leitura e basta `organization:access`; qualquer ação que mude o
- * mundo exige `organization:manage` (8ª rodada de revisão).
+ * **Autorização pelo EFEITO, não pelo nome da ação (9ª rodada, B5).** A 8ª
+ * rodada classificava `conferir` como leitura porque ela se chama assim — e o
+ * que ela fazia era tomar posse da tentativa (avançando a época) e escrever no
+ * ledger. Um `member`, com apenas `organization:access`, conseguia com isso
+ * CERCAR um executor legítimo e alterar o desfecho de uma venda.
+ *
+ * Agora: qualquer alteração de posse, de ledger ou do ERP exige
+ * `organization:manage`. Sem gestão, `conferir` continua disponível, mas como
+ * INSPEÇÃO de verdade — não escreve nada e nunca declara a referência
+ * liberada.
  */
 
 /**
@@ -48,13 +56,30 @@ const corpoSchema = z.object({
   /** O UUID que o cliente guardou; a rota o converte na referência completa. */
   referenciaLocal: z.string().uuid('referenciaLocal precisa ser um UUID'),
   /**
-   * `'conferir'` (padrão) é só leitura. As demais mudam estado ou escrevem no
-   * ERP e precisam ser pedidas nomeadamente — nunca acontecem por conferência.
+   * `'conferir'` (padrão) é a única que um papel sem gestão alcança, e nesse
+   * caso ela é inspeção pura. As demais mudam estado, escrevem no ERP ou
+   * registram decisão, e precisam ser pedidas nomeadamente.
    */
-  acao: z.enum(['conferir', 'cancelar-no-bling', 'encerrar-como-nao-criada']).default('conferir'),
+  acao: z
+    .enum(['conferir', 'cancelar-no-bling', 'encerrar-como-nao-criada', 'resolver-ambiguidade'])
+    .default('conferir'),
+  /**
+   * Só para `resolver-ambiguidade`: o que a pessoa observou no Bling sobre o
+   * pedido cujo cancelamento ficou sem resposta (9ª rodada, B3).
+   */
+  decisao: z.enum(['cancelado', 'nao-cancelado']).optional(),
+  /**
+   * A evidência da observação. Obrigatória junto com a decisão: uma afirmação
+   * que o provedor não confirmou precisa dizer em que se apoia.
+   */
+  evidencia: z.string().trim().min(1).max(500).optional(),
 });
 
-/** Só `conferir` é leitura; o resto muda o mundo e exige gestão. */
+/**
+ * Toda ação diferente de `conferir` muda o mundo — ERP, ledger ou registro de
+ * decisão — e por isso exige gestão. `conferir` é a única que existe nos dois
+ * modos, e o modo é decidido pela capacidade, não pelo nome.
+ */
 function exigeGestao(acao: AcaoDeReconciliacao): boolean {
   return acao !== 'conferir';
 }
@@ -106,6 +131,12 @@ export async function POST(request: Request): Promise<NextResponse> {
   const recusa = autorizar(scope, acao);
   if (recusa) return recusa;
 
+  // A decisão e a evidência andam juntas, e só existem para a resolução: um
+  // corpo mal formado é recusado antes de qualquer leitura de ledger.
+  if (acao === 'resolver-ambiguidade' && (!parsed.data.decisao || !parsed.data.evidencia)) {
+    return negado('Resolver uma ambiguidade exige informar a decisão observada no Bling e a evidência.', 400);
+  }
+
   const deps = criarManualOrderDependencies(scope);
   // A mesma montagem da criação (`ORBITA-<uuid>`), porque é essa a string que
   // foi gravada no ledger e enviada ao Bling em `numeroLoja`.
@@ -124,5 +155,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     return negado(elegibilidade.motivo, elegibilidade.status);
   }
 
-  return respostaDaReconciliacao(await reconciliarTentativa(scope, referenciaLocal, tentativa, deps, acao));
+  // O PODER, e não o nome da ação, decide o que esta conferência pode fazer.
+  const poderes = { podeMutar: escopoTemCapacidade(scope, 'organization:manage') };
+  const resolucao: ResolucaoPedida | undefined = parsed.data.decisao && parsed.data.evidencia
+    ? { decisao: parsed.data.decisao, evidencia: parsed.data.evidencia }
+    : undefined;
+
+  return respostaDaReconciliacao(
+    await reconciliarTentativa(scope, referenciaLocal, tentativa, deps, acao, poderes, resolucao),
+  );
 }

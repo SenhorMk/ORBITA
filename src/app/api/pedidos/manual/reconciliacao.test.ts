@@ -68,6 +68,7 @@ function dubles(options: {
         desfecho: DesfechoDaTentativa,
       ) {
         desfechos.push(desfecho);
+        return { _tag: 'DesfechoGravado' as const };
       },
       async findVendaManualJaRegistrada() {
         return options.vendaLocalPedidoId ? { pedidoId: options.vendaLocalPedidoId } : null;
@@ -274,6 +275,7 @@ describe('6ª rodada — o caminho terminal de "Bling tem, ORBITA não tem"', ()
           desfecho: DesfechoDaTentativa,
         ) {
           desfechos.push(desfecho);
+        return { _tag: 'DesfechoGravado' as const };
         },
         async findVendaManualJaRegistrada() {
           return null;
@@ -410,6 +412,7 @@ describe('7ª rodada — visibilidade atrasada: a ausência nunca libera a chave
           desfecho: DesfechoDaTentativa,
         ) {
           desfechos.push(desfecho);
+        return { _tag: 'DesfechoGravado' as const };
         },
         async findVendaManualJaRegistrada() {
           return null;
@@ -482,6 +485,7 @@ describe('8ª rodada — fencing: a reconciliação toma a posse antes de opinar
           epocaEsperada?: number,
         ) {
           chamadas.push({ epocaEsperada });
+          return { _tag: 'DesfechoGravado' as const };
         },
         async assumirTentativaParaReconciliacao(
           _scope: VerifiedOrganizationScope,
@@ -584,7 +588,7 @@ describe('7ª rodada — claim: duas intervenções simultâneas, uma só chamad
     const deps = {
       now: () => AGORA,
       store: {
-        async registrarDesfechoDaTentativa() { /* irrelevante aqui */ },
+        async registrarDesfechoDaTentativa() { return { _tag: 'DesfechoGravado' as const }; },
         async findVendaManualJaRegistrada() { return null; },
         async reivindicarIntervencao() { return { _tag: 'IntervencaoJaEmAndamento' as const }; },
         async encerrarIntervencao() { /* nunca chamado */ },
@@ -619,7 +623,7 @@ describe('8ª rodada — ACK perdido do PRÓPRIO cancelamento', () => {
     const deps = {
       now: () => AGORA,
       store: {
-        async registrarDesfechoDaTentativa() { /* irrelevante aqui */ },
+        async registrarDesfechoDaTentativa() { return { _tag: 'DesfechoGravado' as const }; },
         async assumirTentativaParaReconciliacao() { return { _tag: 'PosseTomada' as const, epoca: 2 }; },
         async findVendaManualJaRegistrada() { return null; },
         async reivindicarIntervencao() {
@@ -698,7 +702,7 @@ describe('8ª rodada — ACK perdido do PRÓPRIO cancelamento', () => {
     const deps = {
       now: () => AGORA,
       store: {
-        async registrarDesfechoDaTentativa() { /* irrelevante */ },
+        async registrarDesfechoDaTentativa() { return { _tag: 'DesfechoGravado' as const }; },
         async assumirTentativaParaReconciliacao() { return { _tag: 'PosseTomada' as const, epoca: 2 }; },
         async findVendaManualJaRegistrada() { return null; },
         async reivindicarIntervencao() { return { _tag: 'IntervencaoJaEmAndamento' as const }; },
@@ -730,7 +734,7 @@ describe('8ª rodada — falha de persistência DEPOIS do efeito externo', () =>
     const deps = {
       now: () => AGORA,
       store: {
-        async registrarDesfechoDaTentativa() { /* irrelevante */ },
+        async registrarDesfechoDaTentativa() { return { _tag: 'DesfechoGravado' as const }; },
         async assumirTentativaParaReconciliacao() { return { _tag: 'PosseTomada' as const, epoca: 2 }; },
         async findVendaManualJaRegistrada() { return null; },
         async reivindicarIntervencao() {
@@ -783,5 +787,192 @@ describe('8ª rodada — falha de persistência DEPOIS do efeito externo', () =>
 
     expect(resultado._tag).toBe('NaoReconciliavel');
     expect(respostaDaReconciliacao(resultado).status).toBe(503);
+  });
+});
+
+/**
+ * Ticket 30 — 9ª rodada de revisão. O que a conferência pode fazer, quem pode
+ * mandá-la fazer, e o que ela tem direito de AFIRMAR depois.
+ */
+describe('9ª rodada — ledger, autorização pelo efeito e saída da ambiguidade', () => {
+  const pedidoNoBling = {
+    _tag: 'BlingOk' as const,
+    value: {
+      _tag: 'UmPedido' as const,
+      pedido: { id: '918273', numeroLoja: REFERENCIA, situacao: 'Em aberto' },
+    },
+  };
+
+  function depsCom(store: Record<string, unknown>): ReconciliacaoDeps {
+    return {
+      now: () => AGORA,
+      store: {
+        async registrarDesfechoDaTentativa() { return { _tag: 'DesfechoGravado' as const }; },
+        async assumirTentativaParaReconciliacao() { return { _tag: 'PosseTomada' as const, epoca: 2 }; },
+        async findVendaManualJaRegistrada() { return null; },
+        ...store,
+      },
+      bling: {
+        async buscarPedidoPorNumeroLoja() { return pedidoNoBling; },
+      },
+    } as unknown as ReconciliacaoDeps;
+  }
+
+  it('B4 — o ledger não gravou: a conferência NÃO declara a referência liberada', async () => {
+    const deps = depsCom({
+      async findVendaManualJaRegistrada() { return { pedidoId: 'pedido-local-1' }; },
+      async registrarDesfechoDaTentativa() {
+        return { _tag: 'DesfechoNaoGravado' as const, causa: new Error('ledger indisponível') };
+      },
+    });
+
+    const resultado = await reconciliarTentativa(scope, REFERENCIA, tentativa(), deps);
+    const resposta = respostaDaReconciliacao(resultado);
+    const corpo = await resposta.json();
+
+    // Antes da 9ª rodada isto devolvia `VendaConfirmada` com
+    // `referenciaLiberada: true` — liberando uma chave que ninguém liberou.
+    expect(resultado._tag).toBe('NaoReconciliavel');
+    expect(resposta.status).toBe(503);
+    expect(corpo.referenciaLiberada).toBe(false);
+  });
+
+  it('B5 — sem gestão, uma tentativa EM ANDAMENTO nem é assumida: o executor não é cercado', async () => {
+    const posses: number[] = [];
+    const deps = depsCom({
+      async assumirTentativaParaReconciliacao(_s: unknown, _t: unknown, epoca: number) {
+        posses.push(epoca);
+        return { _tag: 'PosseTomada' as const, epoca: epoca + 1 };
+      },
+    });
+
+    const resultado = await reconciliarTentativa(
+      scope,
+      REFERENCIA,
+      tentativa({ estado: 'em_andamento', atualizadaEm: new Date(AGORA.getTime() - 10 * 60 * 1000).toISOString() }),
+      deps,
+      'conferir',
+      { podeMutar: false },
+    );
+
+    expect(resultado).toMatchObject({ _tag: 'NaoReconciliavel', status: 403 });
+    expect(posses).toEqual([]);
+  });
+
+  it('B5 — sem gestão, a inspeção lê os dois lados e não escreve nada nem libera a referência', async () => {
+    const escritas: unknown[] = [];
+    const deps = depsCom({
+      async findVendaManualJaRegistrada() { return { pedidoId: 'pedido-local-1' }; },
+      async registrarDesfechoDaTentativa(...args: unknown[]) {
+        escritas.push(args);
+        return { _tag: 'DesfechoGravado' as const };
+      },
+    });
+
+    const resultado = await reconciliarTentativa(
+      scope, REFERENCIA, tentativa(), deps, 'conferir', { podeMutar: false },
+    );
+    const corpo = await respostaDaReconciliacao(resultado).json();
+
+    expect(resultado._tag).toBe('VendaConfirmadaSemRegistro');
+    expect(escritas).toEqual([]);
+    expect(corpo.referenciaLiberada).toBe(false);
+  });
+
+  it('B6 — a tomada de posse apresenta o ESTADO lido junto com a época', async () => {
+    const vistos: Array<{ epoca: number; estado: string }> = [];
+    const deps = depsCom({
+      async assumirTentativaParaReconciliacao(_s: unknown, _t: unknown, epoca: number, estado: string) {
+        vistos.push({ epoca, estado });
+        return { _tag: 'PosseTomada' as const, epoca: epoca + 1 };
+      },
+    });
+
+    await reconciliarTentativa(
+      scope,
+      REFERENCIA,
+      tentativa({ estado: 'em_andamento', epoca: 7, atualizadaEm: new Date(AGORA.getTime() - 10 * 60 * 1000).toISOString() }),
+      deps,
+    );
+
+    expect(vistos).toEqual([{ epoca: 7, estado: 'em_andamento' }]);
+  });
+
+  it('B3 — resolver a ambiguidade registra decisão e evidência, e NÃO fala com o Bling', async () => {
+    const registradas: unknown[] = [];
+    let consultasAoBling = 0;
+    const deps = {
+      now: () => AGORA,
+      store: {
+        async resolverIntervencaoAmbigua(input: unknown) {
+          registradas.push(input);
+          return { _tag: 'AmbiguidadeResolvida' as const, resolucaoId: 'resolucao-1' };
+        },
+      },
+      bling: {
+        async buscarPedidoPorNumeroLoja() {
+          consultasAoBling += 1;
+          return pedidoNoBling;
+        },
+        async cancelarPedidoVenda() {
+          consultasAoBling += 1;
+          return { _tag: 'BlingOk' as const, value: undefined };
+        },
+      },
+    } as unknown as ReconciliacaoDeps;
+
+    const resultado = await reconciliarTentativa(
+      scope, REFERENCIA, tentativa({ epoca: 3 }), deps, 'resolver-ambiguidade', { podeMutar: true },
+      { decisao: 'cancelado', evidencia: 'Pedido 918273 aparece como Cancelado no Bling.' },
+    );
+    const corpo = await respostaDaReconciliacao(resultado).json();
+
+    expect(consultasAoBling).toBe(0);
+    expect(registradas).toEqual([{
+      scope,
+      tentativaId: 'tentativa-1',
+      decisao: 'cancelado',
+      evidencia: 'Pedido 918273 aparece como Cancelado no Bling.',
+      epocaEsperada: 3,
+    }]);
+    expect(corpo.referenciaLiberada).toBe(true);
+  });
+
+  it('B3 — decidir que o pedido NÃO foi cancelado libera o claim mas mantém a venda bloqueada', async () => {
+    const deps = {
+      now: () => AGORA,
+      store: {
+        async resolverIntervencaoAmbigua() {
+          return { _tag: 'AmbiguidadeResolvida' as const, resolucaoId: 'resolucao-2' };
+        },
+      },
+      bling: {},
+    } as unknown as ReconciliacaoDeps;
+
+    const resultado = await reconciliarTentativa(
+      scope, REFERENCIA, tentativa(), deps, 'resolver-ambiguidade', { podeMutar: true },
+      { decisao: 'nao-cancelado', evidencia: 'Pedido 918273 continua Em aberto.' },
+    );
+    const corpo = await respostaDaReconciliacao(resultado).json();
+
+    expect(corpo.referenciaLiberada).toBe(false);
+    expect(corpo.success).toBe(true);
+  });
+
+  it('B3 — dois operadores decidindo: o segundo é recusado, sem sobrescrever o primeiro', async () => {
+    const deps = {
+      now: () => AGORA,
+      store: {
+        async resolverIntervencaoAmbigua() { return { _tag: 'AmbiguidadeJaResolvida' as const }; },
+      },
+      bling: {},
+    } as unknown as ReconciliacaoDeps;
+
+    const resultado = await reconciliarTentativa(
+      scope, REFERENCIA, tentativa(), deps, 'resolver-ambiguidade', { podeMutar: true },
+      { decisao: 'cancelado', evidencia: 'Conferido no Bling.' },
+    );
+
+    expect(resultado).toMatchObject({ _tag: 'NaoReconciliavel', status: 409 });
   });
 });

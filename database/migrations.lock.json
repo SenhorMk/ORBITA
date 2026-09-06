@@ -309,7 +309,7 @@
     {
       "order": 62,
       "path": "../database/59_tentativas_venda_manual_idempotentes.sql",
-      "sha256": "8cf06fac2eb13b9e30793b484cd786adac457811924549a1c649506d48adea5d"
+      "sha256": "3efd960b5e444063f2e2be7097b758e8f9cba38dad61312ff1fefc0ac3d7bd1d"
     }
   ],
   "references": [

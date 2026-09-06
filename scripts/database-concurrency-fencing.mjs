@@ -116,7 +116,9 @@ export async function runFencingRehearsal({
     let epocaDaReconciliacao = epocaLidaPelaReconciliacao;
     if (esperado === 'com-fencing') {
       const { rows: assumidas } = await client.query(
-        `select public.assumir_tentativa_para_reconciliacao($1, $2, $3) as epoca`,
+        // O estado esperado entra junto com a epoca desde a 9a rodada (B6):
+        // a epoca sozinha nao registra que o estado andou.
+        `select public.assumir_tentativa_para_reconciliacao($1, $2, $3, 'em_andamento') as epoca`,
         [ORG_ID, original.tentativa_id, epocaLidaPelaReconciliacao],
       );
       epocaDaReconciliacao = assumidas[0].epoca;

@@ -8,6 +8,7 @@ import { runManualOrderRaceRehearsal } from './database-concurrency.mjs';
 import { runTentativaClaimRaceRehearsal } from './database-concurrency-tentativas.mjs';
 import { runPendenciaIdenticaRaceRehearsal } from './database-concurrency-pendencia.mjs';
 import { runFencingRehearsal } from './database-concurrency-fencing.mjs';
+import { runPosseDaVendaRehearsal } from './database-concurrency-posse-da-venda.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -26,6 +27,7 @@ let outcomeVenda;
 let outcomeTentativa;
 let outcomePendencia;
 let outcomeFencing;
+let outcomePosse;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -33,6 +35,7 @@ try {
     outcomeTentativa = started;
     outcomePendencia = started;
     outcomeFencing = started;
+    outcomePosse = started;
   } else {
     const applied = await applyCanonicalMigrations({});
     if (applied._tag === 'err') {
@@ -40,11 +43,13 @@ try {
       outcomeTentativa = applied;
       outcomePendencia = applied;
       outcomeFencing = applied;
+      outcomePosse = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
       outcomePendencia = await runPendenciaIdenticaRaceRehearsal();
       outcomeFencing = await runFencingRehearsal();
+      outcomePosse = await runPosseDaVendaRehearsal();
     }
   }
 } finally {
@@ -95,6 +100,19 @@ if (outcomeFencing._tag === 'err') {
     `[database-concurrency] fencing provado: a reconciliação tomou a posse (época ${outcomeFencing.value.epocaDoOriginal} → `
       + `${outcomeFencing.value.epocaDepoisDaTomada}) e a escrita do executor anterior foi recusada com `
       + `${outcomeFencing.value.escritaDoZumbiRecusadaCom}; estado final ${outcomeFencing.value.estadoFinal}`,
+  );
+}
+
+if (outcomePosse._tag === 'err') {
+  console.error(`[database-concurrency] ${outcomePosse.error._tag}: ${failureMessage(outcomePosse.error)}`);
+  falhou = true;
+} else {
+  console.log(
+    `[database-concurrency] posse da venda provada: a reconciliação tomou a posse (época ${outcomePosse.value.epocaDoOriginal} → `
+      + `${outcomePosse.value.epocaDepoisDaTomada}) e a gravação do executor cercado foi recusada com `
+      + `${outcomePosse.value.gravacaoDoZumbiRecusadaCom} sem efeito residual `
+      + `(pedidos=${outcomePosse.value.pedidosDoZumbi}, estoque=${outcomePosse.value.estoquePreservado}); `
+      + `com a posse vigente, o ledger fecha na mesma transação (${outcomePosse.value.ledgerConcluidoNaMesmaTransacao})`,
   );
 }
 

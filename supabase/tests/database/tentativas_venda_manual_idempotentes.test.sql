@@ -63,7 +63,7 @@ insert into public.membros_organizacao (organizacao_id, user_id, papel)
 values ('59100000-0000-4000-8000-000000000001', '59000000-0000-4000-8000-000000000001', 'owner'),
        ('59100000-0000-4000-8000-000000000002', '59000000-0000-4000-8000-000000000002', 'owner');
 
-select plan(89);
+select plan(109);
 
 -- ----------------------------------------------------------------------------
 -- 1-4. Primeira reivindicação: tentativa nova.
@@ -597,7 +597,7 @@ select is((select epoca from fenc), 1, '70. a reivindicação devolve a época v
 -- A reconciliação toma a posse: a época avança.
 create temp table posse as
 select public.assumir_tentativa_para_reconciliacao(
-    '59100000-0000-4000-8000-000000000001', (select tentativa_id from fenc), 1
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from fenc), 1, 'em_andamento'
 ) as epoca;
 
 select is((select epoca from posse), 2, '71. tomar a posse avança a época');
@@ -616,7 +616,7 @@ select throws_ok(
 -- Tomar a posse duas vezes com a mesma época também é recusado: só um dono.
 select throws_ok(
     format(
-        $q$select public.assumir_tentativa_para_reconciliacao(%L, %L, 1)$q$,
+        $q$select public.assumir_tentativa_para_reconciliacao(%L, %L, 1, 'em_andamento')$q$,
         '59100000-0000-4000-8000-000000000001', (select tentativa_id from fenc)
     ),
     '55P03',
@@ -811,6 +811,273 @@ select is(
     (select count(*) from public.intervencoes_venda_manual where id = (select id from interv_fin)),
     1::bigint,
     '89. …e o registro de intervenção continua lá, com a referência preservada'
+);
+
+
+-- ----------------------------------------------------------------------------
+-- 90-91. B6 (9ª rodada) — TOMAR POSSE EXIGE ESTADO **E** ÉPOCA.
+--
+-- Conferir só a época aceitava este entrelaçamento: a rota lê `em_andamento`
+-- na época N; o handler conclui a tentativa, ainda na época N; a reconciliação
+-- assume com N e passa a agir sobre uma tentativa que já tem desfecho. A época
+-- não registra que o ESTADO andou.
+--
+-- REINTRODUZIR O DEFEITO: remova `and estado = p_estado_esperado` do UPDATE em
+-- `assumir_tentativa_para_reconciliacao`. A asserção 90 falha.
+-- ----------------------------------------------------------------------------
+create temp table tent_cas as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'cas-ref-1', 'fingerprint-cas', 'valores-cas'
+);
+
+select throws_ok(
+    format(
+        $q$select public.assumir_tentativa_para_reconciliacao(%L, %L, 1, 'indeterminada')$q$,
+        '59100000-0000-4000-8000-000000000001',
+        (select tentativa_id from tent_cas)
+    ),
+    '55P03',
+    null,
+    '90. época certa mas estado esperado errado: a posse NÃO é tomada'
+);
+
+select is(
+    (select public.assumir_tentativa_para_reconciliacao(
+        '59100000-0000-4000-8000-000000000001', (select tentativa_id from tent_cas), 1, 'em_andamento'
+    )),
+    2,
+    '91. estado e época corretos: a posse é tomada e a época avança'
+);
+
+-- ----------------------------------------------------------------------------
+-- 92-95. B7 (9ª rodada) — O BYPASS DO `SET NULL` É ESTRITO.
+--
+-- O caminho especial que deixa `tentativa_id → NULL` passar existe para o
+-- ciclo de vida (apagar a tentativa, apagar a organização). A 8ª rodada
+-- comparava só PARTE dos campos, então um UPDATE podia desvincular a tentativa
+-- E, na mesma instrução, reescrever `bling_pedido_id`, `solicitada_em`,
+-- `concluida_em` ou `created_at` — reescrevendo história por dentro do bypass.
+--
+-- REINTRODUZIR O DEFEITO: volte o ramo do `set null` a comparar só
+-- `id/organizacao_id/referencia_local/acao/ator_id/resultado/detalhe`. As
+-- asserções 92-94 falham.
+-- ----------------------------------------------------------------------------
+create temp table tent_b7 as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'b7-ref-1', 'fingerprint-b7', 'valores-b7'
+);
+create temp table interv_b7 as
+select public.reivindicar_intervencao_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from tent_b7),
+    'cancelar-no-bling', '59000000-0000-4000-8000-000000000001', '2000'
+) as id;
+
+select throws_ok(
+    format(
+        $q$update public.intervencoes_venda_manual set tentativa_id = null, bling_pedido_id = '9999' where id = %L$q$,
+        (select id from interv_b7)
+    ),
+    '42501',
+    null,
+    '92. desvincular a tentativa NÃO pode carregar um bling_pedido_id novo'
+);
+
+select throws_ok(
+    format(
+        $q$update public.intervencoes_venda_manual set tentativa_id = null, solicitada_em = now() + interval '1 day' where id = %L$q$,
+        (select id from interv_b7)
+    ),
+    '42501',
+    null,
+    '93. …nem reescrever quando a intervenção foi solicitada'
+);
+
+select throws_ok(
+    format(
+        $q$update public.intervencoes_venda_manual set tentativa_id = null, created_at = now() + interval '1 day', concluida_em = now() where id = %L$q$,
+        (select id from interv_b7)
+    ),
+    '42501',
+    null,
+    '94. …nem `created_at`/`concluida_em`'
+);
+
+select lives_ok(
+    format($q$update public.intervencoes_venda_manual set tentativa_id = null where id = %L$q$, (select id from interv_b7)),
+    '95. o desvínculo puro — que é o que o `on delete set null` faz — continua passando'
+);
+
+-- ----------------------------------------------------------------------------
+-- 96-105. B3 (9ª rodada) — A AMBIGUIDADE DEIXA DE SER UM BECO SEM SAÍDA.
+--
+-- Uma intervenção `ambigua` bloqueia o claim de propósito (a mutação no ERP
+-- pode ter acontecido). Antes desta rodada, NADA a desbloqueava: a tentativa
+-- ficava presa para sempre. A saída é uma decisão humana registrada, sem
+-- repetir o PATCH, e APPEND-ONLY: o fato original não é reescrito.
+--
+-- REINTRODUZIR O DEFEITO: volte o predicado do índice a
+-- `resultado is null or resultado = 'ambigua'`. A asserção 99 falha.
+-- ----------------------------------------------------------------------------
+create temp table tent_b3 as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'b3-ref-1', 'fingerprint-b3', 'valores-amb'
+);
+create temp table interv_b3 as
+select public.reivindicar_intervencao_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select tentativa_id from tent_b3),
+    'cancelar-no-bling', '59000000-0000-4000-8000-000000000001', '3000'
+) as id;
+
+select public.encerrar_intervencao_venda_manual(
+    '59100000-0000-4000-8000-000000000001', (select id from interv_b3), 'ambigua', 'ACK do PATCH nao chegou'
+);
+
+select throws_ok(
+    format(
+        $q$select public.reivindicar_intervencao_venda_manual(%L, %L, 'cancelar-no-bling', %L, '3000')$q$,
+        '59100000-0000-4000-8000-000000000001',
+        (select tentativa_id from tent_b3),
+        '59000000-0000-4000-8000-000000000001'
+    ),
+    '55006',
+    null,
+    '96. enquanto a ambiguidade não é resolvida, nenhum novo cancelamento é reivindicado'
+);
+
+select throws_ok(
+    format(
+        $q$select public.resolver_intervencao_ambigua(%L, %L, %L, 'cancelado', '   ', 1)$q$,
+        '59100000-0000-4000-8000-000000000001',
+        (select tentativa_id from tent_b3),
+        '59000000-0000-4000-8000-000000000001'
+    ),
+    '22023',
+    null,
+    '97. resolver sem evidência é recusado — decisão sem lastro não é decisão'
+);
+
+select throws_ok(
+    format(
+        $q$select public.resolver_intervencao_ambigua(%L, %L, %L, 'cancelado', 'Conferido no ERP', 1)$q$,
+        '59100000-0000-4000-8000-000000000002',
+        (select tentativa_id from tent_b3),
+        '59000000-0000-4000-8000-000000000002'
+    ),
+    'P0002',
+    null,
+    '98. a organização B não enxerga — muito menos resolve — a ambiguidade da organização A'
+);
+
+create temp table resolucao_b3 as
+select public.resolver_intervencao_ambigua(
+    '59100000-0000-4000-8000-000000000001',
+    (select tentativa_id from tent_b3),
+    '59000000-0000-4000-8000-000000000002',
+    'cancelado',
+    'Pedido 3000 aparece como Cancelado no Bling.',
+    1
+) as id;
+
+select is(
+    (select count(*) from public.intervencoes_venda_manual
+      where tentativa_id = (select tentativa_id from tent_b3)),
+    2::bigint,
+    '99. a resolução é uma LINHA NOVA: append-only, não reescrita'
+);
+
+select is(
+    (select resultado || '|' || ator_id::text || '|' || detalhe
+       from public.intervencoes_venda_manual where id = (select id from interv_b3)),
+    'ambigua|59000000-0000-4000-8000-000000000001|ACK do PATCH nao chegou',
+    '100. o fato histórico original continua exatamente como foi gravado'
+);
+
+select is(
+    (select ator_id from public.intervencoes_venda_manual where id = (select id from resolucao_b3)),
+    '59000000-0000-4000-8000-000000000002'::uuid,
+    '101. …e a decisão nova registra o ator que a tomou, não o original'
+);
+
+select is(
+    (select estado from public.tentativas_venda_manual where id = (select tentativa_id from tent_b3)),
+    'falhou',
+    '102. decidido `cancelado`: nada ficou pendente no ERP, e a referência é liberada'
+);
+
+select lives_ok(
+    format(
+        $q$select public.reivindicar_intervencao_venda_manual(%L, %L, 'cancelar-no-bling', %L, '3000')$q$,
+        '59100000-0000-4000-8000-000000000001',
+        (select tentativa_id from tent_b3),
+        '59000000-0000-4000-8000-000000000001'
+    ),
+    '103. resolvida a ambiguidade, o claim volta a poder ser reivindicado'
+);
+
+select throws_ok(
+    format(
+        $q$update public.intervencoes_venda_manual set resolucao_id = %L where id = %L$q$,
+        (select id from interv_b7),
+        (select id from interv_b3)
+    ),
+    '42501',
+    null,
+    '104. a resolução não pode ser reapontada depois de registrada'
+);
+
+select throws_ok(
+    format(
+        $q$select public.resolver_intervencao_ambigua(%L, %L, %L, 'cancelado', 'Conferido de novo', 1)$q$,
+        '59100000-0000-4000-8000-000000000001',
+        (select tentativa_id from tent_b3),
+        '59000000-0000-4000-8000-000000000001'
+    ),
+    'P0002',
+    null,
+    '105. resolver duas vezes não sobrescreve a primeira decisão'
+);
+
+-- ----------------------------------------------------------------------------
+-- 106-109. As funções novas seguem a mesma disciplina das antigas: sem
+--          execução para papéis do cliente, `search_path` fixo, e a posse
+--          respondida pela época vigente.
+-- ----------------------------------------------------------------------------
+select ok(
+    not has_function_privilege('authenticated', 'public.confirmar_posse_da_tentativa(uuid,uuid,integer)', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.registrar_venda_manual_com_posse(uuid,uuid,uuid,text,text,numeric,numeric,numeric,text,text,date,jsonb,uuid,integer)', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.resolver_intervencao_ambigua(uuid,uuid,uuid,text,text,integer)', 'EXECUTE'),
+    '106. nenhuma das funções novas é executável por `authenticated`'
+);
+
+select is(
+    (select count(*) from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and p.proname in ('confirmar_posse_da_tentativa', 'registrar_venda_manual_com_posse', 'resolver_intervencao_ambigua')
+        and 'search_path=public' = any(coalesce(p.proconfig, array[]::text[]))),
+    3::bigint,
+    '107. …e as três fixam `search_path`, como toda função `security definer` daqui'
+);
+
+create temp table tent_posse as
+select * from public.reivindicar_tentativa_venda_manual(
+    '59100000-0000-4000-8000-000000000001', 'posse-ref-1', 'fingerprint-posse', 'valores-posse'
+);
+
+select is(
+    (select public.confirmar_posse_da_tentativa(
+        '59100000-0000-4000-8000-000000000001', (select tentativa_id from tent_posse), 1
+    )),
+    true,
+    '108. a época vigente confirma a posse'
+);
+
+select is(
+    (select public.confirmar_posse_da_tentativa(
+        '59100000-0000-4000-8000-000000000001', (select tentativa_id from tent_posse), 99
+    )),
+    false,
+    '109. uma época antiga não confirma — e é isso que barra o efeito externo do zumbi'
 );
 
 select * from finish();

@@ -349,7 +349,11 @@ function lojaEmMemoria(comTomada: boolean): ManualOrderStorePort {
       // coberto em `manual-order.test.ts`) — sempre uma tentativa nova.
       return { _tag: 'TentativaNova', tentativaId: 'tentativa-corrida-1', epoca: 1 };
     },
-    async registrarDesfechoDaTentativa() { /* nada a verificar aqui */ },
+    async registrarDesfechoDaTentativa() { return { _tag: 'DesfechoGravado' as const }; },
+    async confirmarPosse() { return { _tag: 'PosseVigente' as const }; },
+    async resolverIntervencaoAmbigua() {
+      return { _tag: 'AmbiguidadeResolvida' as const, resolucaoId: 'resolucao-corrida-1' };
+    },
     async lerTentativaPorReferencia() { return null; },
     async reivindicarIntervencao() { return { _tag: 'IntervencaoReivindicada', intervencaoId: 'intervencao-1' }; },
     async encerrarIntervencao() { /* este teste não exercita intervenção */ },

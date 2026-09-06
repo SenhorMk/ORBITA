@@ -1,8 +1,13 @@
 -- 59_tentativas_venda_manual_idempotentes.sql
--- Forward-only. Ticket 30, fatia 3 — endurecida nas 3ª, 4ª e 5ª rodadas de
--- revisão. NUNCA APLICADA REMOTAMENTE: as rodadas seguintes corrigiram esta
--- migration no lugar, em vez de empilhar 60/61 sobre um schema que ainda não
--- existe em banco nenhum.
+-- Forward-only. Ticket 30, fatia 3 — endurecida da 3ª à 9ª rodada de revisão.
+-- NUNCA APLICADA REMOTAMENTE: as rodadas seguintes corrigiram esta migration
+-- no lugar, em vez de empilhar 60/61 sobre um schema que ainda não existe em
+-- banco nenhum.
+--
+-- A 9ª rodada acrescentou as seções 9, 10 e 11 (posse como pré-condição do
+-- efeito, venda e ledger na mesma transação, e a saída da ambiguidade), além
+-- de endurecer o gatilho de imutabilidade e o CAS da tomada de posse. Cada uma
+-- diz, no seu próprio cabeçalho, qual defeito fecha e como reintroduzi-lo.
 --
 -- ---------------------------------------------------------------------------
 -- O DEFEITO QUE ESTA MIGRATION FECHA
@@ -464,7 +469,10 @@ create table if not exists public.intervencoes_venda_manual (
     -- Repetida aqui de propósito: a tentativa pode ser removida (cascade da
     -- organização) e o rastro não deve virar um id órfão sem significado.
     referencia_local  text not null,
-    acao              text not null check (acao in ('cancelar-no-bling')),
+    -- `resolver-ambiguidade` (9ª rodada de revisão) é o registro APPEND-ONLY
+    -- da decisão humana que encerra um cancelamento que ficou `ambigua`. Ele
+    -- NÃO repete o PATCH no Bling: só afirma o que a pessoa observou lá.
+    acao              text not null check (acao in ('cancelar-no-bling', 'resolver-ambiguidade')),
     -- O pedido no ERP sobre o qual a intervenção age. Nunca o payload da
     -- venda: rastro de intervenção não é lugar de dado comercial.
     bling_pedido_id   text,
@@ -476,8 +484,23 @@ create table if not exists public.intervencoes_venda_manual (
     -- Motivo legível quando o provedor recusa: mensagem do Bling, não
     -- diagnóstico interno nem segredo.
     detalhe           text,
+    -- Aponta para a intervencao de `resolver-ambiguidade` que encerrou ESTA
+    -- (9ª rodada). E o UNICO campo que pode ser escrito depois do desfecho, e
+    -- so uma vez: o fato historico (`resultado = 'ambigua'`, ator, instante,
+    -- detalhe) permanece exatamente como foi gravado.
+    resolucao_id      uuid references public.intervencoes_venda_manual(id) on delete set null,
     created_at        timestamptz not null default now()
 );
+
+-- Reexecucao sobre uma instalacao anterior desta mesma migration: as duas
+-- linhas acima nao existiam quando a tabela foi criada.
+alter table public.intervencoes_venda_manual
+    add column if not exists resolucao_id uuid references public.intervencoes_venda_manual(id) on delete set null;
+alter table public.intervencoes_venda_manual
+    drop constraint if exists intervencoes_venda_manual_acao_check;
+alter table public.intervencoes_venda_manual
+    add constraint intervencoes_venda_manual_acao_check
+    check (acao in ('cancelar-no-bling', 'resolver-ambiguidade'));
 
 -- O CLAIM: no máximo UMA intervenção em voo por tentativa. Uma segunda
 -- requisição simultânea bate aqui e é recusada antes de tocar o ERP.
@@ -528,22 +551,80 @@ create or replace function public.fn_intervencao_venda_manual_imutavel()
 returns trigger
 language plpgsql
 as $$
+declare
+    -- Todo campo historico do registro, exceto o unico que cada saida abaixo
+    -- tem permissao de mover. Enumerado UMA vez, em vez de repetido em cada
+    -- ramo: a 8a rodada listava so parte deles no bypass do `set null`, e um
+    -- campo esquecido numa lista parcial e exatamente como a imutabilidade
+    -- vaza sem ninguem ver (9a rodada de revisao, B7).
+    v_resto_intacto_no_set_null boolean;
+    v_resto_intacto_na_resolucao boolean;
 begin
+    v_resto_intacto_no_set_null :=
+            new.id is not distinct from old.id
+        and new.organizacao_id is not distinct from old.organizacao_id
+        and new.referencia_local is not distinct from old.referencia_local
+        and new.acao is not distinct from old.acao
+        and new.bling_pedido_id is not distinct from old.bling_pedido_id
+        and new.ator_id is not distinct from old.ator_id
+        and new.solicitada_em is not distinct from old.solicitada_em
+        and new.concluida_em is not distinct from old.concluida_em
+        and new.resultado is not distinct from old.resultado
+        and new.detalhe is not distinct from old.detalhe
+        and new.resolucao_id is not distinct from old.resolucao_id
+        and new.created_at is not distinct from old.created_at;
+
     -- O `on delete set null` da tentativa chega aqui como um UPDATE que muda
     -- SO o `tentativa_id` para NULL. Isso e ciclo de vida, nao reescrita de
     -- historia: passa direto, inclusive num registro ja encerrado. Sem esta
     -- saida, apagar a tentativa (ou a organizacao inteira) falhava com 42501 —
     -- um log "imutavel" travando o lifecycle, que foi o que a 8a rodada de
     -- revisao mandou corrigir.
-    if new.tentativa_id is null and old.tentativa_id is not null
-       and new.id is not distinct from old.id
-       and new.organizacao_id is not distinct from old.organizacao_id
-       and new.referencia_local is not distinct from old.referencia_local
-       and new.acao is not distinct from old.acao
-       and new.ator_id is not distinct from old.ator_id
-       and new.resultado is not distinct from old.resultado
-       and new.detalhe is not distinct from old.detalhe then
+    --
+    -- O bypass e ESTRITO (9a rodada): so o `tentativa_id` pode mover. Qualquer
+    -- outro campo carregado junto — `bling_pedido_id`, `solicitada_em`,
+    -- `concluida_em`, `created_at`, `resolucao_id` — derruba o UPDATE inteiro.
+    if new.tentativa_id is null and old.tentativa_id is not null then
+        if not v_resto_intacto_no_set_null then
+            raise exception 'Registro de intervencao e imutavel: o desvinculo da tentativa nao pode carregar outra mudanca.'
+                using errcode = '42501';
+        end if;
         return new;
+    end if;
+
+    -- RESOLUCAO DE AMBIGUIDADE (9a rodada, B3). Uma intervencao `ambigua`
+    -- bloqueia o claim para sempre se nada puder apontar para o seu desfecho.
+    -- O apontamento e a UNICA escrita permitida depois do desfecho, acontece
+    -- UMA vez, e nao toca em nada do que o registro afirma: o fato historico
+    -- (resultado `ambigua`, ator original, instante, detalhe) fica intacto, e
+    -- a decisao nova vive numa LINHA PROPRIA, com ator e evidencia proprios.
+    v_resto_intacto_na_resolucao :=
+            new.tentativa_id is not distinct from old.tentativa_id
+        and new.id is not distinct from old.id
+        and new.organizacao_id is not distinct from old.organizacao_id
+        and new.referencia_local is not distinct from old.referencia_local
+        and new.acao is not distinct from old.acao
+        and new.bling_pedido_id is not distinct from old.bling_pedido_id
+        and new.ator_id is not distinct from old.ator_id
+        and new.solicitada_em is not distinct from old.solicitada_em
+        and new.concluida_em is not distinct from old.concluida_em
+        and new.resultado is not distinct from old.resultado
+        and new.detalhe is not distinct from old.detalhe
+        and new.created_at is not distinct from old.created_at;
+
+    if old.resolucao_id is null and new.resolucao_id is not null then
+        if old.resultado <> 'ambigua' then
+            raise exception 'So uma intervencao ambigua pode receber resolucao.' using errcode = '42501';
+        end if;
+        if not v_resto_intacto_na_resolucao then
+            raise exception 'Registro de intervencao e imutavel: a resolucao nao pode reescrever o fato original.'
+                using errcode = '42501';
+        end if;
+        return new;
+    end if;
+
+    if new.resolucao_id is distinct from old.resolucao_id then
+        raise exception 'Registro de intervencao e imutavel: a resolucao nao pode ser reapontada.' using errcode = '42501';
     end if;
 
     if new.tentativa_id is distinct from old.tentativa_id then
@@ -680,10 +761,21 @@ grant execute on function public.encerrar_intervencao_venda_manual(uuid, uuid, t
 --   5. outra venda idêntica abre;
 --   6. o handler antigo retoma e grava incondicionalmente.
 -- ---------------------------------------------------------------------------
+drop function if exists public.assumir_tentativa_para_reconciliacao(uuid, uuid, integer);
+
 create or replace function public.assumir_tentativa_para_reconciliacao(
     p_organizacao_id uuid,
     p_tentativa_id uuid,
-    p_epoca_esperada integer
+    p_epoca_esperada integer,
+    -- CAS DE ESTADO, e nao so de epoca (9a rodada de revisao, B6).
+    --
+    -- Conferir a epoca sozinha aceita este entrelacamento: a rota le
+    -- `em_andamento` na epoca N; o handler conclui a tentativa, ainda na epoca
+    -- N; a reconciliacao assume com N e passa a agir sobre uma tentativa que
+    -- ja tem desfecho. A epoca so muda quando alguem TOMA a posse — ela nao
+    -- registra que o estado andou. Tomar posse exige, agora, que o mundo ainda
+    -- seja o mesmo que a rota leu: estado esperado E epoca esperada.
+    p_estado_esperado text
 )
 returns integer
 language plpgsql
@@ -693,8 +785,9 @@ as $$
 declare
     v_nova_epoca integer;
 begin
-    if p_organizacao_id is null or p_tentativa_id is null or p_epoca_esperada is null then
-        raise exception 'Organizacao, tentativa e epoca sao obrigatorias.' using errcode = '22023';
+    if p_organizacao_id is null or p_tentativa_id is null or p_epoca_esperada is null
+       or p_estado_esperado is null then
+        raise exception 'Organizacao, tentativa, epoca e estado esperado sao obrigatorios.' using errcode = '22023';
     end if;
 
     update public.tentativas_venda_manual
@@ -702,13 +795,15 @@ begin
     where id = p_tentativa_id
       and organizacao_id = p_organizacao_id
       and epoca = p_epoca_esperada
+      and estado = p_estado_esperado
     returning epoca into v_nova_epoca;
 
     if v_nova_epoca is null then
         -- Ou a tentativa nao e desta organizacao, ou a epoca ja avancou
         -- (outro executor tomou a posse primeiro). Nos dois casos, esta
         -- reconciliacao NAO e dona e nao pode agir.
-        raise exception 'Nao foi possivel assumir a tentativa (epoca % nao e mais a vigente).', p_epoca_esperada
+        raise exception 'Nao foi possivel assumir a tentativa (estado %/epoca % nao sao mais os vigentes).',
+            p_estado_esperado, p_epoca_esperada
             using errcode = '55P03';
     end if;
 
@@ -716,8 +811,8 @@ begin
 end;
 $$;
 
-revoke all on function public.assumir_tentativa_para_reconciliacao(uuid, uuid, integer) from public, anon, authenticated;
-grant execute on function public.assumir_tentativa_para_reconciliacao(uuid, uuid, integer) to service_role;
+revoke all on function public.assumir_tentativa_para_reconciliacao(uuid, uuid, integer, text) from public, anon, authenticated;
+grant execute on function public.assumir_tentativa_para_reconciliacao(uuid, uuid, integer, text) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- 7. O claim de intervenção passa a cobrir também a AMBIGUIDADE (8ª rodada).
@@ -730,11 +825,19 @@ grant execute on function public.assumir_tentativa_para_reconciliacao(uuid, uuid
 -- Agora o claim segue ocupado enquanto o resultado for nulo OU ambíguo, e só
 -- uma reconciliação explícita da intervenção (que descubra o que de fato
 -- aconteceu) a leva a `confirmada`/`falhou`, liberando.
+--
+-- 9ª RODADA (B3): "só uma reconciliação explícita" não existia. `ambigua`
+-- bloqueava o claim e NADA podia desbloqueá-lo — a tentativa ficava presa para
+-- sempre, e a única saída era mexer no banco à mão. O predicado passa a
+-- excluir a ambiguidade JÁ RESOLVIDA: `resolucao_id` aponta para a linha
+-- append-only que registra quem decidiu, quando e com base em quê. O fato
+-- original continua `ambigua` — a história não é reescrita, é continuada.
 -- ---------------------------------------------------------------------------
 drop index if exists public.uq_intervencao_em_voo_por_tentativa;
+drop index if exists public.uq_intervencao_bloqueante_por_tentativa;
 create unique index if not exists uq_intervencao_bloqueante_por_tentativa
     on public.intervencoes_venda_manual(tentativa_id)
-    where resultado is null or resultado = 'ambigua';
+    where resultado is null or (resultado = 'ambigua' and resolucao_id is null);
 
 -- ---------------------------------------------------------------------------
 -- 8. Finalização ATÔMICA de tentativa + intervenção (8ª rodada).
@@ -802,3 +905,260 @@ $$;
 
 revoke all on function public.finalizar_intervencao_e_tentativa(uuid, uuid, uuid, text, text, text, text, integer) from public, anon, authenticated;
 grant execute on function public.finalizar_intervencao_e_tentativa(uuid, uuid, uuid, text, text, text, text, integer) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 9. POSSE COMO PRÉ-CONDIÇÃO DO EFEITO (9ª rodada de revisão, B2).
+--
+-- O fencing da 8ª rodada protegia o LEDGER: um executor cercado não conseguia
+-- mais gravar o desfecho da tentativa. Não protegia os EFEITOS COMERCIAIS. Um
+-- executor que perdeu a posse ainda podia iniciar chamadas ao ERP — criar o
+-- pedido, lançar o estoque — sobre uma tentativa que já não é dele, inclusive
+-- DEPOIS de a reconciliação ter cancelado o pedido lá.
+--
+-- Esta função é a pergunta barata que precede cada efeito externo: "ainda sou
+-- dono?". Ela não fecha a janela física entre a resposta e a chamada HTTP —
+-- nenhum mecanismo local fecha —, mas garante a propriedade que importa:
+-- **nenhum efeito externo NOVO é iniciado por quem já perdeu a posse.** O
+-- efeito local durável tem garantia mais forte, e vem na seção 10: é atômico
+-- com a posse, não condicionado a uma leitura anterior.
+-- ---------------------------------------------------------------------------
+create or replace function public.confirmar_posse_da_tentativa(
+    p_organizacao_id uuid,
+    p_tentativa_id uuid,
+    p_epoca_esperada integer
+)
+returns boolean
+language sql
+security definer
+set search_path = public
+as $$
+    select exists (
+        select 1
+        from public.tentativas_venda_manual t
+        where t.id = p_tentativa_id
+          and t.organizacao_id = p_organizacao_id
+          and t.epoca = p_epoca_esperada
+          and t.estado = 'em_andamento'
+    );
+$$;
+
+revoke all on function public.confirmar_posse_da_tentativa(uuid, uuid, integer) from public, anon, authenticated;
+grant execute on function public.confirmar_posse_da_tentativa(uuid, uuid, integer) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 10. A VENDA E O LEDGER NA MESMA TRANSAÇÃO (9ª rodada de revisão, B1 e B4).
+--
+-- ## O defeito
+--
+-- `persistVenda` gravava pedido, itens, estoque e financeiro SEM olhar para a
+-- posse da tentativa, e só DEPOIS o handler tentava concluir o ledger com a
+-- época. Isso deixava dois furos, um em cada ponta:
+--
+--   **B1 — o executor cercado commitava a venda.** Sequência real: o handler A
+--   possui a época 1 e já criou o pedido no Bling; pausa antes de persistir; a
+--   reconciliação toma posse (época 2), vê pedido remoto sem venda local,
+--   CANCELA o pedido no Bling e encerra a tentativa; A retoma e grava a venda.
+--   Resultado: venda "completa" no ORBITA — com baixa de estoque e título
+--   financeiro — apontando para um pedido que já não existe mais no ERP.
+--
+--   **B4 — falso sucesso.** Mesmo com a posse certa, a venda commitava e a
+--   conclusão do ledger era uma SEGUNDA chamada, cujo erro genérico era apenas
+--   logado (`registrarDesfechoDaTentativa`). A rota respondia `201` como se a
+--   garantia de idempotência estivesse durável, e ela não estava.
+--
+-- ## A correção
+--
+-- Uma transação só. A posse é conferida com a linha da tentativa TRAVADA
+-- (`for update`), o que serializa a tomada de posse contra este commit: uma
+-- reconciliação concorrente espera este commit e então encontra a época
+-- mudada. Ou a venda inteira E o ledger valem, ou nada vale e quem chamou
+-- recebe `55P03` — nunca "a venda existe mas ninguém registrou".
+-- ---------------------------------------------------------------------------
+create or replace function public.registrar_venda_manual_com_posse(
+    p_organizacao_id uuid,
+    p_actor_id uuid,
+    p_cliente_id uuid,
+    p_bling_pedido_id text,
+    p_numero text,
+    p_total numeric,
+    p_desconto numeric,
+    p_frete numeric,
+    p_forma_pagamento text,
+    p_observacoes text,
+    p_data date,
+    p_itens jsonb,
+    p_tentativa_id uuid,
+    p_epoca_esperada integer
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_tentativa record;
+    v_pedido_id uuid;
+begin
+    if p_tentativa_id is null or p_epoca_esperada is null then
+        raise exception 'Tentativa e epoca sao obrigatorias para registrar a venda.' using errcode = '22023';
+    end if;
+
+    -- `for update` ANTES de qualquer efeito: enquanto esta transacao vive,
+    -- ninguem avanca a epoca desta tentativa. E o que transforma "conferi a
+    -- posse" em "tenho a posse ate commitar".
+    select id, estado, epoca
+    into v_tentativa
+    from public.tentativas_venda_manual
+    where id = p_tentativa_id
+      and organizacao_id = p_organizacao_id
+    for update;
+
+    if v_tentativa.id is null then
+        raise exception 'Tentativa de venda manual nao encontrada nesta organizacao.' using errcode = 'P0002';
+    end if;
+
+    if v_tentativa.epoca <> p_epoca_esperada or v_tentativa.estado <> 'em_andamento' then
+        raise exception 'Tentativa tomada por outro executor (estado %, epoca %); a venda NAO foi gravada.',
+            v_tentativa.estado, v_tentativa.epoca
+            using errcode = '55P03';
+    end if;
+
+    v_pedido_id := public.registrar_venda_manual(
+        p_organizacao_id, p_actor_id, p_cliente_id, p_bling_pedido_id, p_numero,
+        p_total, p_desconto, p_frete, p_forma_pagamento, p_observacoes, p_data, p_itens
+    );
+
+    update public.tentativas_venda_manual
+    set estado = 'concluida',
+        pedido_id = v_pedido_id,
+        bling_pedido_id = coalesce(p_bling_pedido_id, bling_pedido_id)
+    where id = p_tentativa_id
+      and organizacao_id = p_organizacao_id;
+
+    return v_pedido_id;
+end;
+$$;
+
+revoke all on function public.registrar_venda_manual_com_posse(
+    uuid, uuid, uuid, text, text, numeric, numeric, numeric, text, text, date, jsonb, uuid, integer
+) from public, anon, authenticated;
+grant execute on function public.registrar_venda_manual_com_posse(
+    uuid, uuid, uuid, text, text, numeric, numeric, numeric, text, text, date, jsonb, uuid, integer
+) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 11. SAÍDA DA AMBIGUIDADE (9ª rodada de revisão, B3).
+--
+-- Uma intervenção que terminou `ambigua` bloqueava o claim de propósito — e
+-- não tinha como sair disso. A tentativa ficava presa para sempre.
+--
+-- O caminho de saída é uma DECISÃO HUMANA registrada, nunca a repetição
+-- automática do PATCH: quem resolve foi ao Bling, olhou a situação real do
+-- pedido e afirma o que encontrou. Esta função **não chama o ERP**.
+--
+-- APPEND-ONLY. O registro ambíguo original não é reescrito: continua dizendo
+-- `resultado = 'ambigua'`, com o ator, o instante e o detalhe originais. A
+-- decisão nova é uma LINHA PRÓPRIA (`acao = 'resolver-ambiguidade'`), com ator
+-- e evidência próprios. O único campo que se move na linha antiga é o ponteiro
+-- `resolucao_id` — uma vez, imposto pelo gatilho de imutabilidade.
+--
+-- CONCORRÊNCIA. Dois operadores decidindo ao mesmo tempo: o `for update`
+-- serializa, e o segundo encontra `resolucao_id` já preenchido e é recusado
+-- com `55006` — nada de duas resoluções contraditórias para o mesmo fato.
+--
+-- O DESFECHO DA TENTATIVA acompanha a decisão:
+--   `cancelado`     — o pedido está cancelado no ERP; nada ficou pendente lá,
+--                     a tentativa vira `falhou` e a referência é liberada.
+--   `nao-cancelado` — o pedido continua ativo no ERP; a tentativa permanece
+--                     `indeterminada` (bloqueada), mas o claim é liberado para
+--                     que um novo `cancelar-no-bling` possa ser reivindicado.
+-- ---------------------------------------------------------------------------
+create or replace function public.resolver_intervencao_ambigua(
+    p_organizacao_id uuid,
+    -- Endereca a TENTATIVA, nao a intervencao: o indice parcial garante no
+    -- maximo uma intervencao bloqueante por tentativa, entao quem opera nao
+    -- precisa descobrir um id interno para poder decidir.
+    p_tentativa_id uuid,
+    p_ator_id uuid,
+    p_decisao text,
+    p_evidencia text,
+    p_epoca_esperada integer
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_original record;
+    v_resolucao_id uuid;
+    v_estado_tentativa text;
+    v_afetadas integer;
+begin
+    if p_organizacao_id is null or p_tentativa_id is null or p_ator_id is null then
+        raise exception 'Organizacao, tentativa e ator sao obrigatorios.' using errcode = '22023';
+    end if;
+    if p_decisao not in ('cancelado', 'nao-cancelado') then
+        raise exception 'Decisao invalida: %', p_decisao using errcode = '22023';
+    end if;
+    if p_evidencia is null or btrim(p_evidencia) = '' then
+        raise exception 'A resolucao precisa registrar a evidencia observada no ERP.' using errcode = '22023';
+    end if;
+
+    select id, tentativa_id, referencia_local, bling_pedido_id, resultado, resolucao_id
+    into v_original
+    from public.intervencoes_venda_manual
+    where tentativa_id = p_tentativa_id
+      and organizacao_id = p_organizacao_id
+      and resultado = 'ambigua'
+      and resolucao_id is null
+    for update;
+
+    if v_original.id is null then
+        raise exception 'Nao ha intervencao ambigua pendente para esta tentativa nesta organizacao.' using errcode = 'P0002';
+    end if;
+
+    insert into public.intervencoes_venda_manual
+        (organizacao_id, tentativa_id, referencia_local, acao, ator_id, bling_pedido_id,
+         resultado, detalhe, concluida_em)
+    values
+        (p_organizacao_id, v_original.tentativa_id, v_original.referencia_local, 'resolver-ambiguidade',
+         p_ator_id, v_original.bling_pedido_id, 'confirmada',
+         'Decisao: ' || p_decisao || '. Evidencia: ' || p_evidencia, now())
+    returning id into v_resolucao_id;
+
+    update public.intervencoes_venda_manual
+    set resolucao_id = v_resolucao_id
+    where id = v_original.id
+      and organizacao_id = p_organizacao_id
+      and resolucao_id is null;
+
+    get diagnostics v_afetadas = row_count;
+    if v_afetadas = 0 then
+        raise exception 'Esta intervencao ambigua ja foi resolvida.' using errcode = '55006';
+    end if;
+
+    -- A tentativa pode ter sido removida (cascade da organizacao); o rastro
+    -- sobrevive sozinho, e nao ha estado a atualizar.
+    if v_original.tentativa_id is not null then
+        v_estado_tentativa := case when p_decisao = 'cancelado' then 'falhou' else 'indeterminada' end;
+
+        update public.tentativas_venda_manual
+        set estado = v_estado_tentativa
+        where id = v_original.tentativa_id
+          and organizacao_id = p_organizacao_id
+          and (p_epoca_esperada is null or epoca = p_epoca_esperada);
+
+        get diagnostics v_afetadas = row_count;
+        if v_afetadas = 0 then
+            raise exception 'Tentativa tomada por outro executor (epoca % nao e mais a vigente).', p_epoca_esperada
+                using errcode = '55P03';
+        end if;
+    end if;
+
+    return v_resolucao_id;
+end;
+$$;
+
+revoke all on function public.resolver_intervencao_ambigua(uuid, uuid, uuid, text, text, integer) from public, anon, authenticated;
+grant execute on function public.resolver_intervencao_ambigua(uuid, uuid, uuid, text, text, integer) to service_role;

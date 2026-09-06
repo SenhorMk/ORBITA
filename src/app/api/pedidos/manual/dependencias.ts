@@ -12,6 +12,7 @@ import {
   encerrarIntervencao,
   finalizarIntervencaoETentativa,
   reivindicarIntervencao,
+  resolverIntervencaoAmbigua,
 } from './dependenciasDeReconciliacao';
 import type {
   DesfechoDaTentativa,
@@ -23,6 +24,8 @@ import type {
   ManualOrderStorePort,
   PersistManualOrderInput,
   PersistVendaResult,
+  PosseDaTentativa,
+  RegistroDeDesfecho,
   ReivindicacaoDeTentativa,
   TentativaRegistrada,
 } from './ports';
@@ -133,11 +136,13 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
 
     reivindicarTentativa,
     registrarDesfechoDaTentativa,
+    confirmarPosse,
     lerTentativaPorReferencia,
     reivindicarIntervencao,
     encerrarIntervencao,
     assumirTentativaParaReconciliacao,
     finalizarIntervencaoETentativa,
+    resolverIntervencaoAmbigua,
   };
 }
 
@@ -246,7 +251,7 @@ async function registrarDesfechoDaTentativa(
   desfecho: DesfechoDaTentativa,
   estadoEsperado?: TentativaRegistrada['estado'],
   epocaEsperada?: number,
-): Promise<void> {
+): Promise<RegistroDeDesfecho> {
   const { error } = await supabaseServer.rpc('concluir_tentativa_venda_manual', {
     p_organizacao_id: scope.organizationId,
     p_tentativa_id: tentativaId,
@@ -257,31 +262,60 @@ async function registrarDesfechoDaTentativa(
     p_epoca_esperada: epocaEsperada ?? null,
   });
 
-  // `55P03` é o FENCING: a tentativa foi tomada por outro executor. Nunca pode
-  // virar silêncio — quem chamou precisa saber que deixou de ser dono, para
-  // não relatar um desfecho que não foi gravado.
-  if (error?.code === '55P03') {
-    throw new Error('Esta tentativa foi assumida por uma conferência; o registro não foi gravado.');
-  }
-
-  // `40001` é o CAS perdendo: alguém mudou o estado entre a leitura e esta
-  // escrita. Não é falha a ser engolida — quem chamou precisa saber que a
-  // escrita NÃO aconteceu, para não relatar um desfecho que não existe.
-  if (error?.code === '40001') {
-    throw new Error('O estado da tentativa mudou durante a operação; nada foi gravado.');
-  }
-
-  if (error && error.code !== '42P01') {
-    // Não deixa a venda cair por causa do REGISTRO do desfecho — a venda em
-    // si já foi decidida antes desta chamada. Só loga: sem isto, a próxima
-    // tentativa com a mesma referência ficaria presa em 'em_andamento' para
-    // sempre.
+  // TODA falha vira VALOR (9ª rodada de revisão, B4).
+  //
+  // A versão anterior lançava em `55P03`/`40001` e apenas LOGAVA o resto — e
+  // era esse "resto" que produzia o falso sucesso: a venda gravada, o ledger
+  // não, e a rota respondendo `201` como se a garantia de idempotência
+  // estivesse durável. Quem chama precisa poder decidir, e para isso precisa
+  // saber. `42P01` (infra da migration 59 ausente) também é não-gravado: a
+  // política deste fluxo é falha fechada, nunca aberta.
+  if (error) {
     registrarFalhaInterna('pedidos.manual.tentativa.concluir', error);
+    return { _tag: 'DesfechoNaoGravado', causa: new Error(error.message) };
   }
+
+  return { _tag: 'DesfechoGravado' };
 }
 
 /**
- * Grava a venda inteira numa transação única.
+ * "Ainda sou dono desta tentativa?" — a pergunta barata que precede cada
+ * efeito externo (9ª rodada de revisão, B2).
+ *
+ * Falha fechada: não conseguir perguntar é `PosseIndeterminada`, e quem chama
+ * trata isso como "não inicie o efeito", nunca como "provavelmente sim".
+ */
+async function confirmarPosse(
+  scope: VerifiedOrganizationScope,
+  tentativaId: string,
+  epoca: number,
+): Promise<PosseDaTentativa> {
+  const { data, error } = await supabaseServer.rpc('confirmar_posse_da_tentativa', {
+    p_organizacao_id: scope.organizationId,
+    p_tentativa_id: tentativaId,
+    p_epoca_esperada: epoca,
+  });
+
+  if (error) {
+    return { _tag: 'PosseIndeterminada', causa: new Error(`Falha ao confirmar a posse da tentativa: ${error.message}`) };
+  }
+  if (typeof data !== 'boolean') {
+    return { _tag: 'PosseIndeterminada', causa: new Error('confirmar_posse_da_tentativa não devolveu um booleano') };
+  }
+  return data ? { _tag: 'PosseVigente' } : { _tag: 'PossePerdida' };
+}
+
+/**
+ * Grava a venda inteira numa transação única — e, desde a 9ª rodada de
+ * revisão, **junto com a posse da tentativa e a conclusão do ledger**
+ * (`registrar_venda_manual_com_posse`, migration 59, seção 10).
+ *
+ * Antes, isto chamava `registrar_venda_manual` direto: a venda commitava sem
+ * olhar para a posse (um executor cercado gravava por cima de uma
+ * reconciliação que já tinha cancelado o pedido no Bling — B1) e a conclusão
+ * do ledger era uma segunda chamada, cujo erro genérico era só logado, o que
+ * deixava a rota responder `201` sem garantia de idempotência durável (B4).
+ * Agora `55P03` significa, literalmente, que NADA foi gravado.
  *
  * Antes eram quatro chamadas separadas — pedido, itens, baixa de estoque e
  * título financeiro. Uma falha no meio deixava estoque baixado sem título, ou
@@ -316,7 +350,7 @@ async function registrarDesfechoDaTentativa(
  * de certeza.
  */
 async function persistVenda(input: PersistManualOrderInput): Promise<PersistVendaResult> {
-  const { data, error } = await supabaseServer.rpc('registrar_venda_manual', {
+  const { data, error } = await supabaseServer.rpc('registrar_venda_manual_com_posse', {
     p_organizacao_id: input.scope.organizationId,
     p_actor_id: input.scope.actorId,
     p_cliente_id: input.clienteId,
@@ -335,9 +369,16 @@ async function persistVenda(input: PersistManualOrderInput): Promise<PersistVend
       quantidade: item.quantidade,
       valor_unitario: item.produto.preco,
     })),
+    p_tentativa_id: input.tentativaId,
+    p_epoca_esperada: input.epoca,
   });
 
   if (error) {
+    // `55P03` é a posse perdida, e a RPC recusa ANTES de qualquer efeito, com
+    // a linha da tentativa travada: nada foi gravado, e não há o que compensar
+    // nem o que classificar (9ª rodada de revisão, B1).
+    if (error.code === '55P03') return { _tag: 'PersistVendaSemPosse' };
+
     const causa = new Error(error.message);
     return classificarErroDePersistencia(error) === 'Definitiva'
       ? { _tag: 'PersistVendaFalhouDefinitivamente', causa }

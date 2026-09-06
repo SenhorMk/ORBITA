@@ -7,11 +7,34 @@
  */
 import type { NextResponse } from 'next/server';
 
-import type { BlingCallResult, BuscaDePedidoPorNumeroLoja, PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
+import type { BlingCallResult, BuscaDePedidoPorNumeroLoja } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { Dormir } from '@/services/filaDeRequisicoes';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import type { ManualOrderBlingPort } from './portsDoBling';
+import type {
+  FinalizacaoDeIntervencao,
+  FinalizacaoResultado,
+  PosseDaTentativa,
+  RegistroDeDesfecho,
+  ReivindicacaoDeIntervencao,
+  ResolucaoDeAmbiguidade,
+  ResolucaoDeIntervencaoAmbigua,
+  TomadaDePosse,
+} from './portsDeReconciliacao';
 
 export type { Dormir };
+
+export type {
+  DecisaoDeAmbiguidade,
+  FinalizacaoDeIntervencao,
+  FinalizacaoResultado,
+  PosseDaTentativa,
+  RegistroDeDesfecho,
+  ReivindicacaoDeIntervencao,
+  ResolucaoDeAmbiguidade,
+  ResolucaoDeIntervencaoAmbigua,
+  TomadaDePosse,
+} from './portsDeReconciliacao';
 
 /** Cliente do ORBITA já lido dentro do escopo verificado da organização. */
 export interface ManualOrderCliente {
@@ -41,6 +64,16 @@ export interface ResolvedManualOrderItem {
 
 export interface PersistManualOrderInput {
   readonly scope: VerifiedOrganizationScope;
+  /**
+   * A tentativa que autoriza esta gravação, e a época em que ela foi
+   * reivindicada (9ª rodada de revisão, B1).
+   *
+   * Não são metadados: a RPC recusa a gravação inteira se a posse já tiver
+   * mudado. É o que impede um executor cercado de commitar a venda depois de
+   * a reconciliação já ter cancelado o pedido no Bling.
+   */
+  readonly tentativaId: string;
+  readonly epoca: number;
   readonly clienteId: string;
   readonly blingPedidoId: string | null;
   readonly referenciaLocal: string;
@@ -72,7 +105,15 @@ export interface PersistManualOrderInput {
 export type PersistVendaResult =
   | { readonly _tag: 'PersistVendaOk'; readonly pedidoId: string }
   | { readonly _tag: 'PersistVendaFalhouDefinitivamente'; readonly causa: unknown }
-  | { readonly _tag: 'PersistVendaAmbigua'; readonly causa: unknown };
+  | { readonly _tag: 'PersistVendaAmbigua'; readonly causa: unknown }
+  /**
+   * A posse da tentativa já não é de quem chamou (9ª rodada de revisão, B1).
+   * **Nada foi gravado** — a RPC recusa antes de qualquer efeito, com a linha
+   * da tentativa travada. Não é falha a compensar: quem tomou a posse é quem
+   * decide o desfecho, e escrever qualquer coisa daqui seria escrever por cima
+   * de uma decisão alheia.
+   */
+  | { readonly _tag: 'PersistVendaSemPosse' };
 
 /**
  * Persistência da venda manual. É uma porta única de propósito porque pedido,
@@ -157,16 +198,45 @@ export interface ManualOrderStorePort {
      * por cima. CAS sozinho protegia só o sentido inverso.
      */
     epocaEsperada?: number,
-  ): Promise<void>;
+  ): Promise<RegistroDeDesfecho>;
+  /**
+   * Confere se a época apresentada ainda é a vigente (9ª rodada, B2).
+   *
+   * Chamada IMEDIATAMENTE antes de cada efeito externo do fluxo — criar o
+   * pedido no Bling, lançar o estoque de lá. Não fecha a janela física entre a
+   * resposta e o pacote HTTP (nenhum mecanismo local fecha), mas garante que
+   * um executor que JÁ perdeu a posse não inicia efeito novo. O efeito local
+   * durável tem garantia mais forte: `persistVenda` é atômico com a posse.
+   */
+  confirmarPosse(
+    scope: VerifiedOrganizationScope,
+    tentativaId: string,
+    epoca: number,
+  ): Promise<PosseDaTentativa>;
   /**
    * Toma a posse de uma tentativa antiga para reconciliar (8ª rodada).
    * Avança a época, cercando o executor anterior. Devolve a época nova.
+   *
+   * O estado esperado entra junto com a época (9ª rodada, B6): a época sozinha
+   * não registra que o estado andou, e sem ele uma reconciliação podia assumir
+   * uma tentativa que o handler acabara de concluir na MESMA época.
    */
   assumirTentativaParaReconciliacao(
     scope: VerifiedOrganizationScope,
     tentativaId: string,
     epocaEsperada: number,
+    estadoEsperado: TentativaRegistrada['estado'],
   ): Promise<TomadaDePosse>;
+  /**
+   * Encerra, com decisão humana registrada, uma intervenção que ficou
+   * `ambigua` (9ª rodada, B3).
+   *
+   * **Não chama o ERP.** A pessoa foi ao Bling, olhou a situação real do
+   * pedido e afirma o que viu; o registro é append-only — o fato original
+   * continua `ambigua`, e a decisão nova é uma linha própria, com ator e
+   * evidência próprios.
+   */
+  resolverIntervencaoAmbigua(input: ResolucaoDeIntervencaoAmbigua): Promise<ResolucaoDeAmbiguidade>;
   /**
    * Finaliza tentativa e intervenção numa transação só (8ª rodada).
    *
@@ -211,40 +281,6 @@ export interface ManualOrderStorePort {
     referenciaLocal: string,
   ): Promise<TentativaRegistrada | null>;
 }
-
-/** Resultado de tentar tomar a posse de uma tentativa. */
-export type TomadaDePosse =
-  | { readonly _tag: 'PosseTomada'; readonly epoca: number }
-  /** Outro executor tomou a posse primeiro, ou a tentativa mudou. */
-  | { readonly _tag: 'PosseNegada' }
-  | { readonly _tag: 'PosseIndisponivel'; readonly causa: unknown };
-
-export interface FinalizacaoDeIntervencao {
-  readonly scope: VerifiedOrganizationScope;
-  readonly intervencaoId: string;
-  readonly tentativaId: string;
-  readonly resultadoIntervencao: 'confirmada' | 'falhou' | 'ambigua';
-  readonly estadoTentativa: 'concluida' | 'indeterminada' | 'falhou';
-  readonly blingPedidoId: string | null;
-  readonly detalhe: string | null;
-  readonly epocaEsperada: number | null;
-}
-
-/**
- * `NaoPersistiu` é a diferença entre "deu certo" e "o efeito externo
- * aconteceu e não conseguimos registrar" — e é o que impede a resposta de
- * dizer que a referência foi liberada quando ela não foi.
- */
-export type FinalizacaoResultado =
-  | { readonly _tag: 'Persistiu' }
-  | { readonly _tag: 'NaoPersistiu'; readonly causa: unknown };
-
-/** O que a reivindicação de intervenção devolve. */
-export type ReivindicacaoDeIntervencao =
-  | { readonly _tag: 'IntervencaoReivindicada'; readonly intervencaoId: string }
-  /** Já existe uma intervenção em voo para esta tentativa: nada foi executado. */
-  | { readonly _tag: 'IntervencaoJaEmAndamento' }
-  | { readonly _tag: 'IntervencaoIndisponivel'; readonly causa: unknown };
 
 /** Uma linha de `tentativas_venda_manual`, como a reconciliação precisa vê-la. */
 export interface TentativaRegistrada {
@@ -309,47 +345,7 @@ export interface DesfechoDaTentativa {
 }
 
 export type { BlingCallResult, BuscaDePedidoPorNumeroLoja };
-
-export interface ManualOrderBlingPort {
-  /** `GET /formas-pagamentos` — a forma marcada como padrão na conta do proprietário. */
-  getDefaultFormaPagamentoId(): Promise<BlingCallResult<number>>;
-  /** `POST /contatos` — usado quando o cliente local ainda não tem cadastro no Bling. */
-  createContato(input: {
-    nome: string;
-    email: string | null;
-    telefone: string | null;
-    documento: string | null;
-  }): Promise<BlingCallResult<{ id: number }>>;
-  /** `POST /pedidos/vendas` — o payload já vem validado contra o schema oficial. */
-  createPedidoVenda(payload: PedidoVendaPayload): Promise<BlingCallResult<{ id: string; alertas: readonly string[] }>>;
-  /** `POST /pedidos/vendas/{id}/lancar-estoque` — baixa vinculada ao pedido, no depósito padrão. */
-  lancarEstoquePedido(pedidoBlingId: string): Promise<BlingCallResult<void>>;
-  /**
-   * `GET /pedidos/vendas?numerosLojas[]=<referencia>` — procura o pedido pela
-   * referência local que o ORBITA enviou em `numeroLoja` na criação.
-   *
-   * É a peça que torna a reconciliação possível SEM `bling_id` (5ª rodada de
-   * revisão): quando `createPedidoVenda` não devolve resposta, o ORBITA não
-   * sabe o id do pedido — mas sabe a referência, porque ela foi decidida antes
-   * do envio. Perguntar por ela responde a única pergunta que importa: o
-   * pedido existe lá, ou não?
-   *
-   * `null` significa "o Bling respondeu, e não existe pedido com essa
-   * referência" — uma resposta NEGATIVA confirmada, diferente de uma falha de
-   * consulta, que vem como `BlingFailed`.
-   */
-  buscarPedidoPorNumeroLoja(numeroLoja: string): Promise<BlingCallResult<BuscaDePedidoPorNumeroLoja>>;
-  /**
-   * Compensação: marca como cancelado um pedido que o Bling aceitou e o ORBITA
-   * não conseguiu gravar.
-   *
-   * Cancelar, e não apagar. Apagar destruiria o rastro de que a venda chegou a
-   * existir no ERP; cancelado é um estado legítimo que diz "isto não vale", e
-   * a sincronização traz o pedido cancelado para cá — os dois lados convergem
-   * em vez de um esquecer.
-   */
-  cancelarPedidoVenda(pedidoBlingId: string): Promise<BlingCallResult<void>>;
-}
+export type { ManualOrderBlingPort } from './portsDoBling';
 
 export interface ManualOrderAuthPort {
   /** Identidade do ator derivada da sessão verificada. `null` recusa a requisição. */

@@ -6,6 +6,9 @@ import type {
   FinalizacaoDeIntervencao,
   FinalizacaoResultado,
   ReivindicacaoDeIntervencao,
+  ResolucaoDeAmbiguidade,
+  ResolucaoDeIntervencaoAmbigua,
+  TentativaRegistrada,
   TomadaDePosse,
 } from './ports';
 
@@ -29,11 +32,13 @@ export async function assumirTentativaParaReconciliacao(
   scope: VerifiedOrganizationScope,
   tentativaId: string,
   epocaEsperada: number,
+  estadoEsperado: TentativaRegistrada['estado'],
 ): Promise<TomadaDePosse> {
   const { data, error } = await supabaseServer.rpc('assumir_tentativa_para_reconciliacao', {
     p_organizacao_id: scope.organizationId,
     p_tentativa_id: tentativaId,
     p_epoca_esperada: epocaEsperada,
+    p_estado_esperado: estadoEsperado,
   });
 
   if (error?.code === '55P03') return { _tag: 'PosseNegada' };
@@ -118,4 +123,37 @@ export async function finalizarIntervencaoETentativa(
     return { _tag: 'NaoPersistiu', causa: new Error(error.message) };
   }
   return { _tag: 'Persistiu' };
+}
+
+/**
+ * Encerra uma intervenção que ficou `ambigua`, com a decisão humana registrada
+ * (9ª rodada de revisão, B3).
+ *
+ * `55006` é outro operador tendo resolvido primeiro; `P0002` é não haver
+ * ambiguidade pendente; `55P03` é a tentativa ter mudado de dono entre a
+ * leitura e a decisão. Os três viram VALOR, porque a rota reage a cada um de
+ * um jeito — e nenhum deles é "deu certo".
+ */
+export async function resolverIntervencaoAmbigua(
+  input: ResolucaoDeIntervencaoAmbigua,
+): Promise<ResolucaoDeAmbiguidade> {
+  const { data, error } = await supabaseServer.rpc('resolver_intervencao_ambigua', {
+    p_organizacao_id: input.scope.organizationId,
+    p_tentativa_id: input.tentativaId,
+    p_ator_id: input.scope.actorId,
+    p_decisao: input.decisao,
+    p_evidencia: input.evidencia,
+    p_epoca_esperada: input.epocaEsperada,
+  });
+
+  if (error?.code === '55006') return { _tag: 'AmbiguidadeJaResolvida' };
+  if (error?.code === 'P0002') return { _tag: 'SemAmbiguidadePendente' };
+  if (error?.code === '55P03') return { _tag: 'ResolucaoSemPosse' };
+  if (error) {
+    return { _tag: 'ResolucaoIndisponivel', causa: new Error(`Falha ao resolver a ambiguidade: ${error.message}`) };
+  }
+  if (typeof data !== 'string') {
+    return { _tag: 'ResolucaoIndisponivel', causa: new Error('resolver_intervencao_ambigua não devolveu id') };
+  }
+  return { _tag: 'AmbiguidadeResolvida', resolucaoId: data };
 }

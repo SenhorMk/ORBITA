@@ -47,6 +47,13 @@ import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 
 import { cancelarNoBlingEEncerrar } from './intervencaoDeCancelamento';
 import type { ManualOrderDependencies, TentativaRegistrada } from './ports';
+import {
+  ledgerNaoGravado,
+  resolverAmbiguidade,
+  type ResolucaoPedida,
+} from './resolucaoDeAmbiguidade';
+
+export type { ResolucaoPedida };
 
 /**
  * O que a reconciliação precisa: ler o ledger, ler o Bling, gravar o desfecho
@@ -74,7 +81,33 @@ const IDADE_MINIMA_PARA_RECONCILIAR_EM_ANDAMENTO_MS = 2 * 60 * 1000;
  *   não achou agora" não pode, sozinho, liberar a chave. Quem confere no ERP
  *   e conclui que não existe pedido assume essa conclusão nomeadamente.
  */
-export type AcaoDeReconciliacao = 'conferir' | 'cancelar-no-bling' | 'encerrar-como-nao-criada';
+export type AcaoDeReconciliacao =
+  | 'conferir'
+  | 'cancelar-no-bling'
+  | 'encerrar-como-nao-criada'
+  /**
+   * A saída da intervenção `ambigua` (9ª rodada de revisão, B3). Registra a
+   * decisão humana sobre o que de fato aconteceu no ERP. **Não repete o
+   * PATCH** — não chama o Bling em momento nenhum.
+   */
+  | 'resolver-ambiguidade';
+
+/**
+ * O que este ator pode FAZER nesta reconciliação (9ª rodada de revisão, B5).
+ *
+ * Antes desta rodada, `conferir` era tratado como leitura por causa do NOME, e
+ * o que ela fazia de fato era tomar posse da tentativa (avançando a época) e
+ * escrever no ledger. Ou seja: um `member`, com apenas `organization:access`,
+ * conseguia CERCAR um executor legítimo e mudar o desfecho de uma venda.
+ *
+ * A autorização passa a ser pelo EFEITO: mudar posse, escrever no ledger ou
+ * tocar no ERP exige `organization:manage`. Quem não tem gestão continua
+ * podendo INSPECIONAR — e inspeção, aqui, quer dizer literalmente não escrever
+ * nada e nunca declarar a referência liberada.
+ */
+export interface PoderesDaReconciliacao {
+  readonly podeMutar: boolean;
+}
 
 export type ResultadoDaReconciliacao =
   /**
@@ -86,6 +119,19 @@ export type ResultadoDaReconciliacao =
   /** A decisão humana de que nunca houve pedido. Encerra e libera. */
   | { readonly _tag: 'EncerradaComoNaoCriada'; readonly tentativaId: string }
   | { readonly _tag: 'VendaConfirmada'; readonly tentativaId: string; readonly pedidoId: string; readonly blingPedidoId: string }
+  /**
+   * Inspeção sem poder de gestão: os dois lados têm a venda, mas este ator não
+   * pode escrever no ledger — então a referência **não** é declarada liberada.
+   * Relatar a verdade observada sem afirmar um efeito que não aconteceu.
+   */
+  | {
+    readonly _tag: 'VendaConfirmadaSemRegistro';
+    readonly tentativaId: string;
+    readonly pedidoId: string;
+    readonly blingPedidoId: string;
+  }
+  /** A ambiguidade do cancelamento foi encerrada por decisão humana registrada. */
+  | { readonly _tag: 'AmbiguidadeResolvida'; readonly tentativaId: string; readonly liberou: boolean }
   | { readonly _tag: 'PendenteNoBling'; readonly tentativaId: string; readonly blingPedidoId: string }
   /** Cancelamento CONFIRMADO no Bling: nada ficou pendente lá, e a chave foi liberada. */
   | { readonly _tag: 'CanceladoNoBling'; readonly tentativaId: string; readonly blingPedidoId: string }
@@ -143,7 +189,13 @@ export async function reconciliarTentativa(
   tentativa: TentativaRegistrada,
   deps: ReconciliacaoDeps,
   acao: AcaoDeReconciliacao = 'conferir',
+  poderes: PoderesDaReconciliacao = { podeMutar: true },
+  resolucao?: ResolucaoPedida,
 ): Promise<ResultadoDaReconciliacao> {
+  if (acao === 'resolver-ambiguidade') {
+    return resolverAmbiguidade(scope, tentativa, deps, resolucao);
+  }
+
   // FENCING (8ª rodada de revisão). Uma tentativa `em_andamento` velha pode
   // ter um executor original AINDA VIVO. Idade não é sincronização, e CAS
   // sozinho não é fencing: ele protegia só o sentido "handler conclui e a
@@ -156,7 +208,26 @@ export async function reconciliarTentativa(
   // poder escrever (`55P03`).
   let epoca = tentativa.epoca;
   if (tentativa.estado === 'em_andamento') {
-    const posse = await deps.store.assumirTentativaParaReconciliacao(scope, tentativa.id, tentativa.epoca);
+    // Tomar posse é EFEITO, não leitura (9ª rodada, B5): sem gestão, nem
+    // começa — senão um `member` cercaria um executor legítimo.
+    if (!poderes.podeMutar) {
+      return {
+        _tag: 'NaoReconciliavel',
+        motivo:
+          'Esta venda ainda está em execução, e conferi-la exigiria assumi-la — o que só quem administra a '
+          + 'organização pode fazer. Peça a conferência a um administrador.',
+        status: 403,
+      };
+    }
+    // CAS DE ESTADO + ÉPOCA (9ª rodada, B6): a época sozinha não registra que
+    // o estado andou, e sem o estado esperado a reconciliação podia assumir
+    // uma tentativa que o handler acabara de concluir na MESMA época.
+    const posse = await deps.store.assumirTentativaParaReconciliacao(
+      scope,
+      tentativa.id,
+      tentativa.epoca,
+      tentativa.estado,
+    );
     if (posse._tag === 'PosseNegada') {
       return {
         _tag: 'NaoReconciliavel',
@@ -227,8 +298,16 @@ export async function reconciliarTentativa(
     }
 
     // A decisão humana, pedida nomeadamente: alguém conferiu no ERP e assume
-    // que o pedido não existe. Só então a chave é liberada.
-    await deps.store.registrarDesfechoDaTentativa(scope, tentativa.id, { estado: 'falhou' }, undefined, epoca);
+    // que o pedido não existe. Só então a chave é liberada — e só se o
+    // registro dessa liberação for durável (9ª rodada, B4).
+    const registro = await deps.store.registrarDesfechoDaTentativa(
+      scope,
+      tentativa.id,
+      { estado: 'falhou' },
+      undefined,
+      epoca,
+    );
+    if (registro._tag === 'DesfechoNaoGravado') return ledgerNaoGravado(registro.causa);
     return { _tag: 'EncerradaComoNaoCriada', tentativaId: tentativa.id };
   }
 
@@ -236,13 +315,26 @@ export async function reconciliarTentativa(
   const jaRegistrada = await deps.store.findVendaManualJaRegistrada(scope, pedidoNoBling.id);
   if (jaRegistrada !== null) {
     // Os dois lados têm a venda: o que se perdeu foi só a confirmação.
-    await deps.store.registrarDesfechoDaTentativa(
+    if (!poderes.podeMutar) {
+      return {
+        _tag: 'VendaConfirmadaSemRegistro',
+        tentativaId: tentativa.id,
+        pedidoId: jaRegistrada.pedidoId,
+        blingPedidoId: pedidoNoBling.id,
+      };
+    }
+    // FALSO SUCESSO (9ª rodada, B4). A versão anterior devolvia
+    // `VendaConfirmada` — e com ela `referenciaLiberada: true` — mesmo quando
+    // esta gravação falhava, porque o erro genérico era apenas logado. Liberar
+    // uma referência que o ledger não liberou é convidar a próxima duplicação.
+    const registro = await deps.store.registrarDesfechoDaTentativa(
       scope,
       tentativa.id,
       { estado: 'concluida', pedidoId: jaRegistrada.pedidoId, blingPedidoId: pedidoNoBling.id },
       undefined,
       epoca,
     );
+    if (registro._tag === 'DesfechoNaoGravado') return ledgerNaoGravado(registro.causa);
     return {
       _tag: 'VendaConfirmada',
       tentativaId: tentativa.id,
@@ -255,13 +347,17 @@ export async function reconciliarTentativa(
   // a conferência não resolve sozinha. Grava o `bling_id` descoberto de
   // qualquer forma: é ele que torna a resolução possível, e sem ele a
   // tentativa fica cega.
-  await deps.store.registrarDesfechoDaTentativa(
-    scope,
-    tentativa.id,
-    { estado: 'indeterminada', blingPedidoId: pedidoNoBling.id },
-    undefined,
-    epoca,
-  );
+  // Sem gestão, nada é gravado — nem o `bling_id` descoberto. A inspeção
+  // relata o que viu e a tentativa continua exatamente como estava.
+  if (poderes.podeMutar) {
+    await deps.store.registrarDesfechoDaTentativa(
+      scope,
+      tentativa.id,
+      { estado: 'indeterminada', blingPedidoId: pedidoNoBling.id },
+      undefined,
+      epoca,
+    );
+  }
 
   if (acao !== 'cancelar-no-bling') {
     return { _tag: 'PendenteNoBling', tentativaId: tentativa.id, blingPedidoId: pedidoNoBling.id };

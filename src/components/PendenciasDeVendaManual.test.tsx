@@ -167,4 +167,38 @@ describe('PendenciasDeVendaManual', () => {
 
     await waitFor(() => expect(chamadas[1]).toEqual({ referenciaLocal: REFERENCIA, acao: 'cancelar-no-bling' }));
   });
+
+  it('9ª rodada (B3) — cancelamento ambíguo deixa de ser beco sem saída: a pessoa registra o que viu', async () => {
+    semearPendencia();
+    respostaDoServidor = {
+      referenciaLiberada: false,
+      situacao: 'cancelamento_ambiguo',
+      mensagem: 'O cancelamento foi enviado, mas a resposta não chegou.',
+    };
+    render(<PendenciasDeVendaManual open organizacaoId={ORG} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /conferir no bling/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /está cancelado lá/i })).toBeTruthy());
+
+    // Sem evidência, a decisão nem pode ser enviada: uma afirmação que o
+    // provedor não confirmou precisa dizer em que se apoia.
+    expect(screen.getByRole('button', { name: /está cancelado lá/i }).hasAttribute('disabled')).toBe(true);
+
+    await userEvent.type(
+      screen.getByLabelText(/o que você viu/i),
+      'O pedido 918273 aparece como Cancelado.',
+    );
+
+    respostaDoServidor = { referenciaLiberada: true, situacao: 'ambiguidade_resolvida', mensagem: 'Registrado.' };
+    await userEvent.click(screen.getByRole('button', { name: /está cancelado lá/i }));
+
+    // O ORBITA NÃO repete o cancelamento: manda a decisão observada.
+    await waitFor(() => expect(chamadas[1]).toEqual({
+      referenciaLocal: REFERENCIA,
+      acao: 'resolver-ambiguidade',
+      decisao: 'cancelado',
+      evidencia: 'O pedido 918273 aparece como Cancelado.',
+    }));
+    expect(window.localStorage.getItem(CHAVE)).toBeNull();
+  });
 });

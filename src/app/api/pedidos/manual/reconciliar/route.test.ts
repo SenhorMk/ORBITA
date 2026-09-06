@@ -55,6 +55,7 @@ vi.mock('@/lib/supabaseServer', () => ({
       rpcsChamadas.push(nome);
       if (nome === 'assumir_tentativa_para_reconciliacao') return Promise.resolve({ data: 2, error: null });
       if (nome === 'reivindicar_intervencao_venda_manual') return Promise.resolve({ data: 'intervencao-1', error: null });
+      if (nome === 'resolver_intervencao_ambigua') return Promise.resolve({ data: 'resolucao-1', error: null });
       return Promise.resolve({ data: null, error: null });
     },
     from: (tabela: string) => {
@@ -219,6 +220,93 @@ describe('POST /api/pedidos/manual/reconciliar — autorização e ações (rota
 
       expect(resposta.status).toBe(403);
       expect(rpcsChamadas).toEqual([]);
+    });
+  });
+
+  /**
+   * 9ª rodada de revisão. A 8ª autorizava pelo NOME da ação: `conferir` era
+   * "leitura" porque se chama assim. Só que ela tomava posse da tentativa e
+   * escrevia no ledger — então um `member` com apenas `organization:access`
+   * conseguia CERCAR um executor legítimo e mudar o desfecho de uma venda.
+   */
+  describe('B5 — autorização pelo EFEITO, não pelo nome da ação', () => {
+    it('member conferindo uma tentativa EM ANDAMENTO é recusado: tomar posse é efeito', async () => {
+      papel = 'member';
+      tentativaArmazenada = { ...tentativaIndeterminada(), estado: 'em_andamento' };
+      const { POST } = await import('./route');
+
+      const resposta = await POST(requisicao({ referenciaLocal: REFERENCIA, acao: 'conferir' }));
+
+      expect(resposta.status).toBe(403);
+      // O que prova o cerco impedido: a época NÃO foi avançada.
+      expect(rpcsChamadas).not.toContain('assumir_tentativa_para_reconciliacao');
+    });
+
+    it('owner conferindo a MESMA tentativa assume normalmente — a diferença é a capacidade', async () => {
+      papel = 'owner';
+      tentativaArmazenada = { ...tentativaIndeterminada(), estado: 'em_andamento' };
+      const { POST } = await import('./route');
+
+      await POST(requisicao({ referenciaLocal: REFERENCIA, acao: 'conferir' }));
+
+      expect(rpcsChamadas).toContain('assumir_tentativa_para_reconciliacao');
+    });
+
+    it('member conferindo uma indeterminada inspeciona, mas não escreve no ledger', async () => {
+      papel = 'member';
+      const { POST } = await import('./route');
+
+      const resposta = await POST(requisicao({ referenciaLocal: REFERENCIA, acao: 'conferir' }));
+      const corpo = await resposta.json();
+
+      expect(resposta.status).not.toBe(403);
+      expect(rpcsChamadas).not.toContain('concluir_tentativa_venda_manual');
+      expect(corpo.referenciaLiberada).toBe(false);
+    });
+  });
+
+  /** 9ª rodada — B3: a ambiguidade deixa de ser um beco sem saída. */
+  describe('B3 — resolver-ambiguidade', () => {
+    it('member não pode: registrar a decisão muda o estado da venda', async () => {
+      papel = 'member';
+      const { POST } = await import('./route');
+
+      const resposta = await POST(requisicao({
+        referenciaLocal: REFERENCIA,
+        acao: 'resolver-ambiguidade',
+        decisao: 'cancelado',
+        evidencia: 'Conferido no Bling.',
+      }));
+
+      expect(resposta.status).toBe(403);
+      expect(rpcsChamadas).toEqual([]);
+    });
+
+    it('sem decisão e evidência, nada é registrado', async () => {
+      const { POST } = await import('./route');
+
+      const resposta = await POST(requisicao({ referenciaLocal: REFERENCIA, acao: 'resolver-ambiguidade' }));
+
+      expect(resposta.status).toBe(400);
+      expect(rpcsChamadas).toEqual([]);
+    });
+
+    it('com gestão, decisão e evidência: registra e NÃO repete o cancelamento no Bling', async () => {
+      const { POST } = await import('./route');
+
+      const resposta = await POST(requisicao({
+        referenciaLocal: REFERENCIA,
+        acao: 'resolver-ambiguidade',
+        decisao: 'cancelado',
+        evidencia: 'Pedido 918273 aparece como Cancelado no Bling.',
+      }));
+      const corpo = await resposta.json();
+
+      expect(resposta.status).toBe(200);
+      expect(corpo.referenciaLiberada).toBe(true);
+      expect(rpcsChamadas).toContain('resolver_intervencao_ambigua');
+      // O ponto do B3: a saída é uma DECISÃO registrada, não a repetição do PATCH.
+      expect(cancelamentosNoBling).toEqual([]);
     });
   });
 });

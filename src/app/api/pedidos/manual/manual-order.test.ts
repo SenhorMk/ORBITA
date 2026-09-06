@@ -11,6 +11,7 @@ import {
   type BuscaDePedidoPorNumeroLoja,
   type ManualOrderStorePort,
   type PersistManualOrderInput,
+  type PosseDaTentativa,
   type ReivindicacaoDeTentativa,
   type TentativaRegistrada,
 } from './handler';
@@ -49,6 +50,8 @@ interface FakeStore extends ManualOrderStorePort {
   readonly persisted: PersistManualOrderInput[];
   readonly vinculos: Array<{ clienteId: string; blingId: string }>;
   readonly desfechosRegistrados: DesfechoDaTentativa[];
+  /** O CAS de estado apresentado em cada escrita de desfecho (9ª rodada). */
+  readonly estadosEsperadosNoDesfecho: Array<TentativaRegistrada['estado'] | undefined>;
   /** Fingerprints que o handler calculou e mandou reivindicar (5ª rodada). */
   readonly fingerprintsReivindicados: string[];
 }
@@ -77,27 +80,53 @@ function fakeStore(options: {
   reivindicacaoForcada?: ReivindicacaoDeTentativa;
   /** 5ª rodada — o que `lerTentativaPorReferencia` (reconciliação) devolve. */
   tentativaRegistrada?: TentativaRegistrada;
+  /**
+   * 9ª rodada, B2 — o que `confirmarPosse` responde, em ORDEM, antes de cada
+   * efeito externo. Uma lista, e não um valor único, porque o caso interessante
+   * é a posse mudar ENTRE a criação do pedido e a baixa de estoque.
+   */
+  posses?: readonly PosseDaTentativa[];
+  /** 9ª rodada, B4 — o ledger recusa gravar o desfecho. */
+  ledgerNaoGrava?: boolean;
+  /** 9ª rodada, B1 — `persistVenda` recusa por posse perdida. */
+  persistSemPosse?: boolean;
 } = {}): FakeStore {
   const clientesPorOrg = options.clientes ?? { [ORG_A]: cliente() };
   const produtos = options.produtos ?? [produto()];
   const persisted: PersistManualOrderInput[] = [];
   const vinculos: Array<{ clienteId: string; blingId: string }> = [];
   const desfechosRegistrados: DesfechoDaTentativa[] = [];
+  /** O CAS de estado apresentado em cada escrita — nenhuma pode rebaixar um desfecho existente. */
+  const estadosEsperadosNoDesfecho: Array<TentativaRegistrada['estado'] | undefined> = [];
   const fingerprintsReivindicados: string[] = [];
   const apareceNaTentativa = options.vendaApareceNaTentativa ?? 1;
   let tentativasDeConfirmacao = 0;
+  let confirmacoesDePosse = 0;
 
   return {
     persisted,
     vinculos,
     desfechosRegistrados,
+    estadosEsperadosNoDesfecho,
     fingerprintsReivindicados,
     async reivindicarTentativa(_scope, _referencia, fingerprint) {
       fingerprintsReivindicados.push(fingerprint);
       return options.reivindicacaoForcada ?? { _tag: 'TentativaNova', tentativaId: 'tentativa-fake-1', epoca: 1 };
     },
-    async registrarDesfechoDaTentativa(_scope, _tentativaId, desfecho) {
+    async registrarDesfechoDaTentativa(_scope, _tentativaId, desfecho, estadoEsperado) {
       desfechosRegistrados.push(desfecho);
+      estadosEsperadosNoDesfecho.push(estadoEsperado);
+      return options.ledgerNaoGrava
+        ? { _tag: 'DesfechoNaoGravado' as const, causa: new Error('ledger indisponível') }
+        : { _tag: 'DesfechoGravado' as const };
+    },
+    async confirmarPosse() {
+      const proxima = options.posses?.[confirmacoesDePosse];
+      confirmacoesDePosse += 1;
+      return proxima ?? { _tag: 'PosseVigente' as const };
+    },
+    async resolverIntervencaoAmbigua() {
+      return { _tag: 'AmbiguidadeResolvida' as const, resolucaoId: 'resolucao-fake-1' };
     },
     async lerTentativaPorReferencia() {
       return options.tentativaRegistrada ?? null;
@@ -120,6 +149,9 @@ function fakeStore(options: {
       return produtos.filter((p) => produtoIds.includes(p.id));
     },
     async persistVenda(input) {
+      if (options.persistSemPosse) {
+        return { _tag: 'PersistVendaSemPosse' };
+      }
       if (options.persistDefinitiveError) {
         return { _tag: 'PersistVendaFalhouDefinitivamente', causa: options.persistDefinitiveError };
       }
@@ -797,7 +829,7 @@ describe('idempotência entre retentativas da mesma submissão (referenciaLocal)
     expect(store.persisted).toHaveLength(0);
   });
 
-  it('uma tentativa NOVA prossegue normalmente e registra o desfecho concluída', async () => {
+  it('uma tentativa NOVA prossegue, e a conclusão do ledger vai JUNTO com a venda, não depois', async () => {
     const store = fakeStore();
     const bling = fakeBling();
     const handler = createManualOrderHandler(deps({ store, bling }));
@@ -805,9 +837,13 @@ describe('idempotência entre retentativas da mesma submissão (referenciaLocal)
     const response = await handler(requestWith(corpoValido()));
     expect(response.status).toBe(201);
     expect(bling.payloads).toHaveLength(1);
-    expect(store.desfechosRegistrados).toEqual([
-      { estado: 'concluida', pedidoId: 'pedido-local-1', blingPedidoId: '918273' },
-    ]);
+    // 9ª rodada (B1/B4): não existe mais uma SEGUNDA escrita de desfecho no
+    // caminho feliz. A posse viaja dentro da própria gravação da venda, e é a
+    // RPC que conclui a tentativa na mesma transação — era essa segunda
+    // escrita, falhando em silêncio, que produzia `201` sem ledger durável.
+    expect(store.desfechosRegistrados).toEqual([]);
+    expect(store.persisted).toHaveLength(1);
+    expect(store.persisted[0]).toMatchObject({ tentativaId: 'tentativa-fake-1', epoca: 1 });
   });
 
   it('uma falha DEFINITIVA registra o desfecho falhou, para que a mesma referência possa ser reaberta depois', async () => {
@@ -934,5 +970,119 @@ describe('ticket 30, fatia 3 — 5ª rodada: a chave de idempotência carrega o 
     // E não grava desfecho nenhum: a tentativa que existe é da outra venda, e
     // não é desta submissão o direito de concluí-la.
     expect(store.desfechosRegistrados).toEqual([]);
+  });
+});
+
+/**
+ * Ticket 30 — 9ª rodada de revisão. Posse como pré-condição de TODO efeito.
+ *
+ * As rodadas anteriores cercavam o executor antigo só no LEDGER: ele não
+ * conseguia mais gravar o desfecho da tentativa. Continuava podendo produzir
+ * efeito — chamar o ERP e, pior, commitar a venda local — depois de já ter
+ * perdido a posse. Estes testes fixam a regra nova: **quem não é dono não
+ * inicia efeito, e nenhuma resposta de sucesso sai sem estado durável.**
+ */
+describe('9ª rodada — posse como pré-condição do efeito (B1, B2, B4)', () => {
+  it('B2 — posse perdida ANTES da criação: o Bling não é chamado, e o ledger não é tocado', async () => {
+    const store = fakeStore({ posses: [{ _tag: 'PossePerdida' }] });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+
+    expect(response.status).toBe(409);
+    expect(bling.payloads).toHaveLength(0);
+    expect(store.persisted).toHaveLength(0);
+    // Escrever aqui seria escrever por cima da decisão de quem TOMOU a posse.
+    expect(store.desfechosRegistrados).toEqual([]);
+  });
+
+  it('B2 — posse perdida ENTRE a criação e a baixa de estoque: não lança estoque de um pedido alheio', async () => {
+    const store = fakeStore({ posses: [{ _tag: 'PosseVigente' }, { _tag: 'PossePerdida' }] });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+
+    expect(response.status).toBe(409);
+    expect(bling.payloads).toHaveLength(1);
+    expect(bling.estoqueLancado).toEqual([]);
+    expect(store.persisted).toHaveLength(0);
+    expect(store.desfechosRegistrados).toEqual([]);
+  });
+
+  it('B2 — não conseguir PERGUNTAR pela posse falha fechada: nada é enviado ao ERP', async () => {
+    const store = fakeStore({ posses: [{ _tag: 'PosseIndeterminada', causa: new Error('sem conexão') }] });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+
+    expect(response.status).toBe(409);
+    expect(bling.payloads).toHaveLength(0);
+  });
+
+  it('B1 — a gravação recusada por posse perdida NÃO compensa nem escreve: quem tomou a posse decide', async () => {
+    const store = fakeStore({ persistSemPosse: true });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+
+    expect(response.status).toBe(409);
+    expect(store.persisted).toHaveLength(0);
+    expect(store.desfechosRegistrados).toEqual([]);
+    // Cancelar aqui destruiria no ERP um pedido que a nova dona pode estar
+    // usando para concluir a MESMA venda.
+    expect(bling.cancelados).toEqual([]);
+  });
+
+  it('B4 — venda achada pela confirmação mas ledger não gravado: a resposta NÃO é sucesso', async () => {
+    const store = fakeStore({
+      persistAmbiguousError: new Error('AbortError: The operation was aborted'),
+      vendaJaRegistradaPedidoId: 'pedido-local-1',
+      ledgerNaoGrava: true,
+    });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+    const corpo = await response.json();
+
+    // Antes da 9ª rodada isto respondia 200 com `success: true`, afirmando uma
+    // garantia de idempotência que o ledger não tinha registrado.
+    expect(response.status).toBe(500);
+    expect(corpo.success).toBe(false);
+    expect(corpo.estadoIndeterminado).toBe(true);
+  });
+
+  it('a escrita pós-falha NÃO pode rebaixar uma tentativa que a própria transação já concluiu', async () => {
+    // A venda e o ledger commitam juntos. Se a RESPOSTA dessa transação se
+    // perde, o handler vê `PersistVendaAmbigua` sobre uma tentativa que já
+    // está `concluida`. Gravar `indeterminada` por cima travaria uma venda que
+    // existe — e, sem `bling_id`, a reconciliação não teria como destravá-la.
+    const store = fakeStore({ persistAmbiguousError: new Error('AbortError: The operation was aborted') });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    await handler(requestWith(corpoValido()));
+
+    expect(store.estadosEsperadosNoDesfecho).toEqual(['em_andamento']);
+  });
+
+  it('B4 — com o ledger gravando, o mesmo caminho volta a responder sucesso', async () => {
+    const store = fakeStore({
+      persistAmbiguousError: new Error('AbortError: The operation was aborted'),
+      vendaJaRegistradaPedidoId: 'pedido-local-1',
+    });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+
+    expect(response.status).toBe(200);
+    expect(store.desfechosRegistrados).toEqual([
+      { estado: 'concluida', pedidoId: 'pedido-local-1', blingPedidoId: '918273' },
+    ]);
   });
 });

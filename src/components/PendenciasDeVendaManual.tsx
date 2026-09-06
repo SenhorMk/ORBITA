@@ -43,13 +43,31 @@ interface RespostaDeReconciliacao {
  * uma listagem vazia — ver `evidence/30-visibilidade-do-bling-*.md`), e a
  * outra escreve no ERP. Nenhuma acontece sem ser pedida nomeadamente.
  */
-type AcaoDePendencia = 'conferir' | 'encerrar-como-nao-criada' | 'cancelar-no-bling';
+type AcaoDePendencia =
+  | 'conferir'
+  | 'encerrar-como-nao-criada'
+  | 'cancelar-no-bling'
+  /**
+   * A saída do cancelamento que ficou ambíguo (9ª rodada de revisão). Não
+   * repete o cancelamento: registra o que a pessoa observou no Bling.
+   */
+  | 'resolver-ambiguidade';
 
-async function pedirAoServidor(referencia: string, acao: AcaoDePendencia): Promise<RespostaDeReconciliacao> {
+/** O que a pessoa afirma ter visto no ERP ao resolver uma ambiguidade. */
+interface DecisaoDaAmbiguidade {
+  readonly decisao: 'cancelado' | 'nao-cancelado';
+  readonly evidencia: string;
+}
+
+async function pedirAoServidor(
+  referencia: string,
+  acao: AcaoDePendencia,
+  decisao?: DecisaoDaAmbiguidade,
+): Promise<RespostaDeReconciliacao> {
   const resposta = await fetchWithAuth('/api/pedidos/manual/reconciliar', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ referenciaLocal: referencia, acao }),
+    body: JSON.stringify({ referenciaLocal: referencia, acao, ...decisao }),
   });
   return (await resposta.json()) as RespostaDeReconciliacao;
 }
@@ -67,6 +85,8 @@ export function PendenciasDeVendaManual({
   const [, relerArmazenamento] = useReducer((versao: number) => versao + 1, 0);
   /** Última situação relatada por pendência — decide quais decisões oferecer. */
   const [situacaoPorReferencia, setSituacaoPorReferencia] = useState<Record<string, string>>({});
+  /** O que a pessoa digitou como evidência do que viu no Bling, por pendência. */
+  const [evidenciaPorReferencia, setEvidenciaPorReferencia] = useState<Record<string, string>>({});
 
   // Lido durante a renderização, de propósito, em vez de copiado para estado
   // dentro de um `useEffect`: sincronizar um armazenamento externo para dentro
@@ -78,12 +98,12 @@ export function PendenciasDeVendaManual({
     ? lerTentativasPendentes(organizacaoId)
     : [];
 
-  const pedir = async (referencia: string, acao: AcaoDePendencia) => {
+  const pedir = async (referencia: string, acao: AcaoDePendencia, decisao?: DecisaoDaAmbiguidade) => {
     if (!organizacaoId) return;
     setConferindo(referencia);
     setMensagem(null);
     try {
-      const corpo = await pedirAoServidor(referencia, acao);
+      const corpo = await pedirAoServidor(referencia, acao, decisao);
       setSituacaoPorReferencia((anterior) => ({ ...anterior, [referencia]: corpo.situacao ?? '' }));
       // Só esquece com desfecho conhecido. `referenciaLiberada: false` (o
       // pedido existe no Bling e não existe aqui) mantém a pendência de
@@ -114,7 +134,8 @@ export function PendenciasDeVendaManual({
           </div>
           <ul className="space-y-2">
             {pendentes.map((pendente) => (
-              <li key={pendente.referencia} className="flex items-center justify-between gap-3 text-xs">
+              <li key={pendente.referencia} className="text-xs space-y-2">
+                <div className="flex items-center justify-between gap-3">
                 <code className="text-amber-100/80 truncate">{pendente.referencia}</code>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <button
@@ -156,6 +177,55 @@ export function PendenciasDeVendaManual({
                     </button>
                   )}
                 </div>
+                </div>
+
+                {/* O CANCELAMENTO FICOU AMBÍGUO (9ª rodada de revisão). O
+                    ORBITA não repete o cancelamento — repetir uma mutação que
+                    pode ter acontecido é o que se está evitando. Quem confere
+                    no Bling afirma o que viu, e é essa afirmação que destrava
+                    a pendência. */}
+                {situacaoPorReferencia[pendente.referencia] === 'cancelamento_ambiguo' && (
+                  <div className="space-y-2 rounded-xl bg-amber-500/10 p-2">
+                    <label className="block text-amber-100/80" htmlFor={`evidencia-${pendente.referencia}`}>
+                      O que você viu na tela do pedido no Bling?
+                    </label>
+                    <input
+                      id={`evidencia-${pendente.referencia}`}
+                      type="text"
+                      value={evidenciaPorReferencia[pendente.referencia] ?? ''}
+                      onChange={(evento) => setEvidenciaPorReferencia((anterior) => ({
+                        ...anterior,
+                        [pendente.referencia]: evento.target.value,
+                      }))}
+                      placeholder="Ex.: o pedido aparece como Cancelado"
+                      className="w-full px-2 py-1.5 rounded-lg bg-black/20 border border-amber-500/20 text-amber-50"
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={conferindo !== null || !(evidenciaPorReferencia[pendente.referencia] ?? '').trim()}
+                        onClick={() => pedir(pendente.referencia, 'resolver-ambiguidade', {
+                          decisao: 'cancelado',
+                          evidencia: evidenciaPorReferencia[pendente.referencia] ?? '',
+                        })}
+                        className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
+                      >
+                        Está cancelado lá
+                      </button>
+                      <button
+                        type="button"
+                        disabled={conferindo !== null || !(evidenciaPorReferencia[pendente.referencia] ?? '').trim()}
+                        onClick={() => pedir(pendente.referencia, 'resolver-ambiguidade', {
+                          decisao: 'nao-cancelado',
+                          evidencia: evidenciaPorReferencia[pendente.referencia] ?? '',
+                        })}
+                        className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
+                      >
+                        Continua ativo lá
+                      </button>
+                    </div>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

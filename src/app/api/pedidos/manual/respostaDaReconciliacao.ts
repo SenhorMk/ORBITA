@@ -21,6 +21,8 @@ export interface RespostaDaReconciliacao {
     | 'nenhum_pedido_visivel'
     | 'encerrada_como_nao_criada'
     | 'venda_confirmada'
+    | 'venda_confirmada_sem_registro'
+    | 'ambiguidade_resolvida'
     | 'pendente_no_bling'
     | 'cancelado_no_bling'
     | 'cancelamento_ambiguo'
@@ -63,6 +65,17 @@ const APRESENTACOES: Readonly<Record<string, Apresentacao>> = {
     liberada: true,
     mensagem: () => 'Conferido no Bling: a venda foi registrada nos dois lados. Só a confirmação tinha se perdido.',
   },
+  VendaConfirmadaSemRegistro: {
+    situacao: 'venda_confirmada_sem_registro',
+    status: 200,
+    // NÃO libera: quem inspecionou não tem gestão, então nada foi gravado. A
+    // resposta relata o que foi observado sem afirmar um efeito que não houve.
+    liberada: false,
+    mensagem: () =>
+      'Conferido no Bling: a venda existe nos dois lados. Como esta conta não administra a organização, '
+      + 'nada foi registrado e a referência continua bloqueada. Peça a conferência a um administrador '
+      + 'para liberá-la.',
+  },
   PendenteNoBling: {
     situacao: 'pendente_no_bling',
     status: 409,
@@ -101,6 +114,26 @@ export function respostaDaReconciliacao(resultado: ResultadoDaReconciliacao): Ne
         mensagem: resultado.motivo,
       } satisfies RespostaDaReconciliacao,
       { status: resultado.status },
+    );
+  }
+
+  // A resolução da ambiguidade é o único desfecho cuja liberação depende da
+  // DECISÃO registrada, não do seu tipo: `cancelado` prova que nada ficou
+  // pendente no ERP e libera; `nao-cancelado` mantém o bloqueio e só devolve o
+  // claim, para que um novo cancelamento possa ser reivindicado.
+  if (resultado._tag === 'AmbiguidadeResolvida') {
+    return NextResponse.json(
+      {
+        success: true,
+        referenciaLiberada: resultado.liberou,
+        situacao: 'ambiguidade_resolvida',
+        mensagem: resultado.liberou
+          ? 'Decisão registrada: o pedido está cancelado no Bling. Nada ficou pendente lá, e esta venda '
+            + 'pode ser registrada de novo.'
+          : 'Decisão registrada: o pedido continua ativo no Bling. A venda segue bloqueada, mas o '
+            + 'cancelamento pode ser pedido de novo agora.',
+      } satisfies RespostaDaReconciliacao,
+      { status: 200 },
     );
   }
 

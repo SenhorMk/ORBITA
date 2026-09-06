@@ -56,7 +56,7 @@ vi.mock('@/lib/requestOrganizationContext', () => ({
  */
 const tentativasPorReferencia = new Map<
   string,
-  { estado: string; blingPedidoId: string | null; pedidoId: string | null; fingerprint: string }
+  { estado: string; blingPedidoId: string | null; pedidoId: string | null; fingerprint: string; epoca: number }
 >();
 /** Organizações que o código pediu para concluir — prova que o escopo chega à RPC (5ª rodada). */
 const organizacoesNoConcluir: Array<string | undefined> = [];
@@ -102,6 +102,7 @@ vi.mock('@/lib/supabaseServer', () => ({
                   is_duplicate: false,
                   fingerprint_conflitante: false,
                   valores_divergentes: false,
+                  epoca: null,
                   referencia_pendente: outraReferencia,
                 }],
                 error: null,
@@ -121,6 +122,7 @@ vi.mock('@/lib/supabaseServer', () => ({
                 bling_pedido_id: null,
                 is_duplicate: true,
                 fingerprint_conflitante: true,
+                epoca: null,
               }],
               error: null,
             });
@@ -132,6 +134,8 @@ vi.mock('@/lib/supabaseServer', () => ({
             existente.estado = 'em_andamento';
             existente.pedidoId = null;
             existente.blingPedidoId = null;
+            // Reabrir avanca a epoca, como a migration 59 faz.
+            existente.epoca += 1;
             return Promise.resolve({
               data: [{
                 tentativa_id: `tentativa-${referencia}`,
@@ -140,6 +144,7 @@ vi.mock('@/lib/supabaseServer', () => ({
                 bling_pedido_id: null,
                 is_duplicate: false,
                 fingerprint_conflitante: false,
+                epoca: existente.epoca,
               }],
               error: null,
             });
@@ -152,11 +157,14 @@ vi.mock('@/lib/supabaseServer', () => ({
               bling_pedido_id: existente.blingPedidoId,
               is_duplicate: true,
               fingerprint_conflitante: false,
+              epoca: existente.epoca,
             }],
             error: null,
           });
         }
-        tentativasPorReferencia.set(referencia, { estado: 'em_andamento', blingPedidoId: null, pedidoId: null, fingerprint });
+        tentativasPorReferencia.set(referencia, {
+          estado: 'em_andamento', blingPedidoId: null, pedidoId: null, fingerprint, epoca: 1,
+        });
         return Promise.resolve({
           data: [{
             tentativa_id: `tentativa-${referencia}`,
@@ -165,9 +173,19 @@ vi.mock('@/lib/supabaseServer', () => ({
             bling_pedido_id: null,
             is_duplicate: false,
             fingerprint_conflitante: false,
+            epoca: 1,
           }],
           error: null,
         });
+      }
+      // 9a rodada (B2): a posse e conferida antes de cada efeito externo.
+      if (fnName === 'confirmar_posse_da_tentativa') {
+        const referencia = String(args?.p_tentativa_id).replace(/^tentativa-/, '');
+        const existente = tentativasPorReferencia.get(referencia);
+        const vigente = existente !== undefined
+          && existente.estado === 'em_andamento'
+          && existente.epoca === args?.p_epoca_esperada;
+        return Promise.resolve({ data: vigente, error: null });
       }
       if (fnName === 'concluir_tentativa_venda_manual') {
         organizacoesNoConcluir.push(args?.p_organizacao_id as string | undefined);
@@ -181,8 +199,24 @@ vi.mock('@/lib/supabaseServer', () => ({
         }
         return Promise.resolve({ data: null, error: null });
       }
-      if (fnName === 'registrar_venda_manual') {
+      // 9a rodada (B1/B4): a venda e a conclusao do ledger sao UMA transacao —
+      // a RPC recusa por posse perdida (55P03) antes de qualquer efeito, e no
+      // sucesso conclui a tentativa junto.
+      if (fnName === 'registrar_venda_manual_com_posse') {
+        // Desde a 9a rodada e ESTA a RPC que conclui o ledger no caminho feliz.
+        organizacoesNoConcluir.push(args?.p_organizacao_id as string | undefined);
+        const referencia = String(args?.p_tentativa_id).replace(/^tentativa-/, '');
+        const existente = tentativasPorReferencia.get(referencia);
+        if (!existente || existente.estado !== 'em_andamento' || existente.epoca !== args?.p_epoca_esperada) {
+          return Promise.resolve({
+            data: null,
+            error: { message: 'Tentativa tomada por outro executor', code: '55P03' },
+          });
+        }
         if (modoRegistrarVenda === 'sucesso') {
+          existente.estado = 'concluida';
+          existente.pedidoId = 'pedido-local-concorrencia-1';
+          existente.blingPedidoId = (args?.p_bling_pedido_id as string | null) ?? existente.blingPedidoId;
           return Promise.resolve({ data: 'pedido-local-concorrencia-1', error: null });
         }
         // Falha de TRANSPORTE — sem `code` — exatamente o formato que
