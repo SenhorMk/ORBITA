@@ -9,6 +9,7 @@ import {
   compensarNoBling,
   resolverAmbiguidadeDePersistencia,
   respostaCriacaoNoBlingIndeterminada,
+  respostaVendaJaRegistrada,
 } from './compensacao';
 import { classificarFalhaDeCriacaoNoBling } from './classificacaoDeFalhaBling';
 import { decidirSobreTentativa } from './decisaoDeTentativa';
@@ -53,10 +54,27 @@ type SyncResult =
   | { readonly _tag: 'SyncSemPosse' };
 
 /**
- * Cria o pedido no Bling e lança o estoque vinculado a ele.
+ * Cria o pedido no Bling. **Não lança o estoque** — ver `lancarEstoqueDaVenda`.
  *
- * A falha da baixa de estoque acontece depois de o pedido já existir no ERP,
- * então ela vira aviso — não pode derrubar a venda nem ser engolida.
+ * A ordem mudou na 10ª rodada de revisão (B2). Antes era
+ * `confirmar posse → lançar estoque → gravar venda`, e o `confirmar posse`
+ * não fechava o entrelaçamento: a chamada de estoque já em voo podia aterrissar
+ * DEPOIS de a reconciliação ter tomado a posse e cancelado o pedido. Conferir
+ * antes de um efeito não impede o efeito de chegar tarde.
+ *
+ * Agora o commit durável vem no meio: `criar → gravar venda+ledger (atômico
+ * com a posse) → lançar estoque`. Isso resolve o entrelaçamento sem máquina de
+ * fases nenhuma, porque as duas pontas passam a ser decididas pelo mesmo
+ * `55P03`:
+ *
+ * - se a reconciliação tomou a posse ANTES do commit, `registrar_venda_manual_com_posse`
+ *   recusa, e o executor nunca chega a lançar estoque;
+ * - se o commit venceu, a tentativa já está `concluida` — e uma tentativa
+ *   `concluida` não pode mais ser assumida nem cancelada como se não houvesse
+ *   venda (`tentativaPodeSerReconciliada`).
+ *
+ * O estoque remoto vira, então, efeito PÓS-confirmação do executor vencedor —
+ * e não uma aposta feita antes de saber quem venceu.
  */
 async function sincronizarComBling(
   scope: VerifiedOrganizationScope,
@@ -66,7 +84,10 @@ async function sincronizarComBling(
   posse: PosseDaVenda,
   deps: ManualOrderDependencies,
 ): Promise<SyncResult> {
-  const payloadResult = await prepararEnvioAoBling(scope, cliente, body, entrada, deps);
+  const payloadResult = await prepararEnvioAoBling(scope, cliente, body, entrada, posse, deps);
+  if (payloadResult._tag === 'PayloadSemPosse') {
+    return { _tag: 'SyncSemPosse' };
+  }
   if (payloadResult._tag === 'PayloadRejected') {
     return { _tag: 'SyncRejected', response: payloadResult.response };
   }
@@ -104,26 +125,50 @@ async function sincronizarComBling(
     };
   }
 
-  const blingPedidoId = criado.value.id;
-  const avisos = criado.value.alertas.map((alerta) => `Bling: ${alerta}`);
+  return {
+    _tag: 'Synced',
+    blingPedidoId: criado.value.id,
+    avisos: criado.value.alertas.map((alerta) => `Bling: ${alerta}`),
+  };
+}
 
-  // A posse pode ter mudado ENTRE a criação e a baixa (9ª rodada, B2): lançar
-  // estoque de um pedido que a nova dona pode estar cancelando é justamente o
-  // efeito incompatível a evitar. O pedido criado não fica perdido — ele
-  // carrega a `referenciaLocal` em `numeroLoja`, que é como a reconciliação o
-  // encontra.
-  if (!await posseAindaVigente(scope, posse, 'estoque', deps)) {
-    return { _tag: 'SyncSemPosse' };
+/**
+ * Lança no ERP o estoque do pedido — DEPOIS de a venda e o ledger estarem
+ * commitados (10ª rodada de revisão, B2).
+ *
+ * A falha vira aviso, como sempre foi: ela acontece com o pedido já existindo
+ * no ERP e com a venda já gravada aqui, então não pode derrubar nem ser
+ * engolida. Chamado exatamente uma vez por tentativa vencedora — o claim da
+ * referência é o que garante isso.
+ */
+async function lancarEstoqueDaVenda(
+  blingPedidoId: string | null,
+  deps: ManualOrderDependencies,
+): Promise<readonly string[]> {
+  if (blingPedidoId === null) return [];
+
+  // A exceção também vira aviso (10ª rodada de revisão). Agora que a baixa
+  // acontece DEPOIS do commit, deixá-la subir trocaria um `201` legítimo por
+  // um `500` sobre uma venda que existe nos dois lados — e a retentativa com a
+  // mesma referência encontraria a tentativa `concluida` e nunca relançaria o
+  // estoque. O contrato desta chamada sempre foi "falha vira aviso, não
+  // derruba a venda"; sem este `catch` ele valia só para a falha TIPADA.
+  let estoque: Awaited<ReturnType<ManualOrderDependencies['bling']['lancarEstoquePedido']>>;
+  try {
+    estoque = await deps.bling.lancarEstoquePedido(blingPedidoId);
+  } catch (causa) {
+    registrarFalhaInterna('pedidos.manual.bling.estoque', causa);
+    return [
+      `O pedido ${blingPedidoId} foi criado no Bling e a venda foi registrada, mas a baixa de estoque `
+      + 'no ERP não teve resposta. Confira o estoque no Bling.',
+    ];
   }
+  if (estoque._tag === 'BlingOk') return [];
 
-  const estoque = await deps.bling.lancarEstoquePedido(blingPedidoId);
-  if (estoque._tag === 'BlingFailed') {
-    avisos.push(
-      `O pedido ${blingPedidoId} foi criado no Bling, mas a baixa de estoque no ERP falhou: ${estoque.failure.message}. Confira o estoque no Bling.`,
-    );
-  }
-
-  return { _tag: 'Synced', blingPedidoId, avisos };
+  return [
+    `O pedido ${blingPedidoId} foi criado no Bling, mas a baixa de estoque no ERP falhou: `
+    + `${estoque.failure.message}. Confira o estoque no Bling.`,
+  ];
 }
 
 /**
@@ -211,9 +256,19 @@ async function gravarVenda(
     itens: entrada.itens,
   });
 
+  // O COMMIT VENCEU: a venda e o ledger existem, e a tentativa está
+  // `concluida`. Só agora o estoque remoto é lançado — antes disso, ninguém
+  // sabia quem tinha vencido a corrida com a reconciliação.
   if (resultado._tag === 'PersistVendaOk') {
+    const avisosDoEstoque = await lancarEstoqueDaVenda(blingPedidoId, deps);
     return json(
-      { success: true, pedidoId: resultado.pedidoId, blingPedidoId, total: entrada.total, avisos },
+      {
+        success: true,
+        pedidoId: resultado.pedidoId,
+        blingPedidoId,
+        total: entrada.total,
+        avisos: [...avisos, ...avisosDoEstoque],
+      },
       201,
     );
   }
@@ -260,6 +315,16 @@ async function gravarVenda(
   // garantia de idempotência que não existe.
   if (registro._tag === 'DesfechoNaoGravado' && desfecho.estado === 'concluida') {
     return respostaLedgerNaoGravado(blingPedidoId);
+  }
+
+  // A CONFIRMAÇÃO PROVOU QUE O COMMIT ACONTECEU (10ª rodada, B2). A resposta
+  // se perdeu, mas a venda e o ledger existem — este executor é o vencedor, e
+  // o lançamento de estoque que ficou pendente é dele. Uma vez só: a próxima
+  // requisição com a mesma referência encontra a tentativa `concluida` e nem
+  // chega aqui.
+  if (desfecho.estado === 'concluida' && desfecho.pedidoId !== undefined) {
+    const avisosDoEstoque = await lancarEstoqueDaVenda(blingPedidoId, deps);
+    return respostaVendaJaRegistrada(desfecho.pedidoId, blingPedidoId, avisosDoEstoque);
   }
   return response;
 }

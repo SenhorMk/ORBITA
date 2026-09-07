@@ -63,7 +63,7 @@ insert into public.membros_organizacao (organizacao_id, user_id, papel)
 values ('59100000-0000-4000-8000-000000000001', '59000000-0000-4000-8000-000000000001', 'owner'),
        ('59100000-0000-4000-8000-000000000002', '59000000-0000-4000-8000-000000000002', 'owner');
 
-select plan(109);
+select plan(111);
 
 -- ----------------------------------------------------------------------------
 -- 1-4. Primeira reivindicação: tentativa nova.
@@ -1078,6 +1078,65 @@ select is(
     )),
     false,
     '109. uma época antiga não confirma — e é isso que barra o efeito externo do zumbi'
+);
+
+
+-- ----------------------------------------------------------------------------
+-- 110-111. CICLO DE VIDA DEPOIS DA RESOLUÇÃO (10ª rodada de revisão).
+--
+-- `resolucao_id` é uma FK AUTORREFERENTE, e o gatilho de imutabilidade proíbe
+-- reapontá-la. A pergunta que isso levanta é de CICLO DE VIDA: apagar a
+-- organização remove as duas linhas — o fato ambíguo e a resolução — e nada
+-- garante, à primeira vista, que a referência entre elas não trave o caminho.
+--
+-- Medido: não trava. O `on delete cascade` da organização remove as duas
+-- linhas juntas, sem disparar o `set null` da FK autorreferente, então o
+-- gatilho não chega a ser consultado. A asserção existe para MANTER isso —
+-- é o mesmo tipo de impasse que a 8ª rodada mediu quando o gatilho bloqueava
+-- `DELETE` e travava o encerramento de um tenant inteiro.
+--
+-- Esta é uma asserção de REGRESSÃO de ciclo de vida, não a prova de um defeito
+-- que existiu: ela fixa um comportamento medido para que uma mudança futura no
+-- gatilho ou na FK não volte a travar o encerramento de um tenant.
+-- ----------------------------------------------------------------------------
+create temp table org_ciclo as select '59100000-0000-4000-8000-000000000003'::uuid as id;
+
+insert into public.organizacoes (id, nome, slug)
+values ((select id from org_ciclo), 'Org T59 Ciclo', 'org-t59-ciclo');
+insert into public.membros_organizacao (organizacao_id, user_id, papel)
+values ((select id from org_ciclo), '59000000-0000-4000-8000-000000000001', 'owner');
+
+create temp table tent_ciclo as
+select * from public.reivindicar_tentativa_venda_manual(
+    (select id from org_ciclo), 'ciclo-ref-1', 'fingerprint-ciclo', 'valores-ciclo'
+);
+create temp table interv_ciclo as
+select public.reivindicar_intervencao_venda_manual(
+    (select id from org_ciclo), (select tentativa_id from tent_ciclo),
+    'cancelar-no-bling', '59000000-0000-4000-8000-000000000001', '4000'
+) as id;
+
+select public.encerrar_intervencao_venda_manual(
+    (select id from org_ciclo), (select id from interv_ciclo), 'ambigua', 'ACK do PATCH nao chegou'
+);
+select public.resolver_intervencao_ambigua(
+    (select id from org_ciclo),
+    (select tentativa_id from tent_ciclo),
+    '59000000-0000-4000-8000-000000000001',
+    'cancelado',
+    'Pedido 4000 aparece como Cancelado no Bling.',
+    1
+);
+
+select lives_ok(
+    format($q$delete from public.organizacoes where id = %L$q$, (select id from org_ciclo)),
+    '110. apagar a organização depois de resolver a ambiguidade não trava no gatilho'
+);
+
+select is(
+    (select count(*) from public.intervencoes_venda_manual where organizacao_id = (select id from org_ciclo)),
+    0::bigint,
+    '111. …e as duas linhas — o fato ambíguo e a resolução — foram embora com o tenant'
 );
 
 select * from finish();

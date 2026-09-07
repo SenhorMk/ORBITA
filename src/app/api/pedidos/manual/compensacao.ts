@@ -33,13 +33,25 @@ export interface DesfechoDaFalha {
  * concluída (ticket 30, fatia 3, 3ª rodada) chegam aqui pelo mesmo motivo —
  * a gravação aconteceu, só a certeza sobre ela é que demorou a chegar.
  */
-export function respostaVendaJaRegistrada(pedidoId: string, blingPedidoId: string | null): NextResponse {
+export function respostaVendaJaRegistrada(
+  pedidoId: string,
+  blingPedidoId: string | null,
+  /**
+   * Avisos de efeitos que ainda pertenciam a esta requisição (10ª rodada de
+   * revisão): quando a confirmação prova que o commit aconteceu, o lançamento
+   * de estoque no ERP é feito aqui, e a falha dele precisa aparecer.
+   */
+  avisosExtras: readonly string[] = [],
+): NextResponse {
   return json(
     {
       success: true,
       pedidoId,
       blingPedidoId,
-      avisos: ['A venda já havia sido registrada numa tentativa anterior; nenhuma ação nova foi necessária.'],
+      avisos: [
+        'A venda já havia sido registrada numa tentativa anterior; nenhuma ação nova foi necessária.',
+        ...avisosExtras,
+      ],
     },
     200,
   );

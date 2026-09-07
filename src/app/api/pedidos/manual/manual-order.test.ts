@@ -52,6 +52,10 @@ interface FakeStore extends ManualOrderStorePort {
   readonly desfechosRegistrados: DesfechoDaTentativa[];
   /** O CAS de estado apresentado em cada escrita de desfecho (9ª rodada). */
   readonly estadosEsperadosNoDesfecho: Array<TentativaRegistrada['estado'] | undefined>;
+  /** A ordem observada dos efeitos duráveis e externos (10ª rodada). */
+  readonly ordemDosEfeitos: string[];
+  /** Quantas vezes a posse foi conferida — um cliente já vinculado paga uma só. */
+  readonly confirmacoesDePosse: number;
   /** Fingerprints que o handler calculou e mandou reivindicar (5ª rodada). */
   readonly fingerprintsReivindicados: string[];
 }
@@ -96,6 +100,8 @@ function fakeStore(options: {
   const persisted: PersistManualOrderInput[] = [];
   const vinculos: Array<{ clienteId: string; blingId: string }> = [];
   const desfechosRegistrados: DesfechoDaTentativa[] = [];
+  /** A ORDEM em que os efeitos aconteceram — é ela que prova o entrelaçamento. */
+  const ordemDosEfeitos: string[] = [];
   /** O CAS de estado apresentado em cada escrita — nenhuma pode rebaixar um desfecho existente. */
   const estadosEsperadosNoDesfecho: Array<TentativaRegistrada['estado'] | undefined> = [];
   const fingerprintsReivindicados: string[] = [];
@@ -108,6 +114,10 @@ function fakeStore(options: {
     vinculos,
     desfechosRegistrados,
     estadosEsperadosNoDesfecho,
+    ordemDosEfeitos,
+    get confirmacoesDePosse() {
+      return confirmacoesDePosse;
+    },
     fingerprintsReivindicados,
     async reivindicarTentativa(_scope, _referencia, fingerprint) {
       fingerprintsReivindicados.push(fingerprint);
@@ -149,6 +159,7 @@ function fakeStore(options: {
       return produtos.filter((p) => produtoIds.includes(p.id));
     },
     async persistVenda(input) {
+      ordemDosEfeitos.push('persistVenda');
       if (options.persistSemPosse) {
         return { _tag: 'PersistVendaSemPosse' };
       }
@@ -191,10 +202,14 @@ interface FakeBling extends ManualOrderBlingPort {
 }
 
 function fakeBling(options: {
+  /** Lista compartilhada com o store, para observar a ordem entre os dois. */
+  ordemDosEfeitos?: string[];
   createFailure?: { message: string; duplicateSale?: boolean; status?: number; type?: string };
   /** 5ª rodada — a chamada de criação LANÇA (timeout/conexão perdida). */
   createThrows?: unknown;
   estoqueFailure?: string;
+  /** 10ª rodada — a chamada de estoque LANÇA (timeout/conexão perdida). */
+  estoqueLanca?: unknown;
   formaPagamentoFailure?: string;
   alertas?: string[];
   cancelamentoFailure?: string;
@@ -223,10 +238,12 @@ function fakeBling(options: {
       return { _tag: 'BlingOk' as const, value: 12 };
     },
     async createContato() {
+      options.ordemDosEfeitos?.push('createContato');
       contatosCriados += 1;
       return { _tag: 'BlingOk' as const, value: { id: 9001 } };
     },
     async createPedidoVenda(payload: PedidoVendaPayload) {
+      options.ordemDosEfeitos?.push('createPedidoVenda');
       payloads.push(payload);
       // 5ª rodada: o ACK perdido da PRÓPRIA criação — a chamada lança, e o
       // pedido pode ter sido criado assim mesmo.
@@ -255,6 +272,10 @@ function fakeBling(options: {
       return { _tag: 'BlingOk' as const, value: options.pedidoEncontrado ?? { _tag: 'NenhumPedido' as const } };
     },
     async lancarEstoquePedido(pedidoBlingId: string) {
+      options.ordemDosEfeitos?.push('lancarEstoquePedido');
+      if (options.estoqueLanca) {
+        throw options.estoqueLanca;
+      }
       if (options.estoqueFailure) {
         return { _tag: 'BlingFailed' as const, failure: { _tag: 'BlingProviderFailure' as const, type: 'BAD_REQUEST', status: 400, message: options.estoqueFailure, duplicateSale: false } };
       }
@@ -997,18 +1018,91 @@ describe('9ª rodada — posse como pré-condição do efeito (B1, B2, B4)', () 
     expect(store.desfechosRegistrados).toEqual([]);
   });
 
-  it('B2 — posse perdida ENTRE a criação e a baixa de estoque: não lança estoque de um pedido alheio', async () => {
-    const store = fakeStore({ posses: [{ _tag: 'PosseVigente' }, { _tag: 'PossePerdida' }] });
-    const bling = fakeBling();
+  /**
+   * 10ª rodada de revisão — o entrelaçamento que a conferência de posse SOZINHA
+   * não fechava:
+   *
+   *   1. A possui a tentativa e confirma a posse;
+   *   2. a chamada de estoque entra em voo;
+   *   3. a reconciliação toma a posse;
+   *   4. acha o pedido, cancela, encerra a tentativa;
+   *   5. a chamada de A aterrissa depois — sobre um pedido cancelado.
+   *
+   * Conferir antes de um efeito não impede o efeito de chegar tarde. A ordem
+   * passou a ser `criar → commitar venda+ledger → lançar estoque`, e com isso
+   * as duas pontas são decididas pelo mesmo `55P03`.
+   */
+  it('B2 — a reconciliação vence ANTES do commit: o executor antigo não lança estoque depois', async () => {
+    const store = fakeStore({ persistSemPosse: true });
+    const bling = fakeBling({ ordemDosEfeitos: [] });
     const handler = createManualOrderHandler(deps({ store, bling }));
 
     const response = await handler(requestWith(corpoValido()));
 
     expect(response.status).toBe(409);
+    // O pedido chegou a ser criado (a posse ainda era dele naquele instante),
+    // e é por `numeroLoja` que a reconciliação o encontra. O que NÃO pode
+    // acontecer é o lançamento de estoque sobre um pedido que a nova dona
+    // pode estar cancelando.
     expect(bling.payloads).toHaveLength(1);
     expect(bling.estoqueLancado).toEqual([]);
-    expect(store.persisted).toHaveLength(0);
     expect(store.desfechosRegistrados).toEqual([]);
+  });
+
+  it('B2 — o commit vencedor lança o estoque, e só DEPOIS do commit durável', async () => {
+    const store = fakeStore();
+    const bling = fakeBling({ ordemDosEfeitos: store.ordemDosEfeitos });
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+
+    expect(response.status).toBe(201);
+    expect(bling.estoqueLancado).toEqual(['918273']);
+    // A ordem é a garantia, não um detalhe: o estoque remoto é efeito
+    // PÓS-confirmação de quem venceu a corrida.
+    expect(store.ordemDosEfeitos).toEqual(['createPedidoVenda', 'persistVenda', 'lancarEstoquePedido']);
+  });
+
+  it('a baixa de estoque que nem responde vira AVISO: não derruba um 201 sobre uma venda que existe', async () => {
+    const store = fakeStore();
+    const bling = fakeBling({ estoqueLanca: new Error('AbortError: The operation was aborted') });
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+    const corpo = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(corpo.avisos.join(' ')).toContain('baixa de estoque');
+  });
+
+  it('B2 — posse perdida antes de criar o contato: `createContato` não é chamado', async () => {
+    const store = fakeStore({
+      clientes: { [ORG_A]: cliente({ blingId: null }) },
+      posses: [{ _tag: 'PossePerdida' }],
+    });
+    const bling = fakeBling({ ordemDosEfeitos: [] });
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+
+    expect(response.status).toBe(409);
+    expect(bling.contatosCriados).toBe(0);
+    // E o vínculo local também não é gravado — ele só existe como par do
+    // cadastro remoto.
+    expect(store.vinculos).toEqual([]);
+    expect(bling.payloads).toHaveLength(0);
+  });
+
+  it('B2 — cliente já vinculado ao Bling não paga conferência extra de posse', async () => {
+    const store = fakeStore();
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    await handler(requestWith(corpoValido()));
+
+    // Uma única conferência: a que precede a criação do pedido. A do contato
+    // vive dentro do ramo que cadastra, e esse ramo nem é percorrido.
+    expect(store.confirmacoesDePosse).toBe(1);
   });
 
   it('B2 — não conseguir PERGUNTAR pela posse falha fechada: nada é enviado ao ERP', async () => {

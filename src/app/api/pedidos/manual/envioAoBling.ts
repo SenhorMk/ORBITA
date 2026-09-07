@@ -2,9 +2,11 @@
  * O que se faz ANTES de o pedido existir no Bling: converter a data, resolver
  * o contato e montar um payload que o schema oficial aceita.
  *
- * Separado de `handler.ts` porque nada aqui produz efeito irreversível — toda
- * recusa desta fase prova que NADA foi criado no ERP — e porque `handler.ts`
- * passou do limite de tamanho do gate de qualidade.
+ * Separado de `handler.ts` porque `handler.ts` passou do limite de tamanho do
+ * gate de qualidade. A fase é quase toda inofensiva — mas NÃO inteiramente:
+ * quando o cliente ainda não tem `bling_id`, `resolveBlingContato` cadastra um
+ * contato na conta do lojista. É por isso que a posse é conferida ali dentro
+ * (10ª rodada de revisão, B2).
  */
 import type { NextResponse } from 'next/server';
 
@@ -17,6 +19,7 @@ import type {
   ManualOrderDependencies,
   ResolvedManualOrderItem,
 } from './ports';
+import { posseAindaVigente, type PosseDaVenda } from './posseDaVenda';
 import { falhaDaVendaManual as fail } from './resposta';
 
 /** Os campos da venda que o payload do Bling consome. */
@@ -29,7 +32,9 @@ export interface EntradaDoEnvio {
 
 export type BlingPayloadResult =
   | { readonly _tag: 'PayloadBuilt'; readonly payload: PedidoVendaPayload }
-  | { readonly _tag: 'PayloadRejected'; readonly response: NextResponse };
+  | { readonly _tag: 'PayloadRejected'; readonly response: NextResponse }
+  /** A posse mudou durante a preparação: nenhum efeito foi iniciado. */
+  | { readonly _tag: 'PayloadSemPosse' };
 
 /** `format: date` do Bling — AAAA-MM-DD, sem componente de hora. */
 export function toBlingDate(date: Date): string {
@@ -46,17 +51,33 @@ function parseNumericBlingId(value: string | null): number | null {
 
 type ContatoResult =
   | { readonly _tag: 'ContatoResolved'; readonly blingContatoId: number }
-  | { readonly _tag: 'ContatoRejected'; readonly response: NextResponse };
+  | { readonly _tag: 'ContatoRejected'; readonly response: NextResponse }
+  /** A posse mudou antes de cadastrar o contato: nada foi criado no ERP. */
+  | { readonly _tag: 'ContatoSemPosse' };
 
 /** Garante um id numérico de contato no Bling, cadastrando o cliente se necessário. */
 async function resolveBlingContato(
   scope: VerifiedOrganizationScope,
   cliente: ManualOrderCliente,
+  posse: PosseDaVenda,
   deps: ManualOrderDependencies,
 ): Promise<ContatoResult> {
   const existente = parseNumericBlingId(cliente.blingId);
   if (existente !== null) {
     return { _tag: 'ContatoResolved', blingContatoId: existente };
+  }
+
+  // CADASTRAR O CONTATO É EFEITO NO ERP (10ª rodada de revisão, B2).
+  //
+  // A 9ª rodada conferia a posse logo antes de `createPedidoVenda`, e tratava
+  // toda a preparação como inofensiva. Não é: quando o cliente ainda não tem
+  // `bling_id`, esta função CRIA um contato na conta do lojista e grava o
+  // vínculo local. Um executor que já perdeu a posse chegava até aqui.
+  //
+  // A conferência fica DENTRO do ramo que muta, e não antes da preparação
+  // inteira: um cliente já vinculado não paga round-trip nenhum a mais.
+  if (!await posseAindaVigente(scope, posse, 'contato', deps)) {
+    return { _tag: 'ContatoSemPosse' };
   }
 
   const criado = await deps.bling.createContato({
@@ -148,23 +169,23 @@ function buildPedidoVendaPayload(
  * Tudo o que precisa dar certo ANTES de o pedido poder existir no Bling:
  * contato, forma de pagamento e um payload que o schema oficial aceita.
  *
- * Nenhum passo daqui cria coisa alguma no ERP — é justamente por isso que
- * qualquer recusa nesta fase é `SyncRejected` (nada existe lá) e não uma
- * ambiguidade.
+ * Uma recusa desta fase é `SyncRejected` — nada de PEDIDO existe no ERP. O
+ * único efeito externo possível aqui é o cadastro do contato, e ele acontece
+ * atrás da conferência de posse; cadastrar um contato não cria venda nenhuma,
+ * então não há ambiguidade a resolver.
  */
 export async function prepararEnvioAoBling(
   scope: VerifiedOrganizationScope,
   cliente: ManualOrderCliente,
   body: ManualOrderRequest,
-  entrada: {
-    readonly itens: readonly ResolvedManualOrderItem[];
-    readonly total: number;
-    readonly dataStr: string;
-    readonly referenciaLocal: string;
-  },
+  entrada: EntradaDoEnvio,
+  posse: PosseDaVenda,
   deps: ManualOrderDependencies,
 ): Promise<BlingPayloadResult> {
-  const contatoResult = await resolveBlingContato(scope, cliente, deps);
+  const contatoResult = await resolveBlingContato(scope, cliente, posse, deps);
+  if (contatoResult._tag === 'ContatoSemPosse') {
+    return { _tag: 'PayloadSemPosse' };
+  }
   if (contatoResult._tag === 'ContatoRejected') {
     return { _tag: 'PayloadRejected', response: contatoResult.response };
   }
