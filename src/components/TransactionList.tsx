@@ -13,9 +13,11 @@ import {
   Copy,
   Calendar,
   XCircle,
-  RefreshCw
+  RefreshCw,
+  Ban
 } from 'lucide-react';
 import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
+import { pedidoContaComoVendaAtiva } from '@/lib/metricas/vendasAtivas';
 import { DropdownMenu } from './DropdownMenu';
 import { OrderDetailModal } from './OrderDetailModal';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
@@ -35,6 +37,12 @@ export const TransactionList = React.memo(function TransactionList({
   loading = false
 }: TransactionListProps) {
   const [selectedPedidoId, setSelectedPedidoId] = useState<string | null>(null);
+  /**
+   * O snapshot LOCAL do pedido aberto. Vai junto para o modal porque um pedido
+   * apagado no Bling ainda existe aqui: sem isto, abrir o histórico devolvia
+   * só "Pedido não encontrado", como se o registro estivesse quebrado.
+   */
+  const [selectedPedidoLocal, setSelectedPedidoLocal] = useState<PedidoEnriquecido | null>(null);
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [pedidoToCancel, setPedidoToCancel] = useState<PedidoEnriquecido | null>(null);
   const [isCanceling, setIsCanceling] = useState(false);
@@ -140,10 +148,16 @@ export const TransactionList = React.memo(function TransactionList({
       {pedidos.map((pedido) => {
         const clienteNome = pedido.cliente?.nome || 'Cliente Consumidor';
         const clienteTelefone = pedido.cliente?.telefone;
-        const nfeStatus = pedido.nfe?.status || 'Pendente';
+        // Pedido cancelado não tem pendência de NF-e — ele não vai receber
+        // nota nenhuma. Antes o selo principal mostrava "Pendente" (o status da
+        // NF-e ausente) e o cancelamento virava uma linha cinza minúscula
+        // embaixo, o que faz um pedido morto parecer trabalho a fazer.
+        const cancelado = !pedidoContaComoVendaAtiva(pedido);
+        const nfeStatus = cancelado ? 'Cancelado' : (pedido.nfe?.status || 'Pendente');
 
-        const isNfeEmitida = nfeStatus.toLowerCase().includes('emitid');
-        const isNfeErro = nfeStatus.toLowerCase().includes('erro') || nfeStatus.toLowerCase().includes('rejeit');
+        const isNfeEmitida = !cancelado && nfeStatus.toLowerCase().includes('emitid');
+        const isNfeErro = !cancelado
+          && (nfeStatus.toLowerCase().includes('erro') || nfeStatus.toLowerCase().includes('rejeit'));
 
         return (
           <div
@@ -152,7 +166,10 @@ export const TransactionList = React.memo(function TransactionList({
           >
             <button
               type="button"
-              onClick={() => setSelectedPedidoId(pedido.bling_id)}
+              onClick={() => {
+                setSelectedPedidoLocal(pedido);
+                setSelectedPedidoId(pedido.bling_id);
+              }}
               className="flex flex-col md:flex-row md:items-center gap-3 min-w-0 flex-1 text-left cursor-pointer"
             >
             {/* Left Side: Avatar + Details */}
@@ -206,7 +223,9 @@ export const TransactionList = React.memo(function TransactionList({
                       : 'bg-[#FF9F0A]/15 text-[#FF9F0A] border-[#FF9F0A]/30'
                   }`}
                 >
-                  {isNfeEmitida ? (
+                  {cancelado ? (
+                    <Ban className="w-3 h-3 text-slate-400" />
+                  ) : isNfeEmitida ? (
                     <CheckCircle2 className="w-3 h-3 text-[#30D158]" />
                   ) : isNfeErro ? (
                     <AlertCircle className="w-3 h-3 text-red-400" />
@@ -265,6 +284,7 @@ export const TransactionList = React.memo(function TransactionList({
                           icon: FileText,
                           onClick: (e?: React.MouseEvent) => {
                             e?.stopPropagation();
+                            setSelectedPedidoLocal(pedido);
                             setSelectedPedidoId(pedido.bling_id);
                           }
                         },
@@ -328,8 +348,14 @@ export const TransactionList = React.memo(function TransactionList({
       </div>
       <OrderDetailModal
         open={!!selectedPedidoId}
-        onOpenChange={(open) => !open && setSelectedPedidoId(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedPedidoId(null);
+            setSelectedPedidoLocal(null);
+          }
+        }}
         pedidoBlingId={selectedPedidoId}
+        pedidoLocal={selectedPedidoLocal}
       />
 
       {/* Modal de Cancelamento Simplificado (One Way Sync) */}

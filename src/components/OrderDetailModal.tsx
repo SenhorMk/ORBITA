@@ -9,20 +9,34 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Loader2, Package, User, Truck, Calendar, FileText, AlertCircle, Trash2, Pencil, Receipt } from "lucide-react";
+import { Loader2, Package, User, Truck, Calendar, FileText, AlertCircle, Trash2, Pencil, Receipt, Archive } from "lucide-react";
 import { BlingPedido } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
 import { ErrorLogModal } from '@/components/ErrorLogModal';
 import { EditOrderModal } from '@/components/EditOrderModal';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import { descreverErro } from '@/lib/erroLegivel';
+import { pedidoContaComoVendaAtiva } from '@/lib/metricas/vendasAtivas';
+import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 
 interface OrderDetailModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pedidoId?: string | null;
   pedidoBlingId: string | null;
+  /**
+   * O snapshot LOCAL do pedido, quando quem abriu o modal já o tinha.
+   *
+   * Existe porque um pedido apagado ou cancelado no Bling continua existindo
+   * aqui: sem ele, abrir o histórico do #20 devolvia apenas "Pedido não
+   * encontrado", como se o registro estivesse quebrado — quando na verdade o
+   * ORBITA tem o registro inteiro e é o ERP que não tem mais.
+   */
+  pedidoLocal?: PedidoEnriquecido | null;
 }
+
+/** O pedido sumiu do Bling — não é falha de rede nem erro de leitura. */
+const PEDIDO_AUSENTE_NO_BLING = 'PedidoAusenteNoBling';
 
 /** Busca os detalhes de um pedido no Bling ERP. O ID é URI-encoded para suportar IDs `#MANUAL-...`. */
 async function fetchPedidoDetalhes(id: string): Promise<BlingPedido> {
@@ -34,6 +48,10 @@ async function fetchPedidoDetalhes(id: string): Promise<BlingPedido> {
   });
   const data = await res.json();
   if (!res.ok) {
+    // `404` é uma resposta, não uma avaria: o Bling respondeu que aquele
+    // pedido não existe mais lá. Quem chama precisa distinguir isso de "não
+    // consegui perguntar" para poder cair no histórico local.
+    if (res.status === 404) throw new Error(PEDIDO_AUSENTE_NO_BLING);
     throw new Error(data.error || 'Erro ao carregar detalhes do pedido');
   }
   return data.data;
@@ -165,22 +183,118 @@ function PedidoDetails({ pedido }: { pedido: BlingPedido }) {
   );
 }
 
-export function OrderDetailModal({ open, onOpenChange, pedidoBlingId }: OrderDetailModalProps) {
+/**
+ * O que se mostra quando o pedido não existe mais no Bling.
+ *
+ * O ORBITA guarda o registro para histórico e auditoria; o ERP é que não tem
+ * mais. Antes esta situação caía no bloco de erro genérico e dizia só "Pedido
+ * não encontrado", como se o registro estivesse quebrado.
+ */
+function RegistroHistoricoLocal({ pedidoLocal }: { pedidoLocal: PedidoEnriquecido | null }) {
+  return (
+    <div className="bg-slate-500/10 border border-white/10 p-4 rounded-2xl mt-4">
+      <div className="flex items-center gap-2 text-slate-300 font-medium">
+        <Archive className="w-4 h-4" />
+        Registro histórico local
+      </div>
+      <p className="text-sm text-slate-400 mt-2">
+        Este pedido não existe mais no Bling. O ORBITA mantém o registro para histórico e
+        auditoria, e é ele que está sendo mostrado abaixo.
+      </p>
+      {pedidoLocal ? (
+        <dl className="grid grid-cols-3 gap-3 mt-4 text-sm">
+          <div><dt className="text-slate-500">Número</dt><dd className="text-white">{pedidoLocal.numero}</dd></div>
+          <div><dt className="text-slate-500">Status</dt><dd className="text-white">{pedidoLocal.status}</dd></div>
+          <div>
+            <dt className="text-slate-500">Total</dt>
+            <dd className="text-white">
+              R$ {Number(pedidoLocal.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+            </dd>
+          </div>
+        </dl>
+      ) : (
+        <p className="text-sm text-slate-500 mt-3">
+          O snapshot local não foi carregado nesta tela.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * As ações do rodapé.
+ *
+ * `acoesNoErpIndisponiveis` cobre os dois casos em que escrever no ERP não faz
+ * sentido: o pedido não existe mais lá, ou está cancelado — e um pedido
+ * cancelado não recebe NF-e nem edição. Apagar fica de fora quando o pedido já
+ * sumiu do Bling: não há o que apagar lá, e o registro local é o histórico.
+ */
+function AcoesDoPedido({
+  onApagar, onEditar, isDeleting, temPedidoRemoto, ausenteNoBling, acoesNoErpIndisponiveis,
+}: {
+  onApagar: () => void;
+  onEditar: () => void;
+  isDeleting: boolean;
+  temPedidoRemoto: boolean;
+  ausenteNoBling: boolean;
+  acoesNoErpIndisponiveis: boolean;
+}) {
+  return (
+    <div className="flex flex-col sm:flex-row items-center justify-end gap-3 mt-6 pt-6 border-t border-white/10">
+      <Button
+        variant="outline"
+        onClick={onApagar}
+        disabled={isDeleting || ausenteNoBling}
+        className="w-full sm:w-auto border-white/10 hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/30 text-slate-300 transition-colors">
+        {isDeleting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+        {isDeleting ? 'Apagando...' : 'Apagar'}
+      </Button>
+      <Button
+        variant="outline"
+        onClick={onEditar}
+        disabled={!temPedidoRemoto || acoesNoErpIndisponiveis}
+        className="w-full sm:w-auto border-white/10 hover:bg-blue-500/10 hover:text-blue-400 hover:border-blue-500/30 text-slate-300 transition-colors">
+        <Pencil className="w-4 h-4 mr-2" />
+        Editar Pedido
+      </Button>
+      <Button
+        disabled={!temPedidoRemoto || acoesNoErpIndisponiveis}
+        className="w-full sm:w-auto bg-[#30D158] hover:bg-[#28B84E] text-[#0a0f1c] border border-[#30D158] font-bold shadow-lg shadow-[#30D158]/20 transition-all disabled:opacity-50">
+        <Receipt className="w-4 h-4 mr-2" />
+        Emitir NF-e
+      </Button>
+    </div>
+  );
+}
+
+export function OrderDetailModal({ open, onOpenChange, pedidoBlingId, pedidoLocal }: OrderDetailModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ausenteNoBling, setAusenteNoBling] = useState(false);
   const [pedido, setPedido] = useState<BlingPedido | null>(null);
   const [isEditOpen, setIsEditOpen] = useState(false);
+
+  const canceladoLocalmente = pedidoLocal ? !pedidoContaComoVendaAtiva(pedidoLocal) : false;
+  // Sem cópia no ERP, nada que escreva lá faz sentido — e um pedido cancelado
+  // não recebe NF-e nem edição.
+  const acoesNoErpIndisponiveis = ausenteNoBling || canceladoLocalmente;
 
   const fetchPedido = useCallback(async (id: string, isMounted: () => boolean = () => true) => {
     try {
       if (isMounted()) {
         setLoading(true);
         setError(null);
+        setAusenteNoBling(false);
       }
       const data = await fetchPedidoDetalhes(id);
       if (isMounted()) setPedido(data);
     } catch (err: unknown) {
-      if (isMounted()) setError(descreverErro(err));
+      if (!isMounted()) return;
+      if (err instanceof Error && err.message === PEDIDO_AUSENTE_NO_BLING) {
+        setAusenteNoBling(true);
+      } else {
+        setError(descreverErro(err));
+      }
     } finally {
       if (isMounted()) setLoading(false);
     }
@@ -275,40 +389,25 @@ export function OrderDetailModal({ open, onOpenChange, pedidoBlingId }: OrderDet
           </div>
         )}
 
+        {ausenteNoBling && !loading && <RegistroHistoricoLocal pedidoLocal={pedidoLocal ?? null} />}
+
         {pedido && !loading && <PedidoDetails pedido={pedido} />}
 
-        {/* Actions Footer - Sempre Visível para permitir Exclusão de Pedidos Órfãos */}
-        <div className="flex flex-col sm:flex-row items-center justify-end gap-3 mt-6 pt-6 border-t border-white/10">
-          <Button
-            variant="outline"
-            onClick={handleDelete}
-            disabled={isDeleting}
-            className="w-full sm:w-auto border-white/10 hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/30 text-slate-300 transition-colors">
-            {isDeleting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
-            {isDeleting ? 'Apagando...' : 'Apagar'}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => {
-              if (!pedido) return;
-              if (String(pedido.situacao?.valor || '').toLowerCase().includes('emitid')) {
-                alert('Pedidos com NF-e emitida não podem ser editados.');
-                return;
-              }
-              setIsEditOpen(true);
-            }}
-            disabled={!pedido}
-            className="w-full sm:w-auto border-white/10 hover:bg-blue-500/10 hover:text-blue-400 hover:border-blue-500/30 text-slate-300 transition-colors">
-            <Pencil className="w-4 h-4 mr-2" />
-            Editar Pedido
-          </Button>
-          <Button
-            disabled={!pedido}
-            className="w-full sm:w-auto bg-[#30D158] hover:bg-[#28B84E] text-[#0a0f1c] border border-[#30D158] font-bold shadow-lg shadow-[#30D158]/20 transition-all disabled:opacity-50">
-            <Receipt className="w-4 h-4 mr-2" />
-            Emitir NF-e
-          </Button>
-        </div>
+        <AcoesDoPedido
+          onApagar={handleDelete}
+          onEditar={() => {
+            if (!pedido) return;
+            if (String(pedido.situacao?.valor || '').toLowerCase().includes('emitid')) {
+              alert('Pedidos com NF-e emitida não podem ser editados.');
+              return;
+            }
+            setIsEditOpen(true);
+          }}
+          isDeleting={isDeleting}
+          temPedidoRemoto={!!pedido}
+          ausenteNoBling={ausenteNoBling}
+          acoesNoErpIndisponiveis={acoesNoErpIndisponiveis}
+        />
 
         <ErrorLogModal
           isOpen={errorLog.isOpen}

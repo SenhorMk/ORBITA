@@ -85,6 +85,7 @@ import {
 } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
 import { useStartupPorOrganizacao } from '@/components/organizacao/useStartupPorOrganizacao';
 import { descreverErro } from '@/lib/erroLegivel';
+import { apenasVendasAtivas, pedidosComNfePendente, variacaoPercentual } from '@/lib/metricas/vendasAtivas';
 
 /**
  * Identidade do usuário logado — **e nada além disso**.
@@ -316,6 +317,7 @@ export default function Home() {
     categorias?: Categoria[];
     estatisticas: {
       faturamento30Dias: number;
+      faturamento30DiasAnterior: number;
       totalPedidos: number;
       pendentes: number;
       cancelados: number;
@@ -917,7 +919,8 @@ export default function Home() {
     const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
     if (data?.pedidos) {
-      data.pedidos.forEach(p => {
+      // A MESMA regra dos cards: cancelado é histórico, não receita.
+      apenasVendasAtivas(data.pedidos).forEach(p => {
         const d = new Date(p.data);
         const dayName = dayNames[d.getDay()];
         if (dayName && daysMap[dayName] !== undefined) {
@@ -933,15 +936,18 @@ export default function Home() {
   };
 
   const totalVendidoMesAtual = data?.estatisticas.faturamento30Dias || 0;
-  const faturamentoMesAnterior = 12500;
-  const variacaoFaturamento = totalVendidoMesAtual > 0
-    ? ((totalVendidoMesAtual - faturamentoMesAnterior) / faturamentoMesAnterior) * 100
-    : 0;
+  // A janela anterior vem do servidor, calculada sobre os mesmos pedidos
+  // ativos. Antes era `12500` escrito aqui — um número inventado exibido ao
+  // lado de um número real, o que estraga a leitura dos dois.
+  const faturamentoMesAnterior = data?.estatisticas.faturamento30DiasAnterior || 0;
+  const variacaoFaturamento = variacaoPercentual(totalVendidoMesAtual, faturamentoMesAnterior);
   const lucroEstimado = totalVendidoMesAtual * 0.42;
 
   const getFaturamentoChartData = () => {
     if (!data?.pedidos) return [];
-    let filtered = data.pedidos;
+    // Cancelado fora daqui também: o gráfico de receita e o card de
+    // faturamento precisam contar a mesma coisa.
+    let filtered = apenasVendasAtivas(data.pedidos);
     const now = new Date();
 
     if (faturamentoPeriod !== 'all') {
@@ -978,7 +984,9 @@ export default function Home() {
     return { revenue, cost, profit, projectedProfit };
   };
 
-  const pedidosNfePendente = data?.pedidos?.filter(p => p.status === 'A Emitir' || !p.nfe) || [];
+  // O critério de emissão continua o mesmo; o que saiu foi o cancelado, que
+  // entrava por não ter nota — e um pedido cancelado nunca vai receber NF-e.
+  const pedidosNfePendente = pedidosComNfePendente(data?.pedidos ?? []);
   const novosPedidosFluxo = data?.pedidos?.filter(p => p.status === novosPedidosTab) || [];
   const filteredPedidosList = getFilteredAndSortedPedidos();
 
@@ -1324,7 +1332,7 @@ export default function Home() {
 
         {/* TAB FINANCEIRO */}
         <div className={activeTab === 'finance' ? 'block' : 'hidden'}>
-          <FinanceiroTab fetchWithAuth={fetchWithAuth} />
+          <FinanceiroTab fetchWithAuth={fetchWithAuth} ativo={activeTab === 'finance'} />
         </div>
 
         {/* TAB ORGANIZAÇÃO & MEMBROS (Ticket 24b) */}
@@ -1369,10 +1377,17 @@ export default function Home() {
                       <h3 className="text-2xl font-black text-white tracking-tight">
                         R$ {totalVendidoMesAtual.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                       </h3>
-                      <div className="mt-2 flex items-center gap-1.5 text-xs font-bold text-[#F0E675]">
-                        <TrendingUp className="h-3.5 w-3.5" />
-                        <span>+{variacaoFaturamento.toFixed(1)}% vs mês anterior</span>
-                      </div>
+                      {/* Sem janela anterior não há comparação a fazer, e
+                          inventar uma é o que este card fazia. */}
+                      {variacaoFaturamento !== null && (
+                        <div className="mt-2 flex items-center gap-1.5 text-xs font-bold text-[#F0E675]">
+                          <TrendingUp className="h-3.5 w-3.5" />
+                          <span>
+                            {variacaoFaturamento >= 0 ? '+' : ''}
+                            {variacaoFaturamento.toFixed(1)}% vs 30 dias anteriores
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </button>
                 </DialogTrigger>
