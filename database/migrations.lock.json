@@ -310,6 +310,11 @@
       "order": 62,
       "path": "../database/59_tentativas_venda_manual_idempotentes.sql",
       "sha256": "d87abdb545866c70ecc65e234dfa89289bb327855cdf90d9cceeb8de6b85753d"
+    },
+    {
+      "order": 63,
+      "path": "../database/60_reserva_nao_conta_venda_manual.sql",
+      "sha256": "4ff14c1fe36cd4ae074d56682fcea3dac613be7a4ae87af6132ef9cca544d5b0"
     }
   ],
   "references": [

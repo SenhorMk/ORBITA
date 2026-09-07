@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   BlingInboxService,
+  descreverFalhaDeWebhook,
   generateBlingIdempotencyKey,
 } from './blingInboxService';
 import { SupabaseClient } from '@supabase/supabase-js';
@@ -212,5 +213,45 @@ describe('BlingInboxService & Idempotency Boundary', () => {
         payload: { id: 1002, numero: 'PED-1002' },
       });
     });
+  });
+});
+
+/**
+ * Ticket 30 — o `order.created` real do staging (evento `7fc1329f-…`) terminou
+ * `failed` com "Erro desconhecido durante processamento de webhook", e a causa
+ * concreta foi descartada ANTES de ser gravada. O registro que existe para
+ * explicar a falha era justamente o que impedia explicá-la.
+ *
+ * A causa da perda: os repositórios fazem `throw error` com o objeto do
+ * PostgREST, que não é `instanceof Error`.
+ */
+describe('descreverFalhaDeWebhook', () => {
+  it('preserva o erro do PostgREST, que NÃO é instanceof Error', () => {
+    const erroDoPostgrest = {
+      message: 'Estoque insuficiente para o produto "719a3d96".',
+      code: '23514',
+      details: null,
+      hint: null,
+    };
+
+    const descrito = descreverFalhaDeWebhook(erroDoPostgrest);
+
+    expect(descrito).toContain('23514');
+    expect(descrito).toContain('Estoque insuficiente');
+    expect(descrito).not.toContain('Erro desconhecido');
+  });
+
+  it('mantém a mensagem de um Error comum', () => {
+    expect(descreverFalhaDeWebhook(new Error('conexão perdida'))).toBe('conexão perdida');
+  });
+
+  it('só cai no genérico quando não há mensagem nem código para gravar', () => {
+    expect(descreverFalhaDeWebhook({ foo: 'bar' })).toBe('Erro desconhecido durante processamento de webhook');
+    expect(descreverFalhaDeWebhook(null)).toBe('Erro desconhecido durante processamento de webhook');
+    expect(descreverFalhaDeWebhook(undefined)).toBe('Erro desconhecido durante processamento de webhook');
+  });
+
+  it('um código sem mensagem ainda é melhor que o genérico', () => {
+    expect(descreverFalhaDeWebhook({ code: '42P10' })).toBe('[42P10]');
   });
 });
