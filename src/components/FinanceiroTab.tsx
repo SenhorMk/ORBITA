@@ -36,6 +36,16 @@ interface ResumoFinanceiro {
 
 interface FinanceiroTabProps {
   fetchWithAuth: (url: string, options?: RequestInit) => Promise<Response>;
+  /**
+   * A aba está visível?
+   *
+   * A tela fica MONTADA o tempo todo (o painel só a esconde com `hidden`), e a
+   * busca acontecia uma vez, no mount. Uma venda manual registrada depois disso
+   * não aparecia aqui até recarregar a página — o Financeiro mostrava um saldo
+   * mais velho que o do painel ao lado. Reler quando a aba volta a aparecer
+   * resolve sem inventar polling.
+   */
+  ativo?: boolean;
 }
 
 const FORNECEDOR_GENERICO_ID = -1;
@@ -377,7 +387,7 @@ async function submitNovaDespesa(
 }
 
 /** Carrega/sincroniza os títulos financeiros e deriva os dados agregados (resumo + série do gráfico). */
-function useFinanceiroResumo(fetchWithAuth: FinanceiroTabProps['fetchWithAuth']) {
+function useFinanceiroResumo(fetchWithAuth: FinanceiroTabProps['fetchWithAuth'], ativo: boolean) {
   const [titulos, setTitulos] = useState<TituloFinanceiro[]>([]);
   const [resumo, setResumo] = useState<ResumoFinanceiro>({ receitas: 0, despesas: 0, saldo: 0 });
   const [loading, setLoading] = useState(true);
@@ -418,6 +428,7 @@ function useFinanceiroResumo(fetchWithAuth: FinanceiroTabProps['fetchWithAuth'])
   };
 
   useEffect(() => {
+    if (!ativo) return;
     let isMounted = true;
     void (async () => {
       await fetchFinanceiro(() => isMounted);
@@ -425,7 +436,10 @@ function useFinanceiroResumo(fetchWithAuth: FinanceiroTabProps['fetchWithAuth'])
     return () => {
       isMounted = false;
     };
-  }, [fetchFinanceiro]);
+    // `ativo` entra na dependência de propósito: a aba fica montada o tempo
+    // todo, então voltar a ela é o único momento em que releitura é pedida —
+    // e é aí que uma venda manual registrada no painel precisa aparecer aqui.
+  }, [fetchFinanceiro, ativo]);
 
   const chartData = titulos
     .filter(t => t.situacao === 'pago' || t.situacao === 'aberto')
@@ -450,11 +464,11 @@ function useFinanceiroResumo(fetchWithAuth: FinanceiroTabProps['fetchWithAuth'])
 }
 
 
-export function FinanceiroTab({ fetchWithAuth }: FinanceiroTabProps) {
+export function FinanceiroTab({ fetchWithAuth, ativo = true }: FinanceiroTabProps) {
   const {
     titulos, resumo, loading, syncing, setSyncing, avisoSync, filtroTipo, setFiltroTipo,
     fetchFinanceiro, syncFinanceiro, chartData,
-  } = useFinanceiroResumo(fetchWithAuth);
+  } = useFinanceiroResumo(fetchWithAuth, ativo);
 
   // Modais
   const [isNovaDespesaModalOpen, setIsNovaDespesaModalOpen] = useState(false);

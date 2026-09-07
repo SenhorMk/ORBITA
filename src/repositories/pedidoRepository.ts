@@ -1,6 +1,7 @@
 import { supabaseServer } from '../lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { Pedido, ItemPedido, Nfe, Cliente } from '../types';
+import { faturamentoNaJanela } from '@/lib/metricas/vendasAtivas';
 
 // Tipo enriquecido para visualização no dashboard
 export interface PedidoEnriquecido extends Pedido {
@@ -241,40 +242,51 @@ export class PedidoRepository {
   }
 
   // Estatísticas para o Dashboard
-  async getDashboardStats(scope: VerifiedOrganizationScope): Promise<{
+  /**
+   * As estatísticas do painel.
+   *
+   * `faturamento30` conta só VENDA ATIVA (`vendasAtivas.ts`). Antes somava
+   * todo pedido da janela, cancelado incluído: medido no staging, três pedidos
+   * de R$ 40 — um cancelado — viravam R$ 120 de faturamento e R$ 50,40 de
+   * lucro. As CONTAGENS por status continuam contando tudo, porque a de
+   * cancelados existe justamente para mostrar quantos são.
+   *
+   * `faturamento30Anterior` é a janela imediatamente anterior, de mesmo
+   * tamanho. Existe para o painel comparar com um número real: o "vs mês
+   * anterior" era calculado sobre R$ 12.500 escritos no código.
+   */
+  async getDashboardStats(scope: VerifiedOrganizationScope, agora: Date = new Date()): Promise<{
     faturamento30: number;
+    faturamento30Anterior: number;
     total: number;
     pendentes: number;
     cancelados: number;
     atendidos: number;
   }> {
     const pedidos = await this.getAllEnriched(scope);
-    const trintaDiasAtras = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const JANELA_MS = 30 * 24 * 60 * 60 * 1000;
+    const fim = new Date(agora.getTime());
+    const inicio = new Date(agora.getTime() - JANELA_MS);
+    const inicioAnterior = new Date(agora.getTime() - 2 * JANELA_MS);
 
-    let faturamento30 = 0;
     let pendentes = 0;
     let cancelados = 0;
     let atendidos = 0;
 
     for (const p of pedidos) {
-      const valor = Number(p.total || 0);
-      const dataTime = new Date(p.data).getTime();
-      if (dataTime >= trintaDiasAtras) {
-        faturamento30 += valor;
-      }
-
       const st = (p.status || '').toLowerCase();
-      if (st.includes('pend') || st.includes('aberto')) {
-        pendentes++;
-      } else if (st.includes('canc')) {
+      if (st.includes('canc')) {
         cancelados++;
+      } else if (st.includes('pend') || st.includes('aberto')) {
+        pendentes++;
       } else if (st.includes('atend') || st.includes('fatur')) {
         atendidos++;
       }
     }
 
     return {
-      faturamento30,
+      faturamento30: faturamentoNaJanela(pedidos, inicio, fim),
+      faturamento30Anterior: faturamentoNaJanela(pedidos, inicioAnterior, inicio),
       total: pedidos.length,
       pendentes,
       cancelados,

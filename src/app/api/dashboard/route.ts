@@ -45,6 +45,9 @@ export async function GET(request: Request) {
         clientes,
         estatisticas: {
           faturamento30Dias: stats.faturamento30 || 0,
+          // A janela anterior, para o painel comparar com um número real em
+          // vez do valor fixo que vivia no componente.
+          faturamento30DiasAnterior: stats.faturamento30Anterior || 0,
           totalPedidos: stats.total || 0,
           pendentes: stats.pendentes || 0,
           cancelados: stats.cancelados || 0,
