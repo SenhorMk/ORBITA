@@ -52,6 +52,43 @@ export function generateBlingIdempotencyKey(event: unknown, fallbackPrefix = 'bl
   return `${fallbackPrefix}_hash_${hash}`;
 }
 
+/**
+ * O que registrar como `last_error` de um evento que falhou.
+ *
+ * A versão anterior só sabia ler `Error` e `string`, e caía em "Erro
+ * desconhecido durante processamento de webhook" para qualquer outra coisa.
+ * O problema é que a coisa mais provável de ser lançada no caminho do webhook
+ * NÃO é um `Error`: os repositórios fazem `throw error` com o objeto de erro
+ * do PostgREST, que é um objeto simples com `message`/`code`/`details`/`hint`.
+ *
+ * Medido no staging em 07/09/2026: o `order.created` real (evento
+ * `7fc1329f-…`) terminou `failed` com exatamente aquela frase genérica, e a
+ * causa concreta foi descartada antes de ser gravada — o registro que existe
+ * para explicar a falha era o que impedia explicá-la.
+ *
+ * `code` entra junto com a mensagem porque é ele que distingue um
+ * `check_violation` de um `not_null_violation` de um `42P10`, e é a primeira
+ * coisa que se pergunta ao diagnosticar. A redação contra segredos continua
+ * acontecendo depois, no chamador.
+ */
+export function descreverFalhaDeWebhook(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+
+  if (error !== null && typeof error === 'object') {
+    const bruto = error as { message?: unknown; code?: unknown; details?: unknown; hint?: unknown };
+    const mensagem = typeof bruto.message === 'string' && bruto.message.trim() !== '' ? bruto.message : null;
+    const codigo = typeof bruto.code === 'string' && bruto.code.trim() !== '' ? bruto.code : null;
+    const detalhe = typeof bruto.details === 'string' && bruto.details.trim() !== '' ? bruto.details : null;
+
+    if (mensagem || codigo) {
+      return [codigo ? `[${codigo}]` : null, mensagem, detalhe].filter(Boolean).join(' ');
+    }
+  }
+
+  return 'Erro desconhecido durante processamento de webhook';
+}
+
 export class BlingInboxService {
   private async assertEventScope(
     supabase: SupabaseClient,
@@ -138,12 +175,7 @@ export class BlingInboxService {
     eventoId: string,
     error: unknown
   ): Promise<void> {
-    let sanitizedMessage = 'Erro desconhecido durante processamento de webhook';
-    if (error instanceof Error) {
-      sanitizedMessage = error.message;
-    } else if (typeof error === 'string') {
-      sanitizedMessage = error;
-    }
+    const sanitizedMessage = descreverFalhaDeWebhook(error);
 
     // Redigir qualquer token, chave ou dado sensível que possa constar na mensagem de erro
     const redactedDiagnosis = typeof redactSensitiveData(sanitizedMessage) === 'string'
