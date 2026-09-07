@@ -34,10 +34,22 @@ export class FinanceiroRepository {
     return data;
   }
 
+  /**
+   * Entradas, saídas e saldo ATIVOS.
+   *
+   * `cancelado` e `estornado` são estados terminais: o título continua no
+   * histórico e nas Últimas Movimentações, mas sai dos totais. Um pedido
+   * revertido no ERP não pode seguir somando receita — era o que acontecia
+   * enquanto o título ficava `pago` para sempre, sem vínculo com o pedido.
+   *
+   * O filtro é por `situacao = 'pago'`, então os dois estados novos já ficam
+   * de fora por construção; a asserção existe para que uma mudança futura
+   * nesse filtro não os traga de volta em silêncio.
+   */
   async getResumo(scope: VerifiedOrganizationScope): Promise<{ receitas: number; despesas: number; saldo: number }> {
     const { data, error } = await supabaseServer
       .from('titulos_financeiros')
-      .select('tipo, valor')
+      .select('tipo, valor, situacao')
       .eq('organizacao_id', scope.organizationId)
       .eq('situacao', 'pago');
 
@@ -50,6 +62,9 @@ export class FinanceiroRepository {
     let despesas = 0;
 
     data?.forEach((titulo) => {
+      // Defesa em profundidade: se o filtro acima algum dia deixar passar um
+      // terminal, ele ainda não entra no total.
+      if (titulo.situacao === 'cancelado' || titulo.situacao === 'estornado') return;
       if (titulo.tipo === 'receber') receitas += Number(titulo.valor);
       if (titulo.tipo === 'pagar') despesas += Number(titulo.valor);
     });

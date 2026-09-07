@@ -20,7 +20,7 @@ interface TituloFinanceiro {
   id: string;
   bling_id: number;
   tipo: 'receber' | 'pagar';
-  situacao: 'aberto' | 'pago' | 'cancelado';
+  situacao: 'aberto' | 'pago' | 'cancelado' | 'estornado';
   valor: number;
   data_vencimento: string;
   data_pagamento?: string;
@@ -293,12 +293,20 @@ function MovimentacoesList({ loading, titulos, filtroTipo, setFiltroTipo, format
                 </div>
               </div>
               <div className="text-right shrink-0">
-                <div className={`text-sm font-bold ${titulo.tipo === 'receber' ? 'text-[#30D158]' : 'text-white'}`}>
+                <div className={`text-sm font-bold ${
+                  titulo.situacao === 'cancelado' || titulo.situacao === 'estornado'
+                    ? 'text-slate-500 line-through'
+                    : titulo.tipo === 'receber' ? 'text-[#30D158]' : 'text-white'
+                }`}>
                   {titulo.tipo === 'receber' ? '+' : '-'}{formatCurrency(titulo.valor)}
                 </div>
+                {/* Terminal continua VISÍVEL — é isso que deixa o usuário
+                    entender "a venda existiu, mas foi revertida". O que ele
+                    não faz é entrar no total. */}
                 <div className={`text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md inline-block mt-1 ${
                   titulo.situacao === 'pago' ? 'bg-[#30D158]/20 text-[#30D158]'
                     : titulo.situacao === 'cancelado' ? 'bg-zinc-700 text-zinc-300'
+                    : titulo.situacao === 'estornado' ? 'bg-amber-500/20 text-amber-300'
                     : 'bg-[#FF9F0A]/20 text-[#FF9F0A]'
                 }`}>
                   {titulo.situacao}
@@ -442,6 +450,8 @@ function useFinanceiroResumo(fetchWithAuth: FinanceiroTabProps['fetchWithAuth'],
   }, [fetchFinanceiro, ativo]);
 
   const chartData = titulos
+    // Terminal fica fora do fluxo de caixa pelo mesmo motivo que fica fora do
+    // total: ele não é dinheiro que entrou nem que vai entrar.
     .filter(t => t.situacao === 'pago' || t.situacao === 'aberto')
     .reduce<ChartDataPoint[]>((acc, curr) => {
       const date = curr.data_vencimento?.split('T')[0] || curr.data_vencimento;

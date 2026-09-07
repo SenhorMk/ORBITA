@@ -124,7 +124,8 @@ schema_paths = [
   "../database/57_venda_manual_assume_linha_do_webhook.sql",
   "../database/58_reserva_nao_conta_pedido_finalizado.sql",
   "../database/59_tentativas_venda_manual_idempotentes.sql",
-  "../database/60_reserva_nao_conta_venda_manual.sql"
+  "../database/60_reserva_nao_conta_venda_manual.sql",
+  "../database/61_titulo_financeiro_vinculado_ao_pedido.sql"
 ]
 
 [db.seed]
