@@ -16,7 +16,7 @@ const scope = { organizationId: ORG, actorId: 'ator', role: 'owner' } as unknown
 
 /** Os filtros que a consulta aplicou — é por eles que a fronteira se prova. */
 const filtrosAplicados: Array<{ coluna: string; valor: unknown }> = [];
-let linhasDeTitulos: Array<{ tipo: string; valor: string }> = [];
+let linhasDeTitulos: Array<{ tipo: string; valor: string; situacao?: string }> = [];
 
 vi.mock('@/lib/supabaseServer', () => ({
   supabaseServer: {
@@ -123,5 +123,38 @@ describe('resumo financeiro', () => {
     expect(filtrosAplicados).toContainEqual({ coluna: 'organizacao_id', valor: ORG });
     expect(filtrosAplicados).toContainEqual({ coluna: 'situacao', valor: 'pago' });
     expect(filtrosAplicados.some((f) => f.valor === OUTRA_ORG)).toBe(false);
+  });
+});
+
+describe('estados terminais do título', () => {
+  beforeEach(() => {
+    filtrosAplicados.length = 0;
+    linhasDeTitulos = [];
+  });
+
+  it('`cancelado` e `estornado` não entram em Total Entradas', async () => {
+    // O dataset do staging depois da convergência: duas vendas válidas e uma
+    // revertida, que continua na tabela.
+    linhasDeTitulos = [
+      { tipo: 'receber', valor: '40.00', situacao: 'pago' },
+      { tipo: 'receber', valor: '40.00', situacao: 'pago' },
+      { tipo: 'receber', valor: '40.00', situacao: 'estornado' },
+      { tipo: 'receber', valor: '25.00', situacao: 'cancelado' },
+    ];
+
+    const resumo = await financeiroRepository.getResumo(scope);
+
+    expect(resumo.receitas).toBe(80);
+  });
+
+  it('a troca fecha em R$ 60: a venda de R$ 40 estornada não soma com a de R$ 60', async () => {
+    linhasDeTitulos = [
+      { tipo: 'receber', valor: '40.00', situacao: 'estornado' },
+      { tipo: 'receber', valor: '60.00', situacao: 'pago' },
+    ];
+
+    const resumo = await financeiroRepository.getResumo(scope);
+
+    expect(resumo.receitas).toBe(60);
   });
 });

@@ -317,7 +317,12 @@ export interface TituloFinanceiro {
   user_id?: string;
   bling_id?: number;
   tipo: 'receber' | 'pagar';
-  situacao: 'aberto' | 'pago' | 'cancelado';
+  /**
+   * `aberto`/`pago` são estados ativos; `cancelado`/`estornado` são terminais
+   * — o título fica no histórico e sai dos totais. `estornado` é o pago que
+   * foi revertido junto com o pedido.
+   */
+  situacao: 'aberto' | 'pago' | 'cancelado' | 'estornado';
   valor: number;
   data_vencimento: string;
   data_pagamento?: string;
