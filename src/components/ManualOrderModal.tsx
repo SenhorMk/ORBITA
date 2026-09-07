@@ -4,15 +4,22 @@ import { useState, useEffect, useDeferredValue } from "react";
 import { GlassModal } from '@/components/ui/glass-modal';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/lib/supabaseClient';
-import { buildManualOrderRequest, type ManualOrderRequest } from '@/lib/config/manualOrderContract';
 import { Search, Plus, Trash2, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
-import { fetchWithAuth } from '@/lib/fetchWithAuth';
-import { descreverErro } from '@/lib/erroLegivel';
+import { useManualOrderSubmit, type ItemPedidoManual } from './useManualOrderSubmit';
+import { PendenciasDeVendaManual } from './PendenciasDeVendaManual';
+
+export type { ItemPedidoManual, UseManualOrderSubmitInput } from './useManualOrderSubmit';
 
 interface ManualOrderModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess?: () => void;
+  /**
+   * Organização ativa confirmada pelo servidor (ticket 30, 5ª rodada de
+   * revisão). Escopa a memória de tentativas pendentes — ver
+   * `tentativaPendente.ts` — e sem ela nada é lembrado entre instâncias.
+   */
+  organizacaoId: string | null;
 }
 
 interface ClienteOption {
@@ -29,16 +36,6 @@ interface ProdutoOption {
   estoque?: number;
   estoque_reservado?: number;
   bling_id: string;
-}
-
-interface ItemPedidoManual {
-  produto_id: string;
-  bling_id: string;
-  nome: string;
-  codigo?: string;
-  quantidade: number;
-  max_quantidade: number;
-  valor_unitario: number;
 }
 
 /**
@@ -126,35 +123,6 @@ function useManualOrderItems(
   };
 
   return { itens, setItens, addItem, updateItemQty, removeItem, calculateTotal };
-}
-
-interface BuildManualOrderPayloadInput {
-  syncBling: boolean;
-  selectedCliente: string;
-  formaPagamento: string;
-  desconto: number | '';
-  frete: number | '';
-  observacoes: string;
-  itens: ItemPedidoManual[];
-}
-
-/**
- * Monta o corpo de `POST /api/pedidos/manual` pelo contrato compartilhado com a
- * rota. Nem `total` nem `parcelas` são montados aqui: o valor da venda é
- * derivado no servidor pelos preços do cadastro, e as parcelas são construídas
- * lá com a forma de pagamento real da conta Bling. A versão anterior montava
- * `parcelas` que a rota simplesmente não lia.
- */
-function buildManualOrderPayload(input: BuildManualOrderPayloadInput): ManualOrderRequest {
-  return buildManualOrderRequest({
-    syncBling: input.syncBling,
-    clienteId: input.selectedCliente,
-    itens: input.itens.map((item) => ({ produtoId: item.produto_id, quantidade: item.quantidade })),
-    desconto: Number(input.desconto) || 0,
-    frete: Number(input.frete) || 0,
-    observacoes: input.observacoes.trim() ? input.observacoes.trim() : undefined,
-    formaPagamentoRotulo: input.formaPagamento,
-  });
 }
 
 interface ManualOrderFormFieldsProps {
@@ -387,8 +355,7 @@ function ManualOrderItemsPanel({ itens, desconto, frete, updateItemQty, removeIt
   );
 }
 
-export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderModalProps) {
-  const [loading, setLoading] = useState(false);
+export function ManualOrderModal({ open, onOpenChange, onSuccess, organizacaoId }: ManualOrderModalProps) {
   const [error, setError] = useState<string | null>(null);
 
   // Form State
@@ -409,8 +376,33 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
 
   const { itens, setItens, addItem, updateItemQty, removeItem, calculateTotal } = useManualOrderItems(produtos, setError, setSearchProduto);
 
+  const { loading, handleSubmit } = useManualOrderSubmit({
+    syncBling, selectedCliente, formaPagamento, desconto, frete, observacoes, itens,
+    setError,
+    onSuccess,
+    onOpenChange,
+    organizacaoId,
+    resetForm: () => {
+      setItens([]);
+      setSelectedCliente('');
+      setDesconto('');
+      setFrete('');
+      setObservacoes('');
+    },
+  });
+
   useEffect(() => {
     if (!open) return;
+    // Ticket 30, fatia 3, 4ª rodada de revisão — a abertura do modal NÃO
+    // zera a referência de idempotência. Um envio anterior pode ter ficado
+    // indeterminado (nem sucesso nem falha confirmados), e reabrir o modal
+    // — ou um reload da página inteira, que é exatamente o cenário que a
+    // 4ª rodada pediu para fechar — precisa continuar apontando para a
+    // MESMA tentativa até ela se resolver. `useManualOrderSubmit` já cuida
+    // de retomar de `localStorage` na inicialização; zerar aqui destruiria
+    // justamente a persistência que fecha esse gap. Só um sucesso real
+    // limpa a referência (`resetReferenciaLocal`, chamado de dentro do
+    // próprio envio).
     let isMounted = true;
     loadManualOrderFormData(
       (v) => { if (isMounted) setClientes(v); },
@@ -420,78 +412,6 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
       isMounted = false;
     };
   }, [open]);
-
-  const handleSubmit = async () => {
-    if (!selectedCliente) {
-      setError('Selecione um cliente.');
-      return;
-    }
-    if (itens.length === 0) {
-      setError('Adicione pelo menos um item ao pedido.');
-      return;
-    }
-
-    setError(null);
-    setLoading(true);
-
-    try {
-      const payload = buildManualOrderPayload({
-        syncBling, selectedCliente, formaPagamento, desconto, frete, observacoes, itens,
-      });
-
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-
-      const res = await fetchWithAuth('/api/pedidos/manual', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        },
-        body: JSON.stringify(payload)
-      });
-
-      const data = (await res.json()) as {
-        error?: string;
-        avisos?: string[];
-        vendaDuplicada?: boolean;
-      };
-
-      if (!res.ok) {
-        // O Bling sinaliza venda idêntica à anterior por código estruturado; a
-        // rota o traduz em `vendaDuplicada`. Antes isso era detectado
-        // comparando a mensagem por substring, com os escapes gravados
-        // literalmente no fonte — comparação que nunca casava.
-        setError(
-          data.vendaDuplicada
-            ? 'Venda duplicada: o Bling recusou um pedido idêntico ao anterior (mesmo cliente, produtos e valores). Altere alguma informação antes de reenviar.'
-            : data.error || 'Falha ao processar pedido manual',
-        );
-        return;
-      }
-
-      // Sucesso confirmado pelo servidor. Avisos são falhas parciais reais
-      // (por exemplo, a baixa de estoque no Bling) e o modal fica aberto para
-      // que o usuário as leia em vez de vê-las desaparecer.
-      if (data.avisos && data.avisos.length > 0) {
-        setError(`Venda registrada, mas com pendências: ${data.avisos.join(' ')}`);
-        onSuccess?.();
-        return;
-      }
-
-      onSuccess?.();
-      onOpenChange(false);
-      setItens([]);
-      setSelectedCliente('');
-      setDesconto('');
-      setFrete('');
-      setObservacoes('');
-    } catch (err: unknown) {
-      setError(descreverErro(err));
-    } finally {
-      setLoading(false);
-    }
-  };
 
   return (
     <GlassModal
@@ -517,6 +437,8 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess }: ManualOrderM
         </>
       }
     >
+        <PendenciasDeVendaManual open={open} organizacaoId={organizacaoId} />
+
         {error && (
           <div className="bg-rose-500/10 text-rose-400 p-4 rounded-2xl flex items-start gap-2 text-sm border border-rose-500/20 mb-6">
             <AlertCircle className="w-5 h-5 flex-shrink-0" />

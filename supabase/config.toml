@@ -120,7 +120,10 @@ schema_paths = [
   "../database/53_venda_manual_transacional.sql",
   "../database/54_produtos_unidade_categoria.sql",
   "../database/55_upsert_conflito_inferivel.sql",
-  "../database/56_baixa_estoque_com_ator.sql"
+  "../database/56_baixa_estoque_com_ator.sql",
+  "../database/57_venda_manual_assume_linha_do_webhook.sql",
+  "../database/58_reserva_nao_conta_pedido_finalizado.sql",
+  "../database/59_tentativas_venda_manual_idempotentes.sql"
 ]
 
 [db.seed]

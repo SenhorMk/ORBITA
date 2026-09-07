@@ -2335,6 +2335,7 @@ export default function Home() {
         open={isManualOrderOpen}
         onOpenChange={setIsManualOrderOpen}
         onSuccess={loadDashboardData}
+        organizacaoId={organizacaoConfirmada}
       />
 
       {/* Modal de Cadastrar / Editar Contato */}

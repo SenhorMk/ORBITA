@@ -42,6 +42,17 @@ export const manualOrderRequestSchema = z.object({
   formaPagamentoId: z.number().int().positive().optional(),
   /** Rótulo exibido ao usuário e gravado em `pedidos.forma_pagamento`. */
   formaPagamentoRotulo: z.string().trim().min(1).max(60).optional(),
+  /**
+   * Ticket 30, fatia 3 - ancora de idempotencia entre retentativas da MESMA
+   * submissao (ver `tentativas_venda_manual`, migration 59). O cliente gera
+   * um UUID uma vez por tentativa e reenvia o MESMO valor se retentar depois
+   * de uma resposta ambigua - nunca um novo a cada clique.
+   *
+   * Opcional de proposito: um cliente mais antigo que nao o envie continua
+   * funcionando, so sem a protecao contra retentativa. O servidor gera uma
+   * referencia propria quando este campo esta ausente, como sempre fez.
+   */
+  referenciaLocal: z.string().uuid('referenciaLocal precisa ser um UUID').optional(),
 });
 
 export type ManualOrderRequest = z.infer<typeof manualOrderRequestSchema>;

@@ -161,6 +161,20 @@ export type BlingCallResult<T> =
   | { readonly _tag: 'BlingOk'; readonly value: T }
   | { readonly _tag: 'BlingFailed'; readonly failure: BlingProviderFailure };
 
+/**
+ * Resultado de procurar um pedido de venda pela referência local
+ * (`numeroLoja`) — ticket 30, 6ª rodada de revisão.
+ *
+ * A **cardinalidade é explícita** porque cada caso exige uma reação diferente,
+ * e "pegar o primeiro" seria escolher em silêncio: com mais de um pedido
+ * carregando a mesma referência, associar a tentativa a qualquer um deles é um
+ * palpite, e o palpite errado conclui uma venda com o pedido errado.
+ */
+export type BuscaDePedidoPorNumeroLoja =
+  | { readonly _tag: 'NenhumPedido' }
+  | { readonly _tag: 'UmPedido'; readonly pedido: { readonly id: string; readonly numeroLoja: string; readonly situacao: string | null } }
+  | { readonly _tag: 'VariosPedidos'; readonly quantidade: number; readonly ids: readonly string[] };
+
 /** Falha do provedor já traduzida para algo que pode ser mostrado ao usuário. */
 export interface BlingProviderFailure {
   readonly _tag: 'BlingProviderFailure';

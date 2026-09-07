@@ -246,6 +246,43 @@ com `type` enumerado (`VALIDATION_ERROR`, `MISSING_REQUIRED_FIELD_ERROR`,
 `TOO_MANY_REQUESTS`, ...). `parseBlingFailure` o traduz em falha tipada; o
 código `3` em `fields[]` é a recusa de venda idêntica à anterior.
 
+## Achar um pedido pela referência local (`numeroLoja`) — Ticket 30, 5ª rodada
+
+`GET /pedidos/vendas` aceita **`numerosLojas[]`** como filtro de query —
+descrito no OpenAPI oficial como "Conjunto de números de pedidos nas lojas".
+É o que torna possível reconciliar uma venda manual **sem ter o `bling_id`**:
+quando a criação perde o ACK, o ORBITA não sabe o id do pedido, mas sabe a
+`referenciaLocal`, porque ela é decidida antes do envio e viaja em
+`numeroLoja`.
+
+Parâmetros de query de `GET /pedidos/vendas`, conferidos no OpenAPI publicado
+em 2026-09-03:
+
+| Parâmetro | Tipo | Descrição no spec |
+|---|---|---|
+| `pagina`, `limite` | integer | paginação padrão |
+| `idContato` | integer | ID do contato |
+| `idsSituacoes[]` | array | Conjunto de situações |
+| `dataInicial`, `dataFinal` | string | faixa de data |
+| `dataAlteracaoInicial`, `dataAlteracaoFinal` | string | faixa de alteração |
+| `dataPrevistaInicial`, `dataPrevistaFinal` | string | faixa prevista |
+| `numero` | integer | Número do pedido de venda |
+| `idLoja` | integer | ID da loja |
+| `idVendedor` | integer | ID do vendedor |
+| `idControleCaixa` | integer | ID do controle de caixa |
+| **`numerosLojas[]`** | **array** | **Conjunto de números de pedidos nas lojas** |
+| `idUnidadeNegocio` | integer | ID da unidade de negócio (filial) |
+
+A resposta `200` devolve `data[]` de `VendasDadosBaseDTO`, que inclui `id`
+(readOnly) e `numeroLoja` — os dois campos de que a reconciliação precisa.
+
+**O filtro não é a prova.** `buscarPedidoVendaPorNumeroLoja`
+(`src/services/bling.ts`) confere a igualdade de `numeroLoja` no resultado
+antes de aceitar qualquer linha: um filtro que faça correspondência parcial,
+ou que o provedor passe a ignorar numa versão futura, devolveria pedidos de
+outras vendas — e concluir uma tentativa com o pedido errado é pior do que não
+concluir nenhuma.
+
 ## Baixa de estoque de um pedido de venda
 
 Use `POST /pedidos/vendas/{id}/lancar-estoque` — "lança o estoque de um

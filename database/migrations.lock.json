@@ -295,6 +295,21 @@
       "order": 59,
       "path": "../database/56_baixa_estoque_com_ator.sql",
       "sha256": "ebf80da5afc22f8672e2534156ce30c2932763ac1f5647e37d2b68eb968787da"
+    },
+    {
+      "order": 60,
+      "path": "../database/57_venda_manual_assume_linha_do_webhook.sql",
+      "sha256": "e4df539ca872ce14842720375c9513d4cf63f3fd585bfb55d063dd7bec3d419d"
+    },
+    {
+      "order": 61,
+      "path": "../database/58_reserva_nao_conta_pedido_finalizado.sql",
+      "sha256": "21048d9e0141a3ef718e02e64c5f0f81dee4133d684a114e496157757e8e1dd6"
+    },
+    {
+      "order": 62,
+      "path": "../database/59_tentativas_venda_manual_idempotentes.sql",
+      "sha256": "d87abdb545866c70ecc65e234dfa89289bb327855cdf90d9cceeb8de6b85753d"
     }
   ],
   "references": [

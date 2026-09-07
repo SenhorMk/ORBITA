@@ -1,247 +1,122 @@
 import { NextResponse } from 'next/server';
 
-import {
-  calculateManualOrderTotal,
-  manualOrderRequestSchema,
-  type ManualOrderRequest,
-} from '@/lib/config/manualOrderContract';
-import { pedidoVendaPayloadSchema, type PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
+import { type ManualOrderRequest } from '@/lib/config/manualOrderContract';
+import { fingerprintDaVendaManual, fingerprintDosValoresResolvidos } from '@/lib/config/manualOrderFingerprint';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
-import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
+import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 
-import type {
-  ManualOrderCliente,
-  ManualOrderDependencies,
-  ManualOrderResponseBody,
-  ManualOrderStorePort,
-  ResolvedManualOrderItem,
-} from './ports';
+import {
+  compensarNoBling,
+  resolverAmbiguidadeDePersistencia,
+  respostaCriacaoNoBlingIndeterminada,
+  respostaVendaJaRegistrada,
+} from './compensacao';
+import { classificarFalhaDeCriacaoNoBling } from './classificacaoDeFalhaBling';
+import { decidirSobreTentativa } from './decisaoDeTentativa';
+import { prepararEnvioAoBling, toBlingDate, type EntradaDoEnvio } from './envioAoBling';
+import { prepararPedido } from './preparacao';
+import {
+  posseAindaVigente,
+  respostaLedgerNaoGravado,
+  respostaPosseTomada,
+  type PosseDaVenda,
+} from './posseDaVenda';
+import { falhaDaVendaManual as fail, jsonDaVendaManual as json } from './resposta';
+import type { ManualOrderCliente, ManualOrderDependencies } from './ports';
 
 export * from './ports';
-
-function json(body: ManualOrderResponseBody, status: number): NextResponse {
-  return NextResponse.json(body, { status });
-}
-
-function fail(error: string, status: number, extra: Partial<ManualOrderResponseBody> = {}): NextResponse {
-  return json({ success: false, error, ...extra }, status);
-}
-
-/** `format: date` do Bling — AAAA-MM-DD, sem componente de hora. */
-function toBlingDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-function parseNumericBlingId(value: string | null): number | null {
-  if (value === null) return null;
-  const trimmed = value.trim();
-  if (!/^\d+$/u.test(trimmed)) return null;
-  const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-type ResolveItensResult =
-  | { readonly _tag: 'ItensResolved'; readonly itens: readonly ResolvedManualOrderItem[] }
-  | { readonly _tag: 'ItensRejected'; readonly response: NextResponse };
+export { compensarNoBling, resolverAmbiguidadeDePersistencia } from './compensacao';
 
 /**
- * Casa os itens pedidos com o cadastro local dentro do escopo da organização.
- * O preço usado é sempre o do cadastro: o corpo da requisição não carrega
- * preço nem total justamente para que o cliente não possa ditar o valor.
+ * Desfecho da sincronização com o Bling. Três casos, não dois (5ª rodada de
+ * revisão): `SyncRejected` e `SyncIndeterminado` exigem reações OPOSTAS no
+ * ledger de idempotência.
+ *
+ * - `SyncRejected` — nada foi criado no Bling, e isso é **sabido**: a falha
+ *   aconteceu antes do envio (contato, forma de pagamento, payload inválido)
+ *   ou o Bling respondeu recusando. A tentativa pode ficar `falhou`, que é
+ *   REABRÍVEL — retentar é seguro.
+ * - `SyncIndeterminado` — o `POST /pedidos/vendas` foi despachado e o desfecho
+ *   é desconhecido: timeout, conexão perdida, `5xx`, ou sucesso com id
+ *   ilegível. O pedido pode existir na conta do lojista, e o ORBITA pode nem
+ *   saber o `bling_id`. A tentativa fica `indeterminada`, que BLOQUEIA a
+ *   referência — retentar criaria um segundo pedido real.
  */
-async function resolveItens(
-  scope: VerifiedOrganizationScope,
-  body: ManualOrderRequest,
-  store: ManualOrderStorePort,
-): Promise<ResolveItensResult> {
-  const produtoIds = body.itens.map((item) => item.produtoId);
-  const duplicados = produtoIds.length !== new Set(produtoIds).size;
-  if (duplicados) {
-    return { _tag: 'ItensRejected', response: fail('O pedido tem o mesmo produto repetido em itens diferentes. Ajuste a quantidade em vez de repetir o item.', 400) };
-  }
-
-  const produtos = await store.findProdutosByIds(scope, produtoIds);
-  const porId = new Map(produtos.map((produto) => [produto.id, produto]));
-
-  const itens: ResolvedManualOrderItem[] = [];
-  for (const item of body.itens) {
-    const produto = porId.get(item.produtoId);
-    if (!produto) {
-      return { _tag: 'ItensRejected', response: fail(`Produto não encontrado no cadastro desta organização (${item.produtoId}).`, 400) };
-    }
-    if (produto.estoqueDisponivel < item.quantidade) {
-      return {
-        _tag: 'ItensRejected',
-        response: fail(`Estoque insuficiente para ${produto.nome}. Disponível: ${produto.estoqueDisponivel}, pedido: ${item.quantidade}.`, 400),
-      };
-    }
-    itens.push({ produto, quantidade: item.quantidade });
-  }
-
-  return { _tag: 'ItensResolved', itens };
-}
-
-type ContatoResult =
-  | { readonly _tag: 'ContatoResolved'; readonly blingContatoId: number }
-  | { readonly _tag: 'ContatoRejected'; readonly response: NextResponse };
-
-/** Garante um id numérico de contato no Bling, cadastrando o cliente se necessário. */
-async function resolveBlingContato(
-  scope: VerifiedOrganizationScope,
-  cliente: ManualOrderCliente,
-  deps: ManualOrderDependencies,
-): Promise<ContatoResult> {
-  const existente = parseNumericBlingId(cliente.blingId);
-  if (existente !== null) {
-    return { _tag: 'ContatoResolved', blingContatoId: existente };
-  }
-
-  const criado = await deps.bling.createContato({
-    nome: cliente.nome,
-    email: cliente.email,
-    telefone: cliente.telefone,
-    documento: cliente.cpfCnpj,
-  });
-
-  if (criado._tag === 'BlingFailed') {
-    return {
-      _tag: 'ContatoRejected',
-      response: fail(`Não foi possível cadastrar o cliente no Bling: ${criado.failure.message}`, 400),
-    };
-  }
-
-  await deps.store.linkClienteBlingId(scope, cliente.id, String(criado.value.id));
-  return { _tag: 'ContatoResolved', blingContatoId: criado.value.id };
-}
-
-type BlingPayloadResult =
-  | { readonly _tag: 'PayloadBuilt'; readonly payload: PedidoVendaPayload }
-  | { readonly _tag: 'PayloadRejected'; readonly response: NextResponse };
-
-/**
- * Monta e valida o corpo de `POST /pedidos/vendas` contra o schema oficial.
- * Validar antes de enviar troca um `400` opaco do provedor por uma mensagem
- * que diz exatamente o que falta.
- */
-function buildPedidoVendaPayload(
-  input: {
-    readonly blingContatoId: number;
-    readonly itens: readonly ResolvedManualOrderItem[];
-    readonly total: number;
-    readonly desconto: number;
-    readonly frete: number;
-    readonly observacoes: string | null;
-    readonly formaPagamentoId: number;
-    readonly dataStr: string;
-    readonly referenciaLocal: string;
-  },
-): BlingPayloadResult {
-  const itensSemBlingId = input.itens.filter((item) => parseNumericBlingId(item.produto.blingId) === null);
-  if (itensSemBlingId.length > 0) {
-    const nomes = itensSemBlingId.map((item) => item.produto.nome).join(', ');
-    return {
-      _tag: 'PayloadRejected',
-      response: fail(
-        `Estes produtos ainda não estão sincronizados com o Bling e por isso não podem entrar em um pedido enviado ao ERP: ${nomes}. Sincronize o catálogo ou desmarque o envio ao Bling.`,
-        400,
-      ),
-    };
-  }
-
-  const candidato = {
-    contato: { id: input.blingContatoId },
-    data: input.dataStr,
-    dataPrevista: input.dataStr,
-    dataSaida: input.dataStr,
-    numeroLoja: input.referenciaLocal,
-    itens: input.itens.map((item) => ({
-      descricao: item.produto.nome,
-      quantidade: item.quantidade,
-      valor: item.produto.preco,
-      // Sem desconto por item: o desconto da venda é aplicado no cabeçalho,
-      // então o preço de lista é o próprio preço praticado.
-      valorLista: item.produto.preco,
-      ...(item.produto.codigo ? { codigo: item.produto.codigo } : {}),
-      produto: { id: parseNumericBlingId(item.produto.blingId)! },
-    })),
-    parcelas: [
-      {
-        dataVencimento: input.dataStr,
-        valor: input.total,
-        formaPagamento: { id: input.formaPagamentoId },
-      },
-    ],
-    ...(input.observacoes ? { observacoes: input.observacoes } : {}),
-    ...(input.desconto > 0 ? { desconto: { valor: input.desconto, unidade: 'REAL' as const } } : {}),
-    ...(input.frete > 0 ? { transporte: { frete: input.frete } } : {}),
-  };
-
-  const parsed = pedidoVendaPayloadSchema.safeParse(candidato);
-  if (!parsed.success) {
-    const detalhes = parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
-    return { _tag: 'PayloadRejected', response: fail(`Pedido incompleto para o Bling: ${detalhes}`, 400) };
-  }
-
-  return { _tag: 'PayloadBuilt', payload: parsed.data };
-}
-
 type SyncResult =
   | { readonly _tag: 'Synced'; readonly blingPedidoId: string; readonly avisos: readonly string[] }
-  | { readonly _tag: 'SyncRejected'; readonly response: NextResponse };
+  | { readonly _tag: 'SyncRejected'; readonly response: NextResponse }
+  | { readonly _tag: 'SyncIndeterminado'; readonly causa: unknown }
+  /**
+   * A posse da tentativa mudou (9ª rodada de revisão, B2). Nenhum efeito
+   * externo NOVO é iniciado a partir daqui, e o ledger não é tocado: quem tomou
+   * a posse é quem decide o desfecho.
+   */
+  | { readonly _tag: 'SyncSemPosse' };
 
 /**
- * Cria o pedido no Bling e lança o estoque vinculado a ele.
+ * Cria o pedido no Bling. **Não lança o estoque** — ver `lancarEstoqueDaVenda`.
  *
- * A falha da baixa de estoque acontece depois de o pedido já existir no ERP,
- * então ela vira aviso — não pode derrubar a venda nem ser engolida.
+ * A ordem mudou na 10ª rodada de revisão (B2). Antes era
+ * `confirmar posse → lançar estoque → gravar venda`, e o `confirmar posse`
+ * não fechava o entrelaçamento: a chamada de estoque já em voo podia aterrissar
+ * DEPOIS de a reconciliação ter tomado a posse e cancelado o pedido. Conferir
+ * antes de um efeito não impede o efeito de chegar tarde.
+ *
+ * Agora o commit durável vem no meio: `criar → gravar venda+ledger (atômico
+ * com a posse) → lançar estoque`. Isso resolve o entrelaçamento sem máquina de
+ * fases nenhuma, porque as duas pontas passam a ser decididas pelo mesmo
+ * `55P03`:
+ *
+ * - se a reconciliação tomou a posse ANTES do commit, `registrar_venda_manual_com_posse`
+ *   recusa, e o executor nunca chega a lançar estoque;
+ * - se o commit venceu, a tentativa já está `concluida` — e uma tentativa
+ *   `concluida` não pode mais ser assumida nem cancelada como se não houvesse
+ *   venda (`tentativaPodeSerReconciliada`).
+ *
+ * O estoque remoto vira, então, efeito PÓS-confirmação do executor vencedor —
+ * e não uma aposta feita antes de saber quem venceu.
  */
 async function sincronizarComBling(
   scope: VerifiedOrganizationScope,
   cliente: ManualOrderCliente,
   body: ManualOrderRequest,
-  itens: readonly ResolvedManualOrderItem[],
-  total: number,
-  dataStr: string,
-  referenciaLocal: string,
+  entrada: EntradaDoEnvio,
+  posse: PosseDaVenda,
   deps: ManualOrderDependencies,
 ): Promise<SyncResult> {
-  const contatoResult = await resolveBlingContato(scope, cliente, deps);
-  if (contatoResult._tag === 'ContatoRejected') {
-    return { _tag: 'SyncRejected', response: contatoResult.response };
+  const payloadResult = await prepararEnvioAoBling(scope, cliente, body, entrada, posse, deps);
+  if (payloadResult._tag === 'PayloadSemPosse') {
+    return { _tag: 'SyncSemPosse' };
   }
-
-  let formaPagamentoId = body.formaPagamentoId;
-  if (formaPagamentoId === undefined) {
-    const padrao = await deps.bling.getDefaultFormaPagamentoId();
-    if (padrao._tag === 'BlingFailed') {
-      return {
-        _tag: 'SyncRejected',
-        response: fail(
-          `Não foi possível descobrir a forma de pagamento padrão no Bling: ${padrao.failure.message}. Configure uma forma de pagamento padrão na conta.`,
-          400,
-        ),
-      };
-    }
-    formaPagamentoId = padrao.value;
-  }
-
-  const payloadResult = buildPedidoVendaPayload({
-    blingContatoId: contatoResult.blingContatoId,
-    itens,
-    total,
-    desconto: body.desconto,
-    frete: body.frete,
-    observacoes: body.observacoes ?? null,
-    formaPagamentoId,
-    dataStr,
-    referenciaLocal,
-  });
   if (payloadResult._tag === 'PayloadRejected') {
     return { _tag: 'SyncRejected', response: payloadResult.response };
   }
 
-  const criado = await deps.bling.createPedidoVenda(payloadResult.payload);
+  // A PARTIR DAQUI o pedido pode existir no Bling (5ª rodada de revisão).
+  // Uma exceção lançada aqui — timeout, conexão perdida, abort — não prova
+  // que nada foi criado: prova só que a RESPOSTA não chegou. Deixá-la subir
+  // marcaria a tentativa como `falhou` (reabrível) ou a deixaria presa em
+  // `em_andamento` para sempre; as duas coisas estão erradas.
+  //
+  // FENCING DO EFEITO COMERCIAL (9ª rodada de revisão, B2). Antes desta
+  // rodada, um executor que já tinha perdido a posse ainda podia criar o
+  // pedido no ERP. A pergunta é feita aqui, o mais tarde possível antes do
+  // envio.
+  if (!await posseAindaVigente(scope, posse, 'criar', deps)) {
+    return { _tag: 'SyncSemPosse' };
+  }
+
+  let criado: Awaited<ReturnType<ManualOrderDependencies['bling']['createPedidoVenda']>>;
+  try {
+    criado = await deps.bling.createPedidoVenda(payloadResult.payload);
+  } catch (causa) {
+    return { _tag: 'SyncIndeterminado', causa };
+  }
+
   if (criado._tag === 'BlingFailed') {
+    if (classificarFalhaDeCriacaoNoBling(criado.failure) === 'Ambigua') {
+      return { _tag: 'SyncIndeterminado', causa: new Error(criado.failure.message) };
+    }
     return {
       _tag: 'SyncRejected',
       response: fail(`O Bling recusou o pedido: ${criado.failure.message}`, 400, {
@@ -250,157 +125,265 @@ async function sincronizarComBling(
     };
   }
 
-  const blingPedidoId = criado.value.id;
-  const avisos = criado.value.alertas.map((alerta) => `Bling: ${alerta}`);
-
-  const estoque = await deps.bling.lancarEstoquePedido(blingPedidoId);
-  if (estoque._tag === 'BlingFailed') {
-    avisos.push(
-      `O pedido ${blingPedidoId} foi criado no Bling, mas a baixa de estoque no ERP falhou: ${estoque.failure.message}. Confira o estoque no Bling.`,
-    );
-  }
-
-  return { _tag: 'Synced', blingPedidoId, avisos };
+  return {
+    _tag: 'Synced',
+    blingPedidoId: criado.value.id,
+    avisos: criado.value.alertas.map((alerta) => `Bling: ${alerta}`),
+  };
 }
 
 /**
- * Desfaz no Bling a venda que o ORBITA não conseguiu gravar.
+ * Lança no ERP o estoque do pedido — DEPOIS de a venda e o ledger estarem
+ * commitados (10ª rodada de revisão, B2).
  *
- * O efeito remoto acontece ANTES da gravação local, e não há como inverter a
- * ordem: o `bling_id` do pedido só existe depois da criação remota. A única
- * saída honesta é compensar — cancelar lá o que não existe aqui.
- *
- * Sem isto, cada tentativa deixava um pedido órfão na conta real do lojista.
- * Aconteceu em 2026-08-30: o pedido 26735607230 nasceu no Bling, a gravação
- * local foi recusada pelo banco, e ele ficou sem par no ORBITA. Não havia
- * retentativa segura — tentar de novo criava mais um.
+ * A falha vira aviso, como sempre foi: ela acontece com o pedido já existindo
+ * no ERP e com a venda já gravada aqui, então não pode derrubar nem ser
+ * engolida. Chamado exatamente uma vez por tentativa vencedora — o claim da
+ * referência é o que garante isso.
  */
-async function compensarNoBling(
+async function lancarEstoqueDaVenda(
   blingPedidoId: string | null,
-  error: unknown,
+  deps: ManualOrderDependencies,
+): Promise<readonly string[]> {
+  if (blingPedidoId === null) return [];
+
+  // A exceção também vira aviso (10ª rodada de revisão). Agora que a baixa
+  // acontece DEPOIS do commit, deixá-la subir trocaria um `201` legítimo por
+  // um `500` sobre uma venda que existe nos dois lados — e a retentativa com a
+  // mesma referência encontraria a tentativa `concluida` e nunca relançaria o
+  // estoque. O contrato desta chamada sempre foi "falha vira aviso, não
+  // derruba a venda"; sem este `catch` ele valia só para a falha TIPADA.
+  let estoque: Awaited<ReturnType<ManualOrderDependencies['bling']['lancarEstoquePedido']>>;
+  try {
+    estoque = await deps.bling.lancarEstoquePedido(blingPedidoId);
+  } catch (causa) {
+    registrarFalhaInterna('pedidos.manual.bling.estoque', causa);
+    return [
+      `O pedido ${blingPedidoId} foi criado no Bling e a venda foi registrada, mas a baixa de estoque `
+      + 'no ERP não teve resposta. Confira o estoque no Bling.',
+    ];
+  }
+  if (estoque._tag === 'BlingOk') return [];
+
+  return [
+    `O pedido ${blingPedidoId} foi criado no Bling, mas a baixa de estoque no ERP falhou: `
+    + `${estoque.failure.message}. Confira o estoque no Bling.`,
+  ];
+}
+
+/**
+ * Registra o desfecho da tentativa quando a sincronização com o Bling não
+ * produziu um pedido, e devolve a resposta pronta. `null` significa "seguiu
+ * bem, continue".
+ *
+ * Os dois desfechos exigem reações OPOSTAS no ledger, e é por isso que estão
+ * juntos aqui em vez de espalhados: `SyncRejected` grava `falhou`
+ * (REABRÍVEL — a recusa foi comprovada pelo contrato do Bling, então nada
+ * existe lá); `SyncIndeterminado` grava `indeterminada` (BLOQUEIA — o pedido
+ * pode existir, e sem `bling_id` não há o que cancelar nem o que gravar).
+ */
+async function recusaDaSincronizacao(
+  sync: SyncResult,
+  scope: VerifiedOrganizationScope,
+  posse: PosseDaVenda,
+  deps: ManualOrderDependencies,
+): Promise<NextResponse | null> {
+  const { tentativaId, epoca } = posse;
+  // Perdeu a posse: NÃO escreve no ledger. Quem tomou a posse é quem decide o
+  // desfecho, e gravar daqui seria escrever por cima de uma decisão alheia —
+  // o defeito que o fencing existe para impedir (9ª rodada, B2).
+  if (sync._tag === 'SyncSemPosse') {
+    return respostaPosseTomada();
+  }
+  if (sync._tag === 'SyncRejected') {
+    // Nada existe em lugar nenhum (o Bling recusou por contrato). Se o ledger
+    // não gravar, a tentativa segue `em_andamento` e BLOQUEIA a referência até
+    // uma conferência — bloqueio a mais, nunca sucesso a mais.
+    await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, { estado: 'falhou' }, 'em_andamento', epoca);
+    return sync.response;
+  }
+  if (sync._tag === 'SyncIndeterminado') {
+    // A referência fica bloqueada até a reconciliação
+    // (`POST /api/pedidos/manual/reconciliar`) perguntar ao Bling, por
+    // `numeroLoja`, se o pedido existe.
+    registrarFalhaInterna('pedidos.manual.bling.criar.ambiguo', sync.causa);
+    await deps.store.registrarDesfechoDaTentativa(scope, tentativaId, { estado: 'indeterminada' }, 'em_andamento', epoca);
+    return respostaCriacaoNoBlingIndeterminada();
+  }
+  return null;
+}
+
+/**
+ * Grava a venda e devolve a resposta.
+ *
+ * A gravação é atômica com a POSSE (9ª rodada, B1): a mesma transação que
+ * escreve pedido, itens, estoque e financeiro valida a época e conclui o
+ * ledger. Por isso o caminho feliz aqui não tem uma segunda escrita — era
+ * exatamente essa segunda escrita, falhando em silêncio, que produzia `201`
+ * sem garantia de idempotência durável (B4).
+ */
+async function gravarVenda(
+  contexto: {
+    readonly scope: VerifiedOrganizationScope;
+    readonly body: ManualOrderRequest;
+    readonly cliente: ManualOrderCliente;
+    readonly entrada: EntradaDoEnvio;
+    readonly posse: PosseDaVenda;
+    readonly blingPedidoId: string | null;
+    readonly avisos: readonly string[];
+  },
   deps: ManualOrderDependencies,
 ): Promise<NextResponse> {
-  // Ticket 22, critério 13 — `causa` é `descreverErro` do erro do banco, e ela
-  // ia inteira para o cliente. Não ajuda a reconciliar nada e é diagnóstico
-  // interno (CWE-209): passa a ficar só no log. O que permite agir — o id do
-  // pedido no Bling e a instrução — continua na resposta.
-  registrarFalhaInterna('pedidos.manual.registrar', error);
+  const { scope, body, cliente, entrada, posse, blingPedidoId, avisos } = contexto;
 
-  if (blingPedidoId === null) {
-    // Nada foi criado no Bling: não há o que reconciliar, e não há o que dizer
-    // além de que falhou.
-    return fail(MENSAGEM_PUBLICA_DE_FALHA, 500, { blingPedidoId });
-  }
+  const resultado = await deps.store.persistVenda({
+    scope,
+    // A POSSE ENTRA NA MESMA TRANSAÇÃO DA VENDA (9ª rodada, B1). A RPC recusa
+    // a gravação inteira — pedido, itens, estoque, financeiro — se a época já
+    // não for a vigente, com a linha da tentativa travada. Não é "grava e
+    // depois confere": é uma coisa só.
+    tentativaId: posse.tentativaId,
+    epoca: posse.epoca,
+    clienteId: cliente.id,
+    blingPedidoId,
+    referenciaLocal: entrada.referenciaLocal,
+    total: entrada.total,
+    desconto: body.desconto,
+    frete: body.frete,
+    formaPagamento: body.formaPagamentoRotulo ?? null,
+    observacoes: body.observacoes ?? null,
+    dataStr: entrada.dataStr,
+    itens: entrada.itens,
+  });
 
-  const compensacao = await deps.bling.cancelarPedidoVenda(blingPedidoId);
-  if (compensacao._tag === 'BlingFailed') {
-    // As duas metades falharam. É o único caminho que exige ação humana, e por
-    // isso ele diz exatamente o quê, onde e por quê.
-    return fail(
-      `Falha ao registrar a venda no ORBITA. O pedido ${blingPedidoId} foi criado no Bling e o `
-        // A razão vem do **Bling**, não daqui: é ela que diz por que o
-        // cancelamento automático não funcionou, e é o que a pessoa precisa
-        // saber para resolver à mão. Mensagem de provedor externo não é
-        // diagnóstico interno, e sai de propósito.
-        + `cancelamento automático também falhou (${compensacao.failure.message}). `
-        + 'Cancele o pedido no Bling antes de tentar de novo, senão a próxima tentativa cria outro.',
-      500,
-      { blingPedidoId, compensado: false },
+  // O COMMIT VENCEU: a venda e o ledger existem, e a tentativa está
+  // `concluida`. Só agora o estoque remoto é lançado — antes disso, ninguém
+  // sabia quem tinha vencido a corrida com a reconciliação.
+  if (resultado._tag === 'PersistVendaOk') {
+    const avisosDoEstoque = await lancarEstoqueDaVenda(blingPedidoId, deps);
+    return json(
+      {
+        success: true,
+        pedidoId: resultado.pedidoId,
+        blingPedidoId,
+        total: entrada.total,
+        avisos: [...avisos, ...avisosDoEstoque],
+      },
+      201,
     );
   }
 
-  return fail(
-    `Falha ao registrar a venda no ORBITA. O pedido ${blingPedidoId} foi cancelado no Bling `
-      + 'automaticamente, então nada ficou pendente lá. Pode tentar de novo.',
-    500,
-    { blingPedidoId, compensado: true },
+  // A tentativa mudou de dono antes do commit: NADA foi gravado, e o ledger
+  // pertence a quem tomou a posse.
+  if (resultado._tag === 'PersistVendaSemPosse') {
+    return respostaPosseTomada();
+  }
+
+  // Definitiva ou ambígua: as duas devolvem `{ response, desfecho }` — o
+  // desfecho não é sempre 'falhou'/'indeterminada' cegamente. Uma checagem
+  // dentro delas pode achar que a venda JÁ foi registrada (por uma tentativa
+  // concorrente, ou porque o commit chegou entre o erro e a checagem), e nesse
+  // caso o desfecho vem 'concluida' de verdade — é por isso que o registro usa
+  // o que elas devolvem, não uma suposição daqui.
+  const { response, desfecho } = resultado._tag === 'PersistVendaFalhouDefinitivamente'
+    ? await compensarNoBling(scope, blingPedidoId, resultado.causa, deps)
+    : await resolverAmbiguidadeDePersistencia(scope, blingPedidoId, resultado.causa, deps);
+
+  // NENHUMA ESCRITA DAQUI PODE REBAIXAR UMA TENTATIVA JÁ CONCLUÍDA.
+  //
+  // Desde que a venda e o ledger commitam JUNTOS, uma `PersistVendaAmbigua`
+  // pode significar que a transação inteira **commitou** e só a resposta se
+  // perdeu — ou seja, a tentativa já está `concluida`. Gravar `indeterminada`
+  // por cima disso travaria uma venda que existe: a reconciliação não teria o
+  // `bling_id` para consultar (uma venda sem sincronização não tem nenhum), e
+  // a referência ficaria bloqueada sem saída.
+  //
+  // O CAS só entra para os desfechos que rebaixam. `concluida` é gravada sem
+  // CAS de propósito: escrever `concluida` sobre `concluida` é idempotente, e
+  // é o desfecho de quem confirmou a venda.
+  const registro = await deps.store.registrarDesfechoDaTentativa(
+    scope,
+    posse.tentativaId,
+    desfecho,
+    desfecho.estado === 'concluida' ? undefined : 'em_andamento',
+    posse.epoca,
   );
+
+  // NENHUMA RESPOSTA DE SUCESSO SEM ESTADO DURÁVEL (9ª rodada, B4). O único
+  // desfecho deste bloco que responde `2xx` é `concluida` — a checagem achou a
+  // venda já registrada. Se o ledger não gravou, essa resposta afirmaria uma
+  // garantia de idempotência que não existe.
+  if (registro._tag === 'DesfechoNaoGravado' && desfecho.estado === 'concluida') {
+    return respostaLedgerNaoGravado(blingPedidoId);
+  }
+
+  // A CONFIRMAÇÃO PROVOU QUE O COMMIT ACONTECEU (10ª rodada, B2). A resposta
+  // se perdeu, mas a venda e o ledger existem — este executor é o vencedor, e
+  // o lançamento de estoque que ficou pendente é dele. Uma vez só: a próxima
+  // requisição com a mesma referência encontra a tentativa `concluida` e nem
+  // chega aqui.
+  if (desfecho.estado === 'concluida' && desfecho.pedidoId !== undefined) {
+    const avisosDoEstoque = await lancarEstoqueDaVenda(blingPedidoId, deps);
+    return respostaVendaJaRegistrada(desfecho.pedidoId, blingPedidoId, avisosDoEstoque);
+  }
+  return response;
 }
 
-/**
- * `POST /api/pedidos/manual`.
- *
- * A venda só é gravada localmente depois que o Bling confirma a criação do
- * pedido, quando o envio ao ERP foi pedido. Falha parcial (a baixa de estoque
- * no Bling, que acontece depois do pedido já existir) vira aviso explícito na
- * resposta, nunca um `catch` silencioso nem um sucesso mascarado.
- */
 export function createManualOrderHandler(deps: ManualOrderDependencies) {
   return async function handleManualOrder(request: Request): Promise<NextResponse> {
-    const session = await deps.auth.authenticate(request);
-    if (!session) {
-      return fail('Não autorizado', 401);
-    }
-
-    const scopeResult = await deps.auth.resolveScope(request);
-    if (scopeResult._tag === 'Denied') {
-      return scopeResult.response;
-    }
-    const { scope } = scopeResult;
-
-    let rawBody: unknown;
-    try {
-      rawBody = await request.json();
-    } catch {
-      return fail('Corpo da requisição não é um JSON válido.', 400);
-    }
-
-    const parsedBody = manualOrderRequestSchema.safeParse(rawBody);
-    if (!parsedBody.success) {
-      const detalhes = parsedBody.error.issues.map((issue) => `${issue.path.join('.') || 'corpo'}: ${issue.message}`).join('; ');
-      return fail(`Pedido inválido: ${detalhes}`, 400);
-    }
-    const body = parsedBody.data;
-
-    const cliente = await deps.store.findClienteById(scope, body.clienteId);
-    if (!cliente) {
-      return fail('Cliente não encontrado no cadastro desta organização.', 400);
-    }
-
-    const itensResult = await resolveItens(scope, body, deps.store);
-    if (itensResult._tag === 'ItensRejected') {
-      return itensResult.response;
-    }
-    const { itens } = itensResult;
-
-    const total = calculateManualOrderTotal(
-      itens.map((item) => ({ quantidade: item.quantidade, valorUnitario: item.produto.preco })),
-      body.desconto,
-      body.frete,
-    );
+    const preparado = await prepararPedido(request, deps);
+    if (preparado._tag === 'Rejeitado') return preparado.response;
+    const { scope, body, cliente, itens, total } = preparado;
 
     const dataStr = toBlingDate(deps.now());
-    const referenciaLocal = deps.newLocalReference();
+    const referenciaLocal = deps.newLocalReference(body.referenciaLocal);
     const avisos: string[] = [];
+
+    // O fingerprint é calculado AQUI, do corpo já validado — nunca recebido do
+    // cliente (5ª rodada de revisão). Um fingerprint enviado pelo cliente
+    // seria só a afirmação do cliente sobre si mesmo, e a regra que ele
+    // sustenta ("mesma chave + mesmo conteúdo") deixaria de valer contra um
+    // cliente desatualizado, um proxy, ou uma chamada direta à API.
+    const fingerprint = await fingerprintDaVendaManual(body);
+    // Os VALORES resolvidos (preços do cadastro + total derivado) entram
+    // separados (6ª rodada): eles não vêm do cliente, e uma mudança de preço
+    // entre tentativas não pode reabrir uma tentativa em silêncio.
+    const valoresFingerprint = await fingerprintDosValoresResolvidos(
+      itens.map((item) => ({ produtoId: item.produto.id, precoUnitario: item.produto.preco })),
+      total,
+    );
+
+    // Ticket 30, fatia 3, 3ª rodada — reivindica a referência ANTES de
+    // qualquer chamada ao Bling. Uma retentativa (humana, de proxy, de
+    // navegador) que reenvie a MESMA `referenciaLocal` cai num dos três
+    // ramos de `respostaSeTentativaJaExistir` em vez de criar um segundo
+    // pedido remoto — é isso que torna "não tente de novo" uma garantia do
+    // sistema, não só uma instrução de texto.
+    const decisao = decidirSobreTentativa(
+      await deps.store.reivindicarTentativa(scope, referenciaLocal, fingerprint, valoresFingerprint),
+    );
+    if ('response' in decisao) return decisao.response;
+    const { tentativaId, epoca } = decisao;
+
     let blingPedidoId: string | null = null;
 
+    const posse: PosseDaVenda = { tentativaId, epoca };
+    const entrada: EntradaDoEnvio = { itens, total, dataStr, referenciaLocal };
+
     if (body.syncBling) {
-      const sync = await sincronizarComBling(scope, cliente, body, itens, total, dataStr, referenciaLocal, deps);
-      if (sync._tag === 'SyncRejected') {
-        return sync.response;
+      const sync = await sincronizarComBling(scope, cliente, body, entrada, posse, deps);
+      const recusa = await recusaDaSincronizacao(sync, scope, posse, deps);
+      if (recusa) return recusa;
+      // O `_tag` restante é `Synced` — estreitado pelo retorno acima.
+      if (sync._tag === 'Synced') {
+        blingPedidoId = sync.blingPedidoId;
+        avisos.push(...sync.avisos);
       }
-      blingPedidoId = sync.blingPedidoId;
-      avisos.push(...sync.avisos);
     }
 
-    try {
-      const { pedidoId } = await deps.store.persistVenda({
-        scope,
-        clienteId: cliente.id,
-        blingPedidoId,
-        referenciaLocal,
-        total,
-        desconto: body.desconto,
-        frete: body.frete,
-        formaPagamento: body.formaPagamentoRotulo ?? null,
-        observacoes: body.observacoes ?? null,
-        dataStr,
-        itens,
-      });
-
-      return json({ success: true, pedidoId, blingPedidoId, total, avisos }, 201);
-    } catch (error: unknown) {
-      return compensarNoBling(blingPedidoId, error, deps);
-    }
+    return gravarVenda(
+      { scope, body, cliente, entrada, posse, blingPedidoId, avisos },
+      deps,
+    );
   };
 }

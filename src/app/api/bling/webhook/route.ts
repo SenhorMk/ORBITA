@@ -123,7 +123,25 @@ async function processPedidoExclusaoEvent(
   return { blingId, cancelled };
 }
 
-/** Sincroniza um evento de pedido de venda recebido do webhook. */
+/**
+ * Sincroniza um evento de pedido de venda recebido do webhook.
+ *
+ * **A outra ponta da corrida do ticket 30.** Quando o pedido nasceu de uma
+ * venda manual do próprio ORBITA, este evento chega em menos de um segundo e a
+ * linha gravada aqui é a **primeira** — a venda manual chega depois e
+ * **assume** esta linha (`registrar_venda_manual`, migration 57), em vez de
+ * bater em `uq_pedidos_org_bling`.
+ *
+ * Duas consequências que valem para o leitor daqui:
+ *
+ * 1. `pedido` não carrega `origem`, `forma_pagamento`, `observacao`, `desconto`
+ *    nem `frete`. Não é omissão: é o que impede um evento que chegue **depois**
+ *    de apagar a identidade de uma venda manual já registrada. Acrescentar
+ *    qualquer um desses campos aqui reabre isso.
+ * 2. `buildPedidoItemsParaSalvar` pula o item cujo produto não existe
+ *    localmente, então esta rota grava no máximo os itens que a venda tem —
+ *    nunca mais. A tomada do lado da venda manual conta com isso.
+ */
 async function processPedidoEvent(
   eventData: Record<string, unknown>,
   blingClient: BlingPort,

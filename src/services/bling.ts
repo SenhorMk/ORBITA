@@ -10,6 +10,7 @@ import type {
 import {
   blingFailure,
   parseBlingFailure,
+  type BuscaDePedidoPorNumeroLoja,
   pedidoVendaCreatedSchema,
   type BlingCallResult,
   type PedidoVendaPayload,
@@ -935,6 +936,59 @@ export class BlingClient implements BlingPort {
     }
 
     return { _tag: 'BlingOk', value: undefined };
+  }
+
+  async buscarPedidoVendaPorNumeroLoja(numeroLoja: string): Promise<BlingCallResult<BuscaDePedidoPorNumeroLoja>> {
+    const url = new URL(`${this.baseUrl}/pedidos/vendas`);
+    // `numerosLojas[]` é o filtro oficial do `GET /pedidos/vendas` — "Conjunto
+    // de números de pedidos nas lojas", conferido no OpenAPI publicado (ver
+    // `docs/integrations/bling-v3-contract.md`). É ele que permite achar o
+    // pedido pela referência que o ORBITA decidiu ANTES de enviar, quando a
+    // resposta da criação se perdeu e o `bling_id` nunca chegou.
+    url.searchParams.append('numerosLojas[]', numeroLoja);
+    url.searchParams.set('limite', '100');
+
+    const response = await this.fetchWithAuth(url.toString());
+    if (!response.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+    }
+
+    const body = (await response.json()) as {
+      data?: Array<{ id?: number | string; numeroLoja?: string; situacao?: { valor?: number; nome?: string } }>;
+    };
+    const linhas = Array.isArray(body.data) ? body.data : [];
+
+    // O filtro do provedor NÃO é a prova: a igualdade é conferida aqui. Um
+    // filtro que faça correspondência parcial, ou que o Bling passe a ignorar
+    // numa versão futura, devolveria pedidos de OUTRAS vendas — e concluir uma
+    // tentativa com o pedido errado é pior do que não concluir nenhuma.
+    const exatas = linhas.filter((linha) => linha.numeroLoja === numeroLoja && linha.id !== undefined);
+
+    if (exatas.length === 0) return { _tag: 'BlingOk', value: { _tag: 'NenhumPedido' } };
+
+    // Mais de um pedido com a MESMA referência não deveria acontecer (ver a
+    // unicidade do `numeroLoja` em `reconciliacao.ts`), e é justamente por
+    // isso que precisa ser tratado: se acontecer, escolher um seria escolher
+    // no escuro.
+    if (exatas.length > 1) {
+      return {
+        _tag: 'BlingOk',
+        value: { _tag: 'VariosPedidos', quantidade: exatas.length, ids: exatas.map((linha) => String(linha.id)) },
+      };
+    }
+
+    const [exata] = exatas;
+    return {
+      _tag: 'BlingOk',
+      value: {
+        _tag: 'UmPedido',
+        pedido: {
+          id: String(exata.id),
+          numeroLoja,
+          situacao: typeof exata.situacao?.nome === 'string' ? exata.situacao.nome : null,
+        },
+      },
+    };
   }
 
   async lancarEstoquePedidoVenda(idPedido: string): Promise<BlingCallResult<void>> {
