@@ -39,20 +39,53 @@
 -- que já existe na linha (`pedidos.origem`) sendo consultado pelos dois
 -- gatilhos que mexem em reserva.
 --
--- O que **não** muda, e é o caso que exige cuidado: a LIBERAÇÃO continua
--- incondicional. Quando o webhook cria a linha primeiro (`Bling`/`Pendente`,
--- reservando) e a venda manual depois assume aquela linha (migration 57,
--- virando `Loja Física / Manual`/`Entregue`), a transição não-final -> final
--- precisa devolver a reserva que o webhook criou. Guardar essa metade pela
--- origem NOVA deixaria uma reserva fantasma presa para sempre.
+-- ## Por que a regra é um PREDICADO, e não uma guarda em cada ramo
 --
--- Em uma frase: reserva de venda manual não nasce; reserva que já nasceu
--- morre normalmente.
+-- A primeira versão desta migration guardava só o ramo de re-reserva e
+-- deixava a LIBERAÇÃO incondicional. A revisão independente achou o buraco
+-- que isso abre, e ele é real:
 --
--- REINTRODUZIR O DEFEITO: remova a cláusula `and new.origem is distinct from
--- 'Loja Física / Manual'` do ramo de re-reserva. O pgTAP
--- `reserva_venda_manual.test.sql` falha na asserção da ordem
--- "venda manual -> webhook".
+--   1. venda manual `Entregue`, reservado = 0;
+--   2. webhook traz `Pendente` — corretamente não reserva, continua 0;
+--   3. webhook posterior traz `Entregue` (ou `Cancelado`);
+--   4. o ramo de liberação subtrai uma quantidade que essa venda manual
+--      NUNCA reservou.
+--
+-- O resultado é uma reserva negativa — ou, com `chk_produto_reservado` no
+-- lugar, o webhook estourando de novo. E como `estoque_reservado` é um
+-- agregado por PRODUTO, o erro não fica contido: ele corrompe a
+-- disponibilidade de todos os outros pedidos daquele produto. É exatamente
+-- por isso que `greatest(estoque_reservado - quantidade, 0)` seria a correção
+-- errada — aparar em zero esconde a subtração indevida em vez de não fazê-la.
+--
+-- A regra certa não é "quando liberar" nem "quando reservar", e sim **quem
+-- contribui para a reserva**:
+--
+--     contribui := status não é final  E  origem não é venda manual
+--
+-- Com o predicado, os dois ramos ficam simétricos e se derivam dele: libera
+-- quando deixou de contribuir, reserva quando passou a contribuir. Cada
+-- transição é decidida comparando o estado ANTIGO com o NOVO, o que é
+-- justamente o que faltava.
+--
+-- O caso que exige cuidado, e que o predicado preserva: quando o webhook cria
+-- a linha primeiro (`Bling`/`Pendente`, contribuindo) e a venda manual a
+-- assume (migration 57, virando `Loja Física / Manual`/`Entregue`), o antigo
+-- contribuía e o novo não — então libera, e a reserva do webhook não fica
+-- presa como fantasma.
+--
+-- Em uma frase: reserva de venda manual não nasce, e só morre a reserva que
+-- de fato nasceu.
+--
+-- O gatilho passa a observar `origem` além de `status` porque o predicado
+-- depende das duas colunas. Um predicado que depende de uma coluna que o
+-- gatilho não observa é meia garantia — a família de defeito que este ticket
+-- vem encontrando.
+--
+-- REINTRODUZIR O DEFEITO: volte o ramo de liberação para
+-- `if (v_new_finalizado and not v_old_finalizado)`. O pgTAP
+-- `reserva_venda_manual.test.sql` falha nas asserções da volta da venda
+-- manual a um estado final.
 -- ---------------------------------------------------------------------------
 
 /**
@@ -114,25 +147,35 @@ language plpgsql
 set search_path = public
 as $$
 declare
-    v_old_finalizado boolean := old.status in ('Cancelado', 'Entregue');
-    v_new_finalizado boolean := new.status in ('Cancelado', 'Entregue');
+    -- QUEM CONTRIBUI PARA A RESERVA: pedido ainda em aberto no ERP e que não
+    -- seja venda manual (essa já saiu do estoque fisicamente). Os dois ramos
+    -- abaixo são consequências deste predicado, não regras independentes.
+    v_old_contribuia boolean := old.status not in ('Cancelado', 'Entregue')
+                                and old.origem is distinct from 'Loja Física / Manual';
+    v_new_contribui  boolean := new.status not in ('Cancelado', 'Entregue')
+                                and new.origem is distinct from 'Loja Física / Manual';
 begin
-    -- LIBERAÇÃO: incondicional, de propósito. É por aqui que a linha criada
-    -- pelo webhook (`Bling`/`Pendente`, já reservada) devolve a reserva quando
-    -- a venda manual assume a linha e a conclui. Guardar esta metade pela
-    -- origem nova prenderia a reserva do webhook para sempre.
-    if (v_new_finalizado and not v_old_finalizado) then
+    -- Deixou de contribuir: devolve o que ESTE pedido tinha reservado. É por
+    -- aqui que a linha criada pelo webhook (`Bling`/`Pendente`) devolve a
+    -- reserva quando a venda manual a assume.
+    if (v_old_contribuia and not v_new_contribui) then
         update produtos p set estoque_reservado = p.estoque_reservado - coalesce(i.quantidade, 0)
         from itens_pedido i where i.pedido_id = new.id and i.produto_id = p.id;
 
-    -- RE-RESERVA: só para pedido que de fato voltou a ficar em aberto no ERP.
-    -- Uma venda manual que o Bling reporta como não-final continua sendo uma
-    -- venda cujo estoque já saiu; reservá-la de novo é contar duas vezes.
-    elsif (not v_new_finalizado and v_old_finalizado
-           and new.origem is distinct from 'Loja Física / Manual') then
+    -- Passou a contribuir: reserva. Uma venda manual nunca entra aqui, e uma
+    -- venda manual que o Bling reporta como não-final continua não entrando.
+    elsif (not v_old_contribuia and v_new_contribui) then
         update produtos p set estoque_reservado = p.estoque_reservado + coalesce(i.quantidade, 0)
         from itens_pedido i where i.pedido_id = new.id and i.produto_id = p.id;
     end if;
     return new;
 end;
 $$;
+
+-- O predicado lê `origem`, então o gatilho precisa acordar quando ela muda —
+-- não só quando o `status` muda. Sem isto, uma linha que virasse venda manual
+-- sem mudar de status manteria a reserva do webhook presa.
+drop trigger if exists tg_pedidos_reserva_status on pedidos;
+create trigger tg_pedidos_reserva_status
+after update of status, origem on pedidos
+for each row execute function fn_atualizar_reserva_status_pedido();

@@ -22,8 +22,10 @@
 -- exercido pelo rehearsal `scripts/database-concurrency-reserva-manual.mjs`.
 --
 -- REINTRODUZIR O DEFEITO: troque o `\ir` da migration 60 por nada (fica só a
--- 58). As asserções 2 e 3 falham — a reserva ressuscita e a disponibilidade
--- cai 2.
+-- 58). As asserções 2, 3 e 4 falham — a reserva ressuscita e a disponibilidade
+-- cai 2. Para a fatia que a revisão independente achou depois, volte só o ramo
+-- de liberação para `if (v_new_finalizado and not v_old_finalizado)`: as
+-- asserções 10 a 12 falham, com a reserva ficando negativa.
 
 begin;
 
@@ -70,11 +72,12 @@ insert into auth.users (id, email) values ('60000000-0000-4000-8000-000000000001
 \ir ../../../database/58_reserva_nao_conta_pedido_finalizado.sql
 \ir ../../../database/60_reserva_nao_conta_venda_manual.sql
 
--- As MESMAS ligações de `supabase/lab/00_bootstrap_schema.sql`.
+-- A ligação do gatilho de itens é a MESMA de `supabase/lab/00_bootstrap_schema.sql`.
+-- A do gatilho de status NÃO é recriada aqui de propósito: a migration 60 a
+-- cria, porque o predicado passou a depender de `origem` e a lista de colunas
+-- observadas faz parte da correção. Recriá-la aqui esconderia justamente isso.
 create trigger tg_atualizar_estoque_reservado
 after insert or update or delete on itens_pedido for each row execute function fn_atualizar_estoque_reservado();
-create trigger tg_pedidos_reserva_status
-after update of status on pedidos for each row execute function fn_atualizar_reserva_status_pedido();
 
 insert into public.clientes (id, user_id, nome)
 values ('60300000-0000-4000-8000-00000000000a', '60000000-0000-4000-8000-000000000001', 'Cliente T60');
@@ -86,7 +89,7 @@ values
     ('60200000-0000-4000-8000-00000000000b', '60000000-0000-4000-8000-000000000001', 'Rapé B', 2, 0),
     ('60200000-0000-4000-8000-00000000000c', '60000000-0000-4000-8000-000000000001', 'Produto Bling', 2, 0);
 
-select plan(9);
+select plan(14);
 
 -- ============================================================================
 -- ORDEM 1 — a observada no staging: venda manual conclui, webhook chega depois.
@@ -193,6 +196,71 @@ select is(
     (select estoque_reservado from public.produtos where id = '60200000-0000-4000-8000-00000000000c'),
     2,
     '9. pedido do Bling reaberto: RE-reserva — a correção não desligou a sincronização legítima'
+);
+
+-- ============================================================================
+-- A VOLTA DA VENDA MANUAL A UM ESTADO FINAL.
+--
+-- Achado da revisão independente sobre a primeira versão desta migration: ela
+-- guardava só o ramo de re-reserva e deixava a liberação incondicional. Uma
+-- venda manual que o Bling reportasse `Pendente` e depois `Entregue` teria a
+-- quantidade SUBTRAÍDA de uma reserva que ela nunca criou — reserva negativa
+-- num agregado por produto, que corrompe a disponibilidade de todos os outros
+-- pedidos daquele produto.
+-- ============================================================================
+-- O pedido do caso 1 já está em `Pendente` (o webhook o devolveu). O Bling
+-- agora reporta `Entregue`.
+update public.pedidos set status = 'Entregue' where id = '60400000-0000-4000-8000-00000000000a';
+
+select is(
+    (select estoque_reservado from public.produtos where id = '60200000-0000-4000-8000-00000000000a'),
+    0,
+    '10. manual Entregue -> Pendente -> Entregue: a reserva NUNCA existiu, então nada é subtraído'
+);
+
+select is(
+    (select estoque - estoque_reservado from public.produtos where id = '60200000-0000-4000-8000-00000000000a'),
+    1,
+    '11. …e a disponibilidade continua tendo caído exatamente 1'
+);
+
+-- A outra volta possível: o Bling cancela a venda manual.
+update public.pedidos set status = 'Pendente' where id = '60400000-0000-4000-8000-00000000000a';
+update public.pedidos set status = 'Cancelado' where id = '60400000-0000-4000-8000-00000000000a';
+
+select is(
+    (select estoque_reservado from public.produtos where id = '60200000-0000-4000-8000-00000000000a'),
+    0,
+    '12. manual Entregue -> Pendente -> Cancelado: idem, reserva permanece 0 e nunca fica negativa'
+);
+
+-- ============================================================================
+-- MUDANÇA DE ORIGEM SEM MUDANÇA DE STATUS.
+--
+-- O predicado lê `origem`, então o gatilho precisa acordar quando ela muda.
+-- Sem `after update of status, origem`, a reserva que o webhook criou ficaria
+-- presa numa linha que virou venda manual.
+-- ============================================================================
+insert into public.pedidos (id, user_id, cliente_id, bling_id, numero, total, status, origem)
+values ('60400000-0000-4000-8000-00000000000d', '60000000-0000-4000-8000-000000000001',
+        '60300000-0000-4000-8000-00000000000a', '26801269705', '24', 40.00, 'Pendente', 'Bling');
+insert into public.itens_pedido (user_id, pedido_id, produto_id, quantidade, valor_unitario)
+values ('60000000-0000-4000-8000-000000000001', '60400000-0000-4000-8000-00000000000d',
+        '60200000-0000-4000-8000-00000000000c', 1, 40.00);
+
+select is(
+    (select estoque_reservado from public.produtos where id = '60200000-0000-4000-8000-00000000000c'),
+    3,
+    '13. base do caso: o pedido Bling novo soma à reserva do produto (2 do anterior + 1)'
+);
+
+update public.pedidos set origem = 'Loja Física / Manual'
+ where id = '60400000-0000-4000-8000-00000000000d';
+
+select is(
+    (select estoque_reservado from public.produtos where id = '60200000-0000-4000-8000-00000000000c'),
+    2,
+    '14. virar venda manual SEM mudar o status libera a reserva — o gatilho observa `origem`'
 );
 
 select * from finish();

@@ -314,7 +314,7 @@
     {
       "order": 63,
       "path": "../database/60_reserva_nao_conta_venda_manual.sql",
-      "sha256": "4ff14c1fe36cd4ae074d56682fcea3dac613be7a4ae87af6132ef9cca544d5b0"
+      "sha256": "aabe26437a93fa8e45b7150cdf9d810f3ffa72b4be02286fa4d1ab9e47177da5"
     }
   ],
   "references": [
