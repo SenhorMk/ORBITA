@@ -1112,7 +1112,6 @@ export default function Home() {
             dados={data}
             erroDeLeitura={erroDaLeitura}
             onRecarregar={() => { void loadDashboardData(); }}
-            ultimaSincronizacao={lastSyncDate}
           />
         )}
 

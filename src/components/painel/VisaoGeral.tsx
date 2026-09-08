@@ -3,7 +3,6 @@
 import { useMemo, useState } from 'react';
 
 import { AvisoDeAtualizacaoFalhada, EstadoCarregando, EstadoDeErro, EstadoVazio } from '@/components/ui/estados';
-import { descreverTempoDesde } from '@/lib/tempoRelativo';
 import { AreaAnalitica } from './AreaAnalitica';
 import type { DadosDoPainel } from './useLeituraDoPainel';
 import { analiseDaMetrica } from './analisesDoPainel';
@@ -54,14 +53,10 @@ function LinhaDeTitulo({
   celulas,
   metricaSelecionada,
   onSelecionar,
-  ultimaSincronizacao,
-  agora,
 }: {
   celulas: readonly Celula[];
   metricaSelecionada: MetricaId;
   onSelecionar: (metrica: MetricaId) => void;
-  ultimaSincronizacao: Date | null;
-  agora: number;
 }) {
   return (
       <div className="flex items-start gap-8 flex-none">
@@ -79,29 +74,6 @@ function LinhaDeTitulo({
           >
             Visão<br />Geral
           </h1>
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <span
-              className="inline-flex items-center"
-              style={{
-                gap: 7,
-                height: 28,
-                padding: '0 11px',
-                borderRadius: 9,
-                background: 'rgba(200,244,65,.16)',
-                border: '1px solid rgba(200,244,65,.32)',
-                font: '500 11px/1 var(--font-jetbrains-mono), monospace',
-                color: 'var(--txt)',
-              }}
-            >
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--accent)' }} aria-hidden />
-              {ultimaSincronizacao ? 'BLING SINCRONIZADO' : 'ESPELHO DO BLING'}
-            </span>
-            <span style={{ font: '400 11px/1 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
-              {ultimaSincronizacao
-                ? descreverTempoDesde(ultimaSincronizacao, agora)
-                : 'sem sincronização registrada nesta sessão'}
-            </span>
-          </div>
         </div>
 
         <div
@@ -154,10 +126,21 @@ function ColunaDoAnel({
   const anelBg = degradeDoAnel(anel.fatias);
   return (
           <div
-            className="flex flex-col justify-between flex-none min-w-0 overflow-hidden"
-            style={{ width: 'var(--anel-col)', paddingLeft: 26, gap: 18 }}
+            className="flex flex-col flex-none min-w-0"
+            style={{ width: 'var(--anel-col)', paddingLeft: 26, gap: 16 }}
           >
-            <div className="relative flex-none self-center" style={{ width: 'var(--anel-tam)', height: 'var(--anel-tam)' }}>
+            {/*
+              O anel absorve a sobra e as métricas ficam com a altura natural.
+              Antes era o contrário — a coluna distribuía o espaço e, quando ele
+              acabava, quem sumia era a última linha de métricas. Aqui o que
+              cede é o desenho, nunca o número: o anel encolhe até o espaço que
+              existir, e as legendas continuam inteiras.
+            */}
+            <div className="flex-1 min-h-0 flex items-center justify-center">
+              <div
+                className="relative"
+                style={{ height: '100%', aspectRatio: '1', maxHeight: 'var(--anel-tam)', maxWidth: '100%' }}
+              >
               <div className="absolute inset-0 rounded-full" style={{ background: anelBg }} aria-hidden />
               <div
                 className="absolute rounded-full flex flex-col items-center justify-center"
@@ -181,21 +164,21 @@ function ColunaDoAnel({
                 >
                   pedidos
                 </span>
+                </div>
               </div>
             </div>
 
             <div
-              className="grid"
+              className="grid flex-none"
               style={{
                 gridTemplateColumns: 'repeat(auto-fit, minmax(var(--metrica-min), 1fr))',
-                gap: '18px 14px',
-                padding: '0 4px 4px',
+                gap: '14px 12px',
+                padding: '0 4px 2px',
               }}
             >
               {metricas.map((metrica) => (
                 <div key={metrica.rotulo} className="flex flex-col" style={{ gap: 5 }}>
                   <span
-                    className="truncate"
                     style={{
                       fontFamily: 'var(--font-space-grotesk), sans-serif',
                       fontWeight: 500,
@@ -209,10 +192,10 @@ function ColunaDoAnel({
                   </span>
                   <span
                     className="flex items-baseline"
-                    style={{ gap: 6, font: '400 11px/1.3 var(--font-archivo), sans-serif', color: 'var(--txt2)' }}
+                    style={{ gap: 6, font: '400 10.5px/1.25 var(--font-archivo), sans-serif', color: 'var(--txt2)' }}
                   >
                     <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: metrica.cor }} aria-hidden />
-                    {metrica.rotulo}
+                    <span className="min-w-0">{metrica.rotulo}</span>
                   </span>
                 </div>
               ))}
@@ -225,10 +208,9 @@ interface VisaoGeralProps {
   dados: DadosDoPainel | null;
   erroDeLeitura: string | null;
   onRecarregar: () => void;
-  ultimaSincronizacao: Date | null;
 }
 
-export function VisaoGeral({ dados, erroDeLeitura, onRecarregar, ultimaSincronizacao }: VisaoGeralProps) {
+export function VisaoGeral({ dados, erroDeLeitura, onRecarregar }: VisaoGeralProps) {
   const [metricaSelecionada, setMetricaSelecionada] = useState<MetricaId>('faturamento');
   /** O "agora" da tela, fixado na montagem: as janelas não se movem sozinhas. */
   const [agora] = useState(() => Date.now());
@@ -264,8 +246,6 @@ export function VisaoGeral({ dados, erroDeLeitura, onRecarregar, ultimaSincroniz
         celulas={celulas}
         metricaSelecionada={metricaSelecionada}
         onSelecionar={setMetricaSelecionada}
-        ultimaSincronizacao={ultimaSincronizacao}
-        agora={agora}
       />
 
       {dados.pedidos.length === 0 ? (
