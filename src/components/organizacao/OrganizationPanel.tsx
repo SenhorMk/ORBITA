@@ -7,11 +7,19 @@ import { InviteMemberForm } from './InviteMemberForm';
 import { AcceptInviteForm } from './AcceptInviteForm';
 import { MembersList } from './MembersList';
 import type { SelecaoDeOrganizacao } from './usePapelNaOrganizacaoAtiva';
-import { useOrganizationPanel, type AuthenticatedFetch } from './useOrganizationPanel';
+import { useOrganizationPanel, type AuthenticatedFetch, type ListaDeOrganizacoes } from './useOrganizationPanel';
 
 export interface OrganizationPanelProps {
   /** Authenticated fetch boundary (Supabase bearer token attached by the caller). */
   fetchWithAuth: AuthenticatedFetch;
+  /**
+   * O estado de organizações, criado uma única vez pelo topo da aplicação.
+   *
+   * Desde o Ticket 01 o shell mostra e troca a organização ativa; se o painel
+   * criasse o seu próprio estado, uma troca feita pelo topo deixaria esta aba
+   * anunciando a organização anterior.
+   */
+  lista: ListaDeOrganizacoes;
   /**
    * Notified whenever the server-confirmed active organization changes, so
    * sibling panels (billing, integrations) can scope their own requests — and
@@ -31,8 +39,8 @@ export interface OrganizationPanelProps {
  * API vivem em `useOrganizationPanel`; este componente só compõe a
  * apresentação a partir dele.
  */
-export function OrganizationPanel({ fetchWithAuth, onActiveOrgChange }: OrganizationPanelProps) {
-  const panel = useOrganizationPanel(fetchWithAuth, onActiveOrgChange);
+export function OrganizationPanel({ fetchWithAuth, lista, onActiveOrgChange }: OrganizationPanelProps) {
+  const panel = useOrganizationPanel(fetchWithAuth, lista, onActiveOrgChange);
 
   return (
     <div className="space-y-6 text-slate-200">

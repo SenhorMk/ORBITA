@@ -1,0 +1,120 @@
+/*
+ * Tokens do Design System do Orbita (`UI mockups para Orbita`, seções 01, 05 e 06).
+ *
+ * Regra do handoff: **nenhum componente lê cor fora daqui**. Um `hex` solto num
+ * componente é uma cor que não muda de tema, e trocar de tema depois vira caça
+ * ao `hex` pelo código — que é exatamente o que o produto atual tem hoje com os
+ * `--ios-*`.
+ *
+ * Os nomes são os mesmos nos dois temas; só os valores mudam. Acentos (lime,
+ * lavanda e os três semânticos) são **iguais** em dark e light, de propósito:
+ * eles carregam significado, e significado não pode depender de tema.
+ *
+ * O tema claro está declarado, mas ainda não tem interruptor na interface
+ * (Ticket 01). Declarar os valores custa nada agora e evita que a próxima fatia
+ * tenha de reabrir todo componente já escrito.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- Superfícies e texto: trocados por tema ---- */
+  --glass: rgba(18, 18, 20, 0.5);
+  --glass2: rgba(255, 255, 255, 0.07);
+  --modal: rgba(24, 24, 27, 0.82);
+  --line: rgba(255, 255, 255, 0.13);
+  --chip: rgba(255, 255, 255, 0.08);
+  --bar: rgba(255, 255, 255, 0.24);
+  --txt: #f4f4f2;
+  --txt2: rgba(244, 244, 242, 0.62);
+  --txt3: rgba(244, 244, 242, 0.44);
+  --inv: #f2f1ec;
+  --invTxt: #0b0b0c;
+  --lav: #bca9ff;
+
+  /* O fundo sobre o qual a janela flutua. É a única superfície do produto que
+     pode ter degradê — ver a lista NUNCA da seção 06 do Design System. */
+  --canvas: radial-gradient(70% 60% at 20% 10%, #3a3a41 0%, transparent 60%),
+    linear-gradient(170deg, #222226 0%, #111114 100%);
+
+  /* ---- Acentos e semânticos: fixos nos dois temas ---- */
+  --accent: #c8f441;
+  --accent-fg: #0b0b0c;
+  --accent-2: #bca9ff;
+  --accent-2-fg: #17141f;
+  --danger: #ff5a4d;
+  --warning: #ffb84d;
+  --info: #59d2fe;
+
+  /* ---- Forma ---- */
+  --r-chip: 12px;
+  --r-card: 16px;
+  --r-panel: 22px;
+  --r-modal: 26px;
+  --r-window: 34px;
+  --r-pill: 999px;
+
+  --h-control: 38px;
+  --h-field: 40px;
+  --h-row: 52px;
+
+  /* Escala de espaçamento do handoff: 4 8 12 16 22 26 34. */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 22px;
+  --s-6: 26px;
+  --s-7: 34px;
+
+  /* ---- Vidro e elevação ---- */
+  --blur-window: 48px;
+  --blur-modal: 40px;
+  --blur-overlay: 10px;
+  --shadow-window: 0 40px 120px rgba(0, 0, 0, 0.45);
+  --shadow-modal: 0 40px 100px rgba(0, 0, 0, 0.55);
+
+  /* A janela tem inset assimétrico: o fundo precisa aparecer nos quatro lados
+     para o vidro ler como vidro (Design System, seção 05). */
+  --window-inset-top: 44px;
+  --window-inset-right: 56px;
+  --window-inset-bottom: 56px;
+  --window-inset-left: 40px;
+  --rail-width: 96px;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --glass: rgba(250, 250, 247, 0.62);
+  --glass2: rgba(255, 255, 255, 0.5);
+  --modal: rgba(252, 252, 250, 0.86);
+  --line: rgba(20, 20, 26, 0.1);
+  --chip: rgba(20, 20, 26, 0.06);
+  --bar: rgba(20, 20, 26, 0.14);
+  --txt: #14141a;
+  --txt2: rgba(20, 20, 26, 0.62);
+  --txt3: rgba(20, 20, 26, 0.44);
+  --inv: #14141a;
+  --invTxt: #f2f1ec;
+  --lav: #cfc2ff;
+
+  --canvas: radial-gradient(70% 60% at 20% 10%, #f4f2ea 0%, transparent 60%),
+    linear-gradient(170deg, #e9e7e0 0%, #cfccc4 100%);
+
+  --shadow-window: 0 40px 120px rgba(20, 20, 26, 0.18);
+  --shadow-modal: 0 40px 100px rgba(20, 20, 26, 0.22);
+}
+
+/* Em telas estreitas a janela quase encosta na borda. Não é responsividade —
+   é só não entregar um layout impossível fora do desktop; a fatia de mobile é
+   outro ticket. */
+@media (max-width: 900px) {
+  :root {
+    --window-inset-top: 12px;
+    --window-inset-right: 12px;
+    --window-inset-bottom: 12px;
+    --window-inset-left: 12px;
+    --rail-width: 72px;
+  }
+}

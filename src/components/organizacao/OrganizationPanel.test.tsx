@@ -3,6 +3,18 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { OrganizationPanel } from './OrganizationPanel';
+import { useOrganizationsList } from './useOrganizationsList';
+import type { AuthenticatedFetch } from './useOrganizationPanel';
+
+/**
+ * O painel recebe o estado de organizações de fora desde o Ticket 01 — o topo
+ * da aplicação cria uma instância só, para o painel e para o indicador do
+ * shell. Este arranjo monta o painel do mesmo jeito que a produção monta.
+ */
+function PainelComEstadoDoTopo({ fetchWithAuth }: { fetchWithAuth: AuthenticatedFetch }) {
+  const lista = useOrganizationsList(fetchWithAuth, 'sessao@exemplo.com');
+  return <OrganizationPanel fetchWithAuth={fetchWithAuth} lista={lista} />;
+}
 
 const ORG_A = {
   id: '10000000-0000-4000-8000-000000000001',
@@ -58,7 +70,7 @@ describe('OrganizationPanel', () => {
 
   it('loads and displays the user organizations and the active one', async () => {
     const fetchWithAuth = buildFetchWithAuth();
-    render(<OrganizationPanel fetchWithAuth={fetchWithAuth} />);
+    render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
 
     expect(await screen.findAllByText('Loja A')).not.toHaveLength(0);
     expect(screen.getByText('Loja B')).toBeInTheDocument();
@@ -73,7 +85,7 @@ describe('OrganizationPanel', () => {
       return jsonResponse({ organizacao: { id: 'new-id', nome: 'Loja Nova', slug: 'loja-nova' } }, 201);
     });
     const fetchWithAuth = buildFetchWithAuth({ 'POST /api/organizacoes': postOrganizacoes });
-    render(<OrganizationPanel fetchWithAuth={fetchWithAuth} />);
+    render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
     await screen.findByText('Loja B');
 
     await user.type(screen.getByLabelText(/nome da organização/i), 'Loja Nova');
@@ -91,7 +103,7 @@ describe('OrganizationPanel', () => {
       return jsonResponse({ success: true, activeOrg: { organizacao: ORG_B, papel: 'admin' }, selectionVersion: 4 });
     });
     const fetchWithAuth = buildFetchWithAuth({ 'POST /api/organizacoes/switch': postSwitch });
-    render(<OrganizationPanel fetchWithAuth={fetchWithAuth} />);
+    render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
     await screen.findByText('Loja B');
 
     await user.click(screen.getByRole('button', { name: /trocar para loja b/i }));
@@ -108,7 +120,7 @@ describe('OrganizationPanel', () => {
       return jsonResponse({ convite: { id: 'conv-1', token: 'tok' } }, 201);
     });
     const fetchWithAuth = buildFetchWithAuth({ 'POST /api/organizacoes/:id/convites': postConvite });
-    render(<OrganizationPanel fetchWithAuth={fetchWithAuth} />);
+    render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
     await screen.findByText('Loja B');
 
     await user.type(screen.getByLabelText(/e-mail do convidado/i), 'novo@empresa.com');
@@ -126,7 +138,7 @@ describe('OrganizationPanel', () => {
       return jsonResponse({ success: true, organizacaoId: ORG_B.id });
     });
     const fetchWithAuth = buildFetchWithAuth({ 'POST /api/convites/aceitar': postAceitar });
-    render(<OrganizationPanel fetchWithAuth={fetchWithAuth} />);
+    render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
     await screen.findByText('Loja B');
 
     await user.type(screen.getByLabelText(/token do convite/i), 'a'.repeat(32));
@@ -142,7 +154,7 @@ describe('OrganizationPanel', () => {
       return jsonResponse({ success: true });
     });
     const fetchWithAuth = buildFetchWithAuth({ 'DELETE /api/organizacoes/:id/membros/u1': deleteMembro });
-    render(<OrganizationPanel fetchWithAuth={fetchWithAuth} />);
+    render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
     await screen.findByText('Loja B');
 
     const membersSection = await screen.findByTestId('members-list');
@@ -159,7 +171,7 @@ describe('OrganizationPanel', () => {
     );
     const fetchWithAuth = buildFetchWithAuth({ 'POST /api/organizacoes/switch': postSwitch });
     const user = userEvent.setup();
-    render(<OrganizationPanel fetchWithAuth={fetchWithAuth} />);
+    render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
     await screen.findByText('Loja B');
 
     const switchButton = screen.getByRole('button', { name: /trocar para loja b/i });

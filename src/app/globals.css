@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./tokens.css";
 
 :root {
   --background: #000000;
@@ -25,8 +26,12 @@
   --secondary-foreground: #f2f2f7;
   --destructive: var(--ios-red);
   --destructive-foreground: #ffffff;
-  --accent: rgba(255, 255, 255, 0.12);
-  --accent-foreground: #f2f2f7;
+  /* Tokens do `Button`/`DropdownMenu` legados. Renomeados no Ticket 01: o nome
+     `--accent` pertence ao lime do Design System, e este bloco vem depois do
+     `tokens.css` no arquivo — estava sobrescrevendo o acento do produto por um
+     branco a 12%, e a cápsula ativa do rail saía cinza. */
+  --ui-accent: rgba(255, 255, 255, 0.12);
+  --ui-accent-foreground: #f2f2f7;
   --input: rgba(255, 255, 255, 0.15);
   --ring: var(--ios-blue);
 }
@@ -40,23 +45,124 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--ui-accent);
+  --color-accent-foreground: var(--ui-accent-foreground);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", sans-serif;
+  /* Tipografia do Design System: Archivo na interface, Space Grotesk no display
+     e em todo número financeiro, JetBrains Mono em eyebrow e código. */
+  --font-sans: var(--font-archivo), system-ui, sans-serif;
+  --font-display: var(--font-space-grotesk), var(--font-archivo), sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
 }
 
 body {
-  background-color: #000000;
-  background-image: 
-    radial-gradient(circle at 50% 0%, rgba(30, 30, 35, 0.6) 0%, transparent 75%),
-    radial-gradient(circle at 100% 100%, rgba(20, 20, 25, 0.4) 0%, transparent 60%);
+  /* O fundo é o nível 0 da escada de elevação: sem blur, e a única superfície
+     do produto onde degradê é permitido. A janela flutua sobre ele. */
+  background: var(--canvas);
   background-attachment: fixed;
-  color: #f2f2f7;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  color: var(--txt);
+  font-family: var(--font-archivo), system-ui, sans-serif;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
+}
+
+/* ===================================================================== */
+/* Shell do Orbita — a janela de vidro, o rail e os controles do topo.    */
+/* Só o shell usa estas classes; as telas internas continuam nos          */
+/* utilitários `glass-*` legados abaixo até serem migradas.              */
+/* ===================================================================== */
+
+/* Nível 1 da escada de elevação: o único blur pesado da tela. A janela é
+   única e nunca encosta na borda do viewport — o fundo precisa aparecer nos
+   quatro lados para o vidro ler como vidro. */
+.orbita-window {
+  position: fixed;
+  top: var(--window-inset-top);
+  right: var(--window-inset-right);
+  bottom: var(--window-inset-bottom);
+  left: var(--window-inset-left);
+  display: flex;
+  border-radius: var(--r-window);
+  background: var(--glass);
+  /* O `backdrop-filter` NÃO mora aqui: o pipeline de CSS deste projeto remove a
+     propriedade de toda folha de estilo — os `glass-*` legados abaixo declaram
+     blur desde sempre e nunca borraram nada. Ele é aplicado em `AppWindow` por
+     estilo inline, que não passa pelo transformador. */
+  box-shadow: var(--shadow-window), 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+
+/* Nível 2: cards e chips dentro da janela. Sem blur próprio — vidro dentro de
+   vidro é proibido além de dois níveis. */
+.orbita-surface {
+  background: var(--glass2);
+  border: 1px solid var(--line);
+}
+
+.orbita-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: var(--h-control);
+  padding: 0 var(--s-3);
+  border-radius: var(--r-chip);
+  background: var(--chip);
+  border: 1px solid var(--line);
+  color: var(--txt2);
+  font-size: 12px;
+  font-weight: 600;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.orbita-chip:hover:not(:disabled) {
+  color: var(--txt);
+  border-color: var(--bar);
+}
+
+.orbita-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.orbita-eyebrow {
+  font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--txt3);
+}
+
+.orbita-rail-item {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  cursor: pointer;
+  color: var(--txt2);
+  transition: color 0.18s ease, background 0.18s ease;
+}
+
+.orbita-rail-item:hover {
+  color: var(--txt);
+  background: var(--chip);
+}
+
+/* A cápsula lime do destino ativo é a única superfície de acento do shell.
+   Ênfase só existe se for escassa. */
+.orbita-rail-item[aria-current='page'] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.orbita-rail-item[aria-current='page']:hover {
+  background: var(--accent);
+  color: var(--accent-fg);
 }
 
 /* Custom Scrollbar iOS Style */
