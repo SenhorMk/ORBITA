@@ -27,7 +27,7 @@ import {
   Plus,
   Plug,
 } from "lucide-react";
-import type { Produto, Cliente, Categoria, ChatwootConversation, ChatwootMessage, ItemPedido } from '@/types';
+import type { Produto, Cliente, ChatwootConversation, ChatwootMessage, ItemPedido } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
 import {
   descreverProgresso,
@@ -85,6 +85,7 @@ import {
 } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
 import { useStartupPorOrganizacao } from '@/components/organizacao/useStartupPorOrganizacao';
 import { useOrganizationsList } from '@/components/organizacao/useOrganizationsList';
+import { useLeituraDoPainel } from '@/components/painel/useLeituraDoPainel';
 import { descreverErro } from '@/lib/erroLegivel';
 import { apenasVendasAtivas, pedidosComNfePendente, variacaoPercentual } from '@/lib/metricas/vendasAtivas';
 
@@ -333,24 +334,24 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Estados do Dashboard
-  const [data, setData] = useState<{
-    pedidos: PedidoEnriquecido[];
-    produtos: Produto[];
-    clientes: Cliente[];
-    categorias?: Categoria[];
-    estatisticas: {
-      faturamento30Dias: number;
-      faturamento30DiasAnterior: number;
-      totalPedidos: number;
-      pendentes: number;
-      cancelados: number;
-      atendidos: number;
-    }
-  } | null>(null);
+  /**
+   * A leitura operacional, **carimbada pela organização que a produziu**.
+   *
+   * O escopo carrega a identidade da sessão e a seleção de organização com a
+   * versão: sair de uma organização e voltar são seleções diferentes. Trocar de
+   * organização torna a leitura anterior inelegível na hora, e a resposta
+   * atrasada da organização de antes não tem onde ser aplicada.
+   */
+  const escopoDaLeitura = identidadeDaSessao === null
+    ? null
+    : `${identidadeDaSessao}|${selecaoDeOrganizacao ? `${selecaoDeOrganizacao.id}:${selecaoDeOrganizacao.versao}` : 'sem-organizacao'}`;
 
-  const [isLoading, setIsLoading] = useState(true);
-  /** A falha da leitura mais recente do painel, ou `null`. Nunca vira lista vazia. */
-  const [erroDaLeitura, setErroDaLeitura] = useState<string | null>(null);
+  const painel = useLeituraDoPainel(escopoDaLeitura);
+  const data = painel.dados;
+  const erroDaLeitura = painel.erro;
+  const isLoading = painel.carregando;
+  const loadDashboardData = painel.recarregar;
+
   const [isSyncing, setIsSyncing] = useState(false);
   const [nfeLoadingId, setNfeLoadingId] = useState<string | null>(null);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
@@ -717,31 +718,6 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [lastSyncDate]);
 
-  const loadDashboardData = useCallback(async () => {
-    try {
-      const response = await fetchWithAuth('/api/dashboard');
-      const result = await response.json();
-      if (!response.ok || !result.success) {
-        // A leitura falhou. O que NÃO se faz aqui é `setData(null)` ou
-        // `setData({ pedidos: [] })`: zero e "não sei" são coisas diferentes, e
-        // a rota do painel deixou de engolir exceção justamente para não
-        // confundir as duas — a tela não pode reintroduzir o defeito do outro
-        // lado. A última leitura boa continua na tela, com o erro visível ao
-        // lado; se nunca houve leitura boa, `data` segue `null` e quem
-        // renderiza mostra erro, não uma lista vazia.
-        setErroDaLeitura(descreverErro(result?.error ?? `HTTP ${response.status}`));
-        return;
-      }
-      setData(result.data);
-      setErroDaLeitura(null);
-    } catch (error) {
-      console.error('Erro ao carregar dados do dashboard:', error);
-      setErroDaLeitura(descreverErro(error));
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
   // Identidade estável, e não funções inline. O `StartupLoader` já não reinicia
   // por causa dos desfechos — ele os guarda numa referência —, mas passar função
   // nova a cada render o re-renderizaria à toa, e devolveria ao componente a
@@ -755,30 +731,6 @@ export default function Home() {
     encerrarStartup();
     setActiveTab('integrations');
   }, [encerrarStartup]);
-
-  useEffect(() => {
-    let isMounted = true;
-    void (async () => {
-      if (session) {
-        await loadDashboardData();
-      }
-    })();
-    const interval = setInterval(() => {
-      if (isMounted && session) {
-        void loadDashboardData();
-      }
-    }, 30000);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-    // A organização ativa entra como dependência desde o Ticket 01. A leitura é
-    // escopada por organização no servidor, mas a tela só relia a cada 30s ou
-    // na troca de sessão. Enquanto trocar de organização exigia entrar na aba
-    // Organização — onde não há dado operacional na tela — isso não aparecia.
-    // Com a troca disponível no topo, em qualquer aba, ficaria meio minuto
-    // exibindo os números de uma organização sob o nome de outra.
-  }, [session, activeOrganizacaoId, loadDashboardData]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2217,10 +2169,10 @@ export default function Home() {
           null
         }
         onSave={(updated) => {
-          if (data?.produtos) {
-            const newProdutos = data.produtos.map(p => (p.id === updated.id || p.bling_id === updated.bling_id) ? updated : p);
-            setData(prev => prev ? { ...prev, produtos: newProdutos } : null);
-          }
+          painel.atualizarDados((anterior) => ({
+            ...anterior,
+            produtos: anterior.produtos.map((p) => (p.id === updated.id || p.bling_id === updated.bling_id) ? updated : p),
+          }));
         }}
         onOpenChatwoot={handleOpenChatwootForPhone}
       />

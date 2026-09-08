@@ -1,6 +1,7 @@
 /** @vitest-environment jsdom */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { DrawerDoPedido } from './DrawerDoPedido';
@@ -38,14 +39,15 @@ function resposta(body: unknown, status = 200): Response {
 
 beforeEach(() => vi.clearAllMocks());
 
-function montar(pedidoLocal: PedidoEnriquecido, onEmitirNfe = vi.fn()) {
+function montar(pedidoLocal: PedidoEnriquecido, extras: { onEmitirNfe?: () => void; onCancelar?: (p: PedidoEnriquecido) => void } = {}) {
   return render(
     <DrawerDoPedido
       aberto
       onAbertoChange={vi.fn()}
       pedidoBlingId={pedidoLocal.bling_id}
       pedidoLocal={pedidoLocal}
-      onEmitirNfe={onEmitirNfe}
+      onEmitirNfe={extras.onEmitirNfe ?? vi.fn()}
+      onCancelar={extras.onCancelar ?? vi.fn()}
     />,
   );
 }
@@ -65,15 +67,42 @@ describe('quando o pedido não existe mais no Bling', () => {
     expect(screen.queryByText(/não encontrado/i)).not.toBeInTheDocument();
   });
 
-  it('desabilita apagar, porque não há o que apagar lá', async () => {
+  it('não oferece mutação remota nenhuma: não há cópia no ERP para mudar', async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(resposta({ error: 'not found' }, 404));
 
     montar(PEDIDO_LOCAL);
 
     await waitFor(() => expect(screen.getByText(/Registro histórico local/i)).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /Apagar/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Cancelar pedido/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Editar/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Emitir NF-e/i })).toBeDisabled();
+  });
+});
+
+describe('a ação destrutiva', () => {
+  it('é cancelar — e delega ao mesmo fluxo da tabela, sem escrever no ERP daqui', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      resposta({
+        data: {
+          numero: '20', data: '2026-09-01T12:00:00.000Z', total: 40,
+          situacao: { valor: 'Entregue' }, contato: { nome: 'Mateus Kahuan' }, itens: [],
+        },
+      }),
+    );
+    const onCancelar = vi.fn();
+
+    montar(PEDIDO_LOCAL, { onCancelar });
+
+    await waitFor(() => expect(screen.getByText('Cliente')).toBeInTheDocument());
+    // Apagar não é mais a ação destrutiva principal deste fluxo.
+    expect(screen.queryByRole('button', { name: /Apagar/i })).not.toBeInTheDocument();
+
+    vi.mocked(fetchWithAuth).mockClear();
+    await userEvent.click(screen.getByRole('button', { name: /Cancelar pedido/i }));
+
+    expect(onCancelar).toHaveBeenCalledWith(PEDIDO_LOCAL);
+    // O drawer não fala com o ERP por conta própria: quem cancela é o diálogo.
+    expect(fetchWithAuth).not.toHaveBeenCalled();
   });
 });
 
@@ -110,6 +139,8 @@ describe('pedido cancelado', () => {
     await waitFor(() => expect(screen.getByText(/Pedido cancelado\./i)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /Editar/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Emitir NF-e/i })).toBeDisabled();
+    // Cancelar de novo o que já está cancelado não é oferecido.
+    expect(screen.getByRole('button', { name: /Cancelar pedido/i })).toBeDisabled();
   });
 });
 

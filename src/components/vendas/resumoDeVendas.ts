@@ -31,10 +31,11 @@ import { pedidoContaComoVendaAtiva, pedidosComNfePendente } from '@/lib/metricas
  *
  * No lugar entram dois status verdadeiros:
  *
- * - **Entregue** — o estado terminal, e o que a própria venda manual grava
- *   (`53_venda_manual_transacional.sql`). É o chip que responde "o que já
- *   fechou?" sem depender de adivinhar qual estado logístico do Bling esta
- *   organização usa.
+ * - **Entregue** — pedidos cujo status **é agora** `Entregue`. Nada além disso:
+ *   a venda manual nasce com esse status, mas depois converge para o que vier
+ *   do Bling, e já houve venda manual real terminando como `Pendente`. Dizer
+ *   que "Entregue é o status das vendas manuais" seria transformar um estado
+ *   inicial em regra permanente.
  * - **Cancelado** — a única forma de o resumo dizer quanto do histórico já não
  *   é operação, sem tirar esses pedidos da lista.
  *
@@ -140,7 +141,7 @@ export function calcularChips(
       soma: somar(entregues),
       cor: 'var(--accent)',
       filtraTabela: true,
-      explicacao: 'Pedidos cujo status é Entregue — inclui as vendas manuais.',
+      explicacao: 'Pedidos cujo status é, agora, Entregue.',
     },
     {
       id: 'cancelado',

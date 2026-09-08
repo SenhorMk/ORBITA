@@ -1,12 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertCircle, Archive, Loader2, Pencil, Receipt, Trash2 } from 'lucide-react';
+import { AlertCircle, Archive, Pencil, Receipt, XCircle } from 'lucide-react';
 
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { EstadoCarregando, EstadoDeErro } from '@/components/ui/estados';
-import { ErrorLogModal } from '@/components/ErrorLogModal';
 import { EditOrderModal } from '@/components/EditOrderModal';
 import { BlingPedido } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
@@ -25,8 +24,15 @@ import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
  * - o `404` do ERP tratado como **resposta**, e não como avaria — ele cai no
  *   registro histórico local, e não em "Pedido não encontrado";
  * - as ações que escrevem no ERP desabilitadas quando não há cópia lá ou quando
- *   o pedido está cancelado;
- * - o apagar com dupla confirmação e o log de erro legível.
+ *   o pedido está cancelado.
+ *
+ * A ação destrutiva é **cancelar**, e não apagar. É a regra do produto: pedido
+ * errado se cancela, o histórico fica, o título financeiro converge para
+ * cancelado, e a correção vira um pedido novo. A tabela já oferecia cancelar; o
+ * drawer oferecia apagar, e duas semânticas destrutivas para o mesmo objeto é
+ * como alguém apaga o que só queria corrigir. O cancelamento é delegado ao
+ * mesmo `CancelamentoDePedido` da tabela — não há uma segunda implementação da
+ * busca de situação, do `POST /api/pedidos/status` nem da confirmação.
  */
 
 interface DrawerDoPedidoProps {
@@ -44,6 +50,11 @@ interface DrawerDoPedidoProps {
   pedidoLocal?: PedidoEnriquecido | null;
   /** Emite a NF-e pelo mesmo caminho que a lista já usa. */
   onEmitirNfe?: (pedido: PedidoEnriquecido) => void;
+  /**
+   * Pede o cancelamento do pedido. Quem trata é o mesmo fluxo da tabela; o
+   * drawer não abre diálogo próprio nem escreve no ERP por conta própria.
+   */
+  onCancelar?: (pedido: PedidoEnriquecido) => void;
 }
 
 /** O pedido sumiu do Bling — não é falha de rede nem erro de leitura. */
@@ -238,18 +249,13 @@ export function DrawerDoPedido({
   pedidoBlingId,
   pedidoLocal,
   onEmitirNfe,
+  onCancelar,
 }: DrawerDoPedidoProps) {
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [ausenteNoBling, setAusenteNoBling] = useState(false);
   const [pedido, setPedido] = useState<BlingPedido | null>(null);
   const [edicaoAberta, setEdicaoAberta] = useState(false);
-  const [apagando, setApagando] = useState(false);
-  const [logDeErro, setLogDeErro] = useState<{ isOpen: boolean; message: string; details?: string; logs: string[] }>({
-    isOpen: false,
-    message: '',
-    logs: [],
-  });
 
   const canceladoLocalmente = pedidoLocal ? !pedidoContaComoVendaAtiva(pedidoLocal) : false;
   // Sem cópia no ERP, nada que escreva lá faz sentido — e um pedido cancelado
@@ -288,38 +294,6 @@ export function DrawerDoPedido({
     };
   }, [aberto, pedidoBlingId, buscarPedido]);
 
-  const apagar = async () => {
-    if (!pedidoBlingId) return;
-    if (!confirm('ATENÇÃO: Tem certeza que deseja apagar este pedido? Esta ação excluirá os dados no App e também no Bling ERP.')) return;
-
-    try {
-      setApagando(true);
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-
-      const res = await fetchWithAuth(`/api/bling/pedidos/${encodeURIComponent(pedidoBlingId)}`, {
-        method: 'DELETE',
-        headers: (token ? { Authorization: `Bearer ${token}` } : {}),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Falha ao excluir o pedido');
-
-      alert('Pedido apagado com sucesso!');
-      onAbertoChange(false);
-      window.dispatchEvent(new CustomEvent('pedido-apagado'));
-    } catch (err: unknown) {
-      const mensagem = descreverErro(err);
-      setLogDeErro({
-        isOpen: true,
-        message: 'Erro ao Apagar Pedido',
-        details: mensagem,
-        logs: [`DELETE /api/bling/pedidos/${pedidoBlingId}`, `Erro retornado: ${mensagem}`],
-      });
-    } finally {
-      setApagando(false);
-    }
-  };
-
   const numero = pedido?.numero ?? pedidoLocal?.numero ?? '';
   const quando = pedido?.data ?? pedidoLocal?.data;
 
@@ -337,14 +311,20 @@ export function DrawerDoPedido({
             destrutiva={
               <button
                 type="button"
-                onClick={apagar}
-                disabled={apagando || ausenteNoBling}
+                onClick={() => pedidoLocal && onCancelar?.(pedidoLocal)}
+                disabled={!onCancelar || !pedidoLocal || acoesNoErpIndisponiveis}
                 className="orbita-chip cursor-pointer"
                 style={{ color: 'var(--danger)' }}
-                title={ausenteNoBling ? 'O pedido já não existe no Bling — não há o que apagar lá.' : undefined}
+                title={
+                  ausenteNoBling
+                    ? 'O pedido já não existe no Bling — não há o que cancelar lá.'
+                    : canceladoLocalmente
+                      ? 'Este pedido já está cancelado.'
+                      : undefined
+                }
               >
-                {apagando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                {apagando ? 'Apagando…' : 'Apagar'}
+                <XCircle className="w-3.5 h-3.5" />
+                Cancelar pedido
               </button>
             }
             secundaria={
@@ -408,15 +388,8 @@ export function DrawerDoPedido({
         )}
       </Modal>
 
-      <ErrorLogModal
-        isOpen={logDeErro.isOpen}
-        onClose={() => setLogDeErro((anterior) => ({ ...anterior, isOpen: false }))}
-        title={logDeErro.message}
-        errorMessage="Não foi possível apagar o pedido."
-        details={logDeErro.details}
-        logs={logDeErro.logs}
-      />
-
+      {/* Edição continua no modal legado: a lógica dele não faz parte desta
+          fatia e reescrevê-la agora só por estética ampliaria o ticket. */}
       <EditOrderModal
         open={edicaoAberta}
         onOpenChange={setEdicaoAberta}

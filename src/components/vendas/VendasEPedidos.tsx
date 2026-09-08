@@ -333,6 +333,13 @@ export function VendasEPedidos({
         pedidoBlingId={pedidoAberto?.bling_id ?? null}
         pedidoLocal={pedidoAberto}
         onEmitirNfe={onEmitirNfe}
+        onCancelar={(pedido) => {
+          // O drawer sai de cena e o cancelamento acontece no MESMO diálogo da
+          // tabela. Duas telas para a mesma decisão destrutiva seria a segunda
+          // implementação que este ticket existe para não criar.
+          setPedidoAberto(null);
+          setPedidoParaCancelar(pedido);
+        }}
       />
 
       <CancelamentoDePedido pedido={pedidoParaCancelar} onFechar={() => setPedidoParaCancelar(null)} />
