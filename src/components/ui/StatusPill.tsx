@@ -55,13 +55,17 @@ export function aparenciaDoStatus(status: string | null | undefined): Aparencia 
 }
 
 /**
- * O status de um pedido, como pílula.
+ * A pílula de estado do Design System — a forma, sem o vocabulário de pedidos.
  *
  * O ponto colorido carrega o significado, mas nunca sozinho: o texto ao lado diz
  * a mesma coisa. Cor não pode ser a única forma de indicar estado.
+ *
+ * Estoque e Clientes precisam da mesma pílula para estados que **não** são
+ * status de pedido — saldo de estoque, espelho do Bling. Passá-los por
+ * `aparenciaDoStatus` os traduziria pelo vocabulário errado; recriar a pílula
+ * daria duas formas para a mesma coisa.
  */
-export function StatusPill({ status }: { status: string | null | undefined }) {
-  const { rotulo, cor } = aparenciaDoStatus(status);
+export function Pilula({ rotulo, cor }: { rotulo: string; cor: string }) {
   return (
     <span
       className="inline-flex items-center gap-1.5 h-6 px-2.5 rounded-lg w-fit"
@@ -79,4 +83,10 @@ export function StatusPill({ status }: { status: string | null | undefined }) {
       {rotulo.toUpperCase()}
     </span>
   );
+}
+
+/** O status de um pedido, como pílula. */
+export function StatusPill({ status }: { status: string | null | undefined }) {
+  const { rotulo, cor } = aparenciaDoStatus(status);
+  return <Pilula rotulo={rotulo} cor={cor} />;
 }

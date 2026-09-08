@@ -1,9 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import Image from 'next/image';
 import {
-  DollarSign,
   FileText,
   CheckCircle,
   AlertTriangle,
@@ -14,12 +12,9 @@ import {
   ArrowRight,
   Lock,
   Mail,
-  ChevronRight,
   Search,
   RefreshCw,
   X,
-  Package,
-  Image as ImageIcon,
   Plus,
 } from "lucide-react";
 import type { Produto, Cliente, ChatwootConversation, ChatwootMessage, ItemPedido } from '@/types';
@@ -38,27 +33,18 @@ import { Rail } from '@/components/shell/Rail';
 import { OrganizacaoAtiva } from '@/components/shell/OrganizacaoAtiva';
 import { SeletorDeFundo, useFundo } from '@/components/shell/SeletorDeFundo';
 import { VendasEPedidos } from '@/components/vendas/VendasEPedidos';
-import { List2 } from "@/components/ui/list-2";
-import TableWithDialog from "@/components/ui/table-with-dialog";
+import { EstoqueEProdutos } from '@/components/estoque/EstoqueEProdutos';
+import { ClientesEContatos } from '@/components/clientes/ClientesEContatos';
 import { ClienteDetailModal } from '@/components/ClienteDetailModal';
 import { ProductDetailModal } from '@/components/ProductDetailModal';
 import { ClienteEditModal } from '@/components/ClienteEditModal';
 import { ManualOrderModal } from '@/components/ManualOrderModal';
-import { isProdutoSynced, validateProdutoForBling } from '@/lib/utils';
 import { StartupLoader } from '@/components/StartupLoader';
 import { FinanceiroTab } from '@/components/FinanceiroTab';
 import { RegisterForm } from '@/components/auth/RegisterForm';
 import { OrganizationPanel } from '@/components/organizacao/OrganizationPanel';
 import { IntegrationsPanel } from '@/components/integracoes/IntegrationsPanel';
 import { BillingPanel } from '@/components/billing/BillingPanel';
-import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-} from "@/components/ui/dropdown-menu";
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import {
   usePapelNaOrganizacaoAtiva,
@@ -93,44 +79,6 @@ function deriveUserSession(user: SupabaseUser): UserSession {
   };
 }
 
-function ProductThumbnail({
-  produto,
-  imageUrl,
-  variant,
-}: {
-  produto: Produto;
-  imageUrl: string | undefined;
-  variant: 'synced' | 'unsynced';
-}) {
-  const isSynced = variant === 'synced';
-  return (
-    <div
-      className={`relative h-12 w-12 shrink-0 flex items-center justify-center rounded-xl overflow-hidden border bg-black/40 shadow-inner ${
-        isSynced ? 'border-white/15' : 'border-amber-500/30'
-      }`}
-    >
-      <ImageIcon
-        className={`absolute h-5 w-5 z-0 ${
-          isSynced ? 'text-purple-400 opacity-60' : 'text-amber-500 opacity-50'
-        }`}
-      />
-      {imageUrl && (
-        <Image
-          src={imageUrl}
-          alt={produto.nome}
-          width={48}
-          height={48}
-          unoptimized
-          className={`h-full w-full object-cover relative z-10 ${isSynced ? '' : 'opacity-70'}`}
-          onError={(e) => {
-            e.currentTarget.style.display = 'none';
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
 function OrbitaLogo({ className = "h-6 w-6" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 110.88 117.1" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -155,6 +103,14 @@ function OrbitaLogo({ className = "h-6 w-6" }: { className?: string }) {
   );
 }
 
+
+/**
+ * As telas que compõem a si mesmas e ocupam a altura inteira da janela.
+ *
+ * Nelas a tabela é que fica com o espaço que sobra; as demais continuam
+ * empilhando e rolando dentro do `main`, como sempre fizeram.
+ */
+const TELAS_QUE_OCUPAM_A_JANELA = new Set(['dashboard', 'sales', 'inventory', 'contacts']);
 
 /** Intervalo entre consultas ao estado do job de sincronização. */
 const INTERVALO_POLL_SYNC_MS = 2_000;
@@ -311,6 +267,23 @@ export default function Home() {
   const isLoading = painel.carregando;
   const loadDashboardData = painel.recarregar;
 
+  /**
+   * Os contatos da tela de Clientes.
+   *
+   * O recurso ao cliente dos pedidos é o mesmo de antes: quando a leitura não
+   * traz `clientes`, a tela ainda consegue listar quem apareceu comprando, sem
+   * repetir ninguém. `null` enquanto nenhuma leitura deu certo — vazio e "não
+   * sei" continuam sendo coisas diferentes.
+   */
+  const clientesDoPainel = useMemo<Cliente[] | null>(() => {
+    if (!data) return null;
+    if (data.clientes && data.clientes.length > 0) return data.clientes;
+    return (data.pedidos ?? [])
+      .map((pedido) => pedido.cliente)
+      .filter((cliente, indice, todos): cliente is Cliente =>
+        !!cliente && todos.findIndex((outro) => outro?.id === cliente.id) === indice);
+  }, [data]);
+
   const [isSyncing, setIsSyncing] = useState(false);
   const [nfeLoadingId, setNfeLoadingId] = useState<string | null>(null);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
@@ -322,14 +295,6 @@ export default function Home() {
   const [isManualOrderOpen, setIsManualOrderOpen] = useState(false);
   const [isClienteEditOpen, setIsClienteEditOpen] = useState(false);
   const [selectedClienteToEdit, setSelectedClienteToEdit] = useState<Cliente | null>(null);
-
-  // Estados Locais para Filtros da aba Inventário
-
-  const [inventorySearch, setInventorySearch] = useState('');
-  const [inventoryCategory, setInventoryCategory] = useState('all');
-  const [inventoryMinPrice, setInventoryMinPrice] = useState('');
-  const [inventoryMaxPrice, setInventoryMaxPrice] = useState('');
-  const [inventoryStatus, setInventoryStatus] = useState<'all' | 'active' | 'inactive'>('all');
 
   // Relógio Dinâmico de Sincronização Real do Supabase Cache
   const [lastSyncDate, setLastSyncDate] = useState<Date | null>(null);
@@ -348,11 +313,6 @@ export default function Home() {
   const [isChangingStatus, setIsChangingStatus] = useState(false);
 
   // Helper para fetch autenticado com Supabase JWT
-
-  // Resolver de imagem do produto
-  const getProductImage = (produto: Produto): string | undefined => {
-    return produto.imagem_url;
-  };
 
   // Carregar conversas do Supabase
   const loadConversations = async () => {
@@ -1073,10 +1033,11 @@ export default function Home() {
         )}
 
       {/*
-        A área de conteúdo. Vendas compõe a própria tela e ocupa a altura toda;
-        as telas ainda não migradas continuam empilhando e rolando aqui dentro.
+        A área de conteúdo. As telas migradas compõem a si mesmas e ocupam a
+        altura toda — a tabela é que fica com o espaço que sobra, e não a
+        página; as ainda não migradas continuam empilhando e rolando aqui.
       */}
-      <main className={activeTab === 'sales' || activeTab === 'dashboard'
+      <main className={TELAS_QUE_OCUPAM_A_JANELA.has(activeTab)
         ? 'flex-1 min-h-0 flex flex-col'
         : 'flex-1 min-h-0 overflow-y-auto space-y-6 pr-1'}>
 
@@ -1135,321 +1096,36 @@ export default function Home() {
 
         {/* TAB 3: ESTOQUE & PRODUTOS */}
         {activeTab === 'inventory' && (
-          <div className="space-y-6">
-
-            {/* Filtros Avançados */}
-            <div className="glass-panel p-5 rounded-3xl border border-white/10 space-y-4 shadow-xl">
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider">Filtros de Catálogo & Inventário</h3>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* Busca */}
-                <div className="relative w-full">
-                  <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Buscar nome ou SKU..."
-                    value={inventorySearch}
-                    onChange={(e) => setInventorySearch(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 rounded-xl glass-input text-xs outline-none"
-                  />
-                </div>
-
-                {/* Status (Ativos/Inativos) */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" className="w-full justify-between font-normal px-3 py-2 h-[36px] text-xs rounded-xl glass-input outline-none border-white/10 hover:bg-white/5 hover:text-white">
-                      {inventoryStatus === 'all' ? 'Todos os Produtos' : inventoryStatus === 'active' ? 'Ativos (Em Estoque)' : 'Inativos (Sem Estoque)'}
-                      <ChevronRight className="h-4 w-4 opacity-50 rotate-90" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-56">
-                    <DropdownMenuRadioGroup value={inventoryStatus} onValueChange={(val) => setInventoryStatus(val as 'all' | 'active' | 'inactive')}>
-                      <DropdownMenuRadioItem value="all">Todos os Produtos</DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="active">Ativos (Em Estoque)</DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="inactive">Inativos (Sem Estoque)</DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                {/* Categorias */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" className="w-full justify-between font-normal px-3 py-2 h-[36px] text-xs rounded-xl glass-input outline-none border-white/10 hover:bg-white/5 hover:text-white overflow-hidden text-ellipsis whitespace-nowrap">
-                      {inventoryCategory === 'all' ? 'Todas as Categorias' : data?.categorias?.find(c => c.id === inventoryCategory)?.descricao || 'Categoria'}
-                      <ChevronRight className="h-4 w-4 opacity-50 rotate-90 flex-shrink-0 ml-2" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-56 max-h-[300px] overflow-y-auto">
-                    <DropdownMenuRadioGroup value={inventoryCategory} onValueChange={setInventoryCategory}>
-                      <DropdownMenuRadioItem value="all">Todas as Categorias</DropdownMenuRadioItem>
-                      {data?.categorias?.map(cat => (
-                        <DropdownMenuRadioItem key={cat.id || cat.bling_id} value={cat.id || String(cat.bling_id)}>
-                          {cat.descricao}
-                        </DropdownMenuRadioItem>
-                      ))}
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                {/* Faixa de Preço */}
-                <div className="flex items-center gap-2">
-                  <div className="relative w-full">
-                    <DollarSign className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
-                    <input
-                      type="number"
-                      placeholder="Min"
-                      value={inventoryMinPrice}
-                      onChange={(e) => setInventoryMinPrice(e.target.value)}
-                      className="w-full pl-8 pr-2 py-2 rounded-xl glass-input text-xs outline-none"
-                    />
-                  </div>
-                  <span className="text-slate-400">-</span>
-                  <div className="relative w-full">
-                    <DollarSign className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
-                    <input
-                      type="number"
-                      placeholder="Max"
-                      value={inventoryMaxPrice}
-                      onChange={(e) => setInventoryMaxPrice(e.target.value)}
-                      className="w-full pl-8 pr-2 py-2 rounded-xl glass-input text-xs outline-none"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Inventory List (List2 Component - No Cards!) */}
-            <div className="glass-panel p-6 rounded-3xl border border-white/10 space-y-4">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-3">
-                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">Catálogo Sincronizado do Bling</h3>
-                  <span className="text-xs text-slate-400 font-mono">Bling Cache Supabase</span>
-                </div>
-                <button
-                  onClick={() => {
-                    setSelectedProdutoModal(null);
-                    setIsProductModalOpen(true);
-                  }}
-                  className="px-4 py-2 rounded-xl glass-button-primary text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-lg hover:scale-105"
-                >
-                  <Package className="w-4 h-4" />
-                  <span>+ Cadastrar Novo Produto</span>
-                </button>
-              </div>
-
-              {(!data?.produtos || data.produtos.length === 0) ? (
-                <div className="p-8 text-center glass-panel rounded-2xl border border-white/10 space-y-3">
-                  <Package className="h-8 w-8 text-purple-400 mx-auto opacity-60" />
-                  <p className="text-sm font-semibold text-slate-300">Nenhum produto sincronizado do Bling ainda.</p>
-                  <p className="text-xs text-slate-400">Clique no botão <span className="text-purple-300 font-bold">&quot;Sincronizar Bling&quot;</span> no topo do painel para importar o seu catálogo real.</p>
-                </div>
-              ) : (
-                <>
-                  {/* ── PRODUTOS SINCRONIZADOS (bling_id numérico) ── */}
-                  {(() => {
-                    const filteredProducts = (data.produtos || []).filter(p => {
-                      // Filtro de Busca
-                      const q = inventorySearch.toLowerCase();
-                      const matchSearch = q
-                        ? p.nome.toLowerCase().includes(q) || (p.codigo && p.codigo.toLowerCase().includes(q))
-                        : true;
-
-                      // Filtro de Status
-                      const matchStatus = inventoryStatus === 'all'
-                        ? true
-                        : inventoryStatus === 'active'
-                          ? p.estoque > 0
-                          : p.estoque <= 0;
-
-                      // Filtro de Categoria
-                      const matchCategory = inventoryCategory === 'all'
-                        ? true
-                        : p.categoria_id === inventoryCategory;
-
-                      // Filtro de Preço
-                      const price = Number(p.preco);
-                      const min = inventoryMinPrice ? Number(inventoryMinPrice) : 0;
-                      const max = inventoryMaxPrice ? Number(inventoryMaxPrice) : Infinity;
-                      const matchPrice = price >= min && price <= max;
-
-                      return matchSearch && matchStatus && matchCategory && matchPrice;
-                    });
-
-                    const syncedProducts = filteredProducts.filter(p => isProdutoSynced(p.bling_id));
-                    const unsyncedProducts = filteredProducts.filter(p => !isProdutoSynced(p.bling_id));
-
-                    return (
-                      <>
-                        {syncedProducts.length > 0 && (
-                          <List2
-                            heading=""
-                            items={syncedProducts.map((produto) => {
-                              const imageUrl = getProductImage(produto);
-                              return {
-                                icon: (
-                                  <ProductThumbnail produto={produto} imageUrl={imageUrl} variant="synced" />
-                                ),
-                                title: produto.nome,
-                                category: `SKU: ${produto.codigo || `BLING-${produto.bling_id}`} • Saldo: ${produto.estoque} un.`,
-                                description: `R$ ${Number(produto.preco).toFixed(2)}`,
-                                onClick: () => handleOpenProductModal(produto),
-                                action: (
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold px-2 py-1 rounded-full border bg-emerald-500/15 text-emerald-400 border-emerald-500/30">
-                                      ✓ Bling
-                                    </span>
-                                    <span
-                                      className={`text-xs font-bold px-3 py-1.5 rounded-full border ${
-                                        produto.estoque <= 0
-                                          ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
-                                          : produto.estoque < 5
-                                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                                          : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                                      }`}
-                                    >
-                                      {produto.estoque <= 0 ? 'Sem Estoque' : produto.estoque < 5 ? 'Estoque Baixo' : 'Em Estoque'}
-                                    </span>
-                                    <button
-                                      onClick={() => handleOpenProductModal(produto)}
-                                      className="px-3 py-1.5 rounded-xl glass-button-primary text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md hover:scale-105"
-                                    >
-                                      <span>Ver Detalhes</span>
-                                    </button>
-                                  </div>
-                                ),
-                              };
-                            })}
-                          />
-                        )}
-
-                        {/* ── PRODUTOS NÃO SINCRONIZADOS (bling_id local/teste) ── */}
-                        {unsyncedProducts.length > 0 && (
-                          <div className="mt-6 space-y-3">
-                            <div className="flex items-center gap-3 px-2">
-                              <div className="flex items-center gap-2">
-                                <AlertTriangle className="h-4 w-4 text-amber-400" />
-                                <h4 className="text-sm font-bold text-amber-300 uppercase tracking-wider">
-                                  Não Sincronizados ({unsyncedProducts.length})
-                                </h4>
-                              </div>
-                              <p className="text-[11px] text-slate-500">
-                                Estes produtos existem apenas no cache local. Clique em &quot;Sincronizar Bling&quot; para enviá-los ao Bling ERP.
-                              </p>
-                            </div>
-                            <div className="glass-panel rounded-2xl border border-amber-500/20 overflow-hidden">
-                              <List2
-                                heading=""
-                                items={unsyncedProducts.map((produto) => {
-                                  const imageUrl = getProductImage(produto);
-                                  const validation = validateProdutoForBling(produto);
-
-                                  return {
-                                    icon: (
-                                      <ProductThumbnail produto={produto} imageUrl={imageUrl} variant="unsynced" />
-                                    ),
-                                    title: produto.nome || 'Produto sem nome',
-                                    category: `ID Local: ${produto.bling_id} • Saldo: ${produto.estoque} un.`,
-                                    description: (
-                                      <div className="flex flex-col gap-1 mt-1">
-                                        <span className="text-slate-300">R$ {Number(produto.preco).toFixed(2)}</span>
-                                        {!validation.valid && (
-                                          <div className="text-[10px] text-rose-400 bg-rose-500/10 px-2 py-1 rounded border border-rose-500/20">
-                                            <strong>Faltam dados:</strong> {validation.errors.join(' • ')}
-                                          </div>
-                                        )}
-                                      </div>
-                                    ),
-                                    onClick: () => handleOpenProductModal(produto),
-                                    action: (
-                                      <div className="flex items-center gap-2">
-                                        <span className="text-[10px] font-bold px-2.5 py-1 rounded-full border bg-amber-500/15 text-amber-400 border-amber-500/30 animate-pulse">
-                                          ⚠ Não Sincronizado
-                                        </span>
-                                        <button
-                                          onClick={() => handleOpenProductModal(produto)}
-                                          className="px-3 py-1.5 rounded-xl glass-button-primary text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md hover:scale-105"
-                                        >
-                                          <span>Corrigir</span>
-                                        </button>
-                                      </div>
-                                    ),
-                                  };
-                                })}
-                              />
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    );
-                  })()}
-                </>
-              )}
-            </div>
-
-          </div>
+          <EstoqueEProdutos
+            produtos={data?.produtos ?? null}
+            categorias={data?.categorias ?? []}
+            carregando={isLoading}
+            erroDeLeitura={erroDaLeitura}
+            onRecarregar={() => { void loadDashboardData(); }}
+            onAbrirProduto={handleOpenProductModal}
+            onCadastrarProduto={() => {
+              setSelectedProdutoModal(null);
+              setIsProductModalOpen(true);
+            }}
+          />
         )}
 
-        {/* TAB 4: CLIENTES & CONTATOS (TableWithDialog Component) */}
+        {/* TAB 4: CLIENTES & CONTATOS */}
         {activeTab === 'contacts' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between px-1">
-              <div>
-                <h2 className="text-xl font-bold text-white">Base de Clientes & Contatos</h2>
-                <p className="text-slate-400 text-xs mt-0.5">Gestão de contatos sincronizada com Bling & Supabase</p>
-              </div>
-              <Button
-                onClick={() => {
-                  setSelectedClienteToEdit(null);
-                  setIsClienteEditOpen(true);
-                }}
-                className="bg-gradient-to-r from-blue-600 to-blue-500 text-white text-xs font-bold px-4 py-2 h-[36px] rounded-xl hover:opacity-90 transition-all flex items-center gap-1.5 shadow-lg cursor-pointer"
-              >
-                <Plus className="h-4 w-4" />
-                Novo Contato
-              </Button>
-            </div>
-
-            <TableWithDialog
-              title="Clientes Cadastrados"
-
-              users={
-                ((data?.clientes && data.clientes.length > 0)
-                  ? data.clientes
-                  : (data?.pedidos?.map((p) => p.cliente).filter((c, index, self) => c && self.findIndex((t) => t?.id === c.id) === index) || [])
-                ).map((cliente, idx) => ({
-                  id: String(cliente?.id || idx + 1),
-                  name: cliente?.nome || 'Cliente Sem Nome',
-                  email: cliente?.email || 'Sem e-mail',
-                  location: 'Brasil',
-                  status: 'Ativo',
-                  balance: 'R$ 0,00',
-                  phone: cliente?.telefone,
-                  cpf_cnpj: cliente?.cpf_cnpj,
-                  originalCliente: cliente // to pass the full client object
-                }))
-              }
-              onViewDetails={(user: { originalCliente?: Cliente; id: string; name: string; email: string; phone?: string; cpf_cnpj?: string }) => {
-                if (user.originalCliente) {
-                  setSelectedClienteModal(user.originalCliente);
-                  setIsClienteModalOpen(true);
-                } else {
-                  // Fallback para mock users se aplicável
-                  const fallbackUser: Cliente = {
-                    id: user.id,
-                    nome: user.name,
-                    email: user.email,
-                    telefone: user.phone,
-                    cpf_cnpj: user.cpf_cnpj,
-                    bling_id: '',
-                    user_id: '',
-                    created_at: new Date().toISOString()
-                  };
-                  setSelectedClienteModal(fallbackUser);
-                  setIsClienteModalOpen(true);
-                }
-              }}
-            />
-          </div>
+          <ClientesEContatos
+            clientes={clientesDoPainel}
+            carregando={isLoading}
+            erroDeLeitura={erroDaLeitura}
+            onRecarregar={() => { void loadDashboardData(); }}
+            onAbrirCliente={(cliente) => {
+              setSelectedClienteModal(cliente);
+              setIsClienteModalOpen(true);
+            }}
+            onCadastrarCliente={() => {
+              setSelectedClienteToEdit(null);
+              setIsClienteEditOpen(true);
+            }}
+          />
         )}
 
         {/* TAB 5: SAC OMNICHANNEL (CHATWOOT RECREATED) */}
@@ -1761,6 +1437,16 @@ export default function Home() {
         cliente={selectedClienteModal}
         onOpenChatwoot={() => {
           setActiveTab('sac');
+        }}
+        onEdit={(cliente) => {
+          // O `ClienteEditModal` já sabia editar um contato existente, e
+          // `selectedClienteToEdit` já existia — só que nada nunca o preenchia,
+          // então a edição não tinha por onde ser aberta. A ação primária do
+          // detalhe é o caminho que faltava; nenhuma rota nova, nenhum campo
+          // novo.
+          setIsClienteModalOpen(false);
+          setSelectedClienteToEdit(cliente);
+          setIsClienteEditOpen(true);
         }}
       />
 

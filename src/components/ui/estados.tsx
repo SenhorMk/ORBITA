@@ -87,7 +87,14 @@ export function EstadoDeErro({
  * apagá-la para mostrar um erro trocaria informação verdadeira por nenhuma. Os
  * números continuam, com a ressalva de que envelheceram.
  */
-export function AvisoDeAtualizacaoFalhada({ detalhe }: { detalhe?: string }) {
+export function AvisoDeAtualizacaoFalhada({
+  detalhe,
+  /** O que envelheceu, no plural e com artigo: "os pedidos", "o catálogo". */
+  recurso = 'os pedidos',
+}: {
+  detalhe?: string;
+  recurso?: string;
+}) {
   return (
     <div
       className="flex items-start gap-2 px-4 py-2.5 rounded-xl text-xs"
@@ -96,7 +103,7 @@ export function AvisoDeAtualizacaoFalhada({ detalhe }: { detalhe?: string }) {
     >
       <AlertCircle className="w-4 h-4 shrink-0 mt-px" aria-hidden />
       <span>
-        Não foi possível atualizar os pedidos agora — o que está na tela é a última leitura que deu certo.
+        Não foi possível atualizar {recurso} agora — o que está na tela é a última leitura que deu certo.
         {detalhe ? ` (${detalhe})` : ''}
       </span>
     </div>
