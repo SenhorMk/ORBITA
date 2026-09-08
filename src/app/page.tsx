@@ -42,8 +42,8 @@ import { AppWindow } from '@/components/shell/AppWindow';
 import { Rail } from '@/components/shell/Rail';
 import { OrganizacaoAtiva } from '@/components/shell/OrganizacaoAtiva';
 import { EstadoDaSincronizacao } from '@/components/shell/EstadoDaSincronizacao';
-import { GradientMenu } from '@/components/GradientMenu';
 import { TransactionList } from '@/components/TransactionList';
+import { VendasEPedidos } from '@/components/vendas/VendasEPedidos';
 import { HealthMonitor } from '@/components/HealthMonitor';
 import { BudgetCard } from '@/components/ui/analytics-bento';
 import { List2 } from "@/components/ui/list-2";
@@ -327,10 +327,6 @@ export default function Home() {
     'dashboard' | 'sales' | 'inventory' | 'contacts' | 'finance' | 'sac' | 'organization' | 'integrations' | 'billing'
   >('dashboard');
 
-  // Estados para filtros e ordenação na aba Vendas
-  const [filterDays, setFilterDays] = useState<string>('all');
-  const [sortBy, setSortBy] = useState('recent');
-
   // Estados dos Modais Interativos do Dashboard
   const [faturamentoPeriod, setFaturamentoPeriod] = useState<'7' | '30' | '180' | '365' | 'all'>('30');
   const [novosPedidosTab, setNovosPedidosTab] = useState<'Novo' | 'Aberto' | 'Em Processamento' | 'Despachado' | 'Enviado'>('Novo');
@@ -353,6 +349,8 @@ export default function Home() {
   } | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
+  /** A falha da leitura mais recente do painel, ou `null`. Nunca vira lista vazia. */
+  const [erroDaLeitura, setErroDaLeitura] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [nfeLoadingId, setNfeLoadingId] = useState<string | null>(null);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
@@ -723,11 +721,22 @@ export default function Home() {
     try {
       const response = await fetchWithAuth('/api/dashboard');
       const result = await response.json();
-      if (result.success) {
-        setData(result.data);
+      if (!response.ok || !result.success) {
+        // A leitura falhou. O que NÃO se faz aqui é `setData(null)` ou
+        // `setData({ pedidos: [] })`: zero e "não sei" são coisas diferentes, e
+        // a rota do painel deixou de engolir exceção justamente para não
+        // confundir as duas — a tela não pode reintroduzir o defeito do outro
+        // lado. A última leitura boa continua na tela, com o erro visível ao
+        // lado; se nunca houve leitura boa, `data` segue `null` e quem
+        // renderiza mostra erro, não uma lista vazia.
+        setErroDaLeitura(descreverErro(result?.error ?? `HTTP ${response.status}`));
+        return;
       }
+      setData(result.data);
+      setErroDaLeitura(null);
     } catch (error) {
       console.error('Erro ao carregar dados do dashboard:', error);
+      setErroDaLeitura(descreverErro(error));
     } finally {
       setIsLoading(false);
     }
@@ -912,38 +921,6 @@ export default function Home() {
     }
   };
 
-  const [currentDateBaseline] = useState(() => Date.now());
-
-  const getFilteredAndSortedPedidos = () => {
-    if (!data?.pedidos) return [];
-
-    let filtered = [...data.pedidos];
-
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(p =>
-        p.numero.toLowerCase().includes(query) ||
-        (p.cliente?.nome && p.cliente.nome.toLowerCase().includes(query)) ||
-        (p.status && p.status.toLowerCase().includes(query))
-      );
-    }
-
-    if (filterDays !== 'all') {
-      const days = parseInt(filterDays, 10);
-      const limitTime = currentDateBaseline - days * 24 * 60 * 60 * 1000;
-      filtered = filtered.filter(p => new Date(p.data).getTime() >= limitTime);
-    }
-
-    if (sortBy === 'recent') {
-      filtered.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
-    } else if (sortBy === 'old') {
-      filtered.sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
-    } else if (sortBy === 'highest') {
-      filtered.sort((a, b) => Number(b.total) - Number(a.total));
-    }
-
-    return filtered;
-  };
 
   const getWeeklySalesData = () => {
     const daysMap: { [key: string]: number } = {
@@ -1021,7 +998,6 @@ export default function Home() {
   // entrava por não ter nota — e um pedido cancelado nunca vai receber NF-e.
   const pedidosNfePendente = pedidosComNfePendente(data?.pedidos ?? []);
   const novosPedidosFluxo = data?.pedidos?.filter(p => p.status === novosPedidosTab) || [];
-  const filteredPedidosList = getFilteredAndSortedPedidos();
 
   const handleOpenChatwootForPhone = (phone?: string) => {
     setActiveTab('sac');
@@ -1595,6 +1571,9 @@ export default function Home() {
                 </button>
               </div>
 
+              {/* O Dashboard continua na lista antiga de propósito: migrá-lo é
+                  o Ticket 03, e trazê-lo junto agora ampliaria esta fatia. A
+                  coexistência é a mesma que o Ticket 01 estabeleceu. */}
               <TransactionList
                 pedidos={data?.pedidos ? data.pedidos.slice(0, 5) : []}
                 onOpenChatwoot={handleOpenChatwootForPhone}
@@ -1608,81 +1587,21 @@ export default function Home() {
 
         {/* TAB 2: VENDAS & PEDIDOS */}
         {activeTab === 'sales' && (
-          <div className="space-y-6">
-
-            {/* Filter Controls Bar with GradientMenu */}
-            <div className="glass-panel p-4 rounded-3xl border border-white/10 flex flex-col lg:flex-row items-center justify-between gap-4 shadow-xl">
-
-              {/* Gradient Menu Filter for Period */}
-              <GradientMenu
-                activeId={filterDays}
-                onChange={(id) => setFilterDays(id)}
-                items={[
-                  { id: 'all', label: 'Todo o período' },
-                  { id: '7', label: 'Últimos 7 dias' },
-                  { id: '30', label: 'Últimos 30 dias' },
-                  { id: '90', label: 'Últimos 90 dias' },
-                ]}
-              />
-
-              <div className="flex items-center gap-3 w-full lg:w-auto justify-end">
-                {/* Sort By Dropdown */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" className="w-full lg:w-auto justify-between font-normal px-3 py-2 h-[36px] text-xs rounded-xl glass-input outline-none border-white/10 hover:bg-white/5 hover:text-white">
-                      {sortBy === 'recent' ? 'Mais recentes' : sortBy === 'old' ? 'Mais antigos' : 'Maior valor'}
-                      <ChevronRight className="h-4 w-4 opacity-50 rotate-90 flex-shrink-0 ml-2" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-48">
-                    <DropdownMenuRadioGroup value={sortBy} onValueChange={setSortBy}>
-                      <DropdownMenuRadioItem value="recent">Mais recentes</DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="old">Mais antigos</DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="highest">Maior valor</DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                {/* Search Box */}
-                <SearchQueryInput
-                  containerClassName="relative w-full sm:w-64"
-                  iconClassName="absolute left-3.5 top-2.5 h-4 w-4 text-slate-400"
-                  inputClassName="w-full pl-10 pr-4 py-2 rounded-xl glass-input text-xs outline-none"
-                  placeholder="Buscar pedido, cliente..."
-                  value={searchQuery}
-                  onChange={setSearchQuery}
-                />
-
-                {/* Botão Incluir Pedido Manual */}
-                <Button
-                  onClick={() => setIsManualOrderOpen(true)}
-                  className="bg-gradient-to-r from-[#FF9F0A] to-[#FF6B00] text-zinc-900 text-xs font-bold px-4 py-2 h-[36px] rounded-xl hover:opacity-90 transition-all flex items-center gap-1.5 shrink-0 shadow-lg cursor-pointer"
-                >
-                  <Plus className="h-4 w-4" />
-                  Incluir Pedido Manual
-                </Button>
-              </div>
-
-            </div>
-
-            {/* Transaction List Component */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between px-1">
-                <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                  Listagem de Pedidos Bling ({filteredPedidosList.length})
-                </h3>
-              </div>
-
-              <TransactionList
-                pedidos={filteredPedidosList}
-                onOpenChatwoot={handleOpenChatwootForPhone}
-                onEmitirNfe={(pedido) => handleEmitNfe(pedido.id || '', pedido.bling_id || '')}
-                loading={isLoading}
-              />
-            </div>
-
-          </div>
+          <VendasEPedidos
+            pedidos={data?.pedidos ?? null}
+            carregando={isLoading}
+            erroDeLeitura={erroDaLeitura}
+            onRecarregar={() => { void loadDashboardData(); }}
+            organizacaoId={organizacaoConfirmada}
+            ultimaSincronizacao={lastSyncDate}
+            busca={searchQuery}
+            onBuscaChange={setSearchQuery}
+            onConversarNoWhatsapp={(telefone) => handleOpenChatwootForPhone(telefone)}
+            onEmitirNfe={(pedido) => handleEmitNfe(pedido.id || '', pedido.bling_id || '')}
+            onAbrirVendaManual={() => setIsManualOrderOpen(true)}
+          />
         )}
+
 
         {/* TAB 3: ESTOQUE & PRODUTOS */}
         {activeTab === 'inventory' && (

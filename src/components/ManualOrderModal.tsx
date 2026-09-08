@@ -1,8 +1,7 @@
 'use client';
 
 import { useState, useEffect, useDeferredValue } from "react";
-import { GlassModal } from '@/components/ui/glass-modal';
-import { Button } from '@/components/ui/button';
+import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import { supabase } from '@/lib/supabaseClient';
 import { Search, Plus, Trash2, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 import { useManualOrderSubmit, type ItemPedidoManual } from './useManualOrderSubmit';
@@ -414,27 +413,38 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess, organizacaoId 
   }, [open]);
 
   return (
-    <GlassModal
-      isOpen={open}
-      onClose={() => onOpenChange(false)}
-      title="Novo Pedido Manual (Loja Física)"
-      subtitle="Crie um pedido para debitar estoque local e registrar finanças instantaneamente."
-      icon={<Plus className="w-6 h-6 text-blue-400" />}
-      footer={
-        <>
-          <div className="flex items-center gap-2 text-xs text-slate-400">
-            {/* Espaço para status ou sincronização no footer */}
-          </div>
-          <div className="flex items-center gap-3">
-            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading} className="bg-white/5 border-white/15 text-slate-300 hover:bg-white/10 rounded-2xl px-6">
+    <Modal
+      aberto={open}
+      onAbertoChange={onOpenChange}
+      tamanho="lg"
+      eyebrow="Loja física"
+      titulo="Novo pedido manual"
+      descricao="Cria um pedido para debitar estoque local e registrar o financeiro."
+      rodape={
+        <RodapeDeModal
+          secundaria={
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              disabled={loading}
+              className="orbita-chip cursor-pointer"
+            >
               Cancelar
-            </Button>
-            <Button onClick={handleSubmit} disabled={loading || itens.length === 0 || !selectedCliente} className="glass-button-primary gap-2 bg-blue-600/80 hover:bg-blue-600 rounded-2xl px-6">
+            </button>
+          }
+          primaria={
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={loading || itens.length === 0 || !selectedCliente}
+              className="orbita-chip cursor-pointer"
+              style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
+            >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-              Finalizar e Baixar Estoque
-            </Button>
-          </div>
-        </>
+              Finalizar e baixar estoque
+            </button>
+          }
+        />
       }
     >
         <PendenciasDeVendaManual open={open} organizacaoId={organizacaoId} />
@@ -477,6 +487,6 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess, organizacaoId 
             calculateTotal={calculateTotal}
           />
         </div>
-    </GlassModal>
+    </Modal>
   );
 }

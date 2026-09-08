@@ -75,9 +75,18 @@ async function pedirAoServidor(
 export function PendenciasDeVendaManual({
   open,
   organizacaoId,
+  onMudanca,
 }: {
   readonly open: boolean;
   readonly organizacaoId: string | null;
+  /**
+   * Avisa que o armazenamento de pendências mudou.
+   *
+   * Existe desde o Ticket 02, quando este bloco passou a aparecer também na
+   * tela de Vendas: lá o chip "Conflito Bling" conta as mesmas pendências, e
+   * sem este aviso ele continuaria mostrando uma que já foi resolvida aqui.
+   */
+  readonly onMudanca?: () => void;
 }) {
   const [conferindo, setConferindo] = useState<string | null>(null);
   const [mensagem, setMensagem] = useState<string | null>(null);
@@ -111,6 +120,7 @@ export function PendenciasDeVendaManual({
       if (corpo.referenciaLiberada) esquecerTentativaPendente(organizacaoId, referencia);
       setMensagem(corpo.mensagem ?? corpo.error ?? 'Não foi possível conferir esta venda agora.');
       relerArmazenamento();
+      onMudanca?.();
     } catch (erro: unknown) {
       setMensagem(descreverErro(erro));
     } finally {

@@ -165,6 +165,91 @@ body {
   color: var(--accent-fg);
 }
 
+/* ---- Diálogos (nível 4 da escada de elevação) ---------------------- */
+
+/* O overlay cobre a JANELA, não o viewport: mesmos insets do shell, mesmo raio.
+   O fundo escolhido continua aparecendo em volta, e o drawer ancora na borda da
+   janela — como no mockup. O blur vai inline no componente, porque o pipeline
+   de CSS do projeto remove `backdrop-filter` de folhas de estilo. */
+.orbita-overlay {
+  position: fixed;
+  top: var(--window-inset-top);
+  right: var(--window-inset-right);
+  bottom: var(--window-inset-bottom);
+  left: var(--window-inset-left);
+  z-index: 50;
+  border-radius: var(--r-window);
+  background: rgba(6, 6, 8, 0.5);
+}
+
+.orbita-modal {
+  position: fixed;
+  z-index: 51;
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100vw - 96px);
+  max-height: 78%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: var(--r-modal);
+  background: var(--modal);
+  box-shadow: var(--shadow-modal), 0 0 0 1px var(--line);
+  color: var(--txt);
+  overflow: hidden;
+}
+
+/* O drawer ocupa a altura inteira da janela e ancora à direita dela. */
+.orbita-modal--drawer {
+  top: var(--window-inset-top);
+  bottom: var(--window-inset-bottom);
+  right: var(--window-inset-right);
+  left: auto;
+  transform: none;
+  max-height: none;
+  border-radius: var(--r-modal) 0 0 var(--r-modal);
+  box-shadow: -40px 0 100px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--line);
+}
+
+/* ---- Tabela (linha 52px, zebra off, hover, cabeçalho fixo) ---------- */
+
+.orbita-tabela-cabecalho {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  height: 40px;
+  background: var(--glass2);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--txt3);
+}
+
+.orbita-tabela-linha {
+  min-height: var(--h-row);
+  border-bottom: 1px solid var(--line);
+  transition: background 0.15s ease;
+}
+
+.orbita-tabela-linha:hover {
+  background: var(--glass2);
+}
+
+.orbita-tabela-linha:last-child {
+  border-bottom: none;
+}
+
+/* O número que manda na linha: Space Grotesk, como todo dinheiro no produto. */
+.orbita-numero {
+  font-family: var(--font-space-grotesk), sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  color: var(--txt);
+}
+
 /* Custom Scrollbar iOS Style */
 ::-webkit-scrollbar {
   width: 6px;
