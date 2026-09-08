@@ -75,9 +75,18 @@ async function pedirAoServidor(
 export function PendenciasDeVendaManual({
   open,
   organizacaoId,
+  onMudanca,
 }: {
   readonly open: boolean;
   readonly organizacaoId: string | null;
+  /**
+   * Avisa que o armazenamento de pendências mudou.
+   *
+   * Existe desde o Ticket 02, quando este bloco passou a aparecer também na
+   * tela de Vendas: lá o chip "Conflito Bling" conta as mesmas pendências, e
+   * sem este aviso ele continuaria mostrando uma que já foi resolvida aqui.
+   */
+  readonly onMudanca?: () => void;
 }) {
   const [conferindo, setConferindo] = useState<string | null>(null);
   const [mensagem, setMensagem] = useState<string | null>(null);
@@ -111,6 +120,7 @@ export function PendenciasDeVendaManual({
       if (corpo.referenciaLiberada) esquecerTentativaPendente(organizacaoId, referencia);
       setMensagem(corpo.mensagem ?? corpo.error ?? 'Não foi possível conferir esta venda agora.');
       relerArmazenamento();
+      onMudanca?.();
     } catch (erro: unknown) {
       setMensagem(descreverErro(erro));
     } finally {
@@ -121,11 +131,14 @@ export function PendenciasDeVendaManual({
   if (pendentes.length === 0 && mensagem === null) return null;
 
   return (
-    <div className="bg-amber-500/10 text-amber-200 p-4 rounded-2xl border border-amber-500/20 mb-6 space-y-3">
+    <div
+      className="p-4 rounded-2xl space-y-3"
+      style={{ background: 'var(--chip)', border: '1px solid var(--warning)', color: 'var(--txt)' }}
+    >
       {pendentes.length > 0 && (
         <>
-          <div className="flex items-start gap-2 text-sm">
-            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <div className="flex items-start gap-2 text-[13px]" style={{ color: 'var(--txt2)' }}>
+            <AlertCircle className="w-5 h-5 flex-shrink-0" style={{ color: 'var(--warning)' }} aria-hidden />
             <span className="mt-0.5">
               {pendentes.length === 1
                 ? 'Há uma venda anterior cujo resultado não foi confirmado. Confira antes de registrar de novo, para não duplicar o pedido no Bling.'
@@ -136,13 +149,18 @@ export function PendenciasDeVendaManual({
             {pendentes.map((pendente) => (
               <li key={pendente.referencia} className="text-xs space-y-2">
                 <div className="flex items-center justify-between gap-3">
-                <code className="text-amber-100/80 truncate">{pendente.referencia}</code>
+                <code
+                  className="truncate text-[11px]"
+                  style={{ color: 'var(--txt3)', fontFamily: 'var(--font-jetbrains-mono), monospace' }}
+                >
+                  {pendente.referencia}
+                </code>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <button
                     type="button"
                     onClick={() => pedir(pendente.referencia, 'conferir')}
                     disabled={conferindo !== null}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
+                    className="orbita-chip cursor-pointer !h-8"
                   >
                     {conferindo === pendente.referencia
                       ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -158,7 +176,7 @@ export function PendenciasDeVendaManual({
                       type="button"
                       onClick={() => pedir(pendente.referencia, 'encerrar-como-nao-criada')}
                       disabled={conferindo !== null}
-                      className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
+                      className="orbita-chip cursor-pointer !h-8"
                     >
                       Confirmei no Bling: não existe
                     </button>
@@ -171,7 +189,8 @@ export function PendenciasDeVendaManual({
                       type="button"
                       onClick={() => pedir(pendente.referencia, 'cancelar-no-bling')}
                       disabled={conferindo !== null}
-                      className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 disabled:opacity-50 transition-colors"
+                      className="orbita-chip cursor-pointer !h-8"
+                      style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
                     >
                       Cancelar o pedido no Bling
                     </button>
@@ -185,8 +204,8 @@ export function PendenciasDeVendaManual({
                     no Bling afirma o que viu, e é essa afirmação que destrava
                     a pendência. */}
                 {situacaoPorReferencia[pendente.referencia] === 'cancelamento_ambiguo' && (
-                  <div className="space-y-2 rounded-xl bg-amber-500/10 p-2">
-                    <label className="block text-amber-100/80" htmlFor={`evidencia-${pendente.referencia}`}>
+                  <div className="space-y-2 rounded-xl p-2.5" style={{ background: 'var(--glass2)', border: '1px solid var(--line)' }}>
+                    <label className="block text-xs" style={{ color: 'var(--txt2)' }} htmlFor={`evidencia-${pendente.referencia}`}>
                       O que você viu na tela do pedido no Bling?
                     </label>
                     <input
@@ -198,7 +217,8 @@ export function PendenciasDeVendaManual({
                         [pendente.referencia]: evento.target.value,
                       }))}
                       placeholder="Ex.: o pedido aparece como Cancelado"
-                      className="w-full px-2 py-1.5 rounded-lg bg-black/20 border border-amber-500/20 text-amber-50"
+                      className="w-full px-2.5 py-1.5 rounded-lg text-xs outline-none"
+                      style={{ background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--txt)' }}
                     />
                     <div className="flex flex-wrap items-center gap-2">
                       <button
@@ -208,7 +228,7 @@ export function PendenciasDeVendaManual({
                           decisao: 'cancelado',
                           evidencia: evidenciaPorReferencia[pendente.referencia] ?? '',
                         })}
-                        className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
+                        className="orbita-chip cursor-pointer !h-8"
                       >
                         Está cancelado lá
                       </button>
@@ -219,7 +239,7 @@ export function PendenciasDeVendaManual({
                           decisao: 'nao-cancelado',
                           evidencia: evidenciaPorReferencia[pendente.referencia] ?? '',
                         })}
-                        className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
+                        className="orbita-chip cursor-pointer !h-8"
                       >
                         Continua ativo lá
                       </button>
@@ -231,7 +251,7 @@ export function PendenciasDeVendaManual({
           </ul>
         </>
       )}
-      {mensagem && <p className="text-xs text-amber-100/90">{mensagem}</p>}
+      {mensagem && <p className="text-xs" style={{ color: 'var(--txt2)' }}>{mensagem}</p>}
     </div>
   );
 }

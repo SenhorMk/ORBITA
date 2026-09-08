@@ -12,11 +12,11 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
-import { useState } from 'react';
+import { useMemo } from 'react';
 
 import { useOrganizationsList } from './useOrganizationsList';
 import { usePapelNaOrganizacaoAtiva, type SelecaoDeOrganizacao } from './usePapelNaOrganizacaoAtiva';
-import { useOrganizationPanel, type AuthenticatedFetch } from './useOrganizationPanel';
+import type { AuthenticatedFetch } from './useOrganizationPanel';
 
 const ANA = 'ana@exemplo.com';
 const BRUNO = 'bruno@exemplo.com';
@@ -142,27 +142,15 @@ describe('useOrganizationsList — o estado pertence à sessão', () => {
   });
 });
 
-/** O painel de organização, que em `page.tsx` só existe dentro da sessão. */
-function PainelDaAba({
-  fetchWithAuth,
-  lista,
-  onSelecao,
-}: {
-  fetchWithAuth: AuthenticatedFetch;
-  lista: ReturnType<typeof useOrganizationsList>;
-  onSelecao: (selecao: SelecaoDeOrganizacao | null) => void;
-}) {
-  useOrganizationPanel(fetchWithAuth, lista, onSelecao);
-  return null;
-}
-
 /**
  * A seleção que alimenta `usePapelNaOrganizacaoAtiva`, montada como `page.tsx` a
- * monta: o estado compartilhado no topo, o painel **dentro** da sessão, e a
- * seleção valendo só enquanto durar a identidade que a produziu.
+ * monta: a lista compartilhada, e a seleção **derivada dela durante a
+ * renderização**.
  *
- * O painel sair junto com a sessão é o ponto do teste. Ele é quem anuncia a
- * organização confirmada — e um anúncio que não acontece não invalida nada.
+ * A derivação é o ponto. A seleção já veio de um anúncio do painel por efeito, e
+ * um anúncio chega um render depois — tempo suficiente para a tela mostrar o
+ * nome de uma organização com os dados de outra. Aqui ela sai da mesma fonte que
+ * o shell, no mesmo render.
  */
 function PaginaSonda({
   fetchWithAuth,
@@ -171,17 +159,19 @@ function PaginaSonda({
   fetchWithAuth: AuthenticatedFetch;
   identidade: string | null;
 }) {
-  const [selecaoAnunciada, setSelecaoAnunciada] = useState<SelecaoDeOrganizacao | null>(null);
   const lista = useOrganizationsList(fetchWithAuth, identidade);
-  const selecao = identidade === null ? null : selecaoAnunciada;
+
+  const organizacaoAtivaId = lista.activeOrg?.organizacao.id ?? null;
+  const versaoDaSelecao = lista.selectionVersion;
+  const selecao = useMemo<SelecaoDeOrganizacao | null>(
+    () => (organizacaoAtivaId === null ? null : { id: organizacaoAtivaId, versao: versaoDaSelecao }),
+    [organizacaoAtivaId, versaoDaSelecao],
+  );
 
   const { organizacaoId } = usePapelNaOrganizacaoAtiva(fetchWithAuth, identidade, selecao);
 
   return (
     <div>
-      {identidade !== null && (
-        <PainelDaAba fetchWithAuth={fetchWithAuth} lista={lista} onSelecao={setSelecaoAnunciada} />
-      )}
       <span data-testid="selecao">{selecao?.id ?? '(nenhuma)'}</span>
       <span data-testid="confirmada">{organizacaoId ?? '(nenhuma)'}</span>
     </div>

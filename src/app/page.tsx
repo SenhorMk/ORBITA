@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Image from 'next/image';
 import {
   DollarSign,
@@ -27,7 +27,7 @@ import {
   Plus,
   Plug,
 } from "lucide-react";
-import type { Produto, Cliente, Categoria, ChatwootConversation, ChatwootMessage, ItemPedido } from '@/types';
+import type { Produto, Cliente, ChatwootConversation, ChatwootMessage, ItemPedido } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
 import {
   descreverProgresso,
@@ -42,8 +42,8 @@ import { AppWindow } from '@/components/shell/AppWindow';
 import { Rail } from '@/components/shell/Rail';
 import { OrganizacaoAtiva } from '@/components/shell/OrganizacaoAtiva';
 import { EstadoDaSincronizacao } from '@/components/shell/EstadoDaSincronizacao';
-import { GradientMenu } from '@/components/GradientMenu';
 import { TransactionList } from '@/components/TransactionList';
+import { VendasEPedidos } from '@/components/vendas/VendasEPedidos';
 import { HealthMonitor } from '@/components/HealthMonitor';
 import { BudgetCard } from '@/components/ui/analytics-bento';
 import { List2 } from "@/components/ui/list-2";
@@ -85,6 +85,7 @@ import {
 } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
 import { useStartupPorOrganizacao } from '@/components/organizacao/useStartupPorOrganizacao';
 import { useOrganizationsList } from '@/components/organizacao/useOrganizationsList';
+import { useLeituraDoPainel } from '@/components/painel/useLeituraDoPainel';
 import { descreverErro } from '@/lib/erroLegivel';
 import { apenasVendasAtivas, pedidosComNfePendente, variacaoPercentual } from '@/lib/metricas/vendasAtivas';
 
@@ -259,24 +260,7 @@ export default function Home() {
     }
     return null;
   });
-  // Organização ativa (Ticket 24b): resolvida pelo servidor via OrganizationPanel,
-  // nunca escolhida localmente. Escopa a leitura de plano/limites — e, desde a
-  // revisão do #66, também invalida a autoridade visual sobre papel na troca.
-  const [selecaoAnunciada, setSelecaoDeOrganizacao] = useState<SelecaoDeOrganizacao | null>(null);
   const identidadeDaSessao = session?.email ?? null;
-  /**
-   * A seleção vale enquanto durar a sessão que a produziu.
-   *
-   * Quem a anuncia é o painel de organização — que desmonta no logout junto com
-   * o resto do shell. Um anúncio que não acontece não invalida nada, então a
-   * seleção da pessoa que saiu ficaria de pé, e com ela a autoridade visual
-   * sobre papel. Aqui ela simplesmente deixa de existir sem sessão; a troca
-   * direta de identidade é coberta pela mesma regra dentro de
-   * `useOrganizationsList`, que devolve organização ativa nula para uma leitura
-   * de outra sessão.
-   */
-  const selecaoDeOrganizacao = identidadeDaSessao === null ? null : selecaoAnunciada;
-  const activeOrganizacaoId = selecaoDeOrganizacao?.id ?? null;
 
   /**
    * O estado de organizações, **uma vez só** (Ticket 01).
@@ -290,6 +274,33 @@ export default function Home() {
    * de login é renderizada por este mesmo componente.
    */
   const listaDeOrganizacoes = useOrganizationsList(fetchWithAuth, identidadeDaSessao);
+
+  /**
+   * A organização ativa desta tela, **derivada da mesma fonte que o shell**.
+   *
+   * Antes ela vinha de um anúncio do painel de organização, por efeito. O
+   * anúncio é correto, mas chega tarde: no render em que a fonte compartilhada
+   * já expõe B — e o indicador do topo já escreve B na tela —, a seleção ainda
+   * era A. Um render inteiro, com paint, em que o nome no topo é de uma
+   * organização e os números embaixo são de outra. Num produto multi-tenant, é
+   * o defeito que não se pode ter, e nenhum carimbo no consumidor resolve: quem
+   * chega atrasado é a própria fonte do escopo.
+   *
+   * Derivar durante a renderização elimina a janela: não existe momento em que
+   * a fonte diz B e a seleção diz A.
+   *
+   * A versão entra junto porque sair de uma organização e voltar são seleções
+   * diferentes — só ela as distingue. E a seleção não sobrevive à sessão que a
+   * produziu de graça: `useOrganizationsList` já devolve organização ativa nula
+   * para uma leitura de outra sessão.
+   */
+  const organizacaoAtivaId = listaDeOrganizacoes.activeOrg?.organizacao.id ?? null;
+  const versaoDaSelecao = listaDeOrganizacoes.selectionVersion;
+  const selecaoDeOrganizacao = useMemo<SelecaoDeOrganizacao | null>(
+    () => (organizacaoAtivaId === null ? null : { id: organizacaoAtivaId, versao: versaoDaSelecao }),
+    [organizacaoAtivaId, versaoDaSelecao],
+  );
+  const activeOrganizacaoId = selecaoDeOrganizacao?.id ?? null;
 
   // Autoridade única sobre papel: o vínculo persistido, lido do servidor, para
   // o par (sessão, organização ativa). Trocar qualquer um dos dois invalida o
@@ -327,32 +338,30 @@ export default function Home() {
     'dashboard' | 'sales' | 'inventory' | 'contacts' | 'finance' | 'sac' | 'organization' | 'integrations' | 'billing'
   >('dashboard');
 
-  // Estados para filtros e ordenação na aba Vendas
-  const [filterDays, setFilterDays] = useState<string>('all');
-  const [sortBy, setSortBy] = useState('recent');
-
   // Estados dos Modais Interativos do Dashboard
   const [faturamentoPeriod, setFaturamentoPeriod] = useState<'7' | '30' | '180' | '365' | 'all'>('30');
   const [novosPedidosTab, setNovosPedidosTab] = useState<'Novo' | 'Aberto' | 'Em Processamento' | 'Despachado' | 'Enviado'>('Novo');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Estados do Dashboard
-  const [data, setData] = useState<{
-    pedidos: PedidoEnriquecido[];
-    produtos: Produto[];
-    clientes: Cliente[];
-    categorias?: Categoria[];
-    estatisticas: {
-      faturamento30Dias: number;
-      faturamento30DiasAnterior: number;
-      totalPedidos: number;
-      pendentes: number;
-      cancelados: number;
-      atendidos: number;
-    }
-  } | null>(null);
+  /**
+   * A leitura operacional, **carimbada pela organização que a produziu**.
+   *
+   * O escopo carrega a identidade da sessão e a seleção de organização com a
+   * versão: sair de uma organização e voltar são seleções diferentes. Trocar de
+   * organização torna a leitura anterior inelegível na hora, e a resposta
+   * atrasada da organização de antes não tem onde ser aplicada.
+   */
+  const escopoDaLeitura = identidadeDaSessao === null
+    ? null
+    : `${identidadeDaSessao}|${selecaoDeOrganizacao ? `${selecaoDeOrganizacao.id}:${selecaoDeOrganizacao.versao}` : 'sem-organizacao'}`;
 
-  const [isLoading, setIsLoading] = useState(true);
+  const painel = useLeituraDoPainel(escopoDaLeitura);
+  const data = painel.dados;
+  const erroDaLeitura = painel.erro;
+  const isLoading = painel.carregando;
+  const loadDashboardData = painel.recarregar;
+
   const [isSyncing, setIsSyncing] = useState(false);
   const [nfeLoadingId, setNfeLoadingId] = useState<string | null>(null);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
@@ -719,20 +728,6 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [lastSyncDate]);
 
-  const loadDashboardData = useCallback(async () => {
-    try {
-      const response = await fetchWithAuth('/api/dashboard');
-      const result = await response.json();
-      if (result.success) {
-        setData(result.data);
-      }
-    } catch (error) {
-      console.error('Erro ao carregar dados do dashboard:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
   // Identidade estável, e não funções inline. O `StartupLoader` já não reinicia
   // por causa dos desfechos — ele os guarda numa referência —, mas passar função
   // nova a cada render o re-renderizaria à toa, e devolveria ao componente a
@@ -746,30 +741,6 @@ export default function Home() {
     encerrarStartup();
     setActiveTab('integrations');
   }, [encerrarStartup]);
-
-  useEffect(() => {
-    let isMounted = true;
-    void (async () => {
-      if (session) {
-        await loadDashboardData();
-      }
-    })();
-    const interval = setInterval(() => {
-      if (isMounted && session) {
-        void loadDashboardData();
-      }
-    }, 30000);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-    // A organização ativa entra como dependência desde o Ticket 01. A leitura é
-    // escopada por organização no servidor, mas a tela só relia a cada 30s ou
-    // na troca de sessão. Enquanto trocar de organização exigia entrar na aba
-    // Organização — onde não há dado operacional na tela — isso não aparecia.
-    // Com a troca disponível no topo, em qualquer aba, ficaria meio minuto
-    // exibindo os números de uma organização sob o nome de outra.
-  }, [session, activeOrganizacaoId, loadDashboardData]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -912,38 +883,6 @@ export default function Home() {
     }
   };
 
-  const [currentDateBaseline] = useState(() => Date.now());
-
-  const getFilteredAndSortedPedidos = () => {
-    if (!data?.pedidos) return [];
-
-    let filtered = [...data.pedidos];
-
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(p =>
-        p.numero.toLowerCase().includes(query) ||
-        (p.cliente?.nome && p.cliente.nome.toLowerCase().includes(query)) ||
-        (p.status && p.status.toLowerCase().includes(query))
-      );
-    }
-
-    if (filterDays !== 'all') {
-      const days = parseInt(filterDays, 10);
-      const limitTime = currentDateBaseline - days * 24 * 60 * 60 * 1000;
-      filtered = filtered.filter(p => new Date(p.data).getTime() >= limitTime);
-    }
-
-    if (sortBy === 'recent') {
-      filtered.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
-    } else if (sortBy === 'old') {
-      filtered.sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
-    } else if (sortBy === 'highest') {
-      filtered.sort((a, b) => Number(b.total) - Number(a.total));
-    }
-
-    return filtered;
-  };
 
   const getWeeklySalesData = () => {
     const daysMap: { [key: string]: number } = {
@@ -1021,7 +960,6 @@ export default function Home() {
   // entrava por não ter nota — e um pedido cancelado nunca vai receber NF-e.
   const pedidosNfePendente = pedidosComNfePendente(data?.pedidos ?? []);
   const novosPedidosFluxo = data?.pedidos?.filter(p => p.status === novosPedidosTab) || [];
-  const filteredPedidosList = getFilteredAndSortedPedidos();
 
   const handleOpenChatwootForPhone = (phone?: string) => {
     setActiveTab('sac');
@@ -1302,11 +1240,7 @@ export default function Home() {
 
         {/* TAB ORGANIZAÇÃO & MEMBROS (Ticket 24b) */}
         <div className={activeTab === 'organization' ? 'block' : 'hidden'}>
-          <OrganizationPanel
-            fetchWithAuth={fetchWithAuth}
-            lista={listaDeOrganizacoes}
-            onActiveOrgChange={setSelecaoDeOrganizacao}
-          />
+          <OrganizationPanel fetchWithAuth={fetchWithAuth} lista={listaDeOrganizacoes} />
         </div>
 
         {/* TAB INTEGRAÇÕES: Bling / Chatwoot (Ticket 24b) */}
@@ -1595,6 +1529,9 @@ export default function Home() {
                 </button>
               </div>
 
+              {/* O Dashboard continua na lista antiga de propósito: migrá-lo é
+                  o Ticket 03, e trazê-lo junto agora ampliaria esta fatia. A
+                  coexistência é a mesma que o Ticket 01 estabeleceu. */}
               <TransactionList
                 pedidos={data?.pedidos ? data.pedidos.slice(0, 5) : []}
                 onOpenChatwoot={handleOpenChatwootForPhone}
@@ -1608,81 +1545,21 @@ export default function Home() {
 
         {/* TAB 2: VENDAS & PEDIDOS */}
         {activeTab === 'sales' && (
-          <div className="space-y-6">
-
-            {/* Filter Controls Bar with GradientMenu */}
-            <div className="glass-panel p-4 rounded-3xl border border-white/10 flex flex-col lg:flex-row items-center justify-between gap-4 shadow-xl">
-
-              {/* Gradient Menu Filter for Period */}
-              <GradientMenu
-                activeId={filterDays}
-                onChange={(id) => setFilterDays(id)}
-                items={[
-                  { id: 'all', label: 'Todo o período' },
-                  { id: '7', label: 'Últimos 7 dias' },
-                  { id: '30', label: 'Últimos 30 dias' },
-                  { id: '90', label: 'Últimos 90 dias' },
-                ]}
-              />
-
-              <div className="flex items-center gap-3 w-full lg:w-auto justify-end">
-                {/* Sort By Dropdown */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" className="w-full lg:w-auto justify-between font-normal px-3 py-2 h-[36px] text-xs rounded-xl glass-input outline-none border-white/10 hover:bg-white/5 hover:text-white">
-                      {sortBy === 'recent' ? 'Mais recentes' : sortBy === 'old' ? 'Mais antigos' : 'Maior valor'}
-                      <ChevronRight className="h-4 w-4 opacity-50 rotate-90 flex-shrink-0 ml-2" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-48">
-                    <DropdownMenuRadioGroup value={sortBy} onValueChange={setSortBy}>
-                      <DropdownMenuRadioItem value="recent">Mais recentes</DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="old">Mais antigos</DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="highest">Maior valor</DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                {/* Search Box */}
-                <SearchQueryInput
-                  containerClassName="relative w-full sm:w-64"
-                  iconClassName="absolute left-3.5 top-2.5 h-4 w-4 text-slate-400"
-                  inputClassName="w-full pl-10 pr-4 py-2 rounded-xl glass-input text-xs outline-none"
-                  placeholder="Buscar pedido, cliente..."
-                  value={searchQuery}
-                  onChange={setSearchQuery}
-                />
-
-                {/* Botão Incluir Pedido Manual */}
-                <Button
-                  onClick={() => setIsManualOrderOpen(true)}
-                  className="bg-gradient-to-r from-[#FF9F0A] to-[#FF6B00] text-zinc-900 text-xs font-bold px-4 py-2 h-[36px] rounded-xl hover:opacity-90 transition-all flex items-center gap-1.5 shrink-0 shadow-lg cursor-pointer"
-                >
-                  <Plus className="h-4 w-4" />
-                  Incluir Pedido Manual
-                </Button>
-              </div>
-
-            </div>
-
-            {/* Transaction List Component */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between px-1">
-                <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                  Listagem de Pedidos Bling ({filteredPedidosList.length})
-                </h3>
-              </div>
-
-              <TransactionList
-                pedidos={filteredPedidosList}
-                onOpenChatwoot={handleOpenChatwootForPhone}
-                onEmitirNfe={(pedido) => handleEmitNfe(pedido.id || '', pedido.bling_id || '')}
-                loading={isLoading}
-              />
-            </div>
-
-          </div>
+          <VendasEPedidos
+            pedidos={data?.pedidos ?? null}
+            carregando={isLoading}
+            erroDeLeitura={erroDaLeitura}
+            onRecarregar={() => { void loadDashboardData(); }}
+            organizacaoId={organizacaoConfirmada}
+            ultimaSincronizacao={lastSyncDate}
+            busca={searchQuery}
+            onBuscaChange={setSearchQuery}
+            onConversarNoWhatsapp={(telefone) => handleOpenChatwootForPhone(telefone)}
+            onEmitirNfe={(pedido) => handleEmitNfe(pedido.id || '', pedido.bling_id || '')}
+            onAbrirVendaManual={() => setIsManualOrderOpen(true)}
+          />
         )}
+
 
         {/* TAB 3: ESTOQUE & PRODUTOS */}
         {activeTab === 'inventory' && (
@@ -2298,10 +2175,10 @@ export default function Home() {
           null
         }
         onSave={(updated) => {
-          if (data?.produtos) {
-            const newProdutos = data.produtos.map(p => (p.id === updated.id || p.bling_id === updated.bling_id) ? updated : p);
-            setData(prev => prev ? { ...prev, produtos: newProdutos } : null);
-          }
+          painel.atualizarDados((anterior) => ({
+            ...anterior,
+            produtos: anterior.produtos.map((p) => (p.id === updated.id || p.bling_id === updated.bling_id) ? updated : p),
+          }));
         }}
         onOpenChatwoot={handleOpenChatwootForPhone}
       />

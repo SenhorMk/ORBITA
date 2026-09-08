@@ -182,6 +182,16 @@ export interface Pedido {
   total: number;
   status: string;
   cliente_id: string; // UUID referente a 'clientes'
+  /**
+   * De onde o pedido entrou no Orbita: `'Bling'` ou `'Loja Física / Manual'`.
+   *
+   * A coluna existe desde o schema base e a leitura de pedidos é `select('*')`,
+   * então o campo já chegava — só não estava declarado. **Não é canal de
+   * venda**: não há marketplace aqui.
+   */
+  origem?: string;
+  /** Frete do pedido. Coluna do schema base, também já vinha no `select('*')`. */
+  frete?: number;
   created_at?: string;
   updated_at?: string;
 }

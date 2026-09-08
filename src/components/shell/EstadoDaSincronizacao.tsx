@@ -2,22 +2,7 @@
 
 import { useEffect, useState } from 'react';
 
-/**
- * Quanto tempo passou desde `momento`, em texto curto.
- *
- * Só descreve o que é conhecido. Nunca arredonda para um horário que não
- * aconteceu, e nunca inventa "agora" quando não há nada registrado.
- */
-export function descreverTempoDesde(momento: Date, agora: number = Date.now()): string {
-  const segundos = Math.max(0, Math.floor((agora - momento.getTime()) / 1000));
-  if (segundos < 60) return 'há instantes';
-  const minutos = Math.floor(segundos / 60);
-  if (minutos < 60) return `há ${minutos} min`;
-  const horas = Math.floor(minutos / 60);
-  if (horas < 24) return `há ${horas} h`;
-  const dias = Math.floor(horas / 24);
-  return dias === 1 ? 'há 1 dia' : `há ${dias} dias`;
-}
+import { descreverTempoDesde } from '@/lib/tempoRelativo';
 
 interface EstadoDaSincronizacaoProps {
   /**
