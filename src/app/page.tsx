@@ -4,7 +4,6 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Image from 'next/image';
 import {
   DollarSign,
-  TrendingUp,
   FileText,
   CheckCircle,
   AlertTriangle,
@@ -17,10 +16,8 @@ import {
   Mail,
   ChevronRight,
   Search,
-  Percent,
   RefreshCw,
   X,
-  Activity,
   Package,
   Image as ImageIcon,
   Plus,
@@ -40,9 +37,7 @@ import { AppWindow } from '@/components/shell/AppWindow';
 import { Rail } from '@/components/shell/Rail';
 import { OrganizacaoAtiva } from '@/components/shell/OrganizacaoAtiva';
 import { SeletorDeFundo, useFundo } from '@/components/shell/SeletorDeFundo';
-import { TransactionList } from '@/components/TransactionList';
 import { VendasEPedidos } from '@/components/vendas/VendasEPedidos';
-import { BudgetCard } from '@/components/ui/analytics-bento';
 import { List2 } from "@/components/ui/list-2";
 import TableWithDialog from "@/components/ui/table-with-dialog";
 import { ClienteDetailModal } from '@/components/ClienteDetailModal';
@@ -64,17 +59,6 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogDescription,
-} from '@/components/ui/dialog';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { format, subDays, isAfter, parseISO } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import {
   usePapelNaOrganizacaoAtiva,
@@ -83,8 +67,8 @@ import {
 import { useStartupPorOrganizacao } from '@/components/organizacao/useStartupPorOrganizacao';
 import { useOrganizationsList } from '@/components/organizacao/useOrganizationsList';
 import { useLeituraDoPainel } from '@/components/painel/useLeituraDoPainel';
+import { VisaoGeral } from '@/components/painel/VisaoGeral';
 import { descreverErro } from '@/lib/erroLegivel';
-import { apenasVendasAtivas, pedidosComNfePendente, variacaoPercentual } from '@/lib/metricas/vendasAtivas';
 
 /**
  * Identidade do usuário logado — **e nada além disso**.
@@ -306,8 +290,6 @@ export default function Home() {
   >('dashboard');
 
   // Estados dos Modais Interativos do Dashboard
-  const [faturamentoPeriod, setFaturamentoPeriod] = useState<'7' | '30' | '180' | '365' | 'all'>('30');
-  const [novosPedidosTab, setNovosPedidosTab] = useState<'Novo' | 'Aberto' | 'Em Processamento' | 'Despachado' | 'Enviado'>('Novo');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Estados do Dashboard
@@ -851,83 +833,6 @@ export default function Home() {
   };
 
 
-  const getWeeklySalesData = () => {
-    const daysMap: { [key: string]: number } = {
-      'Dom': 0, 'Seg': 0, 'Ter': 0, 'Qua': 0, 'Qui': 0, 'Sex': 0, 'Sáb': 0
-    };
-    const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
-
-    if (data?.pedidos) {
-      // A MESMA regra dos cards: cancelado é histórico, não receita.
-      apenasVendasAtivas(data.pedidos).forEach(p => {
-        const d = new Date(p.data);
-        const dayName = dayNames[d.getDay()];
-        if (dayName && daysMap[dayName] !== undefined) {
-          daysMap[dayName] += Number(p.total || 0);
-        }
-      });
-    }
-
-    return Object.keys(daysMap).map(day => ({
-      day,
-      value: daysMap[day]
-    }));
-  };
-
-  const totalVendidoMesAtual = data?.estatisticas.faturamento30Dias || 0;
-  // A janela anterior vem do servidor, calculada sobre os mesmos pedidos
-  // ativos. Antes era `12500` escrito aqui — um número inventado exibido ao
-  // lado de um número real, o que estraga a leitura dos dois.
-  const faturamentoMesAnterior = data?.estatisticas.faturamento30DiasAnterior || 0;
-  const variacaoFaturamento = variacaoPercentual(totalVendidoMesAtual, faturamentoMesAnterior);
-  const lucroEstimado = totalVendidoMesAtual * 0.42;
-
-  const getFaturamentoChartData = () => {
-    if (!data?.pedidos) return [];
-    // Cancelado fora daqui também: o gráfico de receita e o card de
-    // faturamento precisam contar a mesma coisa.
-    let filtered = apenasVendasAtivas(data.pedidos);
-    const now = new Date();
-
-    if (faturamentoPeriod !== 'all') {
-      const days = parseInt(faturamentoPeriod);
-      const cutoff = subDays(now, days);
-      filtered = filtered.filter(p => isAfter(parseISO(p.data), cutoff));
-    }
-
-    const grouped = filtered.reduce((acc, pedido) => {
-      const dateKey = format(parseISO(pedido.data), 'yyyy-MM-dd');
-      if (!acc[dateKey]) acc[dateKey] = 0;
-      acc[dateKey] += Number(pedido.total || 0);
-      return acc;
-    }, {} as Record<string, number>);
-
-    return Object.entries(grouped)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, total]) => ({
-        date: format(parseISO(date), 'dd MMM', { locale: ptBR }),
-        faturamento: total
-      }));
-  };
-
-  const lucroDetalhes = () => {
-    const revenue = totalVendidoMesAtual;
-    const cost = revenue * 0.58;
-    const profit = revenue * 0.42;
-    const now = new Date();
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const currentDay = now.getDate();
-    const dailyAverage = currentDay > 0 ? profit / currentDay : 0;
-    const projectedProfit = dailyAverage * daysInMonth;
-
-    return { revenue, cost, profit, projectedProfit };
-  };
-
-  // O critério de emissão continua o mesmo; o que saiu foi o cancelado, que
-  // entrava por não ter nota — e um pedido cancelado nunca vai receber NF-e.
-  const pedidosNfePendente = pedidosComNfePendente(data?.pedidos ?? []);
-  const novosPedidosFluxo = data?.pedidos?.filter(p => p.status === novosPedidosTab) || [];
-
   const handleOpenChatwootForPhone = (phone?: string) => {
     setActiveTab('sac');
     if (!phone) return;
@@ -1171,7 +1076,7 @@ export default function Home() {
         A área de conteúdo. Vendas compõe a própria tela e ocupa a altura toda;
         as telas ainda não migradas continuam empilhando e rolando aqui dentro.
       */}
-      <main className={activeTab === 'sales'
+      <main className={activeTab === 'sales' || activeTab === 'dashboard'
         ? 'flex-1 min-h-0 flex flex-col'
         : 'flex-1 min-h-0 overflow-y-auto space-y-6 pr-1'}>
 
@@ -1203,287 +1108,14 @@ export default function Home() {
 
         {/* TAB 1: DASHBOARD */}
         {activeTab === 'dashboard' && (
-          <div className="space-y-6">
-
-            {/* SPATIAL METRIC CARDS 3D GRID */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-
-              {/* Card 1: Faturamento Mês Atual */}
-              <Dialog>
-                <DialogTrigger asChild>
-                  <button aria-label="Ver detalhes de Faturamento dos últimos 30 dias" className="text-left w-full glass-card glass-card-hover p-5 rounded-3xl border border-white/10 relative overflow-hidden group">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Faturamento (30d)</span>
-                      <div className="h-10 w-10 rounded-2xl glass-panel flex items-center justify-center text-[#F0E675] border border-[#692A6F]/40 glow-eminence">
-                        <DollarSign className="h-5 w-5" />
-                      </div>
-                    </div>
-                    <div className="mt-4">
-                      <h3 className="text-2xl font-black text-white tracking-tight">
-                        R$ {totalVendidoMesAtual.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </h3>
-                      {/* Sem janela anterior não há comparação a fazer, e
-                          inventar uma é o que este card fazia. */}
-                      {variacaoFaturamento !== null && (
-                        <div className="mt-2 flex items-center gap-1.5 text-xs font-bold text-[#F0E675]">
-                          <TrendingUp className="h-3.5 w-3.5" />
-                          <span>
-                            {variacaoFaturamento >= 0 ? '+' : ''}
-                            {variacaoFaturamento.toFixed(1)}% vs 30 dias anteriores
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-[700px]">
-                  <DialogHeader>
-                    <DialogTitle>Evolução de Faturamento</DialogTitle>
-                    <DialogDescription>
-                      Histórico detalhado do faturamento filtrado por período.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="flex gap-2 my-2 overflow-x-auto pb-2">
-                    {['7', '30', '180', '365', 'all'].map(period => (
-                      <Button
-                        key={period}
-                        variant={faturamentoPeriod === period ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => setFaturamentoPeriod(period as '7' | '30' | '180' | '365' | 'all')}
-                        className="text-xs rounded-xl"
-                      >
-                        {period === 'all' ? 'Total' : `${period} Dias`}
-                      </Button>
-                    ))}
-                  </div>
-                  <div className="h-[300px] w-full mt-4">
-                    <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 600, height: 300 }}>
-
-                      <AreaChart data={getFaturamentoChartData()}>
-                        <defs>
-                          <linearGradient id="colorFaturamento" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#F0E675" stopOpacity={0.3} />
-                            <stop offset="95%" stopColor="#F0E675" stopOpacity={0} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
-                        <XAxis dataKey="date" stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
-                        <YAxis stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} tickFormatter={value => `R$${(value as number).toLocaleString('pt-BR')}`} />
-                        <Tooltip
-                          contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' }}
-                          itemStyle={{ color: '#F0E675', fontWeight: 'bold' }}
-                          formatter={(val: unknown) => [`R$ ${Number(val).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Faturamento']}
-                        />
-                        <Area type="monotone" dataKey="faturamento" stroke="#F0E675" strokeWidth={3} fillOpacity={1} fill="url(#colorFaturamento)" />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </DialogContent>
-              </Dialog>
-
-              {/* Card 2: Lucro Estimado */}
-              <Dialog>
-                <DialogTrigger asChild>
-                  <button aria-label="Ver detalhes de Lucro Estimado" className="text-left w-full glass-card glass-card-hover p-5 rounded-3xl border border-white/10 relative overflow-hidden group">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Lucro Estimado</span>
-                      <div className="h-10 w-10 rounded-2xl glass-panel flex items-center justify-center text-[#ED8F60] border border-[#ED8F60]/40 glow-apricot">
-                        <Percent className="h-5 w-5" />
-                      </div>
-                    </div>
-                    <div className="mt-4">
-                      <h3 className="text-2xl font-black text-white tracking-tight">
-                        R$ {lucroEstimado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </h3>
-                      <p className="mt-2 text-xs text-slate-400">Margem estimada de 42% sobre faturamento</p>
-                    </div>
-                  </button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-[425px]">
-                  <DialogHeader>
-                    <DialogTitle>Detalhamento de Lucro</DialogTitle>
-                    <DialogDescription>
-                      Cálculo de projeção matemática para o fim do mês baseada na margem padrão de 42%.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="grid gap-4 py-4">
-                    <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                      <span className="text-sm text-slate-400">Faturamento 30d</span>
-                      <span className="font-medium text-white">R$ {lucroDetalhes().revenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                    </div>
-                    <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                      <span className="text-sm text-slate-400">Custos & Impostos Estimados (58%)</span>
-                      <span className="font-medium text-red-400">- R$ {lucroDetalhes().cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                    </div>
-                    <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                      <span className="text-sm text-slate-400">Lucro Líquido Atual (42%)</span>
-                      <span className="font-medium text-green-400">R$ {lucroDetalhes().profit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                    </div>
-                    <div className="flex justify-between items-center bg-[#ED8F60]/10 p-3 rounded-xl mt-2 border border-[#ED8F60]/20">
-                      <span className="text-sm text-[#ED8F60] font-bold">Projeção Mês Atual</span>
-                      <span className="font-black text-[#ED8F60]">R$ {lucroDetalhes().projectedProfit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                    </div>
-                  </div>
-                </DialogContent>
-              </Dialog>
-
-              {/* Card 3: Pedidos A Emitir NF-e */}
-              <Dialog>
-                <DialogTrigger asChild>
-                  <button aria-label="Ver detalhes de Pedidos A Emitir NF-e" className="text-left w-full glass-card glass-card-hover p-5 rounded-3xl border border-white/10 relative overflow-hidden group">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">A Emitir NF-e</span>
-                      <div className="h-10 w-10 rounded-2xl glass-panel flex items-center justify-center text-[#BF406A] border border-[#BF406A]/40 glow-blush">
-                        <FileText className="h-5 w-5" />
-                      </div>
-                    </div>
-                    <div className="mt-4">
-                      <h3 className="text-2xl font-black text-[#BF406A] tracking-tight">
-                        {pedidosNfePendente.length} pedidos
-                      </h3>
-                      <p className="mt-2 text-xs text-slate-400">Aguardando geração de nota fiscal</p>
-                    </div>
-                  </button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle>Pedidos aguardando NF-e</DialogTitle>
-                    <DialogDescription>
-                      Pedidos pagos prontos para emissão de nota fiscal.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="mt-4">
-                    <div className="flex flex-col gap-2">
-                      {pedidosNfePendente.slice(0, 15).map(pedido => (
-                        <div key={pedido.id} className="flex items-center justify-between p-3 rounded-xl border border-white/10 hover:bg-white/5 transition-colors">
-                          <div className="flex flex-col">
-                            <span className="text-sm font-medium text-white">{pedido.cliente?.nome || 'Cliente não identificado'}</span>
-                            <span className="text-xs text-slate-400">Pedido #{pedido.numero} • R$ {Number(pedido.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="ml-auto text-[#BF406A] border-[#BF406A]/30 hover:bg-[#BF406A]/10"
-                            onClick={() => handleEmitNfe(pedido.id || '', pedido.bling_id || '')}
-                          >
-                            Emitir NF-e
-                          </Button>
-                        </div>
-                      ))}
-                      {pedidosNfePendente.length === 0 && (
-                        <div className="py-8 text-center text-slate-400 text-sm">
-                          Nenhum pedido aguardando NF-e.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </DialogContent>
-              </Dialog>
-
-              {/* Card 4: Novos Pedidos */}
-              <Dialog>
-                <DialogTrigger asChild>
-                  <button aria-label="Ver detalhes de Novos Pedidos" className="text-left w-full glass-card glass-card-hover p-5 rounded-3xl border border-white/10 relative overflow-hidden group">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Novos Pedidos</span>
-                      <div className="h-10 w-10 rounded-2xl glass-panel flex items-center justify-center text-[#0A84FF] border border-[#0A84FF]/40 glow-blue">
-                        <Package className="h-5 w-5" />
-                      </div>
-                    </div>
-                    <div className="mt-4">
-                      <h3 className="text-2xl font-black text-[#0A84FF] tracking-tight">
-                        {data?.pedidos?.filter(p => p.status === 'Novo').length || 0} pedidos
-                      </h3>
-                      <p className="mt-2 text-xs text-slate-400">Na esteira inicial de preparação</p>
-                    </div>
-                  </button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle>Acompanhamento de Pedidos</DialogTitle>
-                    <DialogDescription>
-                      Selecione o status na esteira para ver os pedidos correspondentes.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="flex flex-wrap gap-2 my-4 border-b border-white/10 pb-4">
-                    {['Novo', 'Aberto', 'Em Processamento', 'Despachado', 'Enviado'].map(status => (
-                      <Button
-                        key={status}
-                        variant={novosPedidosTab === status ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => setNovosPedidosTab(status as "Novo" | "Aberto" | "Em Processamento" | "Despachado" | "Enviado")}
-                        className="text-xs rounded-xl"
-                      >
-                        {status}
-                      </Button>
-                    ))}
-                  </div>
-                  <div className="mt-2">
-                    <div className="flex flex-col gap-2">
-                      {novosPedidosFluxo.slice(0, 15).map(pedido => (
-                        <div key={pedido.id} className="flex items-center justify-between p-3 rounded-xl border border-white/10 hover:bg-white/5 transition-colors">
-                          <div className="flex flex-col">
-                            <span className="text-sm font-medium text-white">{pedido.cliente?.nome || 'Cliente não identificado'}</span>
-                            <span className="text-xs text-slate-400">
-                              Pedido #{pedido.numero} • {format(parseISO(pedido.data), "dd/MM/yyyy")}
-                            </span>
-                          </div>
-                          <span className="text-sm font-bold text-slate-200 ml-auto">
-                            R$ {Number(pedido.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                          </span>
-                        </div>
-                      ))}
-                      {novosPedidosFluxo.length === 0 && (
-                        <div className="py-8 text-center text-slate-400 text-sm">
-                          Nenhum pedido com status &quot;{novosPedidosTab}&quot;.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </DialogContent>
-              </Dialog>
-
-            </div>
-
-            {/* CHARTS SECTION (FULL WIDTH) */}
-            <div className="w-full">
-              <BudgetCard
-                title="Valor total de pedidos por dia"
-                totalAmount={totalVendidoMesAtual}
-                costAmount={totalVendidoMesAtual * 0.58}
-                data={getWeeklySalesData()}
-              />
-            </div>
-
-            {/* RECENT ORDERS OVERVIEW */}
-            <div className="glass-panel p-6 rounded-3xl border border-white/10 space-y-4 shadow-xl">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-slate-200">
-                  <Activity className="h-5 w-5 text-[#0A84FF]" />
-                  <h3 className="text-sm font-bold uppercase tracking-wider">Últimos Pedidos Recebidos</h3>
-                </div>
-                <button
-                  onClick={() => setActiveTab('sales')}
-                  className="text-xs text-[#0A84FF] hover:text-blue-300 font-semibold flex items-center gap-1 cursor-pointer"
-                >
-                  <span>Ver todos</span>
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
-
-              {/* O Dashboard continua na lista antiga de propósito: migrá-lo é
-                  o Ticket 03, e trazê-lo junto agora ampliaria esta fatia. A
-                  coexistência é a mesma que o Ticket 01 estabeleceu. */}
-              <TransactionList
-                pedidos={data?.pedidos ? data.pedidos.slice(0, 5) : []}
-                onOpenChatwoot={handleOpenChatwootForPhone}
-                onEmitirNfe={(pedido) => handleEmitNfe(pedido.id || '', pedido.bling_id || '')}
-                loading={isLoading}
-              />
-            </div>
-
-          </div>
+          <VisaoGeral
+            dados={data}
+            erroDeLeitura={erroDaLeitura}
+            onRecarregar={() => { void loadDashboardData(); }}
+            ultimaSincronizacao={lastSyncDate}
+          />
         )}
+
 
         {/* TAB 2: VENDAS & PEDIDOS */}
         {activeTab === 'sales' && (
