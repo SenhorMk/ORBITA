@@ -174,36 +174,55 @@ export function somarPedidos(pedidos: readonly PedidoEnriquecido[]): number {
  * O faturamento de cada um dos últimos 30 dias.
  *
  * Cada ponto é a soma dos pedidos **ativos** daquele dia — não é um agregado
- * repartido, é a leitura de cada pedido na data dele. Por isso a soma dos
- * pontos é exatamente o faturamento da janela.
+ * repartido, é a leitura de cada pedido na data dele.
+ *
+ * ## A janela é a mesma de `faturamentoNaJanela`, ao segundo
+ *
+ * Os baldes são dias civis, porque é assim que a série fica legível. A
+ * **elegibilidade**, porém, não pode ser por dia civil: o primeiro dia da
+ * janela começa às 00:00, e a janela real começa no horário exato de 30 dias
+ * atrás. Um pedido daquela madrugada cairia no gráfico sem entrar no
+ * faturamento anunciado logo acima dele — dois números discordando na mesma
+ * tela, que é o defeito que este módulo inteiro existe para não ter.
+ *
+ * Por isso o teste de entrada é `[agora - 30d, agora)`, meia-aberto, idêntico
+ * ao de `faturamentoNaJanela`. A soma dos pontos é exatamente o faturamento da
+ * janela, e há teste para isso.
  */
 export function serieDiariaDeFaturamento(
   pedidos: readonly PedidoEnriquecido[],
   agora: number,
 ): Array<{ rotulo: string; valor: number }> {
-  const inicio = new Date(agora - JANELA_DIAS * DIA_MS);
-  inicio.setHours(0, 0, 0, 0);
+  const inicioDaJanela = agora - JANELA_DIAS * DIA_MS;
 
+  // Um balde por dia civil, do dia em que a janela começa até hoje. O passo é
+  // por data, e não por 24h fixas, para um eventual horário de verão não pular
+  // nem duplicar um dia.
   const porDia = new Map<string, number>();
-  for (let i = 0; i <= JANELA_DIAS; i += 1) {
-    const dia = new Date(inicio.getTime() + i * DIA_MS);
+  const dia = new Date(inicioDaJanela);
+  dia.setHours(0, 0, 0, 0);
+  while (dia.getTime() <= agora) {
     porDia.set(dia.toDateString(), 0);
+    dia.setDate(dia.getDate() + 1);
   }
 
   for (const pedido of pedidos) {
     if (!pedidoContaComoVendaAtiva(pedido)) continue;
-    const quando = new Date(pedido.data ?? '');
-    if (!Number.isFinite(quando.getTime())) continue;
-    const chave = quando.toDateString();
-    if (!porDia.has(chave)) continue;
+    const quando = new Date(pedido.data ?? '').getTime();
+    if (!Number.isFinite(quando)) continue;
+    // A janela exata, meia-aberta — a mesma de `faturamentoNaJanela`.
+    if (quando < inicioDaJanela || quando >= agora) continue;
+    const chave = new Date(quando).toDateString();
     const valor = Number(pedido.total ?? 0);
     porDia.set(chave, (porDia.get(chave) ?? 0) + (Number.isFinite(valor) ? valor : 0));
   }
 
-  return [...porDia.entries()].map(([chave, valor]) => ({
-    rotulo: new Date(chave).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
-    valor,
-  }));
+  return [...porDia.entries()]
+    .sort(([a], [b]) => new Date(a).getTime() - new Date(b).getTime())
+    .map(([chave, valor]) => ({
+      rotulo: new Date(chave).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+      valor,
+    }));
 }
 
 /** A distribuição por status real. Fecha com o total: nenhum pedido fica de fora. */

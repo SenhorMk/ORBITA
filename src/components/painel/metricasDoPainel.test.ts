@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import type { DadosDoPainel } from './useLeituraDoPainel';
+import { faturamentoNaJanela } from '@/lib/metricas/vendasAtivas';
 import { analiseDaMetrica } from './analisesDoPainel';
 import {
   anelDePedidos,
@@ -122,6 +123,43 @@ describe('a série de faturamento é medida, não repartida', () => {
     const soma = serieDiariaDeFaturamento(pedidos, AGORA).reduce((t, p) => t + p.valor, 0);
 
     expect(soma).toBe(40);
+  });
+
+  it('a borda da janela é a mesma do faturamento: [agora - 30d, agora)', () => {
+    // `AGORA` são 08/09 12:00; o início da janela, 09/08 12:00.
+    const INICIO = AGORA - 30 * DIA;
+    const pedidos = [
+      // 09/08 11:59:59 — um segundo antes do início: FORA.
+      pedido({ numero: 'antes', total: 7, status: 'Entregue', data: new Date(INICIO - 1000).toISOString() }),
+      // 09/08 12:00:00 — o instante do início: DENTRO.
+      pedido({ numero: 'inicio', total: 11, status: 'Entregue', data: new Date(INICIO).toISOString() }),
+      // 08/09 11:59:59 — um segundo antes de agora: DENTRO.
+      pedido({ numero: 'quase', total: 13, status: 'Entregue', data: new Date(AGORA - 1000).toISOString() }),
+      // 08/09 12:00:00 — o próprio agora: FORA, porque a janela é meia-aberta.
+      pedido({ numero: 'agora', total: 17, status: 'Entregue', data: new Date(AGORA).toISOString() }),
+    ];
+
+    const soma = serieDiariaDeFaturamento(pedidos, AGORA).reduce((total, ponto) => total + ponto.valor, 0);
+
+    expect(soma).toBe(11 + 13);
+  });
+
+  it('com os quatro casos de borda misturados, a série soma o mesmo que a janela', () => {
+    const INICIO = AGORA - 30 * DIA;
+    const pedidos = [
+      pedido({ numero: 'antes', total: 7, status: 'Entregue', data: new Date(INICIO - 1000).toISOString() }),
+      pedido({ numero: 'inicio', total: 11, status: 'Entregue', data: new Date(INICIO).toISOString() }),
+      pedido({ numero: 'meio', total: 40, status: 'Entregue', data: new Date(AGORA - 5 * DIA).toISOString() }),
+      pedido({ numero: 'quase', total: 13, status: 'Entregue', data: new Date(AGORA - 1000).toISOString() }),
+      pedido({ numero: 'agora', total: 17, status: 'Entregue', data: new Date(AGORA).toISOString() }),
+      pedido({ numero: 'cancelado', total: 999, status: 'Cancelado', data: new Date(AGORA - DIA).toISOString() }),
+    ];
+
+    const soma = serieDiariaDeFaturamento(pedidos, AGORA).reduce((total, ponto) => total + ponto.valor, 0);
+
+    // A prova que importa: o gráfico e o número grande em cima dele contam
+    // exatamente a mesma coisa.
+    expect(soma).toBe(faturamentoNaJanela(pedidos, new Date(INICIO), new Date(AGORA)));
   });
 
   it('a soma da série bate com o faturamento que a análise anuncia', () => {
