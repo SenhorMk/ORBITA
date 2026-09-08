@@ -29,6 +29,10 @@ interface OrganizacaoAtivaProps {
  *
  * Com uma única organização não há seletor: mostrar um menu de um item só é
  * ruído. O seletor aparece quando existe de fato para onde trocar.
+ *
+ * Ela é um controle de 38px na barra de ações, e não um card numa faixa
+ * horizontal. A faixa mudava a geometria da tela inteira; o tenant precisa
+ * estar visível, não ocupar uma linha inteira para isso.
  */
 export function OrganizacaoAtiva({
   organizacoes,
@@ -41,29 +45,26 @@ export function OrganizacaoAtiva({
 
   if (carregando && ativa === null) {
     return (
-      <div className="flex items-center gap-2.5 rounded-xl px-3 py-1.5" style={{ background: 'var(--chip)', border: '1px solid var(--line)' }}>
-        <Building2 className="w-3.5 h-3.5" style={{ color: 'var(--txt3)' }} aria-hidden />
-        <span className="text-xs font-semibold" style={{ color: 'var(--txt3)' }}>Carregando organização…</span>
-      </div>
+      <span className="orbita-acao" style={{ color: 'var(--txt3)', cursor: 'default' }}>
+        <Building2 className="w-4 h-4" aria-hidden />
+        Carregando organização…
+      </span>
     );
   }
 
   if (ativa === null) {
     return (
-      <div className="flex items-center gap-2.5 rounded-xl px-3 py-1.5" style={{ background: 'var(--chip)', border: '1px solid var(--line)' }}>
-        <Building2 className="w-3.5 h-3.5" style={{ color: 'var(--txt3)' }} aria-hidden />
-        <span className="text-xs font-semibold" style={{ color: 'var(--txt3)' }}>Sem organização ativa</span>
-      </div>
+      <span className="orbita-acao" style={{ color: 'var(--txt3)', cursor: 'default' }}>
+        <Building2 className="w-4 h-4" aria-hidden />
+        Sem organização ativa
+      </span>
     );
   }
 
   const conteudo = (
     <>
-      <Building2 className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--txt3)' }} aria-hidden />
-      <span className="flex flex-col items-start leading-tight">
-        <span className="orbita-eyebrow">Organização</span>
-        <span className="text-xs font-bold" style={{ color: 'var(--txt)' }}>{ativa.organizacao.nome}</span>
-      </span>
+      <Building2 className="w-4 h-4 shrink-0" style={{ color: 'var(--txt3)' }} aria-hidden />
+      <span className="truncate" style={{ maxWidth: 160 }}>{ativa.organizacao.nome}</span>
     </>
   );
 
@@ -71,9 +72,9 @@ export function OrganizacaoAtiva({
 
   if (!podeTrocar) {
     return (
-      <div className="flex items-center gap-2.5 rounded-xl px-3 py-1.5" style={{ background: 'var(--chip)', border: '1px solid var(--line)' }}>
+      <span className="orbita-acao" style={{ cursor: 'default' }} title={`Organização ativa: ${ativa.organizacao.nome}`}>
         {conteudo}
-      </div>
+      </span>
     );
   }
 
@@ -84,8 +85,7 @@ export function OrganizacaoAtiva({
         onClick={() => setAberto((estava) => !estava)}
         aria-expanded={aberto}
         aria-label={`Organização ativa: ${ativa.organizacao.nome}. Trocar de organização`}
-        className="flex items-center gap-2.5 rounded-xl px-3 py-1.5 cursor-pointer"
-        style={{ background: 'var(--chip)', border: '1px solid var(--line)' }}
+        className="orbita-acao"
       >
         {conteudo}
         <ChevronDown className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--txt3)' }} aria-hidden />

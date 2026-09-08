@@ -59,7 +59,6 @@ function montar(props: Partial<Parameters<typeof VendasEPedidos>[0]> = {}) {
       ultimaSincronizacao={null}
       busca=""
       onBuscaChange={onBuscaChange}
-      onAbrirVendaManual={vi.fn()}
       {...props}
     />,
   );
@@ -110,7 +109,6 @@ describe('chips de resumo na tela', () => {
         ultimaSincronizacao={null}
         busca="Marina"
         onBuscaChange={vi.fn()}
-        onAbrirVendaManual={vi.fn()}
       />,
     );
 

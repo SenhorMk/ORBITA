@@ -48,19 +48,6 @@ const DESTINOS: ReadonlyArray<{ id: TabType; label: string; Icone: typeof Layout
   { id: 'billing', label: 'Plano & Faturamento', Icone: CreditCard },
 ];
 
-function OrbitaLogoIcon({ className = 'h-7 w-7' }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 110.88 117.1" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-      <polygon fill="#0A84FF" points="42.72 22.97 51.52 3.89 58.66 3.96 68.16 23.01 67.59 71.89 65.58 87.31 45.1 86.91 43.34 71.93 42.72 22.97"/>
-      <path fill="#5E5CE6" d="M43.94,29.68c-1.53,1.37-2.38,3.99-2.56,6.12-16.87,2.74-29.08,14.06-41.38,28.71C4.08,44.03,22.32,28.02,42.72,22.97c2.1,1.36,1.18,5.16,1.22,6.71Z"/>
-      <path fill="#30D158" d="M91.36,79.64c.5,9.17,4.32,17.39-5.85,23.99-4.76-3.4-7.18-8.74-6.35-14.49l1.4-9.59c3.48.3,7.29-.45,10.8.08Z"/>
-      <path fill="#30D158" d="M30.35,79.59c.25,9.54,4.92,16.53-5.91,24.22-9.3-8.77-6.34-13.94-4.85-24.25,3.47-.28,7.34.05,10.76.04Z"/>
-      <path fill="#FF9F0A" d="M30.35,79.59c-3.42.01-7.29-.31-10.76-.04-2.25-.75-3.44-3.12-2.83-6.06,1.05-5.06,5.57-8.87,10.6-10.32,13.17-3.79,13.05-15.72,14.02-27.39-.18-2.12,1.03-4.75,2.56-6.12.24,9.02.73,26.93,0,37.53-.21,2.99-1.5,5.43.82,8.44-5.07,2.62-11.51-1.76-14.4,3.95Z"/>
-      <path fill="#64D2FF" d="M61.34,18.44c-4.65.58-8.36.45-12.43.03-.27-5.3,3.09-8.84,6.26-12.26,3.65,4.04,6.53,7.2,6.17,12.22Z"/>
-    </svg>
-  );
-}
-
 /**
  * A navegação do Orbita — e a **única** que existe.
  *
@@ -70,6 +57,11 @@ function OrbitaLogoIcon({ className = 'h-7 w-7' }: { className?: string }) {
  * onde a pessoa está.
  *
  * O item ativo é a única cápsula lime da tela. Ênfase só existe se for escassa.
+ *
+ * A composição é a de `Orbita Vendas.dc.html`: logo, o grupo de destinos dentro
+ * de uma superfície própria, o espaço flexível, e o usuário no rodapé. O
+ * contêiner em volta do grupo não é enfeite — é ele que faz os nove ícones
+ * lerem como uma navegação, e não como nove coisas soltas na borda.
  */
 export function Rail({ activeTab, setActiveTab, session, onLogout }: RailProps) {
   const iniciais = session?.name ? session.name.substring(0, 2).toUpperCase() : 'US';
@@ -77,18 +69,28 @@ export function Rail({ activeTab, setActiveTab, session, onLogout }: RailProps) 
   return (
     <nav
       aria-label="Navegação principal"
-      className="flex flex-col items-center justify-between shrink-0 py-5"
-      style={{ width: 'var(--rail-width)', borderRight: '1px solid var(--line)' }}
+      className="flex flex-col items-center shrink-0"
+      style={{ width: 'var(--rail-width)', padding: 'var(--rail-pad-y) 0', gap: 'var(--rail-pad-y)' }}
     >
-      <div className="relative" title="Órbita">
-        <OrbitaLogoIcon className="h-9 w-9" />
-        <span
-          className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full"
-          style={{ background: 'var(--accent)' }}
-        />
-      </div>
+      {/* O mesmo asset que o protótipo usa. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/icon.svg"
+        alt="Órbita"
+        className="block shrink-0"
+        style={{ width: 'var(--rail-logo)', height: 'var(--rail-logo)' }}
+      />
 
-      <ul className="flex flex-col items-center gap-2 my-auto list-none p-0">
+      <ul
+        className="flex flex-col list-none m-0"
+        style={{
+          gap: 6,
+          padding: '8px 7px',
+          borderRadius: 26,
+          background: 'var(--chip)',
+          border: '1px solid var(--line)',
+        }}
+      >
         {DESTINOS.map(({ id, label, Icone }) => (
           <li key={id} className="group relative flex items-center">
             <button
@@ -98,7 +100,7 @@ export function Rail({ activeTab, setActiveTab, session, onLogout }: RailProps) 
               aria-label={label}
               className="orbita-rail-item"
             >
-              <Icone className="w-5 h-5" strokeWidth={1.75} />
+              <Icone className="w-[21px] h-[21px]" strokeWidth={1.75} />
             </button>
             <span
               role="tooltip"
@@ -111,14 +113,21 @@ export function Rail({ activeTab, setActiveTab, session, onLogout }: RailProps) 
         ))}
       </ul>
 
+      <div className="flex-1" />
+
       {session && (
         <div className="group relative flex items-center">
           <button
             type="button"
             onClick={onLogout}
             aria-label="Sair da conta"
-            className="w-9 h-9 rounded-2xl flex items-center justify-center text-[11px] font-bold cursor-pointer transition-colors"
-            style={{ background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--txt)' }}
+            className="w-10 h-10 rounded-full flex items-center justify-center cursor-pointer"
+            style={{
+              background: 'var(--chip)',
+              border: '1px solid var(--line)',
+              color: 'var(--txt)',
+              font: '600 13px/1 var(--font-jetbrains-mono), monospace',
+            }}
           >
             {iniciais}
           </button>

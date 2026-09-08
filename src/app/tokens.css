@@ -32,10 +32,11 @@
   --invTxt: #0b0b0c;
   --lav: #bca9ff;
 
-  /* O fundo sobre o qual a janela flutua. É a única superfície do produto que
-     pode ter degradê — ver a lista NUNCA da seção 06 do Design System. */
-  --canvas: radial-gradient(70% 60% at 20% 10%, #3a3a41 0%, transparent 60%),
-    linear-gradient(170deg, #222226 0%, #111114 100%);
+  /* A superfície do cabeçalho fixo da tabela. */
+  --head: rgba(30, 30, 34, 0.96);
+
+  /* O véu que o protótipo põe entre o fundo e a janela, para o vidro ler. */
+  --veu: radial-gradient(120% 90% at 50% 0%, transparent 40%, rgba(0, 0, 0, 0.35) 100%);
 
   /* ---- Acentos e semânticos: fixos nos dois temas ---- */
   --accent: #c8f441;
@@ -74,13 +75,42 @@
   --shadow-window: 0 40px 120px rgba(0, 0, 0, 0.45);
   --shadow-modal: 0 40px 100px rgba(0, 0, 0, 0.55);
 
-  /* A janela tem inset assimétrico: o fundo precisa aparecer nos quatro lados
-     para o vidro ler como vidro (Design System, seção 05). */
+  /* ---- Geometria: 1600 × 1000, a janela padrão do protótipo ----------
+     As três geometrias de `Orbita Vendas.dc.html` (1920, 1600, 1366) não são a
+     mesma tela reduzida: inset, raio, rail, tipografia, alturas de linha e as
+     colunas da tabela mudam de valor em cada uma. Por isso elas vivem aqui, em
+     tokens, e não num `transform: scale` — escalar deixaria a densidade errada
+     e a tabela com menos linhas úteis do que o protótipo mostra.
+
+     Esta é a faixa do meio; as outras duas estão nas media queries do fim do
+     arquivo. */
   --window-inset-top: 44px;
   --window-inset-right: 56px;
   --window-inset-bottom: 56px;
   --window-inset-left: 40px;
+  --r-window: 34px;
+
   --rail-width: 96px;
+  --rail-logo: 36px;
+  --rail-pad-y: 26px;
+
+  --conteudo-pad: 26px 34px 30px 8px;
+  --conteudo-gap: 18px;
+
+  --titulo-col: 300px;
+  --titulo-fs: 44px;
+
+  --resumo-gap: 9px;
+  --resumo-min: 78px;
+  --resumo-fs: 22px;
+
+  --linha-h: 58px;
+  --cabecalho-h: 40px;
+  --drawer-w: 560px;
+
+  --tabela-cols: 62px minmax(190px, 1.3fr) 116px 108px 152px 104px 72px;
+  --tabela-gap: 12px;
+  --tabela-pad: 18px;
 }
 
 :root[data-theme='light'] {
@@ -98,23 +128,134 @@
   --inv: #14141a;
   --invTxt: #f2f1ec;
   --lav: #cfc2ff;
-
-  --canvas: radial-gradient(70% 60% at 20% 10%, #f4f2ea 0%, transparent 60%),
-    linear-gradient(170deg, #e9e7e0 0%, #cfccc4 100%);
+  --head: rgba(250, 250, 247, 0.96);
+  --veu: radial-gradient(120% 90% at 50% 0%, transparent 40%, rgba(0, 0, 0, 0.18) 100%);
 
   --shadow-window: 0 40px 120px rgba(20, 20, 26, 0.18);
   --shadow-modal: 0 40px 100px rgba(20, 20, 26, 0.22);
 }
 
-/* Em telas estreitas a janela quase encosta na borda. Não é responsividade —
-   é só não entregar um layout impossível fora do desktop; a fatia de mobile é
-   outro ticket. */
-@media (max-width: 900px) {
+/*
+ * ===================================================================
+ * FUNDOS
+ * ===================================================================
+ *
+ * O protótipo abre com `theme = dark` e `background = armazem`. Não são a mesma
+ * escolha, e tratá-las como uma só foi o que deixou a tela preta: dark diz como
+ * a janela e o texto se comportam; o fundo é o que aparece **atrás** dela, e é
+ * ele que faz o vidro ler como vidro.
+ *
+ * Os cinco presets são os de `Orbita Vendas.dc.html`, com os mesmos degradês. O
+ * fundo é a única superfície do produto onde degradê é permitido.
+ *
+ * `foto` fica transparente de propósito: no protótipo é onde entra a imagem do
+ * armazém. Aqui, sem imagem carregada, ele revela o preto do documento — é a
+ * escolha "sua foto" sem a foto, e não um preset quebrado.
+ */
+:root,
+:root[data-fundo='armazem'] {
+  --canvas: radial-gradient(70% 90% at 12% 30%, #c9d2cf 0%, transparent 60%),
+    radial-gradient(60% 80% at 88% 20%, #aeb8bd 0%, transparent 65%),
+    radial-gradient(90% 70% at 50% 100%, #e6e3da 0%, transparent 70%),
+    linear-gradient(170deg, #8e9a99 0%, #6f7a75 45%, #c4bfb2 100%);
+}
+
+:root[data-fundo='lima'] {
+  --canvas: radial-gradient(80% 70% at 50% 0%, #dcfa74 0%, transparent 60%),
+    linear-gradient(175deg, #c8f441 0%, #a9d92f 100%);
+}
+
+:root[data-fundo='lavanda'] {
+  --canvas: radial-gradient(80% 70% at 50% 0%, #d6cbff 0%, transparent 60%),
+    linear-gradient(175deg, #bca9ff 0%, #9b86e8 100%);
+}
+
+:root[data-fundo='grafite'] {
+  --canvas: radial-gradient(70% 60% at 20% 10%, #3a3a41 0%, transparent 60%),
+    linear-gradient(170deg, #222226 0%, #111114 100%);
+}
+
+:root[data-fundo='foto'] {
+  --canvas: none;
+}
+
+/*
+ * ===================================================================
+ * AS TRÊS GEOMETRIAS DESKTOP
+ * ===================================================================
+ *
+ * Os valores são os de `Orbita Vendas.dc.html`. A faixa declarada no `:root`
+ * acima é a de 1600 × 1000; abaixo dela vale a de 1366 (notebook / PWA 16:9), e
+ * acima a de 1920 (monitor cheio).
+ *
+ * O corte é feito por largura porque é ela que o protótipo varia junto com a
+ * altura nos três presets — e porque uma janela de navegador com 1600 de largura
+ * quer a densidade de 1600, tenha a altura que tiver.
+ */
+
+/* 1366 × 768 — notebook / PWA 16:9. A tabela entra em densidade compacta, como
+   no protótipo: é o que mantém a quantidade útil de linhas visíveis. */
+@media (max-width: 1499px) {
   :root {
-    --window-inset-top: 12px;
-    --window-inset-right: 12px;
-    --window-inset-bottom: 12px;
-    --window-inset-left: 12px;
-    --rail-width: 72px;
+    --window-inset-top: 24px;
+    --window-inset-right: 30px;
+    --window-inset-bottom: 30px;
+    --window-inset-left: 22px;
+    --r-window: 26px;
+
+    --rail-width: 80px;
+    --rail-logo: 30px;
+    --rail-pad-y: 18px;
+
+    --conteudo-pad: 18px 24px 20px 6px;
+    --conteudo-gap: 12px;
+
+    --titulo-col: 216px;
+    --titulo-fs: 34px;
+
+    --resumo-gap: 8px;
+    --resumo-min: 66px;
+    --resumo-fs: 19px;
+
+    --linha-h: 40px;
+    --cabecalho-h: 36px;
+    --drawer-w: 470px;
+
+    --tabela-cols: 56px minmax(150px, 1.25fr) 98px 96px 140px 92px 62px;
+    --tabela-gap: 9px;
+    --tabela-pad: 14px;
+  }
+}
+
+/* 1920 × 1080 — monitor cheio / PWA 16:9. */
+@media (min-width: 1800px) {
+  :root {
+    --window-inset-top: 52px;
+    --window-inset-right: 64px;
+    --window-inset-bottom: 64px;
+    --window-inset-left: 48px;
+    --r-window: 38px;
+
+    --rail-width: 112px;
+    --rail-logo: 40px;
+    --rail-pad-y: 30px;
+
+    --conteudo-pad: 30px 42px 34px 10px;
+    --conteudo-gap: 22px;
+
+    --titulo-col: 340px;
+    --titulo-fs: 52px;
+
+    --resumo-gap: 11px;
+    --resumo-min: 88px;
+    --resumo-fs: 26px;
+
+    --linha-h: 64px;
+    --cabecalho-h: 44px;
+    --drawer-w: 640px;
+
+    --tabela-cols: 70px minmax(230px, 1.35fr) 132px 122px 172px 122px 80px;
+    --tabela-gap: 14px;
+    --tabela-pad: 22px;
   }
 }

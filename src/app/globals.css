@@ -58,8 +58,10 @@
 
 body {
   /* O fundo é o nível 0 da escada de elevação: sem blur, e a única superfície
-     do produto onde degradê é permitido. A janela flutua sobre ele. */
-  background: var(--canvas);
+     do produto onde degradê é permitido. A janela flutua sobre ele.
+     O véu vem por cima do preset, como no protótipo — é ele que impede o fundo
+     claro de competir com a janela nas bordas. */
+  background: var(--veu), var(--canvas), #08080a;
   background-attachment: fixed;
   color: var(--txt);
   font-family: var(--font-archivo), system-ui, sans-serif;
@@ -91,6 +93,55 @@ body {
      estilo inline, que não passa pelo transformador. */
   box-shadow: var(--shadow-window), 0 0 0 1px var(--line);
   overflow: hidden;
+}
+
+/* A coluna de conteúdo da janela. As medidas são as de `Orbita Vendas.dc.html`:
+   o recuo à esquerda é pequeno (8px) porque o rail já dá o respiro daquele
+   lado. */
+.orbita-conteudo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--conteudo-gap);
+  padding: var(--conteudo-pad);
+  overflow: hidden;
+}
+
+/* A barra de ações: à direita, compacta, controles de 38px. Não é uma faixa
+   global — ela vive dentro da janela e ocupa uma linha só. */
+.orbita-acoes {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: none;
+}
+
+.orbita-acao {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 13px;
+  border-radius: 13px;
+  background: var(--chip);
+  border: 1px solid var(--line);
+  color: var(--txt);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.orbita-acao:hover:not(:disabled) {
+  border-color: var(--bar);
+}
+
+.orbita-acao:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Nível 2: cards e chips dentro da janela. Sem blur próprio — vidro dentro de
@@ -217,8 +268,8 @@ body {
   position: sticky;
   top: 0;
   z-index: 5;
-  height: 40px;
-  background: var(--glass2);
+  height: var(--cabecalho-h);
+  background: var(--head);
   border-bottom: 1px solid var(--line);
   font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
   font-size: 9.5px;
@@ -228,9 +279,10 @@ body {
   color: var(--txt3);
 }
 
+/* A altura de linha e a do preset de geometria: 64 / 58 / 40. */
 .orbita-tabela-linha {
-  min-height: var(--h-row);
-  border-bottom: 1px solid var(--line);
+  height: var(--linha-h);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
   transition: background 0.15s ease;
 }
 
@@ -246,6 +298,7 @@ body {
 .orbita-numero {
   font-family: var(--font-space-grotesk), sans-serif;
   font-weight: 500;
+  line-height: 1;
   letter-spacing: -0.025em;
   color: var(--txt);
 }

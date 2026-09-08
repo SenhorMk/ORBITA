@@ -15,7 +15,6 @@ import {
   ArrowRight,
   Lock,
   Mail,
-  LogOut,
   ChevronRight,
   Search,
   Percent,
@@ -25,7 +24,6 @@ import {
   Package,
   Image as ImageIcon,
   Plus,
-  Plug,
 } from "lucide-react";
 import type { Produto, Cliente, ChatwootConversation, ChatwootMessage, ItemPedido } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
@@ -41,10 +39,9 @@ import { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { AppWindow } from '@/components/shell/AppWindow';
 import { Rail } from '@/components/shell/Rail';
 import { OrganizacaoAtiva } from '@/components/shell/OrganizacaoAtiva';
-import { EstadoDaSincronizacao } from '@/components/shell/EstadoDaSincronizacao';
+import { SeletorDeFundo, useFundo } from '@/components/shell/SeletorDeFundo';
 import { TransactionList } from '@/components/TransactionList';
 import { VendasEPedidos } from '@/components/vendas/VendasEPedidos';
-import { HealthMonitor } from '@/components/HealthMonitor';
 import { BudgetCard } from '@/components/ui/analytics-bento';
 import { List2 } from "@/components/ui/list-2";
 import TableWithDialog from "@/components/ui/table-with-dialog";
@@ -112,37 +109,6 @@ function deriveUserSession(user: SupabaseUser): UserSession {
   };
 }
 
-/** Search box bound to the shared `searchQuery` state, reused across the top nav and the sales tab. */
-function SearchQueryInput({
-  containerClassName,
-  iconClassName,
-  inputClassName,
-  placeholder,
-  value,
-  onChange,
-}: {
-  containerClassName: string;
-  iconClassName: string;
-  inputClassName: string;
-  placeholder: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className={containerClassName}>
-      <Search className={iconClassName} />
-      <input
-        type="text"
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={inputClassName}
-      />
-    </div>
-  );
-}
-
-/** Rounded product thumbnail used in both the synced and unsynced product lists. */
 function ProductThumbnail({
   produto,
   imageUrl,
@@ -261,6 +227,7 @@ export default function Home() {
     return null;
   });
   const identidadeDaSessao = session?.email ?? null;
+  const [fundo, escolherFundo] = useFundo();
 
   /**
    * O estado de organizações, **uma vez só** (Ticket 01).
@@ -1111,127 +1078,102 @@ export default function Home() {
           onLogout={handleLogout}
         />
 
-      {/* Main Content Area Right */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        {/* SPATIAL TOPBAR */}
-        <header
-          className="sticky top-0 z-30 px-6 py-3.5"
-          style={{ borderBottom: '1px solid var(--line)', background: 'var(--glass2)' }}
-        >
-          <div className="flex items-center justify-between gap-4">
+      {/* A coluna de conteúdo da janela, com as medidas do protótipo. */}
+      <div className="orbita-conteudo">
 
-            {/* Organização ativa, estado do Bling e busca */}
-            <div className="flex items-center gap-3">
-              {/*
-                A organização é o tenant. Ela fica visível em qualquer aba
-                porque não saber a que empresa os números pertencem é um
-                defeito num produto multi-tenant, não uma economia de espaço.
-              */}
-              <OrganizacaoAtiva
-                organizacoes={listaDeOrganizacoes.organizacoes}
-                ativa={listaDeOrganizacoes.activeOrg}
-                carregando={listaDeOrganizacoes.isLoading}
-                trocandoParaId={listaDeOrganizacoes.switchingOrgId}
-                onTrocar={listaDeOrganizacoes.handleSwitchOrganization}
-              />
+        {/*
+          A barra de ações do protótipo: à direita, compacta, uma linha só.
+          Substituiu a faixa horizontal grande que existia aqui — ela mudava a
+          geometria de toda a tela e não existe em mockup nenhum. O que ficou é
+          o que precisa estar à mão de qualquer aba; navegar para Integrações,
+          por exemplo, é papel do rail, não de um botão nesta barra.
+        */}
+        <div className="orbita-acoes">
+          <OrganizacaoAtiva
+            organizacoes={listaDeOrganizacoes.organizacoes}
+            ativa={listaDeOrganizacoes.activeOrg}
+            carregando={listaDeOrganizacoes.isLoading}
+            trocandoParaId={listaDeOrganizacoes.switchingOrgId}
+            onTrocar={listaDeOrganizacoes.handleSwitchOrganization}
+          />
 
-              <EstadoDaSincronizacao
-                ultimaSincronizacao={lastSyncDate}
-                sincronizando={isSyncing}
-              />
+          <SeletorDeFundo fundo={fundo} onEscolher={escolherFundo} />
 
-              <HealthMonitor
-                supabaseConnected={true}
-                blingConnected={true}
-                chatwootConnected={true}
-                onRefresh={loadDashboardData}
-              />
-
-              <SearchQueryInput
-                containerClassName="relative w-56 hidden xl:block"
-                iconClassName="absolute left-3 top-2.5 h-4 w-4"
-                inputClassName="w-full pl-9 pr-3 py-1.5 rounded-xl text-xs outline-none orbita-surface"
-                placeholder="Pesquisar no sistema..."
-                value={searchQuery}
-                onChange={setSearchQuery}
-              />
-            </div>
-
-            {/* Sync Status Badge & Actions */}
-            <div className="flex items-center gap-3">
-
-              {isOwner && (
-                <div className="flex items-center gap-2">
-                  {/* Ponto de entrada para credenciais/conexão das integrações. O
-                      SetupWizard foi removido no Ticket 28 e o formulário vive no
-                      painel de Integrações; este botão navega até lá em vez de
-                      abrir uma segunda UI para a mesma função. */}
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('integrations')}
-                    className="orbita-chip cursor-pointer"
-                    title="Configurar credenciais e conexões de Bling e Chatwoot"
-                  >
-                    <Plug className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">Configurar APIs</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { void handleSync(false); }}
-                    disabled={isSyncing}
-                    className="orbita-chip cursor-pointer"
-                    title={`Sincronizar o que mudou no Bling desde a última vez · ${syncAgoText}`}
-                  >
-                    <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                    <span className="hidden sm:inline">{isSyncing ? 'Sincronizando...' : 'Sincronizar Bling'}</span>
-                  </button>
-                  {/*
-                    Sincronização completa: relê tudo, ignorando o marcador de
-                    "última alteração". É a saída quando o marcador avançou sem
-                    que os dados tivessem sido realmente importados.
-                  */}
-                  <button
-                    type="button"
-                    onClick={() => { void handleSync(true); }}
-                    disabled={isSyncing}
-                    className="orbita-chip cursor-pointer"
-                    title="Reler todo o catálogo do Bling, ignorando a data da última sincronização"
-                  >
-                    <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                    <span className="hidden lg:inline">Completa</span>
-                  </button>
-                </div>
-              )}
-
+          {isOwner && (
+            <>
               <button
                 type="button"
-                onClick={handleLogout}
-                className="orbita-chip cursor-pointer !px-2.5"
-                title="Sair da sessão"
+                onClick={() => { void handleSync(false); }}
+                disabled={isSyncing}
+                className="orbita-acao"
+                title={`Sincronizar o que mudou no Bling desde a última vez · ${syncAgoText}`}
               >
-                <LogOut className="h-4 w-4" />
+                <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                {isSyncing ? 'Sincronizando…' : 'Sincronizar Bling'}
+                <span
+                  className="w-[5px] h-[5px] rounded-full"
+                  style={{ background: isSyncing ? 'var(--info)' : 'var(--accent)' }}
+                  aria-hidden
+                />
               </button>
-            </div>
-          </div>
-        </header>
+              {/*
+                Sincronização completa: relê tudo, ignorando o marcador de
+                "última alteração". É a saída quando o marcador avançou sem que
+                os dados tivessem sido realmente importados.
+              */}
+              <button
+                type="button"
+                onClick={() => { void handleSync(true); }}
+                disabled={isSyncing}
+                className="orbita-acao"
+                title="Reler todo o catálogo do Bling, ignorando a data da última sincronização"
+              >
+                <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                Completa
+              </button>
+            </>
+          )}
 
-      {/* Sync Feedback Toast */}
-      {syncFeedback && (
-        <div className="max-w-7xl mx-auto w-full px-6 pt-4">
-          <div className="p-3.5 rounded-2xl glass-panel border border-cyan-500/30 text-cyan-300 text-xs font-semibold flex items-center justify-between glow-cyan animate-float">
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-cyan-400 shrink-0 animate-spin" />
-              <span>{syncFeedback}</span>
-            </div>
-            <button onClick={() => setSyncFeedback(null)} className="text-slate-400 hover:text-white">
+          {activeTab === 'sales' && (
+            <button
+              type="button"
+              onClick={() => setIsManualOrderOpen(true)}
+              className="orbita-acao"
+              style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
+            >
+              <Plus className="h-4 w-4" />
+              Novo pedido manual
+            </button>
+          )}
+        </div>
+
+        {syncFeedback && (
+          <div
+            className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-xs font-semibold flex-none"
+            style={{ background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--info)' }}
+          >
+            <span className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 shrink-0" aria-hidden />
+              {syncFeedback}
+            </span>
+            <button
+              type="button"
+              onClick={() => setSyncFeedback(null)}
+              aria-label="Fechar aviso de sincronização"
+              style={{ color: 'var(--txt3)' }}
+            >
               <X className="h-4 w-4" />
             </button>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* MAIN CONTAINER */}
-      <main className="max-w-7xl mx-auto w-full px-6 pt-6 flex-1 space-y-6">
+      {/*
+        A área de conteúdo. Vendas compõe a própria tela e ocupa a altura toda;
+        as telas ainda não migradas continuam empilhando e rolando aqui dentro.
+      */}
+      <main className={activeTab === 'sales'
+        ? 'flex-1 min-h-0 flex flex-col'
+        : 'flex-1 min-h-0 overflow-y-auto space-y-6 pr-1'}>
 
         {/* TAB FINANCEIRO */}
         <div className={activeTab === 'finance' ? 'block' : 'hidden'}>
@@ -1556,7 +1498,6 @@ export default function Home() {
             onBuscaChange={setSearchQuery}
             onConversarNoWhatsapp={(telefone) => handleOpenChatwootForPhone(telefone)}
             onEmitirNfe={(pedido) => handleEmitNfe(pedido.id || '', pedido.bling_id || '')}
-            onAbrirVendaManual={() => setIsManualOrderOpen(true)}
           />
         )}
 

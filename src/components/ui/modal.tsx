@@ -10,7 +10,17 @@ import type { ReactNode } from 'react';
  */
 export type TamanhoDoModal = 'sm' | 'md' | 'lg' | 'drawer';
 
-const LARGURA: Record<TamanhoDoModal, number> = { sm: 440, md: 560, lg: 720, drawer: 520 };
+/**
+ * `drawer` sai do token de geometria: o protótipo o estreita junto com a janela
+ * (640 / 560 / 470). Os outros três são fixos — um formulário não fica melhor
+ * por ser mais largo num monitor maior.
+ */
+const LARGURA: Record<TamanhoDoModal, string> = {
+  sm: '440px',
+  md: '560px',
+  lg: '720px',
+  drawer: 'var(--drawer-w)',
+};
 
 export interface ModalProps {
   aberto: boolean;
