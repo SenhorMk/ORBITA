@@ -145,12 +145,11 @@
  * a janela e o texto se comportam; o fundo é o que aparece **atrás** dela, e é
  * ele que faz o vidro ler como vidro.
  *
- * Os cinco presets são os de `Orbita Vendas.dc.html`, com os mesmos degradês. O
- * fundo é a única superfície do produto onde degradê é permitido.
+ * Os presets são os de `Orbita Vendas.dc.html`, com os mesmos degradês. O fundo
+ * é a única superfície do produto onde degradê é permitido.
  *
- * `foto` fica transparente de propósito: no protótipo é onde entra a imagem do
- * armazém. Aqui, sem imagem carregada, ele revela o preto do documento — é a
- * escolha "sua foto" sem a foto, e não um preset quebrado.
+ * O `Sua foto` do protótipo não está aqui: lá ele abre um slot para arrastar
+ * uma imagem, e sem esse upload sobraria uma amostra que só apaga o fundo.
  */
 :root,
 :root[data-fundo='armazem'] {
@@ -175,9 +174,6 @@
     linear-gradient(170deg, #222226 0%, #111114 100%);
 }
 
-:root[data-fundo='foto'] {
-  --canvas: none;
-}
 
 /*
  * ===================================================================
