@@ -3,16 +3,20 @@
 import { useEffect, useState } from 'react';
 
 /**
- * Os cinco fundos de `Orbita Vendas.dc.html`.
+ * Os fundos de `Orbita Vendas.dc.html`.
  *
  * O protótipo abre em `dark` **com o fundo `armazem`** — e as duas coisas não
  * são a mesma escolha. Tratar "dark" como "preto" foi o que mais afastou a
  * implementação do protótipo: sem um fundo com forma atrás dela, a janela de
  * vidro vira um retângulo escuro sobre outro retângulo escuro, e toda a
  * translucidez que sustenta o desenho deixa de existir.
+ *
+ * O protótipo tem um sexto, `Sua foto`, que no documento de design abre um slot
+ * para arrastar uma imagem. Aqui não há de onde tirar essa imagem, e uma
+ * amostra que só apaga o fundo é um controle que promete o que não entrega. Ele
+ * fica de fora até existir o upload que o sustente.
  */
 export const FUNDOS = [
-  { id: 'foto', rotulo: 'Sua foto', amostra: 'repeating-linear-gradient(135deg,#8a8a8a 0 4px,#c9c9c9 4px 8px)' },
   { id: 'armazem', rotulo: 'Armazém', amostra: 'linear-gradient(150deg,#b9c4c8,#7d8a80)' },
   { id: 'lima', rotulo: 'Lima', amostra: '#C8F441' },
   { id: 'lavanda', rotulo: 'Lavanda', amostra: '#BCA9FF' },
