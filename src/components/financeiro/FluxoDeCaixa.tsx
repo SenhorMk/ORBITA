@@ -29,11 +29,22 @@ export function FluxoDeCaixa({
 }) {
   return (
     <section
-      className="flex-none"
-      style={{ padding: '16px 18px', borderRadius: 'var(--r-panel)', background: 'var(--glass2)', border: '1px solid var(--line)' }}
+      className="flex flex-col min-h-0"
+      style={{
+        // `--fluxo-h` é a altura desejada e `--fluxo-min` o piso. O gráfico
+        // ENCOLHE (`flex: 0 1 auto`) e não cresce: numa janela baixa quem cede
+        // espaço é ele, e não as movimentações, que ficavam com uma linha só.
+        flex: '0 1 auto',
+        height: 'var(--fluxo-h)',
+        minHeight: 'var(--fluxo-min)',
+        padding: '16px 18px',
+        borderRadius: 'var(--r-panel)',
+        background: 'var(--glass2)',
+        border: '1px solid var(--line)',
+      }}
     >
       <h3
-        className="m-0"
+        className="m-0 flex-none"
         style={{
           font: '500 15px/1.2 var(--font-space-grotesk), sans-serif',
           letterSpacing: '-0.02em',
@@ -43,9 +54,7 @@ export function FluxoDeCaixa({
         Fluxo de Caixa
       </h3>
 
-      {/* A altura acompanha a geometria (240 / 200 / 140): num notebook de 1366
-          um gráfico de altura fixa come as linhas da tabela abaixo dele. */}
-      <div style={{ height: 'var(--fluxo-h)', marginTop: 10 }}>
+      <div className="flex-1 min-h-0" style={{ marginTop: 10 }}>
         <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 600, height: 200 }}>
           <AreaChart data={chartData as PontoDoFluxo[]} margin={{ top: 5, right: 5, left: -18, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" vertical={false} />

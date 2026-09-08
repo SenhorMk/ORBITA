@@ -93,22 +93,44 @@ export function CorpoDoFinanceiro({
     );
   }
 
+  /*
+    A moldura vertical do corpo, e a razão de ela existir.
+
+    Antes o corpo devolvia os três blocos soltos e a tabela era o único
+    elemento flexível da coluna: ela ficava com o que sobrasse depois do
+    cabeçalho, da toolbar e de um gráfico de altura fixa. Numa janela baixa
+    (1366×768 vira ~657px de viewport depois da moldura do navegador) o que
+    sobrava eram 50px — uma linha —, e o resto do extrato ficava dentro de uma
+    área rolável pequena demais para ser encontrada. A página inteira não rola,
+    e não pode passar a rolar: o Financeiro é uma tela full height.
+
+    A correção é de prioridade, não de mecanismo de scroll. O gráfico passa a
+    ENCOLHER (`flex: 0 1 auto`, entre `--fluxo-h` e `--fluxo-min`) e as
+    movimentações passam a ter piso próprio (`--movimentacoes-min`), então numa
+    janela apertada quem cede é o gráfico. A rolagem continua sendo a de
+    dentro da `MolduraDeTabela`, com cabeçalho fixo e rodapé sempre visível.
+  */
   return (
-    <>
+    <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
       {erroDeLeitura !== null && (
         <AvisoDeAtualizacaoFalhada detalhe={erroDeLeitura} recurso="o financeiro" />
       )}
 
       <FluxoDeCaixa chartData={chartData} formatarDinheiro={formatarDinheiro} />
 
-      {titulos.length === 0 ? (
-        <EstadoVazio
-          titulo="Nenhuma movimentação encontrada"
-          descricao="Sincronize o Bling para trazer os títulos financeiros, ou registre uma saída por aqui."
-        />
-      ) : (
-        <TabelaDeMovimentacoes titulos={titulos} formatarDinheiro={formatarDinheiro} />
-      )}
-    </>
+      <div
+        className="flex flex-col flex-1 min-h-0"
+        style={{ minHeight: 'var(--movimentacoes-min)' }}
+      >
+        {titulos.length === 0 ? (
+          <EstadoVazio
+            titulo="Nenhuma movimentação encontrada"
+            descricao="Sincronize o Bling para trazer os títulos financeiros, ou registre uma saída por aqui."
+          />
+        ) : (
+          <TabelaDeMovimentacoes titulos={titulos} formatarDinheiro={formatarDinheiro} />
+        )}
+      </div>
+    </div>
   );
 }

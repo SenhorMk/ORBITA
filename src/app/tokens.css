@@ -117,7 +117,9 @@
   --tabela-produtos-cols: minmax(220px, 1.4fr) 132px 128px 152px 180px 108px 92px;
   --tabela-clientes-cols: minmax(220px, 1.4fr) 150px minmax(180px, 1.1fr) 140px 145px 92px;
   --tabela-financeiro-cols: 40px minmax(200px, 1.5fr) 160px 120px 132px 130px;
-  --fluxo-h: 200px;
+  --fluxo-h: 262px;
+  --fluxo-min: min(150px, 17vh);
+  --movimentacoes-min: min(220px, 29vh);
   --tabela-gap: 12px;
   --tabela-pad: 18px;
 }
@@ -235,7 +237,9 @@
     --tabela-produtos-cols: minmax(180px, 1.3fr) 112px 112px 140px 170px 94px 84px;
     --tabela-clientes-cols: minmax(180px, 1.3fr) 128px minmax(150px, 1fr) 120px 130px 84px;
     --tabela-financeiro-cols: 36px minmax(170px, 1.4fr) 140px 108px 120px 116px;
-    --fluxo-h: 140px;
+    --fluxo-h: 200px;
+    --fluxo-min: min(120px, 17vh);
+    --movimentacoes-min: min(200px, 29vh);
     --tabela-gap: 9px;
     --tabela-pad: 14px;
   }
@@ -277,7 +281,9 @@
     --tabela-produtos-cols: minmax(260px, 1.5fr) 150px 150px 168px 196px 124px 100px;
     --tabela-clientes-cols: minmax(260px, 1.5fr) 170px minmax(210px, 1.2fr) 160px 165px 100px;
     --tabela-financeiro-cols: 44px minmax(240px, 1.6fr) 180px 132px 145px 148px;
-    --fluxo-h: 240px;
+    --fluxo-h: 302px;
+    --fluxo-min: min(170px, 17vh);
+    --movimentacoes-min: min(240px, 29vh);
     --tabela-gap: 14px;
     --tabela-pad: 22px;
   }
