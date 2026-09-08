@@ -37,7 +37,7 @@ function construirFetch() {
 
 /** Monta o indicador com o mesmo estado que o topo da aplicação cria. */
 function IndicadorComEstadoDoTopo({ fetchWithAuth }: { fetchWithAuth: AuthenticatedFetch }) {
-  const lista = useOrganizationsList(fetchWithAuth);
+  const lista = useOrganizationsList(fetchWithAuth, 'sessao@exemplo.com');
   return (
     <OrganizacaoAtiva
       organizacoes={lista.organizacoes}

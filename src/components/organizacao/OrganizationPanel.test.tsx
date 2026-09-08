@@ -12,7 +12,7 @@ import type { AuthenticatedFetch } from './useOrganizationPanel';
  * shell. Este arranjo monta o painel do mesmo jeito que a produção monta.
  */
 function PainelComEstadoDoTopo({ fetchWithAuth }: { fetchWithAuth: AuthenticatedFetch }) {
-  const lista = useOrganizationsList(fetchWithAuth);
+  const lista = useOrganizationsList(fetchWithAuth, 'sessao@exemplo.com');
   return <OrganizationPanel fetchWithAuth={fetchWithAuth} lista={lista} />;
 }
 

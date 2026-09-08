@@ -262,7 +262,20 @@ export default function Home() {
   // Organização ativa (Ticket 24b): resolvida pelo servidor via OrganizationPanel,
   // nunca escolhida localmente. Escopa a leitura de plano/limites — e, desde a
   // revisão do #66, também invalida a autoridade visual sobre papel na troca.
-  const [selecaoDeOrganizacao, setSelecaoDeOrganizacao] = useState<SelecaoDeOrganizacao | null>(null);
+  const [selecaoAnunciada, setSelecaoDeOrganizacao] = useState<SelecaoDeOrganizacao | null>(null);
+  const identidadeDaSessao = session?.email ?? null;
+  /**
+   * A seleção vale enquanto durar a sessão que a produziu.
+   *
+   * Quem a anuncia é o painel de organização — que desmonta no logout junto com
+   * o resto do shell. Um anúncio que não acontece não invalida nada, então a
+   * seleção da pessoa que saiu ficaria de pé, e com ela a autoridade visual
+   * sobre papel. Aqui ela simplesmente deixa de existir sem sessão; a troca
+   * direta de identidade é coberta pela mesma regra dentro de
+   * `useOrganizationsList`, que devolve organização ativa nula para uma leitura
+   * de outra sessão.
+   */
+  const selecaoDeOrganizacao = identidadeDaSessao === null ? null : selecaoAnunciada;
   const activeOrganizacaoId = selecaoDeOrganizacao?.id ?? null;
 
   /**
@@ -276,14 +289,14 @@ export default function Home() {
    * Sem sessão não se consulta nada: `fetchWithAuth` lança sem token, e a tela
    * de login é renderizada por este mesmo componente.
    */
-  const listaDeOrganizacoes = useOrganizationsList(fetchWithAuth, session !== null);
+  const listaDeOrganizacoes = useOrganizationsList(fetchWithAuth, identidadeDaSessao);
 
   // Autoridade única sobre papel: o vínculo persistido, lido do servidor, para
   // o par (sessão, organização ativa). Trocar qualquer um dos dois invalida o
   // papel anterior antes de a resposta nova chegar.
   const { podeGerir, organizacaoId: organizacaoConfirmada } = usePapelNaOrganizacaoAtiva(
     fetchWithAuth,
-    session?.email ?? null,
+    identidadeDaSessao,
     selecaoDeOrganizacao,
   );
   const isOwner = podeGerir;
