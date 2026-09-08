@@ -262,6 +262,47 @@ body {
   box-shadow: -40px 0 100px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--line);
 }
 
+/* ---- Campos de formulário dos diálogos ----------------------------- */
+
+/* Os `glass-input` legados desenhavam um campo com `hex` soltos, que não muda
+   de tema. Este é o mesmo campo nos tokens: uma altura, um raio, uma borda. */
+.orbita-campo {
+  width: 100%;
+  height: var(--h-field);
+  padding: 0 13px;
+  border-radius: var(--r-chip);
+  background: var(--glass2);
+  border: 1px solid var(--line);
+  color: var(--txt);
+  font-family: var(--font-archivo), system-ui, sans-serif;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.18s ease;
+}
+
+.orbita-campo:focus {
+  border-color: var(--bar);
+}
+
+.orbita-campo[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.orbita-campo--mono {
+  font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
+}
+
+select.orbita-campo {
+  cursor: pointer;
+}
+
+textarea.orbita-campo {
+  height: auto;
+  padding: 11px 13px;
+  line-height: 1.5;
+  resize: none;
+}
+
 /* ---- Tabela (linha 52px, zebra off, hover, cabeçalho fixo) ---------- */
 
 .orbita-tabela-cabecalho {

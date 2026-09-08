@@ -1,18 +1,42 @@
 'use client';
 
 import { useState } from "react";
-import {
-  User,
-  Mail,
-  FileText,
-  CheckCircle2,
-  MessageCircle,
-  Copy
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { GlassModal } from '@/components/ui/glass-modal';
+import { CheckCircle2, Copy, MessageCircle, Pencil, Trash2 } from 'lucide-react';
+import { Modal, RodapeDeModal } from '@/components/ui/modal';
+import { Pilula } from '@/components/ui/StatusPill';
 import type { Cliente } from '@/types';
+
+/**
+ * O detalhe de um cliente, agora no `Modal` do Design System.
+ *
+ * A casca mudou; a lógica não. Continuam iguais os campos exibidos (os do
+ * contrato de cliente, endereço e CEP inclusive, persistidos desde a migration
+ * 54), o copiar-para-a-área-de-transferência de telefone, e-mail e documento e a
+ * ida para o Chatwoot.
+ *
+ * A ação primária é **editar**, no canto inferior direito; excluir fica sozinha
+ * à esquerda, longe dela, e continua pedindo confirmação com o mesmo texto.
+ *
+ * ## O que a tela de Clientes de fato oferece hoje
+ *
+ * - **criar** um contato: continua disponível, pelo botão da tela;
+ * - **editar** um contato existente: agora tem caminho, pela ação primária
+ *   daqui. `onEdit` já existia nesta interface e `selectedClienteToEdit` já
+ *   existia em `page.tsx`, mas nada nunca preenchia o segundo — a edição não
+ *   tinha por onde ser aberta. O ticket 04 ligou os dois, e é a única mudança
+ *   de comportamento observável da fatia. Guardada em
+ *   `clientes/ligacao-detalhe-edicao.test.tsx`;
+ * - **excluir** um contato: `onDelete` continua **sem chamador**, exatamente
+ *   como estava antes da migração. A composição anterior também não passava
+ *   essa prop, então a exclusão nunca esteve exposta na interface. O texto do
+ *   ticket diz que "criar, editar e excluir continuam funcionando", mas ligar a
+ *   exclusão agora seria **adicionar um fluxo destrutivo novo**, não preservar
+ *   um existente — e o botão que este componente sabe desenhar é uma
+ *   possibilidade, não uma promessa que a tela cumpre hoje.
+ *
+ * A mesma regra vale para produto: `POST /api/produtos/delete` existe no
+ * servidor e nenhuma tela o chamava antes desta fatia. Continua assim.
+ */
 
 interface ClienteDetailModalProps {
   isOpen: boolean;
@@ -23,6 +47,58 @@ interface ClienteDetailModalProps {
   onDelete?: (id: string, blingId?: string) => void;
 }
 
+function Campo({
+  rotulo,
+  valor,
+  mono,
+  aoCopiar,
+  copiado,
+}: {
+  rotulo: string;
+  valor?: string;
+  mono?: boolean;
+  aoCopiar?: () => void;
+  copiado?: boolean;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-4">
+      <span className="text-xs shrink-0" style={{ color: 'var(--txt3)' }}>{rotulo}</span>
+      <span className="flex items-center gap-2 min-w-0">
+        <span
+          className="text-[13px] text-right truncate"
+          style={{
+            color: 'var(--txt)',
+            fontFamily: mono ? 'var(--font-jetbrains-mono), monospace' : undefined,
+          }}
+          title={valor}
+        >
+          {valor || '—'}
+        </span>
+        {valor && aoCopiar && (
+          <button
+            type="button"
+            onClick={aoCopiar}
+            aria-label={`Copiar ${rotulo.toLowerCase()}`}
+            className="shrink-0 cursor-pointer"
+            style={{ color: copiado ? 'var(--accent)' : 'var(--txt3)' }}
+          >
+            {copiado ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
+
+function Secao({ titulo, children }: { titulo: string; children: React.ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h4 className="orbita-eyebrow">{titulo}</h4>
+      <div className="flex flex-col gap-2.5">{children}</div>
+    </section>
+  );
+}
+
 export function ClienteDetailModal({
   isOpen,
   onClose,
@@ -31,154 +107,120 @@ export function ClienteDetailModal({
   onEdit,
   onDelete
 }: ClienteDetailModalProps) {
-  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [campoCopiado, setCampoCopiado] = useState<string | null>(null);
 
-  const handleCopy = (text: string, field: string) => {
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(null), 2000);
+  const copiar = (texto: string, campo: string) => {
+    if (!texto) return;
+    navigator.clipboard.writeText(texto);
+    setCampoCopiado(campo);
+    setTimeout(() => setCampoCopiado(null), 2000);
   };
 
+  if (!cliente) return null;
+
+  const endereco = [cliente.endereco, cliente.numero, cliente.bairro, cliente.cidade, cliente.uf]
+    .filter(Boolean)
+    .join(', ');
+
   return (
-    <>
-      {cliente && (
-        <GlassModal
-          isOpen={isOpen}
-          onClose={onClose}
-          title={
-            <div className="flex items-center gap-2">
-              {cliente.nome}
-              {cliente.bling_id && (
-                <Badge variant="outline" className="text-[10px] bg-white/5 border-emerald-500/30 text-emerald-400">
-                  Bling OK
-                </Badge>
-              )}
-            </div>
+    <Modal
+      aberto={isOpen}
+      onAbertoChange={(aberto) => {
+        if (!aberto) onClose();
+      }}
+      tamanho="lg"
+      eyebrow="Contato"
+      titulo={cliente.nome}
+      descricao="Detalhes do contato, como estão no Orbita e no Bling."
+      rodape={
+        <RodapeDeModal
+          destrutiva={
+            onDelete && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirm('Tem certeza que deseja excluir este contato no Bling e no sistema local? Essa ação não pode ser desfeita.')) {
+                    onDelete(cliente.id!, cliente.bling_id);
+                  }
+                }}
+                className="orbita-chip cursor-pointer"
+                style={{ color: 'var(--danger)' }}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Excluir
+              </button>
+            )
           }
-          subtitle="Detalhes do Cliente"
-          icon={<User className="w-6 h-6 text-blue-400" />}
-          footer={
-            <>
-              <div>
-                {onDelete && (
-                  <Button
-                    variant="destructive"
-                    onClick={() => {
-                      if (confirm('Tem certeza que deseja excluir este contato no Bling e no sistema local? Essa ação não pode ser desfeita.')) {
-                        onDelete(cliente.id!, cliente.bling_id);
-                      }
-                    }}
-                    className="bg-red-500/20 text-red-400 hover:bg-red-500 hover:text-white border border-red-500/30 rounded-xl"
-                  >
-                    Excluir
-                  </Button>
-                )}
-              </div>
-              <div className="flex gap-2">
-                {onEdit && (
-                  <Button
-                    onClick={() => onEdit(cliente)}
-                    className="glass-button-primary gap-2 rounded-xl"
-                  >
-                    Editar Contato
-                  </Button>
-                )}
-                <Button
-                  variant="outline"
-                  onClick={onClose}
-                  className="bg-white/5 border-white/15 text-slate-300 hover:bg-white/10 rounded-xl"
-                >
-                  Fechar
-                </Button>
-              </div>
-            </>
+          secundaria={
+            <button type="button" onClick={onClose} className="orbita-chip cursor-pointer">
+              Fechar
+            </button>
           }
-        >
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          primaria={
+            onEdit && (
+              <button
+                type="button"
+                onClick={() => onEdit(cliente)}
+                className="orbita-chip cursor-pointer"
+                style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                Editar contato
+              </button>
+            )
+          }
+        />
+      }
+    >
+      <div className="flex flex-col gap-6">
+        <Pilula
+          rotulo={cliente.bling_id ? 'Bling' : 'Só no Orbita'}
+          cor={cliente.bling_id ? 'var(--accent)' : 'var(--txt3)'}
+        />
 
-              <div className="p-4 rounded-2xl glass-card border border-white/10 bg-white/[0.02] space-y-4">
-                <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2 mb-3">
-                  <Mail className="w-4 h-4 text-cyan-400" /> Contato
-                </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <Secao titulo="Contato">
+            <Campo
+              rotulo="Telefone"
+              valor={cliente.telefone}
+              mono
+              aoCopiar={() => copiar(cliente.telefone!, 'telefone')}
+              copiado={campoCopiado === 'telefone'}
+            />
+            <Campo
+              rotulo="E-mail"
+              valor={cliente.email}
+              aoCopiar={() => copiar(cliente.email!, 'email')}
+              copiado={campoCopiado === 'email'}
+            />
+            {onOpenChatwoot && cliente.telefone && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenChatwoot(cliente.telefone, cliente.nome);
+                }}
+                className="orbita-chip cursor-pointer w-full justify-center mt-1"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                Abrir no Chatwoot
+              </button>
+            )}
+          </Secao>
 
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-slate-400">Telefone</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-mono text-white">{cliente.telefone || '-'}</span>
-                      {cliente.telefone && (
-                        <button onClick={() => handleCopy(cliente.telefone!, 'phone')} className="text-slate-500 hover:text-white transition">
-                          {copiedField === 'phone' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-slate-400">Email</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-white truncate max-w-[150px]" title={cliente.email}>{cliente.email || '-'}</span>
-                      {cliente.email && (
-                        <button onClick={() => handleCopy(cliente.email!, 'email')} className="text-slate-500 hover:text-white transition">
-                          {copiedField === 'email' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {onOpenChatwoot && cliente.telefone && (
-                  <Button
-                    onClick={() => {
-                      onClose();
-                      onOpenChatwoot(cliente.telefone, cliente.nome);
-                    }}
-                    className="w-full mt-2 bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 border border-blue-500/30 text-xs font-bold rounded-xl"
-                  >
-                    <MessageCircle className="w-4 h-4 mr-2" />
-                    Abrir no Chatwoot
-                  </Button>
-                )}
-              </div>
-
-              <div className="p-4 rounded-2xl glass-card border border-white/10 bg-white/[0.02] space-y-4">
-                <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2 mb-3">
-                  <FileText className="w-4 h-4 text-purple-400" /> Documento & Endereço
-                </h3>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-slate-400">CPF/CNPJ</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-mono text-white">{cliente.cpf_cnpj || '-'}</span>
-                      {cliente.cpf_cnpj && (
-                        <button onClick={() => handleCopy(cliente.cpf_cnpj!, 'doc')} className="text-slate-500 hover:text-white transition">
-                          {copiedField === 'doc' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-slate-400">Endereço</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-white truncate max-w-[150px]">
-                        {[cliente.endereco, cliente.numero, cliente.bairro, cliente.cidade, cliente.uf].filter(Boolean).join(', ') || '-'}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-slate-400">CEP</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-mono text-white">{cliente.cep || '-'}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </GlassModal>
-      )}
-    </>
+          <Secao titulo="Documento & Endereço">
+            <Campo
+              rotulo="CPF / CNPJ"
+              valor={cliente.cpf_cnpj}
+              mono
+              aoCopiar={() => copiar(cliente.cpf_cnpj!, 'documento')}
+              copiado={campoCopiado === 'documento'}
+            />
+            <Campo rotulo="Endereço" valor={endereco} />
+            <Campo rotulo="CEP" valor={cliente.cep} mono />
+          </Secao>
+        </div>
+      </div>
+    </Modal>
   );
 }

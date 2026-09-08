@@ -1,27 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import Image from 'next/image';
-import {
-  Package,
-  DollarSign,
-  Box,
-  Tag,
-  FileText,
-  MoreVertical,
-  CheckCircle2,
-  AlertTriangle,
-  RefreshCw,
-  Copy,
-  Layers,
-  Sparkles,
-  Save,
-} from "lucide-react";
+import { useState, useEffect } from 'react';
+import { CheckCircle2, Copy, Save } from "lucide-react";
 import type { Produto, Cliente, Categoria } from '@/types';
-import { GlassModal } from '@/components/ui/glass-modal';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuGroup, DropdownMenuLabel, DropdownMenuSeparator } from './ui/dropdown-menu';
+import { Modal, RodapeDeModal } from '@/components/ui/modal';
+import { Pilula } from '@/components/ui/StatusPill';
 import { ErrorLogModal } from './ErrorLogModal';
-import { Button } from '@/components/ui/button';
 import { validateProdutoForBling, sanitizeProductName } from '@/lib/utils';
 import { supabase } from '@/lib/supabaseClient';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
@@ -35,6 +19,25 @@ import {
   type ProdutoSituacao,
   type ProdutoTipo,
 } from '@/lib/config/produtoContract';
+
+/**
+ * O detalhe e a edição de um produto, agora no `Modal` do Design System.
+ *
+ * A casca mudou; a lógica não. Continuam iguais os campos, o carregamento de
+ * categorias por `/api/categorias/sync`, a validação para o Bling antes de
+ * enviar (`validateProdutoForBling`), a sanitização do nome, o
+ * `buildProdutoRequest`, o `POST /api/produtos/update`, a regra de só aceitar o
+ * registro devolvido pelo servidor e o `ErrorLogModal` com o log completo
+ * quando a chamada falha.
+ *
+ * **O que saiu:** o menu de "ações rápidas" do cabeçalho. Ele tinha cinco itens,
+ * e nenhum fazia algo que o formulário já não fizesse: copiar o SKU é o botão
+ * dentro do próprio campo, e os três de status apenas escreviam `A` ou `I` no
+ * seletor de situação, que está logo abaixo. O quinto, "Sincronizar no Bling",
+ * era um `alert()` — não sincronizava nada. Um menu de atalhos duplicados, com
+ * um deles fingindo trabalho, não sobrevive a uma migração cuja regra é que a
+ * tela diga a verdade.
+ */
 
 interface ProductDetailModalProps {
   isOpen: boolean;
@@ -83,6 +86,24 @@ async function submitProdutoUpdate(payload: ProdutoUpdatePayload): Promise<Submi
   }
 
   return { ok: true, product: resData.product || payload };
+}
+
+/** O rótulo de um campo — a mesma mono maiúscula do resto do produto. */
+function Rotulo({ para, children }: { para: string; children: React.ReactNode }) {
+  return (
+    <label htmlFor={para} className="orbita-eyebrow">
+      {children}
+    </label>
+  );
+}
+
+function Secao({ titulo, children }: { titulo: string; children: React.ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h4 className="orbita-eyebrow">{titulo}</h4>
+      {children}
+    </section>
+  );
 }
 
 export function ProductDetailModal({
@@ -279,307 +300,194 @@ export function ProductDetailModal({
     }
   };
 
-  const statusColor =
-    parseInt(estoque, 10) <= 0
-      ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
-      : parseInt(estoque, 10) < 5
-      ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-      : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
-
-  const dropdownSections = [
-    {
-      title: 'Ações Rápidas',
-      actions: [
-        {
-          id: 'copy-sku',
-          label: isCopied ? 'SKU Copiado!' : 'Copiar Código SKU',
-          icon: Copy,
-          onClick: handleCopyCode,
-        },
-        {
-          id: 'sync-bling',
-          label: 'Sincronizar no Bling',
-          icon: RefreshCw,
-          onClick: () => alert(`Sincronizando ${nome || 'produto'} com o Bling ERP...`),
-        },
-      ],
-    },
-    {
-      title: 'Status & Categoria',
-      actions: [
-        {
-          id: 'set-active',
-          label: 'Marcar como Ativo',
-          icon: CheckCircle2,
-          onClick: () => setSituacao('A'),
-        },
-        {
-          id: 'set-production',
-          label: 'Marcar em Produção',
-          icon: Sparkles,
-          onClick: () => setSituacao('A'),
-        },
-        {
-          id: 'set-inactive',
-          label: 'Inativar Produto',
-          icon: AlertTriangle,
-          danger: true,
-          onClick: () => setSituacao('I'),
-        },
-      ],
-    },
-  ];
+  // As mesmas três faixas de saldo da tabela do catálogo.
+  const saldo = parseInt(estoque, 10);
+  const saldoRotulo = saldo <= 0 ? 'Sem estoque' : saldo < 5 ? 'Estoque baixo' : 'Em estoque';
+  const saldoCor = saldo <= 0 ? 'var(--danger)' : saldo < 5 ? 'var(--warning)' : 'var(--accent)';
 
   return (
     <>
-      <GlassModal
-        isOpen={isOpen}
-        onClose={onClose}
-        title={nome || (isNew ? 'Cadastrar Novo Produto' : 'Produto Sem Nome')}
-        subtitle={
-          <div className="flex items-center gap-2">
-            <span>SKU: <span className="text-cyan-300 font-semibold">{codigo || 'Será gerado no Bling'}</span></span>
-            {!isNew && produto?.bling_id && <span>• ID Bling: {produto.bling_id}</span>}
-            <span className={`ml-2 text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${statusColor}`}>
-              {parseInt(estoque, 10) <= 0 ? 'Sem Estoque' : parseInt(estoque, 10) < 5 ? 'Estoque Baixo' : 'Em Estoque'}
-            </span>
-          </div>
+      <Modal
+        aberto={isOpen}
+        onAbertoChange={(aberto) => {
+          if (!aberto) onClose();
+        }}
+        tamanho="lg"
+        eyebrow={
+          isNew
+            ? 'Novo produto'
+            : `SKU ${codigo || '—'}${produto?.bling_id ? ` · ID Bling ${produto.bling_id}` : ''}`
         }
-        icon={
-          produto?.imagem_url ? (
-            <Image
-              src={produto.imagem_url}
-              alt={nome || 'Novo Produto'}
-              width={56}
-              height={56}
-              unoptimized
-              className="h-full w-full object-cover rounded-2xl"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none';
-              }}
-            />
-          ) : (
-            <Package className="w-6 h-6 text-cyan-400" />
-          )
-        }
-        headerActions={
-          <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-
-              <button className="p-2.5 rounded-2xl glass-card text-slate-300 hover:text-white hover:border-white/20 transition">
-                <MoreVertical className="w-4 h-4" />
-              </button>
-
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 glass-panel border border-white/10 rounded-xl p-1 shadow-2xl bg-[#1A1A1A]">
-                {dropdownSections.map((section, idx) => (
-                  <React.Fragment key={idx}>
-                    {idx > 0 && <DropdownMenuSeparator className="bg-white/10" />}
-                    <DropdownMenuLabel className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                      {section.title}
-                    </DropdownMenuLabel>
-                    <DropdownMenuGroup>
-                      {section.actions.map(action => {
-                        const Icon = action.icon;
-                        return (
-                          <DropdownMenuItem
-                            key={action.id}
-                            onClick={action.onClick}
-                            className={`cursor-pointer flex items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors ${action.danger ? 'text-rose-400 focus:bg-rose-500/20 focus:text-rose-300' : 'text-slate-200 focus:bg-white/10 focus:text-white'}`}
-                          >
-                            <Icon className="w-4 h-4" />
-                            <span>{action.label}</span>
-                          </DropdownMenuItem>
-                        );
-                      })}
-                    </DropdownMenuGroup>
-                  </React.Fragment>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-        }
-        footer={
-          <>
-            <div className="flex items-center gap-2 text-xs text-slate-400">
-              {savedSuccess && (
-                <span className="text-emerald-400 font-semibold flex items-center gap-1 animate-in fade-in">
-                  <CheckCircle2 className="w-4 h-4" /> Alterações salvas!
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-center gap-3">
-              <Button
-                variant="outline"
-                onClick={onClose}
-                className="bg-white/5 border-white/15 text-slate-300 hover:bg-white/10"
-              >
+        titulo={nome || (isNew ? 'Cadastrar produto' : 'Produto sem nome')}
+        descricao="Os dados do produto, sincronizados com o Bling ERP ao salvar."
+        rodape={
+          <RodapeDeModal
+            secundaria={
+              <button type="button" onClick={onClose} className="orbita-chip cursor-pointer">
                 Cancelar
-              </Button>
-
-              <Button
+              </button>
+            }
+            primaria={
+              <button
+                type="button"
                 onClick={handleSave}
                 disabled={isSaving}
-                className="glass-button-primary gap-2"
+                className="orbita-chip cursor-pointer"
+                style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
               >
-                <Save className="w-4 h-4" />
-                <span>{isSaving ? 'Salvando...' : 'Salvar Alterações'}</span>
-              </Button>
-            </div>
-          </>
+                <Save className="w-3.5 h-3.5" />
+                {isSaving ? 'Salvando…' : 'Salvar alterações'}
+              </button>
+            }
+          />
         }
       >
-        <div className="space-y-6">
-                {/* Form Controls Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Nome do Produto */}
-                  <div className="space-y-1.5 md:col-span-2">
-                    <label htmlFor="product-detail-nome" className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                      <Package className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>Nome do Produto</span>
-                    </label>
-                    <input
-                      id="product-detail-nome"
-                      type="text"
-                      value={nome}
-                      onChange={(e) => setNome(e.target.value)}
-                      className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium"
-                      placeholder="Ex: Camiseta Oversized Streetwear"
-                    />
-                  </div>
+        <div className="flex flex-col gap-6">
+          {savedSuccess && (
+            <output
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold"
+              style={{ background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--accent)' }}
+            >
+              <CheckCircle2 className="w-4 h-4" aria-hidden />
+              Alterações salvas.
+            </output>
+          )}
 
-                  {/* Código SKU */}
-                  <div className="space-y-1.5">
-                    <label htmlFor="product-detail-codigo" className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                      <Tag className="w-3.5 h-3.5 text-purple-400" />
-                      <span>Código SKU / Ref. Bling</span>
-                    </label>
-                    <div className="relative">
-                      <input
-                        id="product-detail-codigo"
-                        type="text"
-                        value={codigo}
-                        onChange={(e) => setCodigo(e.target.value)}
-                        className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-mono"
-                        placeholder="Ex: CAM-001"
-                      />
-                      <button
-                        onClick={handleCopyCode}
-                        className="absolute right-2.5 top-2.5 p-1 text-slate-400 hover:text-white"
-                        title="Copiar Código"
-                      >
-                        <Copy className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
+          <Pilula rotulo={saldoRotulo} cor={saldoCor} />
 
-                  {/* Categoria / Tag */}
-                  <div className="space-y-1.5">
-                    <label htmlFor="product-detail-categoria" className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                      <Layers className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Categoria do Produto</span>
-                    </label>
-                    <select
-                      id="product-detail-categoria"
-                      value={categoriaId}
-                      onChange={(e) => setCategoriaId(e.target.value)}
-                      className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium bg-slate-900 text-slate-100 cursor-pointer"
-                    >
-                      <option value="">Sem categoria</option>
-                      {categorias.map(cat => (
-                        <option key={cat.id} value={cat.id}>{cat.descricao}</option>
-                      ))}
-                    </select>
-                  </div>
+          <Secao titulo="Catálogo">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex flex-col gap-1.5 md:col-span-2">
+                <Rotulo para="product-detail-nome">Nome do produto</Rotulo>
+                <input
+                  id="product-detail-nome"
+                  type="text"
+                  value={nome}
+                  onChange={(e) => setNome(e.target.value)}
+                  className="orbita-campo"
+                  placeholder="Ex: Camiseta Oversized Streetwear"
+                />
+              </div>
 
-                  {/* Preço de Venda */}
-                  <div className="space-y-1.5">
-                    <label htmlFor="product-detail-preco" className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                      <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Preço de Venda (R$)</span>
-                    </label>
-                    <input
-                      id="product-detail-preco"
-                      type="number"
-                      step="0.01"
-                      value={preco}
-                      onChange={(e) => setPreco(e.target.value)}
-                      className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-mono text-emerald-400 font-bold"
-                    />
-                  </div>
-
-                  {/* Saldo de Estoque */}
-                  <div className="space-y-1.5">
-                    <label htmlFor="product-detail-estoque" className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                      <Box className="w-3.5 h-3.5 text-indigo-400" />
-                      <span>Estoque Atual (unidades)</span>
-                    </label>
-                    <input
-                      id="product-detail-estoque"
-                      type="number"
-                      value={estoque}
-                      onChange={(e) => setEstoque(e.target.value)}
-                      className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-mono font-bold"
-                    />
-                  </div>
-                </div>
-
-                {/* Campos Obrigatórios Bling */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-5 rounded-2xl glass-card border border-white/10 bg-white/[0.02]">
-                  <div className="space-y-1.5">
-                    <label htmlFor="product-detail-tipo" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Tipo *</label>
-                    <select id="product-detail-tipo" value={tipo} onChange={(e) => setTipo(produtoTipoSchema.parse(e.target.value))} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
-                      <option value="P">Produto (P)</option>
-                      <option value="S">Serviço (S)</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label htmlFor="product-detail-situacao" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Situação *</label>
-                    <select id="product-detail-situacao" value={situacao} onChange={(e) => setSituacao(produtoSituacaoSchema.parse(e.target.value))} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
-                      <option value="A">Ativo (A)</option>
-                      <option value="I">Inativo (I)</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label htmlFor="product-detail-formato" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Formato *</label>
-                    <select id="product-detail-formato" value={formato} onChange={(e) => setFormato(produtoFormatoSchema.parse(e.target.value))} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50">
-                      <option value="S">Simples (S)</option>
-                      <option value="V">Variações (V)</option>
-                      <option value="E">Composição (E)</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label htmlFor="product-detail-unidade" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Unidade (Ex: UN) *</label>
-                    <input id="product-detail-unidade" type="text" value={unidade} onChange={(e) => setUnidade(e.target.value.toUpperCase())} maxLength={6} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50 font-mono" placeholder="UN, CX, KG" />
-                  </div>
-                </div>
-
-                {/* Observações / Descrição TextArea */}
-                <div className="space-y-1.5">
-                  <label htmlFor="product-detail-observacao" className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Observações & Detalhes Adicionais</span>
-                  </label>
-                  <textarea
-                    id="product-detail-observacao"
-                    rows={3}
-                    value={observacao}
-                    onChange={(e) => setObservacao(e.target.value)}
-                    className="w-full p-4 rounded-2xl glass-input text-xs outline-none resize-none leading-relaxed"
-                    placeholder="Adicione notas internas sobre este produto..."
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="product-detail-codigo">Código SKU / Ref. Bling</Rotulo>
+                <div className="relative">
+                  <input
+                    id="product-detail-codigo"
+                    type="text"
+                    value={codigo}
+                    onChange={(e) => setCodigo(e.target.value)}
+                    className="orbita-campo orbita-campo--mono"
+                    style={{ paddingRight: 38 }}
+                    placeholder="Ex: CAM-001"
                   />
+                  <button
+                    type="button"
+                    onClick={handleCopyCode}
+                    title="Copiar código"
+                    aria-label="Copiar código SKU"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer"
+                    style={{ color: isCopied ? 'var(--accent)' : 'var(--txt3)' }}
+                  >
+                    {isCopied ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </button>
                 </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="product-detail-categoria">Categoria do produto</Rotulo>
+                <select
+                  id="product-detail-categoria"
+                  value={categoriaId}
+                  onChange={(e) => setCategoriaId(e.target.value)}
+                  className="orbita-campo"
+                >
+                  <option value="">Sem categoria</option>
+                  {categorias.map(cat => (
+                    <option key={cat.id} value={cat.id}>{cat.descricao}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="product-detail-preco">Preço de venda (R$)</Rotulo>
+                <input
+                  id="product-detail-preco"
+                  type="number"
+                  step="0.01"
+                  value={preco}
+                  onChange={(e) => setPreco(e.target.value)}
+                  className="orbita-campo orbita-campo--mono"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="product-detail-estoque">Estoque atual (unidades)</Rotulo>
+                <input
+                  id="product-detail-estoque"
+                  type="number"
+                  value={estoque}
+                  onChange={(e) => setEstoque(e.target.value)}
+                  className="orbita-campo orbita-campo--mono"
+                />
+              </div>
+            </div>
+          </Secao>
+
+          <Secao titulo="Obrigatórios do Bling">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="product-detail-tipo">Tipo *</Rotulo>
+                <select id="product-detail-tipo" value={tipo} onChange={(e) => setTipo(produtoTipoSchema.parse(e.target.value))} className="orbita-campo">
+                  <option value="P">Produto (P)</option>
+                  <option value="S">Serviço (S)</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="product-detail-situacao">Situação *</Rotulo>
+                <select id="product-detail-situacao" value={situacao} onChange={(e) => setSituacao(produtoSituacaoSchema.parse(e.target.value))} className="orbita-campo">
+                  <option value="A">Ativo (A)</option>
+                  <option value="I">Inativo (I)</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="product-detail-formato">Formato *</Rotulo>
+                <select id="product-detail-formato" value={formato} onChange={(e) => setFormato(produtoFormatoSchema.parse(e.target.value))} className="orbita-campo">
+                  <option value="S">Simples (S)</option>
+                  <option value="V">Variações (V)</option>
+                  <option value="E">Composição (E)</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="product-detail-unidade">Unidade *</Rotulo>
+                <input id="product-detail-unidade" type="text" value={unidade} onChange={(e) => setUnidade(e.target.value.toUpperCase())} maxLength={6} className="orbita-campo orbita-campo--mono" placeholder="UN, CX, KG" />
+              </div>
+            </div>
+          </Secao>
+
+          <Secao titulo="Observações">
+            <textarea
+              id="product-detail-observacao"
+              aria-label="Observações e detalhes adicionais"
+              rows={3}
+              value={observacao}
+              onChange={(e) => setObservacao(e.target.value)}
+              className="orbita-campo"
+              placeholder="Adicione notas internas sobre este produto..."
+            />
+          </Secao>
         </div>
-      </GlassModal>
-    <ErrorLogModal
-      isOpen={errorLogData.isOpen}
-      onClose={() => setErrorLogData(prev => ({ ...prev, isOpen: false }))}
-      title={errorLogData.title}
-      errorMessage={errorLogData.errorMessage}
-      details={errorLogData.details}
-      logs={errorLogData.logs}
-      onRetry={handleSave}
-    />
-  </>
+      </Modal>
+
+      <ErrorLogModal
+        isOpen={errorLogData.isOpen}
+        onClose={() => setErrorLogData(prev => ({ ...prev, isOpen: false }))}
+        title={errorLogData.title}
+        errorMessage={errorLogData.errorMessage}
+        details={errorLogData.details}
+        logs={errorLogData.logs}
+        onRetry={handleSave}
+      />
+    </>
   );
 }

@@ -1,28 +1,48 @@
 'use client';
 
 import { useState } from "react";
-import {
-  User,
-  Mail,
-  Phone,
-  FileText,
-  MapPin,
-  Save,
-  CheckCircle2,
-} from "lucide-react";
+import { CheckCircle2, Save } from "lucide-react";
 import type { Cliente } from '@/types';
-import { GlassModal } from '@/components/ui/glass-modal';
+import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import { supabase } from '@/lib/supabaseClient';
 import { buildClienteRequest, contatoTipoSchema, indicadorIeSchema } from '@/lib/config/clienteContract';
 import { ErrorLogModal } from './ErrorLogModal';
-import { Button } from '@/components/ui/button';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
+
+/**
+ * O cadastro e a edição de um contato, agora no `Modal` do Design System.
+ *
+ * A casca mudou; a lógica não. São os mesmos campos do contrato de cliente — e
+ * só eles —, a mesma inferência de tipo de pessoa e de indicador de IE pelo
+ * tamanho do documento, a mesma validação de nome obrigatório, o mesmo
+ * `buildClienteRequest`, o mesmo `POST /api/clientes/update`, a mesma regra de
+ * só aceitar o registro devolvido pelo servidor, e o mesmo `ErrorLogModal`
+ * quando a chamada falha.
+ */
 
 interface ClienteEditModalProps {
   isOpen: boolean;
   onClose: () => void;
   cliente: Cliente | null;
   onSave?: (updatedCliente: Cliente) => void;
+}
+
+/** O rótulo de um campo — a mesma mono maiúscula do resto do produto. */
+function Rotulo({ para, children }: { para: string; children: React.ReactNode }) {
+  return (
+    <label htmlFor={para} className="orbita-eyebrow">
+      {children}
+    </label>
+  );
+}
+
+function Secao({ titulo, children }: { titulo: string; children: React.ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h4 className="orbita-eyebrow">{titulo}</h4>
+      {children}
+    </section>
+  );
 }
 
 export function ClienteEditModal({
@@ -205,202 +225,175 @@ export function ClienteEditModal({
 
   return (
     <>
-      <div className="relative z-40">
-        <GlassModal
-          isOpen={isOpen}
-        onClose={onClose}
-        title={isNew ? 'Cadastrar Novo Contato' : 'Editar Contato'}
-        subtitle={isNew ? 'Sincronização em tempo real com Bling ERP' : `ID Bling: ${cliente?.bling_id}`}
-        icon={<User className="w-6 h-6 text-blue-400" />}
-        footer={
-          <>
-            <div className="flex items-center gap-2 text-xs text-slate-400">
-              {savedSuccess && (
-                <span className="text-emerald-400 font-semibold flex items-center gap-1 animate-in fade-in">
-                  <CheckCircle2 className="w-4 h-4" /> Salvo com sucesso!
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-center gap-3">
-              <Button
-                variant="outline"
-                onClick={onClose}
-                className="bg-white/5 border-white/15 text-slate-300 hover:bg-white/10"
-              >
+      <Modal
+        aberto={isOpen}
+        onAbertoChange={(aberto) => {
+          if (!aberto) onClose();
+        }}
+        tamanho="lg"
+        eyebrow={isNew ? 'Novo contato' : `ID Bling: ${cliente?.bling_id}`}
+        titulo={isNew ? 'Cadastrar contato' : 'Editar contato'}
+        descricao="Os dados do contato, sincronizados com o Bling ERP ao salvar."
+        rodape={
+          <RodapeDeModal
+            secundaria={
+              <button type="button" onClick={onClose} className="orbita-chip cursor-pointer">
                 Cancelar
-              </Button>
-
-              <Button
+              </button>
+            }
+            primaria={
+              <button
+                type="button"
                 onClick={handleSave}
                 disabled={isSaving}
-                className="glass-button-primary gap-2 bg-blue-600/80 hover:bg-blue-600"
+                className="orbita-chip cursor-pointer"
+                style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
               >
-                <Save className="w-4 h-4" />
-                <span>{isSaving ? 'Salvando...' : 'Salvar Contato'}</span>
-              </Button>
-            </div>
-          </>
+                <Save className="w-3.5 h-3.5" />
+                {isSaving ? 'Salvando…' : 'Salvar contato'}
+              </button>
+            }
+          />
         }
       >
-        <div className="space-y-6">
-                  {/* Dados Pessoais / Principais */}
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider mb-4 flex items-center gap-2">
-                      <User className="w-4 h-4 text-blue-400" /> Dados Principais
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-1.5 md:col-span-2">
-                        <label htmlFor="cliente-edit-nome" className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                          Nome / Razão Social *
-                        </label>
-                        <input
-                          id="cliente-edit-nome"
-                          type="text"
-                          value={nome}
-                          onChange={(e) => {
-                            setNome(e.target.value);
-                            if (errors.nome) setErrors(prev => ({ ...prev, nome: '' }));
-                          }}
-                          className={`w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium ${errors.nome ? 'border-rose-500/50 focus:border-rose-500 bg-rose-500/5' : ''}`}
-                          placeholder="Ex: João da Silva / Empresa X"
-                        />
-                        {errors.nome && <span className="text-xs text-rose-400 font-semibold">{errors.nome}</span>}
-                      </div>
-                      <div className="space-y-1.5">
-                        <label htmlFor="cliente-edit-email" className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                          Email
-                        </label>
-                        <div className="relative">
-                          <Mail className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                          <input
-                            id="cliente-edit-email"
-                            type="email"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            className="w-full pl-9 pr-4 py-2.5 rounded-2xl glass-input text-sm outline-none"
-                            placeholder="contato@exemplo.com"
-                          />
-                        </div>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label htmlFor="cliente-edit-telefone" className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                          Telefone / Celular
-                        </label>
-                        <div className="relative">
-                          <Phone className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                          <input
-                            id="cliente-edit-telefone"
-                            type="text"
-                            value={telefone}
-                            onChange={(e) => setTelefone(e.target.value)}
-                            className="w-full pl-9 pr-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-mono"
-                            placeholder="(11) 98765-4321"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+        <div className="flex flex-col gap-6">
+          {savedSuccess && (
+            <output
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold"
+              style={{ background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--accent)' }}
+            >
+              <CheckCircle2 className="w-4 h-4" aria-hidden />
+              Contato salvo.
+            </output>
+          )}
 
-                  {/* Documento & Tributação (Bling) */}
-                  <div className="p-5 rounded-2xl glass-card border border-white/10 bg-white/[0.02]">
-                    <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider mb-4 flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-purple-400" /> Documento & Tributação
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div className="space-y-1.5">
-                        <label htmlFor="cliente-edit-cpf-cnpj" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
-                          CPF / CNPJ
-                        </label>
-                        <input
-                          id="cliente-edit-cpf-cnpj"
-                          type="text"
-                          value={cpfCnpj}
-                          onChange={(e) => handleDocChange(e.target.value)}
-                          className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50 font-mono"
-                          placeholder="000.000.000-00"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label htmlFor="cliente-edit-tipo" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
-                          Tipo de Pessoa *
-                        </label>
-                        <select
-                          id="cliente-edit-tipo"
-                          value={tipo}
-                          onChange={(e) => setTipo(e.target.value)}
-                          className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50"
-                        >
-                          <option value="F">Física (F)</option>
-                          <option value="J">Jurídica (J)</option>
-                          <option value="E">Estrangeiro (E)</option>
-                        </select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label htmlFor="cliente-edit-contribuinte" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
-                          Tipo de Contribuinte *
-                        </label>
-                        <select
-                          id="cliente-edit-contribuinte"
-                          value={contribuinte}
-                          onChange={(e) => setContribuinte(e.target.value)}
-                          className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 focus:border-cyan-500/50"
-                        >
-                          <option value="1">1 - Contribuinte ICMS</option>
-                          <option value="2">2 - Contribuinte isento</option>
-                          <option value="9">9 - Não contribuinte</option>
-                        </select>
-                      </div>
-                    </div>
-                  </div>
+          <Secao titulo="Dados principais">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex flex-col gap-1.5 md:col-span-2">
+                <Rotulo para="cliente-edit-nome">Nome / Razão social *</Rotulo>
+                <input
+                  id="cliente-edit-nome"
+                  type="text"
+                  value={nome}
+                  aria-invalid={errors.nome ? true : undefined}
+                  onChange={(e) => {
+                    setNome(e.target.value);
+                    if (errors.nome) setErrors(prev => ({ ...prev, nome: '' }));
+                  }}
+                  className="orbita-campo"
+                  placeholder="Ex: João da Silva / Empresa X"
+                />
+                {errors.nome && (
+                  <span className="text-xs font-semibold" style={{ color: 'var(--danger)' }}>{errors.nome}</span>
+                )}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="cliente-edit-email">E-mail</Rotulo>
+                <input
+                  id="cliente-edit-email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="orbita-campo"
+                  placeholder="contato@exemplo.com"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="cliente-edit-telefone">Telefone / Celular</Rotulo>
+                <input
+                  id="cliente-edit-telefone"
+                  type="text"
+                  value={telefone}
+                  onChange={(e) => setTelefone(e.target.value)}
+                  className="orbita-campo orbita-campo--mono"
+                  placeholder="(11) 98765-4321"
+                />
+              </div>
+            </div>
+          </Secao>
 
-                  {/* Endereço */}
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider mb-4 flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-emerald-400" /> Endereço
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                      <div className="space-y-1.5">
-                        <label htmlFor="cliente-edit-cep" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">CEP</label>
-                        <input id="cliente-edit-cep" type="text" value={cep} onChange={e => setCep(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="00000-000" />
-                      </div>
-                      <div className="space-y-1.5 md:col-span-2">
-                        <label htmlFor="cliente-edit-endereco" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Endereço / Rua</label>
-                        <input id="cliente-edit-endereco" type="text" value={endereco} onChange={e => setEndereco(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="Rua Exemplo" />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label htmlFor="cliente-edit-numero" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Número</label>
-                        <input id="cliente-edit-numero" type="text" value={numero} onChange={e => setNumero(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="123" />
-                      </div>
-                      <div className="space-y-1.5 md:col-span-2">
-                        <label htmlFor="cliente-edit-bairro" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Bairro</label>
-                        <input id="cliente-edit-bairro" type="text" value={bairro} onChange={e => setBairro(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="Centro" />
-                      </div>
-                      <div className="space-y-1.5 md:col-span-1">
-                        <label htmlFor="cliente-edit-cidade" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Cidade</label>
-                        <input id="cliente-edit-cidade" type="text" value={cidade} onChange={e => setCidade(e.target.value)} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10" placeholder="São Paulo" />
-                      </div>
-                      <div className="space-y-1.5 md:col-span-1">
-                        <label htmlFor="cliente-edit-uf" className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">UF</label>
-                        <input id="cliente-edit-uf" type="text" value={uf} onChange={e => setUf(e.target.value)} maxLength={2} className="w-full px-3 py-2 rounded-xl glass-input text-xs outline-none bg-[#0B0E14] border-white/10 uppercase" placeholder="SP" />
-                      </div>
-                    </div>
-                  </div>
+          <Secao titulo="Documento & tributação">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="cliente-edit-cpf-cnpj">CPF / CNPJ</Rotulo>
+                <input
+                  id="cliente-edit-cpf-cnpj"
+                  type="text"
+                  value={cpfCnpj}
+                  onChange={(e) => handleDocChange(e.target.value)}
+                  className="orbita-campo orbita-campo--mono"
+                  placeholder="000.000.000-00"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="cliente-edit-tipo">Tipo de pessoa *</Rotulo>
+                <select
+                  id="cliente-edit-tipo"
+                  value={tipo}
+                  onChange={(e) => setTipo(e.target.value)}
+                  className="orbita-campo"
+                >
+                  <option value="F">Física (F)</option>
+                  <option value="J">Jurídica (J)</option>
+                  <option value="E">Estrangeiro (E)</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="cliente-edit-contribuinte">Tipo de contribuinte *</Rotulo>
+                <select
+                  id="cliente-edit-contribuinte"
+                  value={contribuinte}
+                  onChange={(e) => setContribuinte(e.target.value)}
+                  className="orbita-campo"
+                >
+                  <option value="1">1 - Contribuinte ICMS</option>
+                  <option value="2">2 - Contribuinte isento</option>
+                  <option value="9">9 - Não contribuinte</option>
+                </select>
+              </div>
+            </div>
+          </Secao>
+
+          <Secao titulo="Endereço">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="cliente-edit-cep">CEP</Rotulo>
+                <input id="cliente-edit-cep" type="text" value={cep} onChange={e => setCep(e.target.value)} className="orbita-campo orbita-campo--mono" placeholder="00000-000" />
+              </div>
+              <div className="flex flex-col gap-1.5 md:col-span-2">
+                <Rotulo para="cliente-edit-endereco">Endereço / Rua</Rotulo>
+                <input id="cliente-edit-endereco" type="text" value={endereco} onChange={e => setEndereco(e.target.value)} className="orbita-campo" placeholder="Rua Exemplo" />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="cliente-edit-numero">Número</Rotulo>
+                <input id="cliente-edit-numero" type="text" value={numero} onChange={e => setNumero(e.target.value)} className="orbita-campo" placeholder="123" />
+              </div>
+              <div className="flex flex-col gap-1.5 md:col-span-2">
+                <Rotulo para="cliente-edit-bairro">Bairro</Rotulo>
+                <input id="cliente-edit-bairro" type="text" value={bairro} onChange={e => setBairro(e.target.value)} className="orbita-campo" placeholder="Centro" />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="cliente-edit-cidade">Cidade</Rotulo>
+                <input id="cliente-edit-cidade" type="text" value={cidade} onChange={e => setCidade(e.target.value)} className="orbita-campo" placeholder="São Paulo" />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Rotulo para="cliente-edit-uf">UF</Rotulo>
+                <input id="cliente-edit-uf" type="text" value={uf} onChange={e => setUf(e.target.value)} maxLength={2} className="orbita-campo uppercase" placeholder="SP" />
+              </div>
+            </div>
+          </Secao>
         </div>
-      </GlassModal>
-      </div>
+      </Modal>
 
-      <div className="relative z-50">
-        <ErrorLogModal
-          isOpen={errorLogData.isOpen}
-          onClose={() => setErrorLogData(prev => ({ ...prev, isOpen: false }))}
-          title={errorLogData.title}
-          errorMessage={errorLogData.errorMessage}
-          details={errorLogData.details}
-          logs={errorLogData.logs}
-          onRetry={handleSave}
-        />
-      </div>
+      <ErrorLogModal
+        isOpen={errorLogData.isOpen}
+        onClose={() => setErrorLogData(prev => ({ ...prev, isOpen: false }))}
+        title={errorLogData.title}
+        errorMessage={errorLogData.errorMessage}
+        details={errorLogData.details}
+        logs={errorLogData.logs}
+        onRetry={handleSave}
+      />
     </>
   );
 }
