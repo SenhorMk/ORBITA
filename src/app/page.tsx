@@ -5,7 +5,6 @@ import Image from 'next/image';
 import {
   DollarSign,
   TrendingUp,
-  ShoppingBag,
   FileText,
   CheckCircle,
   AlertTriangle,
@@ -16,11 +15,9 @@ import {
   ArrowRight,
   Lock,
   Mail,
-  User,
   LogOut,
   ChevronRight,
   Search,
-  Box,
   Percent,
   RefreshCw,
   X,
@@ -41,7 +38,10 @@ import {
 } from '@/lib/config/syncContract';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 import { PedidoEnriquecido } from '@/repositories/pedidoRepository';
-import { Sidebar } from '@/components/Sidebar';
+import { AppWindow } from '@/components/shell/AppWindow';
+import { Rail } from '@/components/shell/Rail';
+import { OrganizacaoAtiva } from '@/components/shell/OrganizacaoAtiva';
+import { EstadoDaSincronizacao } from '@/components/shell/EstadoDaSincronizacao';
 import { GradientMenu } from '@/components/GradientMenu';
 import { TransactionList } from '@/components/TransactionList';
 import { HealthMonitor } from '@/components/HealthMonitor';
@@ -84,6 +84,7 @@ import {
   type SelecaoDeOrganizacao,
 } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
 import { useStartupPorOrganizacao } from '@/components/organizacao/useStartupPorOrganizacao';
+import { useOrganizationsList } from '@/components/organizacao/useOrganizationsList';
 import { descreverErro } from '@/lib/erroLegivel';
 import { apenasVendasAtivas, pedidosComNfePendente, variacaoPercentual } from '@/lib/metricas/vendasAtivas';
 
@@ -263,6 +264,19 @@ export default function Home() {
   // revisão do #66, também invalida a autoridade visual sobre papel na troca.
   const [selecaoDeOrganizacao, setSelecaoDeOrganizacao] = useState<SelecaoDeOrganizacao | null>(null);
   const activeOrganizacaoId = selecaoDeOrganizacao?.id ?? null;
+
+  /**
+   * O estado de organizações, **uma vez só** (Ticket 01).
+   *
+   * O indicador do topo e a aba de organização olham para o mesmo objeto: se
+   * cada um tivesse o seu, trocar de organização pelo topo deixaria a aba
+   * anunciando a anterior. A troca continua sendo a mesma de sempre — a rota
+   * com o contrato CAS, dentro deste hook.
+   *
+   * Sem sessão não se consulta nada: `fetchWithAuth` lança sem token, e a tela
+   * de login é renderizada por este mesmo componente.
+   */
+  const listaDeOrganizacoes = useOrganizationsList(fetchWithAuth, session !== null);
 
   // Autoridade única sobre papel: o vínculo persistido, lido do servidor, para
   // o par (sessão, organização ativa). Trocar qualquer um dos dois invalida o
@@ -736,7 +750,13 @@ export default function Home() {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [session, loadDashboardData]);
+    // A organização ativa entra como dependência desde o Ticket 01. A leitura é
+    // escopada por organização no servidor, mas a tela só relia a cada 30s ou
+    // na troca de sessão. Enquanto trocar de organização exigia entrar na aba
+    // Organização — onde não há dado operacional na tela — isso não aparecia.
+    // Com a troca disponível no topo, em qualquer aba, ficaria meio minuto
+    // exibindo os números de uma organização sob o nome de outra.
+  }, [session, activeOrganizacaoId, loadDashboardData]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1117,8 +1137,7 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen flex font-sans select-none bg-[#0d0818] text-slate-100">
-
+    <>
       <StartupLoader
         // A chave é a organização: trocar de organização **desmonta** o
         // carregador da anterior, então nenhum trabalho em curso dela chega
@@ -1132,26 +1151,44 @@ export default function Home() {
         fetchWithAuth={fetchWithAuth}
       />
 
-      {/* Retractable Motion Glass Sidebar */}
-      <Sidebar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        session={session}
-        onLogout={handleLogout}
-        badges={{
-          sales: data?.pedidos?.length,
-          chats: conversas?.filter(c => c.status === 'open')?.length
-        }}
-      />
+      <AppWindow>
+        {/* A navegação do produto, e a única. */}
+        <Rail
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          session={session}
+          onLogout={handleLogout}
+        />
 
       {/* Main Content Area Right */}
-      <div className="flex-1 flex flex-col min-w-0 h-screen overflow-y-auto">
+      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         {/* SPATIAL TOPBAR */}
-        <header className="sticky top-0 z-30 glass-panel border-b border-white/10 px-6 py-3.5 backdrop-blur-xl">
-          <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+        <header
+          className="sticky top-0 z-30 px-6 py-3.5"
+          style={{ borderBottom: '1px solid var(--line)', background: 'var(--glass2)' }}
+        >
+          <div className="flex items-center justify-between gap-4">
 
-            {/* Health Monitor & Search */}
-            <div className="flex items-center gap-4">
+            {/* Organização ativa, estado do Bling e busca */}
+            <div className="flex items-center gap-3">
+              {/*
+                A organização é o tenant. Ela fica visível em qualquer aba
+                porque não saber a que empresa os números pertencem é um
+                defeito num produto multi-tenant, não uma economia de espaço.
+              */}
+              <OrganizacaoAtiva
+                organizacoes={listaDeOrganizacoes.organizacoes}
+                ativa={listaDeOrganizacoes.activeOrg}
+                carregando={listaDeOrganizacoes.isLoading}
+                trocandoParaId={listaDeOrganizacoes.switchingOrgId}
+                onTrocar={listaDeOrganizacoes.handleSwitchOrganization}
+              />
+
+              <EstadoDaSincronizacao
+                ultimaSincronizacao={lastSyncDate}
+                sincronizando={isSyncing}
+              />
+
               <HealthMonitor
                 supabaseConnected={true}
                 blingConnected={true}
@@ -1160,9 +1197,9 @@ export default function Home() {
               />
 
               <SearchQueryInput
-                containerClassName="relative w-64 hidden sm:block"
-                iconClassName="absolute left-3 top-2.5 h-4 w-4 text-slate-400"
-                inputClassName="w-full pl-9 pr-3 py-1.5 rounded-full glass-input text-xs outline-none"
+                containerClassName="relative w-56 hidden xl:block"
+                iconClassName="absolute left-3 top-2.5 h-4 w-4"
+                inputClassName="w-full pl-9 pr-3 py-1.5 rounded-xl text-xs outline-none orbita-surface"
                 placeholder="Pesquisar no sistema..."
                 value={searchQuery}
                 onChange={setSearchQuery}
@@ -1181,7 +1218,7 @@ export default function Home() {
                   <button
                     type="button"
                     onClick={() => setActiveTab('integrations')}
-                    className="px-3.5 py-2 rounded-xl glass-button text-xs font-bold flex items-center gap-2 cursor-pointer active:scale-95 transition"
+                    className="orbita-chip cursor-pointer"
                     title="Configurar credenciais e conexões de Bling e Chatwoot"
                   >
                     <Plug className="h-3.5 w-3.5" />
@@ -1191,7 +1228,7 @@ export default function Home() {
                     type="button"
                     onClick={() => { void handleSync(false); }}
                     disabled={isSyncing}
-                    className="px-3.5 py-2 rounded-xl glass-button-primary text-xs font-bold flex items-center gap-2 cursor-pointer active:scale-95 transition"
+                    className="orbita-chip cursor-pointer"
                     title={`Sincronizar o que mudou no Bling desde a última vez · ${syncAgoText}`}
                   >
                     <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
@@ -1206,7 +1243,7 @@ export default function Home() {
                     type="button"
                     onClick={() => { void handleSync(true); }}
                     disabled={isSyncing}
-                    className="px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 border border-white/15 hover:bg-white/5 flex items-center gap-2 cursor-pointer active:scale-95 transition"
+                    className="orbita-chip cursor-pointer"
                     title="Reler todo o catálogo do Bling, ignorando a data da última sincronização"
                   >
                     <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
@@ -1218,7 +1255,7 @@ export default function Home() {
               <button
                 type="button"
                 onClick={handleLogout}
-                className="p-2 rounded-xl glass-button-secondary text-slate-300 hover:text-rose-400 transition cursor-pointer"
+                className="orbita-chip cursor-pointer !px-2.5"
                 title="Sair da sessão"
               >
                 <LogOut className="h-4 w-4" />
@@ -1245,91 +1282,6 @@ export default function Home() {
       {/* MAIN CONTAINER */}
       <main className="max-w-7xl mx-auto w-full px-6 pt-6 flex-1 space-y-6">
 
-        {/* SPATIAL TAB NAVIGATION BAR */}
-        <div className="glass-panel p-1.5 rounded-2xl border border-white/10 flex items-center gap-1.5 overflow-x-auto no-scrollbar shadow-xl">
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-              activeTab === 'dashboard'
-                ? 'glass-button-primary text-white shadow-lg'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
-            }`}
-          >
-            <TrendingUp className="h-4 w-4" />
-            <span>Dashboard</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('sales')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-              activeTab === 'sales'
-                ? 'glass-button-primary text-white shadow-lg'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
-            }`}
-          >
-            <ShoppingBag className="h-4 w-4" />
-            <span>Vendas & Pedidos</span>
-            {data?.pedidos && (
-              <span className="px-2 py-0.5 rounded-full text-[10px] bg-white/20 text-white font-mono">
-                {data.pedidos.length}
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('inventory')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-              activeTab === 'inventory'
-                ? 'glass-button-primary text-white shadow-lg'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
-            }`}
-          >
-            <Box className="h-4 w-4" />
-            <span>Estoque & Produtos</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('contacts')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-              activeTab === 'contacts'
-                ? 'glass-button-primary text-white shadow-lg'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
-            }`}
-          >
-            <User className="h-4 w-4" />
-            <span>Clientes & Contatos</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('sac')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-              activeTab === 'sac'
-                ? 'glass-button-primary text-white shadow-lg'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
-            }`}
-          >
-            <MessageSquare className="h-4 w-4 text-cyan-400" />
-            <span>SAC Omnichannel</span>
-            {conversas.length > 0 && (
-              <span className="px-2 py-0.5 rounded-full text-[10px] bg-cyan-500/30 text-cyan-300 font-mono border border-cyan-500/40">
-                {conversas.filter(c => c.status === 'open').length}
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('finance')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-              activeTab === 'finance'
-                ? 'glass-button-primary text-white shadow-lg'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
-            }`}
-          >
-            <DollarSign className="h-4 w-4 text-[#FFD60A]" />
-            <span>Financeiro</span>
-          </button>
-        </div>
-
         {/* TAB FINANCEIRO */}
         <div className={activeTab === 'finance' ? 'block' : 'hidden'}>
           <FinanceiroTab fetchWithAuth={fetchWithAuth} ativo={activeTab === 'finance'} />
@@ -1337,7 +1289,11 @@ export default function Home() {
 
         {/* TAB ORGANIZAÇÃO & MEMBROS (Ticket 24b) */}
         <div className={activeTab === 'organization' ? 'block' : 'hidden'}>
-          <OrganizationPanel fetchWithAuth={fetchWithAuth} onActiveOrgChange={setSelecaoDeOrganizacao} />
+          <OrganizationPanel
+            fetchWithAuth={fetchWithAuth}
+            lista={listaDeOrganizacoes}
+            onActiveOrgChange={setSelecaoDeOrganizacao}
+          />
         </div>
 
         {/* TAB INTEGRAÇÕES: Bling / Chatwoot (Ticket 24b) */}
@@ -2225,6 +2181,7 @@ export default function Home() {
 
       </main>
       </div>
+      </AppWindow>
 
       {/* PEDIDO DETAILS MODAL (GLASSMORPHISM SPATIAL POPUP) */}
       {selectedPedido && (
@@ -2361,6 +2318,6 @@ export default function Home() {
         onSave={() => loadDashboardData()}
       />
 
-    </div>
+    </>
   );
 }

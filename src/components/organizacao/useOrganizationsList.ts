@@ -2,8 +2,21 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ActiveOrg, Organizacao } from './types';
 import type { AuthenticatedFetch } from './useOrganizationPanel';
 
-/** Carrega, cria e troca organizações (`/api/organizacoes`, `/api/organizacoes/switch`). */
-export function useOrganizationsList(fetchWithAuth: AuthenticatedFetch) {
+/**
+ * Carrega, cria e troca organizações (`/api/organizacoes`,
+ * `/api/organizacoes/switch`).
+ *
+ * `selectionVersion` sai daqui porque a tela precisa dela: trocar de
+ * organização e voltar para a mesma são seleções diferentes, e é a versão que
+ * separa uma da outra.
+ *
+ * @param habilitado - Se pode consultar o servidor. Existe porque, desde o
+ *   Ticket 01, este estado é criado uma vez no topo da aplicação para servir
+ *   tanto o indicador do shell quanto o painel de organização — e o topo da
+ *   aplicação também renderiza a tela de login, onde não há sessão e
+ *   `fetchWithAuth` lança. Sem sessão não se pergunta nada.
+ */
+export function useOrganizationsList(fetchWithAuth: AuthenticatedFetch, habilitado: boolean = true) {
   const [organizacoes, setOrganizacoes] = useState<Organizacao[]>([]);
   const [activeOrg, setActiveOrg] = useState<ActiveOrg | null>(null);
   const [selectionVersion, setSelectionVersion] = useState<number>(0);
@@ -29,6 +42,7 @@ export function useOrganizationsList(fetchWithAuth: AuthenticatedFetch) {
   }, [fetchWithAuth]);
 
   useEffect(() => {
+    if (!habilitado) return;
     let isMounted = true;
     void (async () => {
       setIsLoading(true);
@@ -38,7 +52,7 @@ export function useOrganizationsList(fetchWithAuth: AuthenticatedFetch) {
     return () => {
       isMounted = false;
     };
-  }, [loadOrganizacoes]);
+  }, [loadOrganizacoes, habilitado]);
 
   async function handleCreateOrganization(nome: string, slug: string) {
     setError(null);
@@ -79,9 +93,6 @@ export function useOrganizationsList(fetchWithAuth: AuthenticatedFetch) {
   return {
     organizacoes,
     activeOrg,
-    // A versão da seleção sai daqui porque a tela precisa dela: trocar de
-    // organização e voltar para a mesma são seleções diferentes, e é a versão
-    // que separa uma da outra.
     selectionVersion,
     isLoading,
     error,
