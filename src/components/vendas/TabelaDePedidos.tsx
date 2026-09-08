@@ -17,10 +17,22 @@ import { descreverOrigem } from './filtrosDeVendas';
  * configurável seria mais código para servir a um único chamador, e a segunda
  * tela que precisar de tabela vai saber melhor do que esta o que generalizar.
  *
- * Linha de 52px, cabeçalho fixo, sem zebra, hover — as medidas do Design System.
+ * As medidas são as de `Orbita Vendas.dc.html` e mudam com a geometria: o
+ * cabeçalho, a altura da linha, as colunas, o gap e o recuo saem de tokens, que
+ * o protótipo reescreve em cada um dos três presets. A tabela ocupa o que sobra
+ * da altura da janela — é ela que fica com o espaço, e não os cards.
+ *
+ * Duas colunas do protótipo não existem aqui e não foram inventadas: **CANAL**,
+ * que pediria marketplace (o que existe é `origem`, de onde o pedido entrou), e
+ * **ESPELHO BLING**, que pediria um segundo estado por pedido — só há um status,
+ * e ele já é o espelho do ERP.
  */
 
-const GRADE = '76px minmax(180px,1.4fr) 116px 150px 150px 116px 84px';
+/**
+ * As colunas saem do token de geometria: o protótipo as reescreve nos três
+ * presets, e não apenas as encolhe. Aqui elas chegam prontas.
+ */
+const GRADE = 'var(--tabela-cols)';
 
 function formatarReais(valor: number | string | null | undefined): string {
   const numero = Number(valor ?? 0);
@@ -41,6 +53,16 @@ function formatarEntrada(iso: string): string {
   });
 }
 
+function iniciaisDe(nome: string): string {
+  return nome
+    .split(' ')
+    .filter(Boolean)
+    .map((parte) => parte[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+}
+
 export interface AcoesDaLinha {
   onAbrir: (pedido: PedidoEnriquecido) => void;
   onConversarNoWhatsapp?: (telefone: string, nome: string) => void;
@@ -52,30 +74,32 @@ export function TabelaDePedidos({
   pedidos,
   acoes,
   agora,
+  rodape,
 }: {
   pedidos: readonly PedidoEnriquecido[];
   acoes: AcoesDaLinha;
   /** O "agora" da tela, para a idade de cada pedido não se mexer sozinha. */
   agora: number;
+  rodape: string;
 }) {
   return (
     <div
-      className="rounded-2xl overflow-hidden"
-      style={{ background: 'var(--glass2)', border: '1px solid var(--line)' }}
+      className="flex flex-col flex-1 min-h-0 overflow-hidden"
+      style={{ borderRadius: 22, background: 'var(--glass2)', border: '1px solid var(--line)' }}
     >
-      <div className="overflow-x-auto">
-        <div style={{ minWidth: 940 }}>
+      <div className="flex-1 min-h-0 overflow-auto" style={{ scrollbarGutter: 'stable' }}>
+        <div style={{ minWidth: 860 }}>
           <div
-            className="orbita-tabela-cabecalho grid items-center gap-3 px-4"
-            style={{ gridTemplateColumns: GRADE }}
+            className="orbita-tabela-cabecalho grid items-center"
+            style={{ gridTemplateColumns: GRADE, gap: 'var(--tabela-gap)', padding: '0 var(--tabela-pad)' }}
           >
-            <span>Pedido</span>
-            <span>Cliente</span>
-            <span>Origem</span>
-            <span>Entrada</span>
-            <span>Status</span>
-            <span className="text-right">Total</span>
-            <span className="text-right">Ações</span>
+            <span>PEDIDO</span>
+            <span>CLIENTE</span>
+            <span>ORIGEM</span>
+            <span>ENTRADA</span>
+            <span>STATUS</span>
+            <span className="text-right">TOTAL</span>
+            <span />
           </div>
 
           {pedidos.map((pedido) => {
@@ -91,13 +115,14 @@ export function TabelaDePedidos({
             return (
               <div
                 key={pedido.id || pedido.bling_id}
-                className="orbita-tabela-linha grid items-center gap-3 px-4 py-2"
-                style={{ gridTemplateColumns: GRADE }}
+                className="orbita-tabela-linha grid items-center"
+                style={{ gridTemplateColumns: GRADE, gap: 'var(--tabela-gap)', padding: '0 var(--tabela-pad)' }}
               >
                 <button
                   type="button"
                   onClick={() => acoes.onAbrir(pedido)}
-                  className="orbita-numero text-left text-[15px] cursor-pointer truncate"
+                  className="text-left cursor-pointer truncate"
+                  style={{ font: '500 12.5px/1 var(--font-jetbrains-mono), monospace', color: 'var(--txt)' }}
                   title={`Abrir o pedido ${pedido.numero}`}
                 >
                   #{pedido.numero}
@@ -106,31 +131,51 @@ export function TabelaDePedidos({
                 <button
                   type="button"
                   onClick={() => acoes.onAbrir(pedido)}
-                  className="flex flex-col items-start min-w-0 text-left cursor-pointer"
+                  className="flex items-center min-w-0 text-left cursor-pointer"
+                  style={{ gap: 10 }}
                 >
-                  <span className="text-[12.5px] font-medium truncate max-w-full" style={{ color: 'var(--txt)' }}>
-                    {nome}
+                  <span
+                    className="flex items-center justify-center shrink-0 rounded-full"
+                    style={{
+                      width: 30,
+                      height: 30,
+                      background: 'var(--chip)',
+                      border: '1px solid var(--line)',
+                      font: '600 10.5px/1 var(--font-jetbrains-mono), monospace',
+                      color: 'var(--txt2)',
+                    }}
+                    aria-hidden
+                  >
+                    {iniciaisDe(nome)}
                   </span>
-                  {documento && (
+                  <span className="flex flex-col min-w-0" style={{ gap: 3 }}>
                     <span
-                      className="text-[11px] truncate max-w-full"
-                      style={{ color: 'var(--txt3)', fontFamily: 'var(--font-jetbrains-mono), monospace' }}
+                      className="truncate"
+                      style={{ font: '500 13px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}
                     >
-                      {documento}
+                      {nome}
                     </span>
-                  )}
+                    {documento && (
+                      <span
+                        className="truncate"
+                        style={{ font: '400 10.5px/1 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}
+                      >
+                        {documento}
+                      </span>
+                    )}
+                  </span>
                 </button>
 
-                <span className="text-[12px]" style={{ color: 'var(--txt2)' }}>
+                <span style={{ font: '400 12px/1.3 var(--font-archivo), sans-serif', color: 'var(--txt2)' }}>
                   {descreverOrigem(pedido.origem)}
                 </span>
 
-                <span className="flex flex-col">
-                  <span className="text-[12px]" style={{ color: 'var(--txt2)' }}>
+                <span className="flex flex-col" style={{ gap: 3 }}>
+                  <span style={{ font: '500 12px/1 var(--font-jetbrains-mono), monospace', color: 'var(--txt)' }}>
                     {formatarEntrada(pedido.data)}
                   </span>
                   {idade && (
-                    <span className="text-[11px]" style={{ color: 'var(--txt3)' }}>
+                    <span style={{ font: '400 10.5px/1 var(--font-archivo), sans-serif', color: 'var(--txt3)' }}>
                       {idade}
                     </span>
                   )}
@@ -138,19 +183,28 @@ export function TabelaDePedidos({
 
                 <StatusPill status={pedido.status} />
 
-                <span className="orbita-numero text-right text-[15px]">{formatarReais(pedido.total)}</span>
+                <span
+                  className="text-right"
+                  style={{
+                    font: '500 14px/1 var(--font-space-grotesk), sans-serif',
+                    letterSpacing: '-0.02em',
+                    color: 'var(--txt)',
+                  }}
+                >
+                  {formatarReais(pedido.total)}
+                </span>
 
-                <span className="flex items-center justify-end gap-1">
+                <span className="flex items-center justify-end" style={{ gap: 4 }}>
                   {telefone && acoes.onConversarNoWhatsapp && (
                     <button
                       type="button"
                       onClick={() => acoes.onConversarNoWhatsapp?.(telefone, nome)}
                       title="Abrir a conversa no Chatwoot"
                       aria-label={`Conversar no WhatsApp com ${nome}`}
-                      className="w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer"
-                      style={{ background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--txt2)' }}
+                      className="flex items-center justify-center cursor-pointer"
+                      style={{ width: 28, height: 28, borderRadius: 9, color: 'var(--txt3)' }}
                     >
-                      <MessageCircle className="w-3.5 h-3.5" />
+                      <MessageCircle className="w-[17px] h-[17px]" />
                     </button>
                   )}
 
@@ -160,10 +214,10 @@ export function TabelaDePedidos({
                       <button
                         type="button"
                         aria-label={`Ações do pedido ${pedido.numero}`}
-                        className="w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer"
-                        style={{ background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--txt2)' }}
+                        className="flex items-center justify-center cursor-pointer"
+                        style={{ width: 28, height: 28, borderRadius: 9, color: 'var(--txt3)' }}
                       >
-                        <MoreVertical className="w-3.5 h-3.5" />
+                        <MoreVertical className="w-[17px] h-[17px]" />
                       </button>
                     }
                     sections={[
@@ -199,6 +253,15 @@ export function TabelaDePedidos({
             );
           })}
         </div>
+      </div>
+
+      <div
+        className="flex items-center justify-between flex-none"
+        style={{ padding: '11px var(--tabela-pad)', borderTop: '1px solid var(--line)' }}
+      >
+        <span style={{ font: '400 11.5px/1 var(--font-archivo), sans-serif', color: 'var(--txt3)' }}>
+          {rodape}
+        </span>
       </div>
     </div>
   );

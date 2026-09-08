@@ -27,15 +27,19 @@ import { pedidoContaComoVendaAtiva, pedidosComNfePendente } from '@/lib/metricas
  *   saber qual: os dois existem, significam coisas diferentes, e "em trânsito"
  *   promete um rastreamento que este contrato não tem. Omitido.
  * - **Aguardando pgto** seria `Pendente` renomeado. `Pendente` é um estado
- *   inicial, não uma afirmação sobre pagamento. Omitido.
+ *   real, e entra com esse nome — o que não entra é a promessa sobre pagamento
+ *   que o rótulo do mockup faz e o dado não sustenta.
  *
- * No lugar entram dois status verdadeiros:
+ * Ficam, então, quatro status verdadeiros e a atenção operacional:
  *
  * - **Entregue** — pedidos cujo status **é agora** `Entregue`. Nada além disso:
  *   a venda manual nasce com esse status, mas depois converge para o que vier
  *   do Bling, e já houve venda manual real terminando como `Pendente`. Dizer
  *   que "Entregue é o status das vendas manuais" seria transformar um estado
  *   inicial em regra permanente.
+ * - **Pendente** — pedidos cujo status **é agora** `Pendente`. É o estado em
+ *   que uma venda espera resolução, e é onde vendas manuais reais já
+ *   terminaram.
  * - **Cancelado** — a única forma de o resumo dizer quanto do histórico já não
  *   é operação, sem tirar esses pedidos da lista.
  *
@@ -66,7 +70,7 @@ export interface ChipDeResumo {
 }
 
 /** Os chips que filtram a tabela, e o predicado de cada um. */
-const CHIPS_DE_PEDIDO = ['a-emitir-nfe', 'entregue', 'cancelado'] as const;
+const CHIPS_DE_PEDIDO = ['a-emitir-nfe', 'pendente', 'entregue', 'cancelado'] as const;
 export type ChipDePedido = (typeof CHIPS_DE_PEDIDO)[number];
 
 export function ehChipDePedido(id: string | null): id is ChipDePedido {
@@ -91,6 +95,7 @@ export function pedidosDoChip(
 ): PedidoEnriquecido[] {
   if (chip === 'a-emitir-nfe') return pedidosComNfePendente(pedidos);
   if (chip === 'cancelado') return pedidos.filter((p) => !pedidoContaComoVendaAtiva(p));
+  if (chip === 'pendente') return pedidos.filter((p) => p.status === 'Pendente');
   return pedidos.filter((p) => p.status === 'Entregue');
 }
 
@@ -119,6 +124,7 @@ export function calcularChips(
   pendenciasDeVendaManual: number,
 ): ChipDeResumo[] {
   const naFilaDeNfe = pedidosDoChip(pedidosDoPeriodo, 'a-emitir-nfe');
+  const pendentes = pedidosDoChip(pedidosDoPeriodo, 'pendente');
   const entregues = pedidosDoChip(pedidosDoPeriodo, 'entregue');
   const cancelados = pedidosDoChip(pedidosDoPeriodo, 'cancelado');
 
@@ -132,6 +138,16 @@ export function calcularChips(
       cor: 'var(--warning)',
       filtraTabela: true,
       explicacao: 'Pedidos ativos que ainda não têm nota fiscal emitida.',
+    },
+    {
+      id: 'pendente',
+      rotulo: 'Pendente',
+      tipo: 'status',
+      quantidade: pendentes.length,
+      soma: somar(pendentes),
+      cor: 'var(--txt2)',
+      filtraTabela: true,
+      explicacao: 'Pedidos cujo status é, agora, Pendente.',
     },
     {
       id: 'entregue',

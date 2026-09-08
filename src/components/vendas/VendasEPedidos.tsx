@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useReducer, useRef, useState } from 'react';
-import { Plus, Search } from 'lucide-react';
+import { Search } from 'lucide-react';
 
 import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { AvisoDeAtualizacaoFalhada, EstadoCarregando, EstadoDeErro, EstadoVazio } from '@/components/ui/estados';
@@ -51,7 +51,6 @@ interface VendasEPedidosProps {
   onBuscaChange: (texto: string) => void;
   onConversarNoWhatsapp?: (telefone: string, nome: string) => void;
   onEmitirNfe?: (pedido: PedidoEnriquecido) => void;
-  onAbrirVendaManual: () => void;
 }
 
 function formatarReais(valor: number): string {
@@ -69,7 +68,6 @@ export function VendasEPedidos({
   onBuscaChange,
   onConversarNoWhatsapp,
   onEmitirNfe,
-  onAbrirVendaManual,
 }: VendasEPedidosProps) {
   const [periodo, setPeriodo] = useState<Periodo>('all');
   const [ordem, setOrdem] = useState<Ordem>('recent');
@@ -123,106 +121,118 @@ export function VendasEPedidos({
   };
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* Cabeçalho da tela */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="flex flex-col gap-2">
+    <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
+
+      {/* Título e resumo NA MESMA LINHA — a composição do protótipo. */}
+      <div className="flex items-start gap-8 flex-none">
+        <div className="flex flex-col flex-none" style={{ width: 'var(--titulo-col)', gap: 13 }}>
           <h1
-            className="text-[34px] leading-none font-bold tracking-tight"
-            style={{ fontFamily: 'var(--font-space-grotesk), sans-serif', color: 'var(--txt)' }}
+            className="m-0"
+            style={{
+              fontFamily: 'var(--font-space-grotesk), sans-serif',
+              fontWeight: 500,
+              fontSize: 'var(--titulo-fs)',
+              lineHeight: 1.04,
+              letterSpacing: '-0.03em',
+              color: 'var(--txt)',
+            }}
           >
-            Vendas &amp; Pedidos
+            Vendas &amp;<br />Pedidos
           </h1>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <span
-              className="w-1.5 h-1.5 rounded-full"
-              style={{ background: ultimaSincronizacao ? 'var(--info)' : 'var(--txt3)' }}
-              aria-hidden
-            />
-            <span className="orbita-eyebrow" style={{ color: 'var(--info)' }}>
-              Espelho do Bling
+              className="inline-flex items-center"
+              style={{
+                gap: 7,
+                height: 28,
+                padding: '0 11px',
+                borderRadius: 9,
+                background: 'rgba(200,244,65,.16)',
+                border: '1px solid rgba(200,244,65,.32)',
+                font: '500 11px/1 var(--font-jetbrains-mono), monospace',
+                color: 'var(--txt)',
+              }}
+            >
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--accent)' }} aria-hidden />
+              {ultimaSincronizacao ? 'BLING SINCRONIZADO' : 'ESPELHO DO BLING'}
             </span>
-            <span className="text-xs" style={{ color: 'var(--txt2)' }}>
+            <span style={{ font: '400 11px/1 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
               {ultimaSincronizacao
-                ? `última sincronização ${descreverTempoDesde(ultimaSincronizacao, agora)}`
+                ? descreverTempoDesde(ultimaSincronizacao, agora)
                 : 'sem sincronização registrada nesta sessão'}
             </span>
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={onAbrirVendaManual}
-          className="orbita-chip cursor-pointer"
-          style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
-        >
-          <Plus className="w-4 h-4" />
-          Novo pedido manual
-        </button>
-      </div>
-
-      {/*
-        Chips de resumo — só existem quando existe uma leitura para resumir.
-        Sem ela, um chip mostraria "0" e "R$ 0,00" ao lado de uma leitura que
-        FALHOU, que é o mesmo erro de confundir zero com "não sei" — só que na
-        posição mais visível da tela.
-      */}
-      {!nuncaCarregou && (
-      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
-        {chips.map((chip) => {
-          const selecionado = chip.filtraTabela && chipSelecionado === chip.id;
-          return (
-            <button
-              key={chip.id}
-              type="button"
-              onClick={() => alternarChip(chip.id, chip.filtraTabela)}
-              aria-pressed={chip.filtraTabela ? selecionado : undefined}
-              title={chip.explicacao}
-              className="flex flex-col justify-between gap-3 rounded-2xl p-3 text-left cursor-pointer"
-              style={{
-                minHeight: 78,
-                background: 'var(--glass2)',
-                border: `1px solid ${selecionado ? 'var(--txt)' : 'var(--line)'}`,
-              }}
-            >
-              <span className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: chip.cor }} aria-hidden />
-                <span className="text-xs font-semibold" style={{ color: 'var(--txt2)' }}>
-                  {chip.rotulo}
-                </span>
-              </span>
-              <span className="flex items-baseline justify-between gap-2">
-                <span className="orbita-numero text-[22px]" style={{ color: chip.cor }}>
-                  {chip.quantidade}
-                </span>
-                {chip.soma !== null && (
-                  <span className="orbita-numero text-[13px]" style={{ color: 'var(--txt2)' }}>
-                    {formatarReais(chip.soma)}
+        {/*
+          Chips de resumo — só existem quando existe uma leitura para resumir.
+          Sem ela, um chip mostraria "0" e "R$ 0,00" ao lado de uma leitura que
+          FALHOU, que é o mesmo erro de confundir zero com "não sei" — só que na
+          posição mais visível da tela.
+        */}
+        {!nuncaCarregou && (
+          <div
+            className="flex-1 min-w-0 grid"
+            style={{ gridTemplateColumns: 'repeat(' + chips.length + ', 1fr)', gap: 'var(--resumo-gap)' }}
+          >
+            {chips.map((chip) => {
+              const selecionado = chip.filtraTabela && chipSelecionado === chip.id;
+              return (
+                <button
+                  key={chip.id}
+                  type="button"
+                  onClick={() => alternarChip(chip.id, chip.filtraTabela)}
+                  aria-pressed={chip.filtraTabela ? selecionado : undefined}
+                  title={chip.explicacao}
+                  className="flex flex-col justify-between text-left cursor-pointer"
+                  style={{
+                    gap: 12,
+                    minHeight: 'var(--resumo-min)',
+                    padding: '12px 13px',
+                    borderRadius: 16,
+                    background: 'var(--glass2)',
+                    border: '1px solid ' + (selecionado ? 'var(--txt)' : 'var(--line)'),
+                  }}
+                >
+                  <span
+                    className="flex items-center"
+                    style={{ gap: 7, font: '400 10.5px/1.35 var(--font-archivo), sans-serif', color: 'var(--txt2)' }}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: chip.cor }} aria-hidden />
+                    {chip.rotulo}
                   </span>
-                )}
-              </span>
-            </button>
-          );
-        })}
+                  <span className="flex items-baseline" style={{ gap: 7 }}>
+                    <span className="orbita-numero" style={{ fontSize: 'var(--resumo-fs)', color: chip.cor }}>
+                      {chip.quantidade}
+                    </span>
+                    {chip.soma !== null && (
+                      <span style={{ font: '400 10.5px/1 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
+                        {formatarReais(chip.soma)}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
-      )}
 
       {/* Pendências de venda manual — visíveis aqui, e não só dentro do modal */}
       <div
         ref={blocoDePendencias}
-        className="rounded-2xl"
-        style={pendenciasEmDestaque ? { outline: '2px solid var(--danger)', outlineOffset: 4 } : undefined}
+        className="flex-none empty:hidden"
+        style={pendenciasEmDestaque ? { outline: '2px solid var(--danger)', outlineOffset: 4, borderRadius: 16 } : undefined}
       >
-        <PendenciasDeVendaManual
-          open
-          organizacaoId={organizacaoId}
-          onMudanca={relerPendencias}
-        />
+        <PendenciasDeVendaManual open organizacaoId={organizacaoId} onMudanca={relerPendencias} />
       </div>
 
-      {/* Período, busca e ordenação */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-1.5">
+      {/* Toolbar: períodos à esquerda, busca, espaço, ordenação. */}
+      <div className="flex items-center flex-none" style={{ gap: 10 }}>
+        <div
+          className="flex"
+          style={{ gap: 3, padding: 4, borderRadius: 14, background: 'var(--chip)', border: '1px solid var(--line)' }}
+        >
           {PERIODOS.map((p) => {
             const ativo = periodo === p.id;
             return (
@@ -231,12 +241,15 @@ export function VendasEPedidos({
                 type="button"
                 onClick={() => setPeriodo(p.id)}
                 aria-pressed={ativo}
-                className="h-[30px] px-3 rounded-xl text-xs font-semibold cursor-pointer"
-                style={
-                  ativo
-                    ? { background: 'var(--txt)', color: 'var(--invTxt)' }
-                    : { color: 'var(--txt2)', border: '1px solid var(--line)' }
-                }
+                className="cursor-pointer"
+                style={{
+                  height: 30,
+                  padding: '0 13px',
+                  borderRadius: 11,
+                  font: '600 12px/1 var(--font-archivo), sans-serif',
+                  background: ativo ? 'var(--txt)' : 'transparent',
+                  color: ativo ? 'var(--invTxt)' : 'var(--txt2)',
+                }}
               >
                 {p.rotulo}
               </button>
@@ -244,43 +257,58 @@ export function VendasEPedidos({
           })}
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search
-              className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none"
-              style={{ color: 'var(--txt3)' }}
-              aria-hidden
-            />
-            <input
-              type="search"
-              value={busca}
-              onChange={(evento) => onBuscaChange(evento.target.value)}
-              placeholder="Pedido, cliente ou CPF/CNPJ"
-              aria-label="Buscar pedido, cliente ou CPF/CNPJ"
-              className="h-[38px] w-[268px] pl-9 pr-3 rounded-xl text-xs outline-none"
-              style={{ background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--txt)' }}
-            />
-          </div>
-
-          <select
-            value={ordem}
-            onChange={(evento) => setOrdem(evento.target.value as Ordem)}
-            aria-label="Ordenação"
-            className="h-[38px] px-3 rounded-xl text-xs font-semibold cursor-pointer outline-none"
-            style={{ background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--txt2)' }}
-          >
-            {ORDENS.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.rotulo}
-              </option>
-            ))}
-          </select>
+        <div
+          className="flex items-center flex-1 min-w-0"
+          style={{
+            gap: 10,
+            height: 38,
+            maxWidth: 340,
+            padding: '0 14px',
+            borderRadius: 13,
+            background: 'var(--glass2)',
+            border: '1px solid var(--line)',
+          }}
+        >
+          <Search className="w-[18px] h-[18px] shrink-0" style={{ color: 'var(--txt3)' }} aria-hidden />
+          <input
+            type="search"
+            value={busca}
+            onChange={(evento) => onBuscaChange(evento.target.value)}
+            placeholder="Pedido, cliente ou CPF/CNPJ"
+            aria-label="Buscar pedido, cliente ou CPF/CNPJ"
+            className="flex-1 min-w-0 bg-transparent outline-none"
+            style={{ font: '400 13px/1 var(--font-archivo), sans-serif', color: 'var(--txt)' }}
+          />
         </div>
+
+        <div className="flex-1" />
+
+        <select
+          value={ordem}
+          onChange={(evento) => setOrdem(evento.target.value as Ordem)}
+          aria-label="Ordenação"
+          className="cursor-pointer outline-none"
+          style={{
+            height: 38,
+            padding: '0 13px',
+            borderRadius: 13,
+            background: 'var(--glass2)',
+            border: '1px solid var(--line)',
+            color: 'var(--txt2)',
+            font: '600 12.5px/1 var(--font-archivo), sans-serif',
+          }}
+        >
+          {ORDENS.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.rotulo}
+            </option>
+          ))}
+        </select>
       </div>
 
       {mostrarAvisoDeAtualizacao && <AvisoDeAtualizacaoFalhada detalhe={erroDeLeitura ?? undefined} />}
 
-      {/* Tabela e seus três estados */}
+      {/* A tabela ocupa o que sobra da janela. */}
       {mostrarCarregando && <EstadoCarregando mensagem="Carregando pedidos…" />}
 
       {mostrarErroDeCarga && (
@@ -293,11 +321,7 @@ export function VendasEPedidos({
 
       {!nuncaCarregou && listaVisivel.length === 0 && (
         <EstadoVazio
-          titulo={
-            base.length === 0
-              ? 'Nenhum pedido neste período'
-              : 'Nenhum pedido corresponde ao filtro'
-          }
+          titulo={base.length === 0 ? 'Nenhum pedido neste período' : 'Nenhum pedido corresponde ao filtro'}
           descricao={
             base.length === 0
               ? 'Amplie o período ou sincronize o Bling para trazer os pedidos mais recentes.'
@@ -307,22 +331,17 @@ export function VendasEPedidos({
       )}
 
       {!nuncaCarregou && listaVisivel.length > 0 && (
-        <>
-          <TabelaDePedidos
-            pedidos={listaVisivel}
-            agora={agora}
-            acoes={{
-              onAbrir: setPedidoAberto,
-              onConversarNoWhatsapp,
-              onEmitirNfe,
-              onCancelar: setPedidoParaCancelar,
-            }}
-          />
-          <p className="text-xs" style={{ color: 'var(--txt3)' }}>
-            {listaVisivel.length} de {base.length} pedidos no período. Pedidos cancelados continuam
-            no histórico.
-          </p>
-        </>
+        <TabelaDePedidos
+          pedidos={listaVisivel}
+          agora={agora}
+          rodape={listaVisivel.length + ' de ' + base.length + ' pedidos no período · pedidos cancelados continuam no histórico'}
+          acoes={{
+            onAbrir: setPedidoAberto,
+            onConversarNoWhatsapp,
+            onEmitirNfe,
+            onCancelar: setPedidoParaCancelar,
+          }}
+        />
       )}
 
       <DrawerDoPedido

@@ -25,11 +25,12 @@ function pedido(parcial: Partial<PedidoEnriquecido> & { numero: string }): Pedid
 const NOTA = { bling_id: 'nf-1', numero: '1', chave: '', status: 'Emitida', pedido_id: 'p' };
 
 describe('chips de resumo de Vendas', () => {
-  it('publica quatro chips, e nenhum deles inventa um estado que não existe', () => {
+  it('publica cinco chips, e nenhum deles inventa um estado que não existe', () => {
     const chips = calcularChips([], 0);
 
     expect(chips.map((c) => c.rotulo)).toEqual([
       'A emitir NF-e',
+      'Pendente',
       'Entregue',
       'Cancelado',
       'Conflito Bling',
@@ -52,6 +53,20 @@ describe('chips de resumo de Vendas', () => {
     expect(chip.tipo).toBe('fila-operacional');
     expect(chip.quantidade).toBe(2);
     expect(chip.soma).toBe(100);
+  });
+
+  it('conta "Pendente" pelo status atual, sem prometer nada sobre pagamento', () => {
+    const pedidos = [
+      pedido({ numero: '1', status: 'Pendente', total: 40 }),
+      pedido({ numero: '2', status: 'Entregue', total: 60, nfe: NOTA }),
+    ];
+
+    const chip = calcularChips(pedidos, 0).find((c) => c.id === 'pendente')!;
+
+    expect(chip.tipo).toBe('status');
+    expect(chip.quantidade).toBe(1);
+    expect(chip.soma).toBe(40);
+    expect(chip.explicacao).not.toMatch(/pagamento|pgto/i);
   });
 
   it('conta "Entregue" e "Cancelado" pelos status reais', () => {
