@@ -107,6 +107,11 @@
   --linha-h: 58px;
   --cabecalho-h: 40px;
   --drawer-w: 560px;
+  --anel-col: 400px;
+  --anel-tam: 330px;
+  --metrica-fs: 23px;
+  --anel-fs: 40px;
+  --metrica-min: 104px;
 
   --tabela-cols: 62px minmax(190px, 1.3fr) 116px 108px 152px 104px 72px;
   --tabela-gap: 12px;
@@ -216,6 +221,11 @@
     --linha-h: 40px;
     --cabecalho-h: 36px;
     --drawer-w: 470px;
+    --anel-col: 268px;
+    --anel-tam: 210px;
+    --metrica-fs: 18px;
+    --anel-fs: 28px;
+    --metrica-min: 76px;
 
     --tabela-cols: 56px minmax(150px, 1.25fr) 98px 96px 140px 92px 62px;
     --tabela-gap: 9px;
@@ -249,6 +259,11 @@
     --linha-h: 64px;
     --cabecalho-h: 44px;
     --drawer-w: 640px;
+    --anel-col: 460px;
+    --anel-tam: 380px;
+    --metrica-fs: 25px;
+    --anel-fs: 46px;
+    --metrica-min: 120px;
 
     --tabela-cols: 70px minmax(230px, 1.35fr) 132px 122px 172px 122px 80px;
     --tabela-gap: 14px;
