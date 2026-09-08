@@ -1444,6 +1444,11 @@ export default function Home() {
           // então a edição não tinha por onde ser aberta. A ação primária do
           // detalhe é o caminho que faltava; nenhuma rota nova, nenhum campo
           // novo.
+          //
+          // `onDelete` continua deliberadamente sem ser passado: a composição
+          // anterior também não o passava, e ligá-lo agora seria estrear um
+          // fluxo destrutivo, não preservar um. Ver o cabeçalho de
+          // `ClienteDetailModal`.
           setIsClienteModalOpen(false);
           setSelectedClienteToEdit(cliente);
           setIsClienteEditOpen(true);
