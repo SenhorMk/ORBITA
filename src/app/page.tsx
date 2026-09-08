@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Image from 'next/image';
 import {
   DollarSign,
@@ -260,24 +260,7 @@ export default function Home() {
     }
     return null;
   });
-  // Organização ativa (Ticket 24b): resolvida pelo servidor via OrganizationPanel,
-  // nunca escolhida localmente. Escopa a leitura de plano/limites — e, desde a
-  // revisão do #66, também invalida a autoridade visual sobre papel na troca.
-  const [selecaoAnunciada, setSelecaoDeOrganizacao] = useState<SelecaoDeOrganizacao | null>(null);
   const identidadeDaSessao = session?.email ?? null;
-  /**
-   * A seleção vale enquanto durar a sessão que a produziu.
-   *
-   * Quem a anuncia é o painel de organização — que desmonta no logout junto com
-   * o resto do shell. Um anúncio que não acontece não invalida nada, então a
-   * seleção da pessoa que saiu ficaria de pé, e com ela a autoridade visual
-   * sobre papel. Aqui ela simplesmente deixa de existir sem sessão; a troca
-   * direta de identidade é coberta pela mesma regra dentro de
-   * `useOrganizationsList`, que devolve organização ativa nula para uma leitura
-   * de outra sessão.
-   */
-  const selecaoDeOrganizacao = identidadeDaSessao === null ? null : selecaoAnunciada;
-  const activeOrganizacaoId = selecaoDeOrganizacao?.id ?? null;
 
   /**
    * O estado de organizações, **uma vez só** (Ticket 01).
@@ -291,6 +274,33 @@ export default function Home() {
    * de login é renderizada por este mesmo componente.
    */
   const listaDeOrganizacoes = useOrganizationsList(fetchWithAuth, identidadeDaSessao);
+
+  /**
+   * A organização ativa desta tela, **derivada da mesma fonte que o shell**.
+   *
+   * Antes ela vinha de um anúncio do painel de organização, por efeito. O
+   * anúncio é correto, mas chega tarde: no render em que a fonte compartilhada
+   * já expõe B — e o indicador do topo já escreve B na tela —, a seleção ainda
+   * era A. Um render inteiro, com paint, em que o nome no topo é de uma
+   * organização e os números embaixo são de outra. Num produto multi-tenant, é
+   * o defeito que não se pode ter, e nenhum carimbo no consumidor resolve: quem
+   * chega atrasado é a própria fonte do escopo.
+   *
+   * Derivar durante a renderização elimina a janela: não existe momento em que
+   * a fonte diz B e a seleção diz A.
+   *
+   * A versão entra junto porque sair de uma organização e voltar são seleções
+   * diferentes — só ela as distingue. E a seleção não sobrevive à sessão que a
+   * produziu de graça: `useOrganizationsList` já devolve organização ativa nula
+   * para uma leitura de outra sessão.
+   */
+  const organizacaoAtivaId = listaDeOrganizacoes.activeOrg?.organizacao.id ?? null;
+  const versaoDaSelecao = listaDeOrganizacoes.selectionVersion;
+  const selecaoDeOrganizacao = useMemo<SelecaoDeOrganizacao | null>(
+    () => (organizacaoAtivaId === null ? null : { id: organizacaoAtivaId, versao: versaoDaSelecao }),
+    [organizacaoAtivaId, versaoDaSelecao],
+  );
+  const activeOrganizacaoId = selecaoDeOrganizacao?.id ?? null;
 
   // Autoridade única sobre papel: o vínculo persistido, lido do servidor, para
   // o par (sessão, organização ativa). Trocar qualquer um dos dois invalida o
@@ -1230,11 +1240,7 @@ export default function Home() {
 
         {/* TAB ORGANIZAÇÃO & MEMBROS (Ticket 24b) */}
         <div className={activeTab === 'organization' ? 'block' : 'hidden'}>
-          <OrganizationPanel
-            fetchWithAuth={fetchWithAuth}
-            lista={listaDeOrganizacoes}
-            onActiveOrgChange={setSelecaoDeOrganizacao}
-          />
+          <OrganizationPanel fetchWithAuth={fetchWithAuth} lista={listaDeOrganizacoes} />
         </div>
 
         {/* TAB INTEGRAÇÕES: Bling / Chatwoot (Ticket 24b) */}
