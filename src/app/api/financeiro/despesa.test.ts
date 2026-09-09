@@ -272,3 +272,58 @@ describe('modo interno', () => {
     expect(corpo.data?.blingId).toBeNull();
   });
 });
+
+describe('o que a despesa deixa no histórico', () => {
+  it('grava título e descrição como campos distintos, sem mandar o título para o Bling', async () => {
+    const bling = fakeBling();
+    const store = fakeStore();
+    const handler = createDespesaHandler(deps({ bling, store }));
+
+    await handler(requisicao(corpoValido({ titulo: 'Insumos', descricao: '1kg de rapé para revenda' })));
+
+    expect(store.salvos[0]).toMatchObject({ titulo: 'Insumos', descricao: '1kg de rapé para revenda' });
+    // O ERP não tem o conceito: lá continua existindo só o `historico`.
+    expect(bling.criadas[0].historico).toBe('1kg de rapé para revenda');
+  });
+
+  it('uma despesa sem título continua válida — a coluna é opcional e nasce nula', async () => {
+    const store = fakeStore();
+    const handler = createDespesaHandler(deps({ store }));
+
+    const resposta = await handler(requisicao(corpoValido()));
+
+    expect(resposta.status).toBe(200);
+    expect(store.salvos[0].titulo).toBeUndefined();
+  });
+
+  it('registra o contato informado e o nome dele no momento do lançamento', async () => {
+    const store = fakeStore();
+    const handler = createDespesaHandler(deps({ store }));
+
+    await handler(requisicao(corpoValido({ contatoBlingId: 4242, contatoNome: 'Fornecedor Exemplo LTDA' })));
+
+    expect(store.salvos[0]).toMatchObject({
+      fornecedorBlingId: 4242,
+      fornecedorNome: 'Fornecedor Exemplo LTDA',
+    });
+  });
+
+  it('sem contato informado, registra o padrão que o SERVIDOR resolveu — não um id do cliente', async () => {
+    const store = fakeStore();
+    const handler = createDespesaHandler(deps({ store }));
+
+    await handler(requisicao(corpoValido()));
+
+    expect(store.salvos[0].fornecedorBlingId).toBe(7001);
+  });
+
+  it('o modo interno não inventa fornecedor: não há contato no Bling para registrar', async () => {
+    const store = fakeStore();
+    const handler = createDespesaHandler(deps({ store }));
+
+    await handler(requisicao(corpoValido({ modo: 'interno', contatoBlingId: 4242, contatoNome: 'X' })));
+
+    expect(store.salvos[0].fornecedorBlingId).toBeUndefined();
+    expect(store.salvos[0].fornecedorNome).toBeUndefined();
+  });
+});

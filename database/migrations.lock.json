@@ -320,6 +320,11 @@
       "order": 64,
       "path": "../database/61_titulo_financeiro_vinculado_ao_pedido.sql",
       "sha256": "016a7a10e47323fc2560430de9e97b330a95dac519e2d0c5d3ee90537bd83111"
+    },
+    {
+      "order": 65,
+      "path": "../database/62_titulo_e_fornecedor_da_despesa.sql",
+      "sha256": "1dfbade613e739e0ae1bacb14aeac83b32f3804ef8ead351db56efd00368e872"
     }
   ],
   "references": [

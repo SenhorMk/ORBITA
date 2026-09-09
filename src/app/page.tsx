@@ -40,7 +40,7 @@ import { ProductDetailModal } from '@/components/ProductDetailModal';
 import { ClienteEditModal } from '@/components/ClienteEditModal';
 import { ManualOrderModal } from '@/components/ManualOrderModal';
 import { StartupLoader } from '@/components/StartupLoader';
-import { FinanceiroTab } from '@/components/FinanceiroTab';
+import { FinanceiroTab } from '@/components/financeiro/FinanceiroTab';
 import { RegisterForm } from '@/components/auth/RegisterForm';
 import { OrganizationPanel } from '@/components/organizacao/OrganizationPanel';
 import { IntegrationsPanel } from '@/components/integracoes/IntegrationsPanel';
@@ -110,7 +110,7 @@ function OrbitaLogo({ className = "h-6 w-6" }: { className?: string }) {
  * Nelas a tabela é que fica com o espaço que sobra; as demais continuam
  * empilhando e rolando dentro do `main`, como sempre fizeram.
  */
-const TELAS_QUE_OCUPAM_A_JANELA = new Set(['dashboard', 'sales', 'inventory', 'contacts']);
+const TELAS_QUE_OCUPAM_A_JANELA = new Set(['dashboard', 'sales', 'inventory', 'contacts', 'finance']);
 
 /** Intervalo entre consultas ao estado do job de sincronização. */
 const INTERVALO_POLL_SYNC_MS = 2_000;
@@ -1042,8 +1042,8 @@ export default function Home() {
         : 'flex-1 min-h-0 overflow-y-auto space-y-6 pr-1'}>
 
         {/* TAB FINANCEIRO */}
-        <div className={activeTab === 'finance' ? 'block' : 'hidden'}>
-          <FinanceiroTab fetchWithAuth={fetchWithAuth} ativo={activeTab === 'finance'} />
+        <div className={activeTab === 'finance' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
+          <FinanceiroTab fetchWithAuth={fetchWithAuth} ativo={activeTab === 'finance'} pedidos={data?.pedidos ?? null} />
         </div>
 
         {/* TAB ORGANIZAÇÃO & MEMBROS (Ticket 24b) */}

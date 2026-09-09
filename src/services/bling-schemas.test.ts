@@ -132,6 +132,10 @@ export function tipoCompativel(tsDeclarado: string, oficial: CampoOficial): bool
 const FRONTEIRAS = [
   { tipo: 'BlingPedido', prefixo: '', dtos: ['VendasDadosBaseDTO', 'VendasDadosDTO'] },
   { tipo: 'ContaFinanceiraOficial', prefixo: '', dtos: ['ContasDadosBaseDTO', 'ContasReceberDadosListDTO'], fonte: 'financeiro' },
+  // `origem.id` e `origem.tipoOrigem` sustentam o vínculo entre uma conta a
+  // receber e o pedido que a originou. A fronteira do nível de cima só prova
+  // que existe um objeto chamado `origem`; esta prova os dois campos.
+  { tipo: 'ContaFinanceiraOficial', prefixo: 'origem', dtos: ['ContasReceberDadosOrigemDTO'], fonte: 'financeiro' },
   { tipo: 'BlingPedido', prefixo: 'situacao', dtos: ['VendasSituacaoDTO'] },
   { tipo: 'BlingPedido', prefixo: 'contato', dtos: ['VendasContatoDTO'] },
   { tipo: 'BlingItemPedido', prefixo: '', dtos: ['VendasItemDTO'] },

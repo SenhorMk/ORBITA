@@ -33,6 +33,16 @@ export interface TituloPersistido {
   readonly id: string;
   readonly blingId: string | null;
   readonly situacao: string;
+  /**
+   * O que a gravação não conseguiu registrar, quando conseguiu gravar o resto.
+   *
+   * Existe para um caso concreto: a migration que criou `titulo` e o
+   * fornecedor pode ainda não ter sido aplicada no banco em que esta versão
+   * está rodando. A despesa é gravada do mesmo jeito — o valor, a data e a
+   * situação são o que importa —, e o aviso diz o que ficou de fora e por quê,
+   * em vez de a informação sumir em silêncio.
+   */
+  readonly aviso?: string;
 }
 
 export interface DespesaStorePort {
@@ -42,9 +52,14 @@ export interface DespesaStorePort {
     readonly blingId: string | null;
     readonly valor: number;
     readonly dataVencimento: string;
+    /** Nome curto local. Ausente quando o lançamento não informou um. */
+    readonly titulo?: string;
     readonly descricao: string;
     readonly categoriaId?: string;
     readonly situacao: 'aberto' | 'pago';
+    /** O contato do ERP a quem a despesa foi lançada, e o nome dele na hora. */
+    readonly fornecedorBlingId?: number;
+    readonly fornecedorNome?: string;
   }): Promise<TituloPersistido>;
 }
 
@@ -75,7 +90,14 @@ function fail(error: string, status: number): NextResponse {
 }
 
 type SincronizacaoBling =
-  | { readonly _tag: 'Sincronizada'; readonly blingId: string; readonly quitada: boolean; readonly avisos: readonly string[] }
+  | {
+      readonly _tag: 'Sincronizada';
+      readonly blingId: string;
+      /** O contato REALMENTE usado — o informado, ou o padrão que o servidor resolveu. */
+      readonly contatoId: number;
+      readonly quitada: boolean;
+      readonly avisos: readonly string[];
+    }
   | { readonly _tag: 'Recusada'; readonly response: NextResponse };
 
 /**
@@ -117,13 +139,14 @@ async function sincronizarComBling(
 
   const blingId = criada.value.id;
   if (!body.pago) {
-    return { _tag: 'Sincronizada', blingId, quitada: false, avisos: [] };
+    return { _tag: 'Sincronizada', blingId, contatoId, quitada: false, avisos: [] };
   }
 
   if (!categoriaBlingId) {
     return {
       _tag: 'Sincronizada',
       blingId,
+      contatoId,
       quitada: false,
       avisos: [`A despesa ${blingId} foi lançada no Bling, mas não pôde ser quitada: a quitação exige uma categoria sincronizada com o Bling.`],
     };
@@ -134,6 +157,7 @@ async function sincronizarComBling(
     return {
       _tag: 'Sincronizada',
       blingId,
+      contatoId,
       quitada: false,
       avisos: [`A despesa ${blingId} foi lançada no Bling, mas continua em aberto lá: ${portador.failure.message}`],
     };
@@ -150,12 +174,13 @@ async function sincronizarComBling(
     return {
       _tag: 'Sincronizada',
       blingId,
+      contatoId,
       quitada: false,
       avisos: [`A despesa ${blingId} foi lançada no Bling, mas a quitação falhou: ${baixa.failure.message}. Ela continua em aberto no ERP.`],
     };
   }
 
-  return { _tag: 'Sincronizada', blingId, quitada: true, avisos: [] };
+  return { _tag: 'Sincronizada', blingId, contatoId, quitada: true, avisos: [] };
 }
 
 /**
@@ -194,11 +219,15 @@ export function createDespesaHandler(deps: DespesaDependencies) {
         blingId: null,
         valor: body.valor,
         dataVencimento: body.dataVencimento,
+        titulo: body.titulo,
         descricao: body.descricao,
         categoriaId: body.categoriaId,
         situacao: body.pago ? 'pago' : 'aberto',
       });
-      return NextResponse.json({ success: true, data } satisfies DespesaResponseBody, { status: 200 });
+      return NextResponse.json(
+        { success: true, data, ...(data.aviso ? { avisos: [data.aviso] } : {}) } satisfies DespesaResponseBody,
+        { status: 200 },
+      );
     }
 
     const sincronizacao = await sincronizarComBling(body, categoriaBlingId, deps);
@@ -209,15 +238,25 @@ export function createDespesaHandler(deps: DespesaDependencies) {
         blingId: sincronizacao.blingId,
         valor: body.valor,
         dataVencimento: body.dataVencimento,
+        titulo: body.titulo,
         descricao: body.descricao,
         categoriaId: body.categoriaId,
+        // Quem recebeu a despesa fica no histórico. Antes o contato só
+        // existia na chamada ao Bling e o ORBITA não sabia de quem era a
+        // saída; o id é a referência, o nome é o retrato do momento.
+        fornecedorBlingId: sincronizacao.contatoId,
+        fornecedorNome: body.contatoNome,
         // A situação gravada é a real do ERP. Se a quitação não aconteceu, o
         // título fica aberto aqui também — os dois lados contam a mesma coisa.
         situacao: sincronizacao.quitada ? 'pago' : 'aberto',
       });
 
       return NextResponse.json(
-        { success: true, data, avisos: sincronizacao.avisos } satisfies DespesaResponseBody,
+        {
+          success: true,
+          data,
+          avisos: data.aviso ? [...sincronizacao.avisos, data.aviso] : sincronizacao.avisos,
+        } satisfies DespesaResponseBody,
         { status: 200 },
       );
     } catch (error: unknown) {

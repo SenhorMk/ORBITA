@@ -1,9 +1,9 @@
 {
   "descricao": "Schemas do OpenAPI oficial do Bling que os tipos Bling* de src/types/index.ts espelham. Extraidos de https://developer.bling.com.br/build/assets/openapi-BvBfsn8J.json (o hash muda; encontre a URL em build/assets/reference-*.js). Serve de guarda: src/services/bling-schemas.test.ts compara os tipos declarados com estes e falha no commit quando divergem.",
   "origem": {
-    "url": "https://developer.bling.com.br/build/assets/openapi-BvBfsn8J.json",
-    "capturadoEm": "2026-08-31",
-    "observacao": "O hash muda a cada publicacao do Bling; a URL corrente esta em build/assets/reference-*.js. `allOf` do requestBody achatado na extracao — `escrita` registra a composicao original. `somenteLeitura` e `nulavel` vem de readOnly/nullable do spec."
+    "url": "https://developer.bling.com.br/build/assets/openapi-DKXp8d1e.json",
+    "capturadoEm": "2026-09-08",
+    "observacao": "O hash muda a cada publicacao do Bling; a URL corrente esta em build/assets/reference-*.js. `allOf` do requestBody achatado na extracao — `escrita` registra a composicao original. `somenteLeitura` e `nulavel` vem de readOnly/nullable do spec. O hash mudou desde a captura de 31/08 (openapi-BvBfsn8J.json passou a devolver 404); a URL acima foi encontrada em build/assets/reference-CWKWlE8-.js e e a fonte de `ContasReceberDadosOrigemDTO`, adicionado no ticket 05. Os demais schemas continuam sendo os da captura anterior — este arquivo nao foi recapturado inteiro."
   },
   "capturadoEm": "2026-08-30",
   "schemas": {
@@ -1373,6 +1373,33 @@
           "tipo": "integer"
         },
         "cor": {
+          "tipo": "string"
+        }
+      }
+    },
+    "ContasReceberDadosOrigemDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "tipoOrigem": {
+          "tipo": "string"
+        },
+        "numero": {
+          "tipo": "string"
+        },
+        "dataEmissao": {
+          "tipo": "string"
+        },
+        "valor": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "situacao": {
+          "tipo": "integer"
+        },
+        "url": {
           "tipo": "string"
         }
       }

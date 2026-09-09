@@ -7,6 +7,7 @@ import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope'
 import type { TituloFinanceiro } from '@/types';
 
 import type {
+  CandidatoDeVinculo,
   EntidadeFinanceira,
   FinanceiroSyncBlingPort,
   FinanceiroSyncDependencies,
@@ -61,6 +62,13 @@ const contaFinanceiraSchema = z.object({
   vencimento: z.string().min(1),
   pagamento: z.object({ data: z.string().optional() }).optional(),
   historico: z.string().optional(),
+  // `origem` é opcional e frouxa de propósito: a conta a pagar não tem esse
+  // campo, e uma conta a receber sem origem continua sendo uma conta válida.
+  // O que ela não pode é virar vínculo sem `tipoOrigem` dizer que é venda.
+  origem: z.object({
+    id: numeroDoProvedor.pipe(z.number().int().positive()).optional(),
+    tipoOrigem: z.string().optional(),
+  }).optional(),
 });
 
 /** Item já provado contra o contrato, pronto para virar `TituloFinanceiro`. */
@@ -134,7 +142,11 @@ function statusTecnico(erro: unknown): number | undefined {
   return typeof bruto === 'number' && Number.isInteger(bruto) && bruto >= 0 && bruto <= 599 ? bruto : undefined;
 }
 
-function toTitulo(conta: ContaValidada, tipo: 'pagar' | 'receber'): TituloFinanceiro {
+function toTitulo(
+  conta: ContaValidada,
+  tipo: 'pagar' | 'receber',
+  pedidoId?: string,
+): TituloFinanceiro {
   const rotulo = tipo === 'pagar' ? 'Conta a Pagar' : 'Conta a Receber';
   return {
     bling_id: conta.id,
@@ -144,7 +156,25 @@ function toTitulo(conta: ContaValidada, tipo: 'pagar' | 'receber'): TituloFinanc
     data_vencimento: conta.vencimento,
     data_pagamento: conta.pagamento?.data || undefined,
     descricao: conta.historico || `${rotulo} #${conta.id}`,
+    // Só o que o store confirmou. `undefined` não escreve nada: um título já
+    // vinculado não perde o vínculo porque uma releitura não o reconfirmou.
+    ...(pedidoId ? { pedido_id: pedidoId } : {}),
   };
+}
+
+/**
+ * O pedido que a conta declara ter originado — e nada além disso.
+ *
+ * `tipoOrigem` é o que separa uma venda de uma nota fiscal dentro do mesmo
+ * campo `origem.id`. Fora de `venda`, o id não é de pedido, e casá-lo com um
+ * pedido seria ligar receita ao registro errado. Valor, data, cliente e texto
+ * da descrição não entram nesta decisão em nenhuma hipótese.
+ */
+function candidatoDeVinculo(conta: ContaValidada): CandidatoDeVinculo | null {
+  const origem = conta.origem;
+  if (!origem || origem.id === undefined) return null;
+  if ((origem.tipoOrigem ?? '').trim().toLowerCase() !== 'venda') return null;
+  return { contaBlingId: conta.id, pedidoBlingId: String(origem.id) };
 }
 
 /**
@@ -194,6 +224,7 @@ async function sincronizarEntidade(
       break;
     }
 
+    const validados: ContaValidada[] = [];
     for (const raw of itens) {
       const validado = contaFinanceiraSchema.safeParse(raw);
       if (!validado.success) {
@@ -208,11 +239,27 @@ async function sincronizarEntidade(
         });
         continue;
       }
+      validados.push(validado.data);
+    }
 
+    // Uma consulta por página, e não uma por conta. Falhar aqui não pode
+    // custar a página inteira: o vínculo é enriquecimento, e sem ele os
+    // títulos continuam sendo gravados exatamente como eram antes.
+    let vinculos: ReadonlyMap<number, string> = new Map();
+    const candidatos = validados.map(candidatoDeVinculo).filter((c): c is CandidatoDeVinculo => c !== null);
+    if (candidatos.length > 0) {
+      try {
+        vinculos = await store.vincularPedidos(scope, candidatos);
+      } catch (err: unknown) {
+        registrarFalha(err, { etapa: 'vincular-pedido', entidade, organizacaoId: scope.organizationId });
+      }
+    }
+
+    for (const conta of validados) {
       try {
         // Idempotente: `onConflict (organizacao_id, bling_id)` no repositório
         // faz a reexecução atualizar o mesmo registro, nunca duplicar.
-        await store.upsertTitulo(scope, toTitulo(validado.data, tipo));
+        await store.upsertTitulo(scope, toTitulo(conta, tipo, vinculos.get(conta.id)));
         processados++;
       } catch (err: unknown) {
         if (ehFalhaTemporaria(err)) falhasTemporarias++;
@@ -221,7 +268,7 @@ async function sincronizarEntidade(
           etapa: 'gravar-titulo',
           entidade,
           organizacaoId: scope.organizationId,
-          blingId: String(validado.data.id),
+          blingId: String(conta.id),
         });
       }
     }

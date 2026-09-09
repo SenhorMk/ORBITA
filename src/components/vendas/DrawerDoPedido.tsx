@@ -55,6 +55,17 @@ interface DrawerDoPedidoProps {
    * drawer não abre diálogo próprio nem escreve no ERP por conta própria.
    */
   onCancelar?: (pedido: PedidoEnriquecido) => void;
+  /**
+   * Abre o pedido só para ler. Padrão `false` — Vendas & Pedidos continua
+   * exatamente como está.
+   *
+   * O Financeiro abre este mesmo drawer a partir de uma entrada, e ali
+   * `Detalhes` é leitura. Não passar `onCancelar`/`onEmitirNfe` já desabilitava
+   * essas duas, mas `Editar` é interna ao drawer e continuava disponível — uma
+   * escrita no ERP a partir de uma tela que não a oferece. Em modo leitura o
+   * rodapé inteiro sai: botão morto é pior que botão ausente.
+   */
+  somenteLeitura?: boolean;
 }
 
 /** O pedido sumiu do Bling — não é falha de rede nem erro de leitura. */
@@ -250,6 +261,7 @@ export function DrawerDoPedido({
   pedidoLocal,
   onEmitirNfe,
   onCancelar,
+  somenteLeitura = false,
 }: DrawerDoPedidoProps) {
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -306,7 +318,7 @@ export function DrawerDoPedido({
         eyebrow={`Pedido #${numero}${quando ? ` · ${new Date(quando).toLocaleString('pt-BR')}` : ''}`}
         titulo={pedido?.contato?.nome ?? pedidoLocal?.cliente?.nome ?? 'Detalhes do pedido'}
         descricao="Detalhes do pedido, lidos do Bling quando ele ainda existe lá."
-        rodape={
+        rodape={somenteLeitura ? undefined : (
           <RodapeDeModal
             destrutiva={
               <button
@@ -358,7 +370,7 @@ export function DrawerDoPedido({
               </button>
             }
           />
-        }
+        )}
       >
         {carregando && <EstadoCarregando mensagem="Buscando dados no Bling ERP…" />}
 
@@ -391,7 +403,7 @@ export function DrawerDoPedido({
       {/* Edição continua no modal legado: a lógica dele não faz parte desta
           fatia e reescrevê-la agora só por estética ampliaria o ticket. */}
       <EditOrderModal
-        open={edicaoAberta}
+        open={edicaoAberta && !somenteLeitura}
         onOpenChange={setEdicaoAberta}
         pedido={pedido}
         onSuccess={() => {

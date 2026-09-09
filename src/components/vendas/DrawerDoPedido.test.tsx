@@ -170,3 +170,36 @@ describe('pedido normal', () => {
     expect(screen.getByText(/R\$\s*47,50/)).toBeInTheDocument();    // total do pedido
   });
 });
+
+describe('somenteLeitura', () => {
+  it('Vendas & Pedidos continua com as três ações — o padrão não mudou', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(resposta({ error: 'not found' }, 404));
+
+    montar(PEDIDO_LOCAL);
+
+    expect(await screen.findByRole('button', { name: /Cancelar pedido/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Editar/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Emitir NF-e/i })).toBeInTheDocument();
+  });
+
+  it('em modo leitura o rodapé inteiro sai — botão morto é pior que botão ausente', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(resposta({ error: 'not found' }, 404));
+
+    render(
+      <DrawerDoPedido
+        aberto
+        onAbertoChange={vi.fn()}
+        pedidoBlingId={PEDIDO_LOCAL.bling_id}
+        pedidoLocal={PEDIDO_LOCAL}
+        onEmitirNfe={vi.fn()}
+        onCancelar={vi.fn()}
+        somenteLeitura
+      />,
+    );
+
+    expect(await screen.findByText('Mateus Kahuan')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Cancelar pedido/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Editar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Emitir NF-e/i })).not.toBeInTheDocument();
+  });
+});
