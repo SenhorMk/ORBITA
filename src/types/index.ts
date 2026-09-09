@@ -336,10 +336,22 @@ export interface TituloFinanceiro {
   valor: number;
   data_vencimento: string;
   data_pagamento?: string;
+  /**
+   * Nome curto da movimentação, informado no lançamento de despesa
+   * (migration 62). **Nulo** em tudo que veio do Bling e em tudo lançado antes
+   * dela: a tela exibe a `descricao` no lugar, como fallback de apresentação.
+   */
+  titulo?: string | null;
   descricao: string;
   categoria_id?: string; // UUID local
   conta_financeira_id?: string; // UUID local
   fornecedor_id?: string; // UUID local
+  /** O pedido que originou este título, quando houver (migration 61). */
+  pedido_id?: string | null;
+  /** Contato do Bling a quem a despesa foi lançada — o identificador, não o nome. */
+  fornecedor_bling_id?: number | null;
+  /** Retrato do nome do fornecedor no momento do lançamento. Não é chave. */
+  fornecedor_nome?: string | null;
   created_at?: string;
   updated_at?: string;
 }

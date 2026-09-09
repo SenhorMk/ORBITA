@@ -220,6 +220,23 @@ export function NovaDespesaModal({
       </div>
 
       <form id={ID_DO_FORMULARIO} onSubmit={onSubmit} className="space-y-4">
+        {/*
+          Título e Descrição são campos distintos desde a migration 62. O
+          título é opcional e **local**: o Bling não tem esse conceito, e é a
+          descrição que continua indo para lá como `historico`.
+        */}
+        <div>
+          <label htmlFor="despesa-titulo" className={ROTULO} style={COR_DO_ROTULO}>Título (opcional)</label>
+          <input
+            id="despesa-titulo"
+            name="titulo"
+            type="text"
+            maxLength={120}
+            className="orbita-campo"
+            placeholder="Ex: Insumos, Frete, Aluguel..."
+          />
+        </div>
+
         <div>
           <label htmlFor="despesa-descricao" className={ROTULO} style={COR_DO_ROTULO}>Descrição do Gasto</label>
           <input

@@ -82,6 +82,14 @@ export class FinanceiroRepository {
   ): Promise<TituloFinanceiro[]> {
     let query = supabaseServer
       .from('titulos_financeiros')
+      // `select('*')` de propósito, e **sem join com `pedidos`**.
+      //
+      // O vínculo `pedido_id` existe no repositório desde a migration 61 e vem
+      // por aqui quando a coluna está aplicada; um join explícito, porém, é um
+      // contrato duro: numa base onde a 61 ainda não rodou, o PostgREST recusa
+      // a consulta inteira ("Could not find a relationship") e a tela do
+      // dinheiro fica em branco por causa de um enfeite. Quem liga o título ao
+      // pedido é a tela, com os pedidos que o painel já leu.
       .select(`
         *,
         categoria:categoria_id (*)
@@ -128,10 +136,13 @@ export class FinanceiroRepository {
       valor: titulo.valor,
       data_vencimento: titulo.data_vencimento,
       data_pagamento: titulo.data_pagamento,
+      titulo: titulo.titulo,
       descricao: titulo.descricao,
       categoria_id: titulo.categoria_id,
       conta_financeira_id: titulo.conta_financeira_id,
       fornecedor_id: titulo.fornecedor_id,
+      fornecedor_bling_id: titulo.fornecedor_bling_id,
+      fornecedor_nome: titulo.fornecedor_nome,
       organizacao_id: scope.organizationId,
       user_id: scope.actorId,
     };
@@ -143,7 +154,10 @@ export class FinanceiroRepository {
 
     if (error) {
       console.error('Erro no upsert do título financeiro:', error.message);
-      throw new Error(error.message);
+      // A causa vai junto: o `code` do PostgREST é o que distingue "esta
+      // coluna ainda não existe neste banco" de uma falha de verdade, e
+      // `new Error(message)` sozinho apagava justamente isso.
+      throw new Error(error.message, { cause: error });
     }
 
     return data;

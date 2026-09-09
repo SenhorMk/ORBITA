@@ -7,19 +7,24 @@ import {
   EstadoVazio,
 } from '@/components/ui/estados';
 
-import { FluxoDeCaixa } from './FluxoDeCaixa';
+import type { BarraDoDia, PontoDoFluxo } from './derivacoesDoFinanceiro';
+import { EntradasESaidas, FluxoDeCaixa } from './Graficos';
 import { TabelaDeMovimentacoes } from './Movimentacoes';
 import { ResumoFinanceiro } from './ResumoFinanceiro';
-import type { PontoDoFluxo, ResumoFinanceiro as Resumo, TituloFinanceiro } from './useLeituraFinanceira';
+import type { ResumoFinanceiro as Resumo, TituloFinanceiro } from './useLeituraFinanceira';
 
 /**
- * As duas metades visuais do Financeiro: o cabeçalho com os totais e o corpo
- * com o fluxo de caixa e as movimentações.
+ * As duas metades visuais do Financeiro: o cabeçalho com os totais e o corpo,
+ * agora em duas colunas — os dois gráficos à esquerda, o extrato à direita.
  *
- * Elas moram aqui, e não no container, porque o container já carrega o estado
- * dos dois diálogos e do cadastro de fornecedor. Nada nestas duas funções
- * decide regra financeira — elas só escolhem qual das quatro situações de
- * leitura mostrar.
+ * A moldura vertical do corpo existe por um defeito concreto: a tabela era o
+ * único elemento flexível da coluna e ficava com o que sobrasse depois do
+ * cabeçalho, da toolbar e de gráficos de altura fixa. Numa janela baixa
+ * (1366×768 vira ~657px de viewport depois da moldura do navegador) sobravam
+ * 50px — uma linha. A página inteira não rola, e não pode passar a rolar: o
+ * Financeiro é uma tela full height. Por isso os gráficos dividem a coluna
+ * esquerda com piso próprio (`--grafico-min`) e a tabela ocupa a coluna direita
+ * inteira, rolando por dentro da `MolduraDeTabela`.
  */
 
 interface EstadoDaLeitura {
@@ -36,25 +41,21 @@ export function CabecalhoDoFinanceiro({
   formatarDinheiro: (valor: number) => string;
 }) {
   return (
-    <div className="flex items-start gap-8 flex-none">
-      <div className="flex flex-col flex-none" style={{ width: 'var(--titulo-col)', gap: 13 }}>
-        <h1
-          className="m-0"
-          style={{
-            fontFamily: 'var(--font-space-grotesk), sans-serif',
-            fontWeight: 500,
-            fontSize: 'var(--titulo-fs)',
-            lineHeight: 1.04,
-            letterSpacing: '-0.03em',
-            color: 'var(--txt)',
-          }}
-        >
-          Controle<br />Financeiro
-        </h1>
-        <span style={{ font: '400 11px/1.4 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
-          gestão simplificada de fluxo de caixa e saídas
-        </span>
-      </div>
+    <div className="flex items-center gap-8 flex-none">
+      <h1
+        className="m-0 flex-none"
+        style={{
+          width: 'var(--titulo-col)',
+          fontFamily: 'var(--font-space-grotesk), sans-serif',
+          fontWeight: 500,
+          fontSize: 'var(--titulo-fs)',
+          lineHeight: 1.04,
+          letterSpacing: '-0.03em',
+          color: 'var(--txt)',
+        }}
+      >
+        Controle<br />Financeiro
+      </h1>
 
       {/*
         Os três totais só existem quando existe uma leitura para resumir. Sem
@@ -69,15 +70,19 @@ export function CabecalhoDoFinanceiro({
 export function CorpoDoFinanceiro({
   estado,
   titulos,
-  chartData,
+  serie,
+  barras,
   formatarDinheiro,
   onRecarregar,
+  onAbrirDetalhe,
 }: {
   estado: EstadoDaLeitura;
   titulos: readonly TituloFinanceiro[];
-  chartData: readonly PontoDoFluxo[];
+  serie: readonly PontoDoFluxo[];
+  barras: readonly BarraDoDia[];
   formatarDinheiro: (valor: number) => string;
   onRecarregar: () => void;
+  onAbrirDetalhe: (titulo: TituloFinanceiro) => void;
 }) {
   const { nuncaCarregou, erroDeLeitura, carregando } = estado;
 
@@ -93,43 +98,35 @@ export function CorpoDoFinanceiro({
     );
   }
 
-  /*
-    A moldura vertical do corpo, e a razão de ela existir.
-
-    Antes o corpo devolvia os três blocos soltos e a tabela era o único
-    elemento flexível da coluna: ela ficava com o que sobrasse depois do
-    cabeçalho, da toolbar e de um gráfico de altura fixa. Numa janela baixa
-    (1366×768 vira ~657px de viewport depois da moldura do navegador) o que
-    sobrava eram 50px — uma linha —, e o resto do extrato ficava dentro de uma
-    área rolável pequena demais para ser encontrada. A página inteira não rola,
-    e não pode passar a rolar: o Financeiro é uma tela full height.
-
-    A correção é de prioridade, não de mecanismo de scroll. O gráfico passa a
-    ENCOLHER (`flex: 0 1 auto`, entre `--fluxo-h` e `--fluxo-min`) e as
-    movimentações passam a ter piso próprio (`--movimentacoes-min`), então numa
-    janela apertada quem cede é o gráfico. A rolagem continua sendo a de
-    dentro da `MolduraDeTabela`, com cabeçalho fixo e rodapé sempre visível.
-  */
   return (
     <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
       {erroDeLeitura !== null && (
         <AvisoDeAtualizacaoFalhada detalhe={erroDeLeitura} recurso="o financeiro" />
       )}
 
-      <FluxoDeCaixa chartData={chartData} formatarDinheiro={formatarDinheiro} />
-
       <div
-        className="flex flex-col flex-1 min-h-0"
-        style={{ minHeight: 'var(--movimentacoes-min)' }}
+        className="grid flex-1 min-h-0"
+        style={{ gridTemplateColumns: 'var(--financeiro-cols)', gap: 'var(--conteudo-gap)' }}
       >
-        {titulos.length === 0 ? (
-          <EstadoVazio
-            titulo="Nenhuma movimentação encontrada"
-            descricao="Sincronize o Bling para trazer os títulos financeiros, ou registre uma saída por aqui."
-          />
-        ) : (
-          <TabelaDeMovimentacoes titulos={titulos} formatarDinheiro={formatarDinheiro} />
-        )}
+        <div className="flex flex-col min-h-0 min-w-0" style={{ gap: 'var(--conteudo-gap)' }}>
+          <EntradasESaidas barras={barras} formatarDinheiro={formatarDinheiro} />
+          <FluxoDeCaixa serie={serie} formatarDinheiro={formatarDinheiro} />
+        </div>
+
+        <div className="flex flex-col min-h-0 min-w-0">
+          {titulos.length === 0 ? (
+            <EstadoVazio
+              titulo="Nenhuma movimentação no período"
+              descricao="Amplie o período, troque o filtro, ou sincronize o Bling para trazer os títulos financeiros."
+            />
+          ) : (
+            <TabelaDeMovimentacoes
+              titulos={titulos}
+              formatarDinheiro={formatarDinheiro}
+              onAbrirDetalhe={onAbrirDetalhe}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

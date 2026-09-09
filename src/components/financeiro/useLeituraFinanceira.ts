@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { descreverErro } from '@/lib/erroLegivel';
 import { executarSyncFinanceiro } from '@/lib/financeiroSync';
@@ -16,8 +16,22 @@ export interface TituloFinanceiro {
   valor: number;
   data_vencimento: string;
   data_pagamento?: string;
+  /**
+   * Nome curto da movimentação (migration 62). **Nulo** em tudo que veio do
+   * Bling e em tudo lançado antes dela — a tela exibe a `descricao` no lugar,
+   * como fallback de apresentação. Nada é gravado por esse fallback.
+   */
+  titulo?: string | null;
   descricao: string;
   categoria?: { descricao: string; cor?: string };
+  /**
+   * O pedido que originou este título (migration 61). É o vínculo estrutural
+   * que substituiu a pista dentro do TEXTO da descrição — e é por ele, nunca
+   * pelo texto, que a tela decide qual detalhe abrir.
+   */
+  pedido_id?: string | null;
+  fornecedor_bling_id?: number | null;
+  fornecedor_nome?: string | null;
 }
 
 export interface ResumoFinanceiro {
@@ -26,15 +40,25 @@ export interface ResumoFinanceiro {
   saldo: number;
 }
 
-export interface PontoDoFluxo {
-  date: string;
-  receitas: number;
-  despesas: number;
-}
-
 export type FiltroDeTipo = 'todos' | 'receber' | 'pagar';
 
 export type BuscaAutenticada = (url: string, options?: RequestInit) => Promise<Response>;
+
+/**
+ * O que a requisição depende, e portanto a quem a resposta pertence.
+ *
+ * **O período não entra aqui de propósito.** Ele é recorte puro sobre a leitura
+ * corrente — nunca cruza a rede —, então nenhuma leitura pode estar velha em
+ * relação a ele: mudar o período recalcula o corte a partir do que já está na
+ * tela. O `tipo`, esse sim, muda a consulta, e é por isso que ele carimba.
+ */
+type EscopoDeLeitura = FiltroDeTipo;
+
+/** Um valor e o escopo que o produziu. Nada é exposto sem o carimbo bater. */
+interface DoEscopo<T> {
+  readonly escopo: EscopoDeLeitura;
+  readonly valor: T;
+}
 
 /** Uma leitura boa: os títulos e o resumo que vieram juntos na mesma resposta. */
 interface LeituraFinanceira {
@@ -73,9 +97,9 @@ function lerResumo(valor: unknown): ResumoFinanceiro | null {
  */
 async function buscarFinanceiro(
   fetchWithAuth: BuscaAutenticada,
-  filtroTipo: FiltroDeTipo,
+  escopo: EscopoDeLeitura,
 ): Promise<Resultado> {
-  const url = filtroTipo === 'todos' ? '/api/financeiro' : `/api/financeiro?tipo=${filtroTipo}`;
+  const url = escopo === 'todos' ? '/api/financeiro' : `/api/financeiro?tipo=${escopo}`;
   try {
     const res = await fetchWithAuth(url);
     const corpo: unknown = await res.json().catch(() => null);
@@ -100,68 +124,64 @@ async function buscarFinanceiro(
 }
 
 /**
- * A série do fluxo de caixa, somada por data de vencimento.
- *
- * Terminal fica fora do fluxo pelo mesmo motivo que fica fora do total: não é
- * dinheiro que entrou nem que vai entrar. A regra e a agregação são as de
- * antes, sem nenhum recorte novo.
- */
-function derivarFluxo(titulos: readonly TituloFinanceiro[]): PontoDoFluxo[] {
-  return titulos
-    .filter((t) => t.situacao === 'pago' || t.situacao === 'aberto')
-    .reduce<PontoDoFluxo[]>((acc, curr) => {
-      const date = curr.data_vencimento?.split('T')[0] || curr.data_vencimento;
-      const existing = acc.find((d) => d.date === date);
-      if (existing) {
-        if (curr.tipo === 'receber') existing.receitas += curr.valor;
-        else existing.despesas += curr.valor;
-      } else {
-        acc.push({
-          date,
-          receitas: curr.tipo === 'receber' ? curr.valor : 0,
-          despesas: curr.tipo === 'pagar' ? curr.valor : 0,
-        });
-      }
-      return acc;
-    }, [])
-    .sort((a, b) => a.date.localeCompare(b.date));
-}
-
-/**
- * Carrega os títulos financeiros e deriva a série do fluxo de caixa.
+ * Carrega os títulos financeiros da organização.
  *
  * ## Zero e "não sei" são coisas diferentes
  *
- * A versão anterior começava em `{ receitas: 0, despesas: 0, saldo: 0 }` e, no
- * `catch`, só registrava o erro no console. O estado inicial continuava na
- * tela, e o lojista lia **R$ 0,00** onde a verdade era "não consegui carregar".
- * Numa tela que mostra dinheiro esse é o pior defeito possível — é o mesmo
- * `catch` que devolve valor "seguro" e apaga o diagnóstico.
+ * A versão anterior começava em `{ receitas: 0, despesas: 0, saldo: 0 }` e o
+ * `catch` só registrava o erro no console. O estado inicial continuava na tela,
+ * e o lojista lia **R$ 0,00** onde a verdade era "não consegui carregar".
+ * Enquanto não há leitura boa, não há resumo: a tela mostra carregando ou erro,
+ * nunca números.
  *
- * Agora não existe resumo antes da primeira leitura boa: enquanto `leitura` é
- * `null` a tela mostra carregando ou erro, nunca números. Quando já houve
- * leitura boa e a atualização falha, os números **daquela** leitura continuam,
- * com o aviso de que envelheceram — apagá-los trocaria informação verdadeira
- * por nenhuma.
+ * ## E o dado de um filtro não vale por outro
+ *
+ * Toda leitura é **carimbada pelo escopo que a produziu**. Sem o carimbo, dois
+ * defeitos reais apareciam:
+ *
+ * 1. **O vazamento entre filtros.** `Todos` carregava, o usuário ia para
+ *    `Entradas`, a consulta de `Entradas` falhava — e a tela preservava a
+ *    "última leitura boa", que era a de `Todos`, sob o rótulo `Entradas`. O
+ *    aviso dizia que o dado envelheceu; ele não era velho, era de outra
+ *    pergunta.
+ * 2. **A resposta fora de ordem.** `Entradas` sai, o usuário troca para
+ *    `Saídas`, `Saídas` responde, e só então `Entradas` responde: sem carimbo,
+ *    a resposta atrasada sobrescreve a atual.
+ *
+ * Nada é exposto sem o carimbo bater com o escopo corrente, e nada é gravado
+ * por uma resposta cujo escopo já não é o atual. Preservar a leitura boa num
+ * refresh falhado continua valendo — dentro do **mesmo** escopo.
  */
 export function useLeituraFinanceira(fetchWithAuth: BuscaAutenticada, ativo: boolean) {
-  const [leitura, setLeitura] = useState<LeituraFinanceira | null>(null);
-  const [erroDeLeitura, setErroDeLeitura] = useState<string | null>(null);
+  const [leitura, setLeitura] = useState<DoEscopo<LeituraFinanceira> | null>(null);
+  const [erro, setErro] = useState<DoEscopo<string> | null>(null);
   const [syncing, setSyncing] = useState(false);
   /** Falha ou parcialidade da última sincronização, para a tela não mentir. */
   const [avisoSync, setAvisoSync] = useState('');
   const [filtroTipo, setFiltroTipo] = useState<FiltroDeTipo>('todos');
+  /**
+   * O escopo corrente, legível de dentro de uma resposta que ainda está em
+   * voo. É o que permite descartar a resposta que chega depois da troca de
+   * filtro sem recriar a leitura a cada renderização.
+   */
+  const escopoAtualRef = useRef<EscopoDeLeitura>(filtroTipo);
 
-  const fetchFinanceiro = useCallback(async (isMounted: () => boolean = () => true) => {
-    const resultado = await buscarFinanceiro(fetchWithAuth, filtroTipo);
-    if (!isMounted()) return;
+  const lerNoEscopo = useCallback(async (escopo: EscopoDeLeitura) => {
+    const resultado = await buscarFinanceiro(fetchWithAuth, escopo);
+    // Daqui para baixo é tudo escrita: se o carimbo não confere, esta resposta
+    // é de outra pergunta e não tem onde ser aplicada.
+    if (escopoAtualRef.current !== escopo) return;
     if (!resultado.ok) {
-      setErroDeLeitura(resultado.erro);
+      setErro({ escopo, valor: resultado.erro });
       return;
     }
-    setErroDeLeitura(null);
-    setLeitura(resultado.leitura);
-  }, [filtroTipo, fetchWithAuth]);
+    setErro(null);
+    setLeitura({ escopo, valor: resultado.leitura });
+  }, [fetchWithAuth]);
+
+  const fetchFinanceiro = useCallback(async () => {
+    await lerNoEscopo(escopoAtualRef.current);
+  }, [lerNoEscopo]);
 
   const syncFinanceiro = async () => {
     setSyncing(true);
@@ -178,29 +198,30 @@ export function useLeituraFinanceira(fetchWithAuth: BuscaAutenticada, ativo: boo
   };
 
   useEffect(() => {
+    escopoAtualRef.current = filtroTipo;
     if (!ativo) return;
-    let isMounted = true;
+    // Disparada e esquecida: tudo o que ela grava acontece DEPOIS da resposta
+    // do servidor, nunca durante o efeito.
     void (async () => {
-      await fetchFinanceiro(() => isMounted);
+      await lerNoEscopo(filtroTipo);
     })();
-    return () => {
-      isMounted = false;
-    };
     // `ativo` entra na dependência de propósito: a aba fica montada o tempo
     // todo, então voltar a ela é o único momento em que releitura é pedida —
     // e é aí que uma venda manual registrada no painel precisa aparecer aqui.
-  }, [fetchFinanceiro, ativo]);
+  }, [lerNoEscopo, filtroTipo, ativo]);
 
-  const nuncaCarregou = leitura === null;
+  const valeAgora = leitura !== null && leitura.escopo === filtroTipo;
+  const leituraAtual = valeAgora ? leitura.valor : null;
+  const erroDeLeitura = erro !== null && erro.escopo === filtroTipo ? erro.valor : null;
 
   return {
-    titulos: leitura?.titulos ?? [],
-    /** `null` enquanto nenhuma leitura deu certo — nunca zeros de partida. */
-    resumo: leitura?.resumo ?? null,
-    nuncaCarregou,
+    titulos: leituraAtual?.titulos ?? [],
+    /** `null` enquanto nenhuma leitura DESTE escopo deu certo — nunca zeros de partida. */
+    resumo: leituraAtual?.resumo ?? null,
+    nuncaCarregou: leituraAtual === null,
     erroDeLeitura,
-    /** Ainda não há leitura boa e nada falhou: é isso que carregar significa. */
-    carregando: nuncaCarregou && erroDeLeitura === null,
+    /** Ainda não há leitura boa deste escopo e nada falhou nele. */
+    carregando: leituraAtual === null && erroDeLeitura === null,
     syncing,
     setSyncing,
     avisoSync,
@@ -208,6 +229,5 @@ export function useLeituraFinanceira(fetchWithAuth: BuscaAutenticada, ativo: boo
     setFiltroTipo,
     fetchFinanceiro,
     syncFinanceiro,
-    chartData: derivarFluxo(leitura?.titulos ?? []),
   };
 }
