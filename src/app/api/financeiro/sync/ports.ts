@@ -41,8 +41,17 @@ export interface ContaFinanceiraOficial {
    * casar isso com um pedido seria ligar receita a pedido errado.
    *
    * Vem na LISTAGEM que a sincronização já lê — nenhuma leitura nova.
+   *
+   * Declarado em várias linhas de propósito: é assim que `camposDeclarados`
+   * enxerga os campos aninhados, e é isso que faz a guarda do OpenAPI comparar
+   * `id` e `tipoOrigem` contra o catálogo congelado em vez de parar em "existe
+   * um objeto chamado origem". Os dois sustentam um relacionamento financeiro;
+   * uma troca silenciosa de tipo lá seria o `situacao.valor` de novo.
    */
-  origem?: { id?: number; tipoOrigem?: string };
+  origem?: {
+    id?: number;
+    tipoOrigem?: string;
+  };
 }
 
 /**

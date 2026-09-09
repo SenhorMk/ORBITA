@@ -170,3 +170,70 @@ describe('a borda do período é dia civil, não vinte e quatro horas', () => {
     ]);
   });
 });
+
+describe('a janela é retrospectiva: o futuro não entra', () => {
+  /**
+   * "7 dias" é hoje e os seis anteriores — uma janela de sete dias civis, e
+   * não "de sete dias atrás em diante". Sem teto, um vencimento de 30/09
+   * entrava em `7 dias` no dia 08/09: a contagem deixava de ter N dias e o
+   * filtro deixava de ser retrospectivo, ao contrário do de Vendas.
+   *
+   * `all` é o histórico inteiro, e aí o futuro entra — é o que "todo o
+   * período" quer dizer.
+   */
+  const HOJE = new Date(2026, 8, 8, 12, 0, 0).getTime();
+
+  function so(dia: string) {
+    return [titulo({ data_vencimento: dia, descricao: dia })];
+  }
+
+  it.each([
+    ['7', '2026-09-02'],
+    ['30', '2026-08-10'],
+    ['90', '2026-06-11'],
+  ] as const)('%s dias: hoje entra, o primeiro dia entra, o anterior a ele não', (periodo, primeiroDia) => {
+    expect(recortarPorVencimento(so('2026-09-08'), periodo, HOJE)).toHaveLength(1);
+    expect(recortarPorVencimento(so(primeiroDia), periodo, HOJE)).toHaveLength(1);
+
+    const anterior = new Date(Date.parse(`${primeiroDia}T00:00:00Z`) - 86_400_000)
+      .toISOString().slice(0, 10);
+    expect(recortarPorVencimento(so(anterior), periodo, HOJE)).toHaveLength(0);
+  });
+
+  it.each(['7', '30', '90'] as const)('%s dias: amanhã não entra, e uma data bem futura também não', (periodo) => {
+    expect(recortarPorVencimento(so('2026-09-09'), periodo, HOJE)).toHaveLength(0);
+    expect(recortarPorVencimento(so('2026-09-30'), periodo, HOJE)).toHaveLength(0);
+    expect(recortarPorVencimento(so('2027-01-01'), periodo, HOJE)).toHaveLength(0);
+  });
+
+  it('`all` continua devolvendo o histórico inteiro, futuro incluído', () => {
+    const lista = [
+      titulo({ data_vencimento: '2026-09-30', descricao: 'futuro' }),
+      titulo({ data_vencimento: '2026-09-08', descricao: 'hoje' }),
+      titulo({ data_vencimento: '2020-01-01', descricao: 'antigo' }),
+    ];
+    expect(recortarPorVencimento(lista, 'all', HOJE).map((t) => t.descricao))
+      .toEqual(['futuro', 'hoje', 'antigo']);
+  });
+
+  it('a hora em que a tela abriu não move o teto', () => {
+    for (const h of [0, 12, 23]) {
+      const baseline = new Date(2026, 8, 8, h, 30, 0).getTime();
+      expect(recortarPorVencimento(so('2026-09-08'), '7', baseline)).toHaveLength(1);
+      expect(recortarPorVencimento(so('2026-09-09'), '7', baseline)).toHaveLength(0);
+    }
+  });
+
+  it('a tabela e os dois gráficos recusam o futuro juntos', () => {
+    const lista = [
+      titulo({ data_vencimento: '2026-09-08', valor: 10, descricao: 'hoje' }),
+      titulo({ data_vencimento: '2026-09-30', valor: 99, descricao: 'futuro' }),
+    ];
+    expect(recortarPorVencimento(lista, '7', HOJE).map((t) => t.descricao)).toEqual(['hoje']);
+    expect(titulosElegiveis(lista, '7', HOJE).map((t) => t.descricao)).toEqual(['hoje']);
+    expect(serieDoFluxo(titulosElegiveis(lista, '7', HOJE)))
+      .toEqual([{ date: '2026-09-08', receitas: 10, despesas: 0 }]);
+    expect(barrasDeEntradaESaida(titulosElegiveis(lista, '7', HOJE)))
+      .toEqual([{ date: '2026-09-08', entradas: 10, saidas: 0 }]);
+  });
+});

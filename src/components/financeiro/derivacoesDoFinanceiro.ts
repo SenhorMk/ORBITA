@@ -48,19 +48,38 @@ function diaCivil(valor: string): string {
   return (valor ?? '').slice(0, 10);
 }
 
+/** O dia civil **local** de um instante — "hoje" é o dia de quem olha a tela. */
+function diaCivilDe(baseline: number): { readonly ano: number; readonly mes: number; readonly dia: number } {
+  const d = new Date(baseline);
+  return { ano: d.getFullYear(), mes: d.getMonth(), dia: d.getDate() };
+}
+
+function comoTexto(utc: number): string {
+  return new Date(utc).toISOString().slice(0, 10);
+}
+
 /**
- * O primeiro dia civil incluído no período, a partir do dia de `baseline`.
+ * A janela civil de um período: o primeiro e o **último** dia, inclusive.
  *
- * `7 dias` conta o dia de hoje e os seis anteriores — a janela é fechada dos
- * dois lados e tem exatamente N dias.
+ * `7 dias` conta o dia de hoje e os seis anteriores. A janela é fechada dos
+ * dois lados, e o lado de cima não é detalhe: sem ele, um vencimento de 30/09
+ * entrava em `7 dias` no dia 08/09 — a contagem deixava de ter sete dias e o
+ * filtro deixava de ser retrospectivo, ao contrário do de Vendas. Contas a
+ * vencer existem o tempo todo no financeiro, então esse caso é a regra, não a
+ * exceção.
  */
-export function primeiroDiaDoPeriodo(periodo: Exclude<Periodo, 'all'>, baseline: number): string {
-  const hoje = new Date(baseline);
+export function janelaDoPeriodo(
+  periodo: Exclude<Periodo, 'all'>,
+  baseline: number,
+): { readonly primeiroDia: string; readonly ultimoDia: string } {
+  const { ano, mes, dia } = diaCivilDe(baseline);
   // UTC de propósito: o único uso é aritmética de calendário sobre a data
   // local já extraída, e o horário de verão não pode encurtar uma janela.
-  const inicio = Date.UTC(hoje.getFullYear(), hoje.getMonth(), hoje.getDate())
-    - (Number(periodo) - 1) * 24 * 60 * 60 * 1000;
-  return new Date(inicio).toISOString().slice(0, 10);
+  const hoje = Date.UTC(ano, mes, dia);
+  return {
+    primeiroDia: comoTexto(hoje - (Number(periodo) - 1) * 24 * 60 * 60 * 1000),
+    ultimoDia: comoTexto(hoje),
+  };
 }
 
 /**
@@ -72,6 +91,10 @@ export function primeiroDiaDoPeriodo(periodo: Exclude<Periodo, 'all'>, baseline:
  * que não existem no dado. O corte agora é entre strings `AAAA-MM-DD`, então o
  * resultado não depende da hora em que a tela foi aberta nem do fuso do
  * navegador.
+ *
+ * A janela é **fechada dos dois lados**: `7 dias` não alcança amanhã nem um
+ * vencimento do mês que vem. `all` é o histórico inteiro, e aí o futuro entra —
+ * é o que "todo o período" quer dizer.
  *
  * A semântica de Vendas (`recortarPorPeriodo`) não muda: lá o campo é um
  * `timestamp` de verdade, e comparar instantes é o certo.
@@ -85,8 +108,11 @@ export function recortarPorVencimento<T extends { data_vencimento: string }>(
   baseline: number,
 ): T[] {
   if (periodo === 'all') return [...titulos];
-  const primeiroDia = primeiroDiaDoPeriodo(periodo, baseline);
-  return titulos.filter((titulo) => diaCivil(titulo.data_vencimento) >= primeiroDia);
+  const { primeiroDia, ultimoDia } = janelaDoPeriodo(periodo, baseline);
+  return titulos.filter((titulo) => {
+    const dia = diaCivil(titulo.data_vencimento);
+    return dia >= primeiroDia && dia <= ultimoDia;
+  });
 }
 
 /**
