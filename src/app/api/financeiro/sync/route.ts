@@ -35,6 +35,10 @@ function supabaseFinanceiroSyncStore(): FinanceiroSyncStorePort {
       await financeiroRepository.upsertTitulo(scope, titulo);
     },
 
+    async vincularPedidos(scope, candidatos) {
+      return financeiroRepository.vincularPedidos(scope, candidatos);
+    },
+
     async marcarCheckpoint(scope: VerifiedOrganizationScope, entidade: EntidadeFinanceira): Promise<void> {
       const agora = new Date().toISOString();
       const { error } = await supabaseServer

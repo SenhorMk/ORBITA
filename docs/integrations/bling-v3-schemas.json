@@ -1376,6 +1376,33 @@
           "tipo": "string"
         }
       }
+    },
+    "ContasReceberDadosOrigemDTO": {
+      "obrigatorios": [],
+      "campos": {
+        "id": {
+          "tipo": "integer"
+        },
+        "tipoOrigem": {
+          "tipo": "string"
+        },
+        "numero": {
+          "tipo": "string"
+        },
+        "dataEmissao": {
+          "tipo": "string"
+        },
+        "valor": {
+          "tipo": "number",
+          "formato": "float"
+        },
+        "situacao": {
+          "tipo": "integer"
+        },
+        "url": {
+          "tipo": "string"
+        }
+      }
     }
   },
   "escrita": {

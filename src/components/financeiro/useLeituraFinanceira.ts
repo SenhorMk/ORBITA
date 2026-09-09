@@ -40,6 +40,12 @@ export interface ResumoFinanceiro {
   saldo: number;
 }
 
+/** Categoria financeira da organização, como o endpoint já a devolve. */
+export interface CategoriaFinanceira {
+  id: string;
+  descricao: string;
+}
+
 export type FiltroDeTipo = 'todos' | 'receber' | 'pagar';
 
 export type BuscaAutenticada = (url: string, options?: RequestInit) => Promise<Response>;
@@ -64,6 +70,8 @@ interface DoEscopo<T> {
 interface LeituraFinanceira {
   readonly titulos: TituloFinanceiro[];
   readonly resumo: ResumoFinanceiro;
+  /** As categorias que a MESMA resposta trouxe — nenhuma leitura nova. */
+  readonly categorias: CategoriaFinanceira[];
 }
 
 /** Ou uma leitura boa, ou o motivo de não haver uma. Nunca as duas coisas. */
@@ -106,7 +114,7 @@ async function buscarFinanceiro(
     const envelope = (typeof corpo === 'object' && corpo !== null ? corpo : {}) as {
       success?: unknown;
       error?: unknown;
-      data?: { titulos?: unknown; resumo?: unknown };
+      data?: { titulos?: unknown; resumo?: unknown; categorias?: unknown };
     };
     const resumo = lerResumo(envelope.data?.resumo);
 
@@ -117,7 +125,10 @@ async function buscarFinanceiro(
     const titulos = Array.isArray(envelope.data?.titulos)
       ? (envelope.data.titulos as TituloFinanceiro[])
       : [];
-    return { ok: true, leitura: { titulos, resumo } };
+    const categorias = Array.isArray(envelope.data?.categorias)
+      ? (envelope.data.categorias as CategoriaFinanceira[]).filter((c) => c && c.id && c.descricao)
+      : [];
+    return { ok: true, leitura: { titulos, resumo, categorias } };
   } catch (err: unknown) {
     return { ok: false, erro: descreverErro(err) };
   }
@@ -216,6 +227,7 @@ export function useLeituraFinanceira(fetchWithAuth: BuscaAutenticada, ativo: boo
 
   return {
     titulos: leituraAtual?.titulos ?? [],
+    categorias: leituraAtual?.categorias ?? [],
     /** `null` enquanto nenhuma leitura DESTE escopo deu certo — nunca zeros de partida. */
     resumo: leituraAtual?.resumo ?? null,
     nuncaCarregou: leituraAtual === null,

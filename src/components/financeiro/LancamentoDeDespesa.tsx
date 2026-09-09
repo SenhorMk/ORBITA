@@ -7,7 +7,7 @@ import { descreverErro } from '@/lib/erroLegivel';
 
 import { NovaDespesaModal, type Fornecedor } from './NovaDespesaModal';
 import { NovoFornecedorModal, type DadosCNPJ } from './NovoFornecedorModal';
-import type { BuscaAutenticada } from './useLeituraFinanceira';
+import type { BuscaAutenticada, CategoriaFinanceira } from './useLeituraFinanceira';
 
 const BRASILAPI_CNPJ_URL =
   process.env.NEXT_PUBLIC_BRASILAPI_CNPJ_URL || 'https://brasilapi.com.br/api/cnpj/v1';
@@ -166,10 +166,16 @@ async function submitNovaDespesa(
       ? fornecedorId
       : undefined;
     const titulo = String(formData.get('titulo') ?? '').trim();
+    const categoriaId = String(formData.get('categoriaId') ?? '').trim();
     payload = buildDespesaRequest({
-      // O título é opcional e local: o Bling não tem esse campo, e a descrição
-      // continua sendo o `historico` que vai para lá.
+      // O título é local: o Bling não tem esse campo, e a descrição continua
+      // sendo o `historico` que vai para lá. Ele é obrigatório no formulário,
+      // e continua opcional no contrato — a coluna nasceu nullable e os
+      // registros anteriores a ela não podem ser invalidados.
       titulo: titulo === '' ? undefined : titulo,
+      // A categoria é a que a pessoa escolheu, entre as reais da organização.
+      // "Sem categoria" é uma resposta legítima, e não vira um id inventado.
+      categoriaId: categoriaId === '' ? undefined : categoriaId,
       descricao: String(formData.get('descricao') ?? ''),
       valor: Number(formData.get('valor')),
       dataVencimento: String(formData.get('data_vencimento') ?? ''),
@@ -228,8 +234,10 @@ export function LancamentoDeDespesa({
   onSalvo,
   syncing,
   setSyncing,
+  categorias,
 }: {
   fetchWithAuth: BuscaAutenticada;
+  categorias: readonly CategoriaFinanceira[];
   aberto: boolean;
   onFechar: () => void;
   onSalvo: () => void;
@@ -331,6 +339,7 @@ export function LancamentoDeDespesa({
         setModoLancamento={setModoLancamento}
         syncing={syncing}
         onSubmit={handleSubmit}
+        categorias={categorias}
         fornecedorPicker={{
           fornecedorSelecionado,
           showFornecedorDropdown,

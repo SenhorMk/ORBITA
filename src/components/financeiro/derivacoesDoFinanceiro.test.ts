@@ -109,3 +109,64 @@ describe('o que os dois gráficos enxergam', () => {
     ]);
   });
 });
+
+describe('a borda do período é dia civil, não vinte e quatro horas', () => {
+  /**
+   * `data_vencimento` é `date`: não tem hora. A versão anterior comparava
+   * `agora - N × 24h` com a meia-noite da data, e às 12:00 do dia 8 o
+   * vencimento do dia 1 caía fora de "7 dias" por doze horas que não existem
+   * no dado. Estes casos fixam a janela nos dois lados.
+   */
+  function comVencimento(dia: string) {
+    return [titulo({ data_vencimento: dia, descricao: dia })];
+  }
+
+  // Instantes do MESMO dia civil local (8 de setembro), da primeira à última
+  // hora. "Hoje" é o dia de quem olha a tela, então a base é a data local — e
+  // é justamente por isso que os três têm de dar a mesma janela.
+  const dia8 = (h: number, m: number, sec: number) => new Date(2026, 8, 8, h, m, sec).getTime();
+  const LOGO_CEDO = dia8(0, 0, 1);
+  const MEIO_DIA = dia8(12, 0, 0);
+  const QUASE_MEIA_NOITE = dia8(23, 59, 59);
+
+  it.each([
+    ['7', '2026-09-02', '2026-09-01'],
+    ['30', '2026-08-10', '2026-08-09'],
+    ['90', '2026-06-11', '2026-06-10'],
+  ] as const)('%s dias: inclui %s e exclui %s', (periodo, primeiroIncluido, ultimoExcluido) => {
+    expect(recortarPorVencimento(comVencimento(primeiroIncluido), periodo, MEIO_DIA)).toHaveLength(1);
+    expect(recortarPorVencimento(comVencimento(ultimoExcluido), periodo, MEIO_DIA)).toHaveLength(0);
+  });
+
+  it('a hora em que a tela foi aberta não muda a janela', () => {
+    for (const baseline of [LOGO_CEDO, MEIO_DIA, QUASE_MEIA_NOITE]) {
+      expect(recortarPorVencimento(comVencimento('2026-09-02'), '7', baseline)).toHaveLength(1);
+      expect(recortarPorVencimento(comVencimento('2026-09-01'), '7', baseline)).toHaveLength(0);
+    }
+  });
+
+  it('a janela de N dias tem exatamente N dias, incluindo o de hoje', () => {
+    const dias = ['2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05', '2026-09-06', '2026-09-07', '2026-09-08'];
+    const lista = dias.map((dia) => titulo({ data_vencimento: dia, descricao: dia }));
+    expect(recortarPorVencimento(lista, '7', MEIO_DIA)).toHaveLength(7);
+  });
+
+  it('um vencimento com hora é cortado pelo dia, não pelo instante', () => {
+    const lista = [titulo({ data_vencimento: '2026-09-02T00:30:00Z', descricao: 'limite' })];
+    expect(recortarPorVencimento(lista, '7', MEIO_DIA)).toHaveLength(1);
+  });
+
+  it('a tabela e os dois gráficos usam exatamente o mesmo corte', () => {
+    const lista = [
+      titulo({ data_vencimento: '2026-09-02', valor: 10, descricao: 'dentro' }),
+      titulo({ data_vencimento: '2026-09-01', valor: 99, descricao: 'fora' }),
+    ];
+    const naTabela = recortarPorVencimento(lista, '7', MEIO_DIA).map((t) => t.descricao);
+    const nosGraficos = titulosElegiveis(lista, '7', MEIO_DIA).map((t) => t.descricao);
+    expect(naTabela).toEqual(['dentro']);
+    expect(nosGraficos).toEqual(['dentro']);
+    expect(serieDoFluxo(titulosElegiveis(lista, '7', MEIO_DIA))).toEqual([
+      { date: '2026-09-02', receitas: 10, despesas: 0 },
+    ]);
+  });
+});

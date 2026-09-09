@@ -58,8 +58,9 @@ function montarDeps(sobrescritas: {
 } = {}) {
   const upsertTitulo = vi.fn<FinanceiroSyncStorePort['upsertTitulo']>().mockResolvedValue(undefined);
   const marcarCheckpoint = vi.fn<FinanceiroSyncStorePort['marcarCheckpoint']>().mockResolvedValue(undefined);
+  const vincularPedidos = vi.fn<FinanceiroSyncStorePort['vincularPedidos']>().mockResolvedValue(new Map());
 
-  const store: FinanceiroSyncStorePort = { upsertTitulo, marcarCheckpoint, ...sobrescritas.store };
+  const store: FinanceiroSyncStorePort = { upsertTitulo, marcarCheckpoint, vincularPedidos, ...sobrescritas.store };
   const bling: FinanceiroSyncBlingPort = sobrescritas.bling ?? blingComPaginas({});
   const auth: FinanceiroSyncAuthPort = {
     authenticate: vi.fn().mockResolvedValue({ actorId: ATOR }),
@@ -68,7 +69,12 @@ function montarDeps(sobrescritas: {
   };
 
   const deps: FinanceiroSyncDependencies = { auth, store, bling };
-  return { deps, store, bling, upsertTitulo, marcarCheckpoint };
+  // Devolve o que o handler REALMENTE vai usar: uma sobrescrita de store troca
+  // a função, e asserir sobre o espião padrão testaria a fita métrica.
+  return {
+    deps, store, bling, upsertTitulo, marcarCheckpoint,
+    vincularPedidos: store.vincularPedidos as ReturnType<typeof vi.fn>,
+  };
 }
 
 describe('POST /api/financeiro/sync', () => {
@@ -551,5 +557,103 @@ describe('POST /api/financeiro/sync', () => {
       expect(error).not.toMatch(/rode novamente/iu);
       expect(error).toMatch(/ampliar o limite|filtrar por período/iu);
     });
+  });
+});
+
+/**
+ * O vínculo entre uma conta a receber e o pedido que a originou.
+ *
+ * O único identificador estrutural que o contrato oficial oferece é
+ * `origem` (`ContasReceberDadosOrigemDTO`): `origem.id` é "ID da venda ou nota
+ * fiscal que originou a conta", e `origem.tipoOrigem` é quem diz de qual das
+ * duas se trata. Fora de `venda`, o id não é de pedido — e ligar receita ao
+ * pedido errado é pior do que não ligar.
+ *
+ * Valor, data, cliente e texto da descrição **não entram** nesta decisão.
+ */
+describe('vínculo da conta a receber com o pedido de origem', () => {
+  const RECEBER_DE_VENDA: RawContaFinanceira = {
+    ...CONTA,
+    id: 7001,
+    origem: { id: 555001, tipoOrigem: 'venda' },
+  };
+
+  it('leva o id da venda ao store e grava o pedido que ele resolveu', async () => {
+    const { deps, upsertTitulo, vincularPedidos } = montarDeps({
+      bling: blingComPaginas({ financeiro_contas_receber: [[RECEBER_DE_VENDA]] }),
+      store: { vincularPedidos: vi.fn().mockResolvedValue(new Map([[7001, 'pedido-uuid-a']])) },
+    });
+
+    await createFinanceiroSyncHandler(deps)(requisicao());
+
+    expect(vincularPedidos).toHaveBeenCalledWith(escopo, [{ contaBlingId: 7001, pedidoBlingId: '555001' }]);
+    expect(upsertTitulo).toHaveBeenCalledWith(escopo, expect.objectContaining({
+      bling_id: 7001,
+      tipo: 'receber',
+      pedido_id: 'pedido-uuid-a',
+    }));
+  });
+
+  it('o escopo que vai ao store é o VERIFICADO — o vínculo nunca cruza organização', async () => {
+    const { deps, vincularPedidos } = montarDeps({
+      bling: blingComPaginas({ financeiro_contas_receber: [[RECEBER_DE_VENDA]] }),
+    });
+
+    await createFinanceiroSyncHandler(deps)(requisicao());
+
+    expect(vincularPedidos.mock.calls[0]?.[0]).toBe(escopo);
+    expect((vincularPedidos.mock.calls[0]?.[0] as { organizationId: string }).organizationId).toBe(ORG_A);
+    expect(ORG_A).not.toBe(ORG_B);
+  });
+
+  it('o store não resolvendo NÃO vira palpite: o título é gravado sem vínculo', async () => {
+    const { deps, upsertTitulo } = montarDeps({
+      bling: blingComPaginas({ financeiro_contas_receber: [[RECEBER_DE_VENDA]] }),
+      store: { vincularPedidos: vi.fn().mockResolvedValue(new Map()) },
+    });
+
+    await createFinanceiroSyncHandler(deps)(requisicao());
+
+    expect(upsertTitulo).toHaveBeenCalledWith(escopo, expect.not.objectContaining({ pedido_id: expect.anything() }));
+  });
+
+  it.each([
+    ['nota fiscal', { id: 555001, tipoOrigem: 'nota fiscal' }],
+    ['sem tipoOrigem', { id: 555001 }],
+    ['sem origem nenhuma', undefined],
+  ])('não é candidato quando a origem é %s', async (_rotulo, origem) => {
+    const { deps, vincularPedidos, upsertTitulo } = montarDeps({
+      bling: blingComPaginas({ financeiro_contas_receber: [[{ ...CONTA, id: 7002, origem }]] }),
+    });
+
+    await createFinanceiroSyncHandler(deps)(requisicao());
+
+    expect(vincularPedidos).not.toHaveBeenCalled();
+    expect(upsertTitulo).toHaveBeenCalledWith(escopo, expect.not.objectContaining({ pedido_id: expect.anything() }));
+  });
+
+  it('nada é inferido de valor, data ou texto — só o id da origem', async () => {
+    const semOrigem: RawContaFinanceira = {
+      ...CONTA, id: 7003, valor: 40, vencimento: '2026-09-07', historico: 'Venda manual 26801269702',
+    };
+    const { deps, vincularPedidos } = montarDeps({
+      bling: blingComPaginas({ financeiro_contas_receber: [[semOrigem]] }),
+    });
+
+    await createFinanceiroSyncHandler(deps)(requisicao());
+
+    expect(vincularPedidos).not.toHaveBeenCalled();
+  });
+
+  it('uma falha ao resolver o vínculo não custa a página: os títulos continuam gravados', async () => {
+    const { deps, upsertTitulo } = montarDeps({
+      bling: blingComPaginas({ financeiro_contas_receber: [[RECEBER_DE_VENDA, { ...CONTA, id: 7004 }]] }),
+      store: { vincularPedidos: vi.fn().mockRejectedValue(new Error('indisponível')) },
+    });
+
+    const { stats } = await (await createFinanceiroSyncHandler(deps)(requisicao())).json();
+
+    expect(upsertTitulo).toHaveBeenCalledTimes(2);
+    expect(stats.contasReceber.processados).toBe(2);
   });
 });

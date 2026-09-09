@@ -95,6 +95,28 @@ describe('entrada vinculada a um pedido', () => {
     expect(await screen.findByText(/Pedido #777/)).toBeInTheDocument();
   });
 
+  it('do Financeiro o pedido é LEITURA: nenhuma ação que escreve no ERP fica disponível', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(resposta({ error: 'not found' }, 404));
+
+    montar(ENTRADA_DE_PEDIDO, PEDIDO_LOCAL);
+
+    // Os dados aparecem…
+    expect(await screen.findByText('Mateus Kahuan')).toBeInTheDocument();
+    // …e as três mutações do pedido, não. `Editar` é interna ao drawer e
+    // continuava disponível mesmo sem os callbacks — era uma escrita no ERP a
+    // partir de uma tela que não a oferece.
+    expect(screen.queryByRole('button', { name: /Editar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Cancelar pedido/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Emitir NF-e/i })).not.toBeInTheDocument();
+  });
+
+  it('uma entrada sem pedido vinculado diz isso, em vez de deixar a ausência passar', () => {
+    montar({ ...ENTRADA_DE_PEDIDO, pedido_id: null }, null);
+
+    expect(screen.getByText('Pedido de origem')).toBeInTheDocument();
+    expect(screen.getByText(/não vinculado/i)).toBeInTheDocument();
+  });
+
   it('sem o pedido na leitura corrente, abre o detalhe da movimentação em vez de um drawer vazio', async () => {
     montar(ENTRADA_DE_PEDIDO, null);
 

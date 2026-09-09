@@ -30,6 +30,19 @@ export interface ContaFinanceiraOficial {
   situacao?: number;
   valor?: number;
   vencimento?: string;
+  /**
+   * A origem da conta, declarada em `ContasReceberDadosListDTO`.
+   *
+   * É o **único** identificador estrutural que o contrato oficial oferece
+   * entre uma conta a receber e o pedido que a gerou: `ContasReceberOrigemDTO`
+   * documenta `id` como "ID da venda ou nota fiscal que originou a conta", e
+   * `tipoOrigem` é quem diz de qual das duas se trata (`venda`, no exemplo do
+   * spec). Sem `tipoOrigem === 'venda'` o `id` pode ser de uma nota fiscal, e
+   * casar isso com um pedido seria ligar receita a pedido errado.
+   *
+   * Vem na LISTAGEM que a sincronização já lê — nenhuma leitura nova.
+   */
+  origem?: { id?: number; tipoOrigem?: string };
 }
 
 /**
@@ -69,8 +82,34 @@ export interface FinanceiroSyncBlingPort {
   lerPagina(entidade: EntidadeFinanceira, pagina: number, limite: number): Promise<readonly RawContaFinanceira[]>;
 }
 
+/** Uma conta a receber que declara ter nascido de uma venda, e qual venda. */
+export interface CandidatoDeVinculo {
+  readonly contaBlingId: number;
+  /** `origem.id` — o id do pedido de venda no Bling, como texto. */
+  readonly pedidoBlingId: string;
+}
+
 export interface FinanceiroSyncStorePort {
   upsertTitulo(scope: VerifiedOrganizationScope, titulo: TituloFinanceiro): Promise<void>;
+  /**
+   * Traduz `origem.id` no pedido LOCAL, e só quando o vínculo é seguro.
+   *
+   * Devolve o mapa `contaBlingId -> pedidos.id` apenas para os casos em que
+   * existe uma resposta única. Fica de fora, sem palpite:
+   *
+   * - o pedido que não pertence a esta organização (ou que ainda não foi
+   *   sincronizado para cá);
+   * - o pedido que já tem um título `receber` de OUTRA conta — o banco só
+   *   admite um título de cada tipo por pedido, e roubar o vínculo do que já
+   *   está lá reescreveria história;
+   * - o pedido apontado por MAIS DE UMA conta no mesmo lote (venda parcelada):
+   *   escolher uma das parcelas seria arbitrário, e arbitrário é exatamente o
+   *   que não pode acontecer com receita.
+   */
+  vincularPedidos(
+    scope: VerifiedOrganizationScope,
+    candidatos: readonly CandidatoDeVinculo[],
+  ): Promise<ReadonlyMap<number, string>>;
   /**
    * Avança o checkpoint da entidade.
    *

@@ -115,6 +115,88 @@ export class FinanceiroRepository {
   }
 
   /**
+   * O pedido local de cada conta a receber que declara ter nascido de uma
+   * venda — e só quando a resposta é única.
+   *
+   * O identificador é `origem.id` da conta (`ContasReceberDadosOrigemDTO`, do
+   * OpenAPI oficial), já filtrado por `tipoOrigem === 'venda'` de quem chama.
+   * Aqui ele vira o `pedidos.id` desta organização. Nada é inferido por valor,
+   * data, cliente ou texto.
+   *
+   * Três casos ficam de fora, deliberadamente sem palpite:
+   *
+   * 1. o pedido não é desta organização (ou ainda não chegou aqui) — a busca é
+   *    escopada por `organizacao_id`, e o que não aparece não vira vínculo;
+   * 2. o pedido já tem um título `receber` de OUTRA conta — o índice único
+   *    `uq_titulo_por_pedido_e_tipo` admite um só, e roubar o vínculo de quem
+   *    já está lá reescreveria história;
+   * 3. duas ou mais contas do mesmo lote apontam para o mesmo pedido (venda
+   *    parcelada) — escolher uma parcela seria arbitrário.
+   */
+  async vincularPedidos(
+    scope: VerifiedOrganizationScope,
+    candidatos: readonly { readonly contaBlingId: number; readonly pedidoBlingId: string }[],
+  ): Promise<ReadonlyMap<number, string>> {
+    const vazio: ReadonlyMap<number, string> = new Map();
+    if (candidatos.length === 0) return vazio;
+
+    // Caso 3: pedido disputado por mais de uma conta neste lote.
+    const contasPorPedido = new Map<string, number>();
+    for (const c of candidatos) {
+      contasPorPedido.set(c.pedidoBlingId, (contasPorPedido.get(c.pedidoBlingId) ?? 0) + 1);
+    }
+    const disputados = new Set([...contasPorPedido].filter(([, n]) => n > 1).map(([id]) => id));
+
+    const procurados = [...new Set(candidatos.map((c) => c.pedidoBlingId))].filter((id) => !disputados.has(id));
+    if (procurados.length === 0) return vazio;
+
+    const { data: pedidos, error: erroPedidos } = await supabaseServer
+      .from('pedidos')
+      .select('id, bling_id')
+      .eq('organizacao_id', scope.organizationId)
+      .in('bling_id', procurados);
+
+    if (erroPedidos) {
+      console.error('Erro ao resolver pedidos de contas a receber:', erroPedidos.message);
+      throw new Error(erroPedidos.message, { cause: erroPedidos });
+    }
+
+    const pedidoPorBlingId = new Map<string, string>();
+    for (const pedido of pedidos ?? []) {
+      if (pedido.id && pedido.bling_id !== null) pedidoPorBlingId.set(String(pedido.bling_id), String(pedido.id));
+    }
+    if (pedidoPorBlingId.size === 0) return vazio;
+
+    const { data: existentes, error: erroTitulos } = await supabaseServer
+      .from('titulos_financeiros')
+      .select('pedido_id, bling_id')
+      .eq('organizacao_id', scope.organizationId)
+      .eq('tipo', 'receber')
+      .in('pedido_id', [...pedidoPorBlingId.values()]);
+
+    if (erroTitulos) {
+      console.error('Erro ao conferir títulos já vinculados:', erroTitulos.message);
+      throw new Error(erroTitulos.message, { cause: erroTitulos });
+    }
+
+    const ocupantePorPedido = new Map<string, number>();
+    for (const titulo of existentes ?? []) {
+      if (titulo.pedido_id) ocupantePorPedido.set(String(titulo.pedido_id), Number(titulo.bling_id));
+    }
+
+    const vinculos = new Map<number, string>();
+    for (const candidato of candidatos) {
+      if (disputados.has(candidato.pedidoBlingId)) continue;
+      const pedidoId = pedidoPorBlingId.get(candidato.pedidoBlingId);
+      if (!pedidoId) continue;
+      const ocupante = ocupantePorPedido.get(pedidoId);
+      if (ocupante !== undefined && ocupante !== candidato.contaBlingId) continue;
+      vinculos.set(candidato.contaBlingId, pedidoId);
+    }
+    return vinculos;
+  }
+
+  /**
    * Upsert de título financeiro. O payload de autoridade (organizacao_id,
    * user_id/actor) é sempre derivado do VerifiedOrganizationScope resolvido
    * no servidor — qualquer organizacao_id/user_id vindo em `titulo` (input
@@ -138,6 +220,7 @@ export class FinanceiroRepository {
       data_pagamento: titulo.data_pagamento,
       titulo: titulo.titulo,
       descricao: titulo.descricao,
+      pedido_id: titulo.pedido_id,
       categoria_id: titulo.categoria_id,
       conta_financeira_id: titulo.conta_financeira_id,
       fornecedor_id: titulo.fornecedor_id,

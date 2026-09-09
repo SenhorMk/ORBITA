@@ -4,6 +4,7 @@ import React from 'react';
 import { Building2, ChevronDown, FileSpreadsheet, Loader2, Search, ShieldCheck } from 'lucide-react';
 
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
+import type { CategoriaFinanceira } from './useLeituraFinanceira';
 
 export interface Fornecedor {
   id: number;
@@ -155,6 +156,8 @@ interface NovaDespesaModalProps {
   syncing: boolean;
   onSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
   fornecedorPicker: FornecedorPickerProps;
+  /** As categorias reais da organização, vindas da leitura do Financeiro. */
+  categorias: readonly CategoriaFinanceira[];
 }
 
 /**
@@ -171,7 +174,7 @@ interface NovaDespesaModalProps {
  * sumir por um clique errado.
  */
 export function NovaDespesaModal({
-  isOpen, onClose, modoLancamento, setModoLancamento, syncing, onSubmit, fornecedorPicker,
+  isOpen, onClose, modoLancamento, setModoLancamento, syncing, onSubmit, fornecedorPicker, categorias,
 }: NovaDespesaModalProps) {
   return (
     <Modal
@@ -226,11 +229,12 @@ export function NovaDespesaModal({
           descrição que continua indo para lá como `historico`.
         */}
         <div>
-          <label htmlFor="despesa-titulo" className={ROTULO} style={COR_DO_ROTULO}>Título (opcional)</label>
+          <label htmlFor="despesa-titulo" className={ROTULO} style={COR_DO_ROTULO}>Título</label>
           <input
             id="despesa-titulo"
             name="titulo"
             type="text"
+            required
             maxLength={120}
             className="orbita-campo"
             placeholder="Ex: Insumos, Frete, Aluguel..."
@@ -273,6 +277,31 @@ export function NovaDespesaModal({
               className="orbita-campo orbita-campo--mono"
             />
           </div>
+        </div>
+
+        {/*
+          As categorias são as reais da organização, que a leitura do Financeiro
+          já traz na mesma resposta. Sem categorias não se inventa uma padrão:
+          a despesa é gravada sem categoria, como sempre pôde ser.
+        */}
+        <div>
+          <label htmlFor="despesa-categoria" className={ROTULO} style={COR_DO_ROTULO}>Categoria</label>
+          {categorias.length === 0 ? (
+            <p
+              className="px-4 py-3 text-xs m-0"
+              style={{ borderRadius: 'var(--r-card)', background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--txt3)' }}
+            >
+              Nenhuma categoria financeira cadastrada nesta organização. A despesa será
+              lançada sem categoria — sincronize o Bling para trazer as categorias dele.
+            </p>
+          ) : (
+            <select id="despesa-categoria" name="categoriaId" defaultValue="" className="orbita-campo">
+              <option value="">Sem categoria</option>
+              {categorias.map((categoria) => (
+                <option key={categoria.id} value={categoria.id}>{categoria.descricao}</option>
+              ))}
+            </select>
+          )}
         </div>
 
         {modoLancamento === 'contabil' && <FornecedorPicker {...fornecedorPicker} />}

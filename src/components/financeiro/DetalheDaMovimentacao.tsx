@@ -111,6 +111,20 @@ function DetalheDeMovimentacaoAvulsa({
 
         {descricaoPropria && <Campo rotulo="Descrição">{descricaoPropria}</Campo>}
 
+        {/*
+          Uma entrada deveria ter nascido de um pedido. Quando o vínculo não
+          existe, isso é dito — em vez de a linha simplesmente não aparecer, o
+          que faria a ausência passar por "não se aplica". O vínculo é
+          preenchido pela sincronização, a partir de `origem.id` da conta a
+          receber; contas anteriores a ele ficam sem, e ninguém adivinha qual
+          pedido era.
+        */}
+        {entrada && (
+          <Campo rotulo="Pedido de origem">
+            <span style={{ color: 'var(--txt3)' }}>Pedido de origem não vinculado.</span>
+          </Campo>
+        )}
+
         {titulo.fornecedor_bling_id ? (
           <Campo rotulo="Fornecedor">
             {titulo.fornecedor_nome || 'Contato sem nome registrado'}
@@ -133,15 +147,16 @@ function DetalheDeMovimentacaoAvulsa({
 /**
  * A porta única do detalhe: um título ou outro, nunca os dois.
  *
- * A escolha é pelo vínculo estrutural `pedido_id` (migration 61), exposto pelo
- * join de `GET /api/financeiro`. Não se olha o texto da descrição: foi
- * exatamente isso — `Venda manual <id>` dentro de `descricao` — que a
- * migration 61 existiu para substituir por um relacionamento de verdade.
+ * A escolha é pelo vínculo estrutural `pedido_id` (migration 61), que o
+ * `select('*')` de `GET /api/financeiro` já traz, casado com os pedidos que o
+ * painel leu. Não se olha o texto da descrição: foi exatamente isso —
+ * `Venda manual <id>` dentro de `descricao` — que a migration 61 existiu para
+ * substituir por um relacionamento de verdade.
  *
  * Vinculado a pedido, inclusive quando a origem é venda manual (que já produz
  * um pedido canônico), abre o `DrawerDoPedido` de Vendas & Pedidos: o mesmo
- * componente, o mesmo fetch, a mesma apresentação. As ações que escrevem no
- * ERP — emitir NF-e, cancelar — não são passadas: daqui o pedido é leitura.
+ * componente, o mesmo fetch, a mesma apresentação — em `somenteLeitura`. Daqui
+ * o pedido é leitura: nem cancelar, nem emitir NF-e, nem editar.
  */
 export function DetalhesDaMovimentacao({
   titulo,
@@ -167,6 +182,7 @@ export function DetalhesDaMovimentacao({
         onAbertoChange={(aberto) => { if (!aberto) onFechar(); }}
         pedidoBlingId={pedidoLocal?.bling_id ?? null}
         pedidoLocal={pedidoLocal}
+        somenteLeitura
       />
 
       <DetalheDeMovimentacaoAvulsa

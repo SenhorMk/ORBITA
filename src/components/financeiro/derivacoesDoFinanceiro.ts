@@ -40,15 +40,41 @@ export interface BarraDoDia {
 
 /** Só o dia, sem hora — a chave de agrupamento de tudo aqui. */
 function diaDe(titulo: TituloFinanceiro): string {
-  return titulo.data_vencimento?.split('T')[0] || titulo.data_vencimento;
+  return diaCivil(titulo.data_vencimento) || titulo.data_vencimento;
+}
+
+/** `AAAA-MM-DD` de uma data que pode vir com hora, sem passar por fuso. */
+function diaCivil(valor: string): string {
+  return (valor ?? '').slice(0, 10);
 }
 
 /**
- * O recorte de período, pelo vencimento.
+ * O primeiro dia civil incluído no período, a partir do dia de `baseline`.
  *
- * A aritmética é a mesma de `recortarPorPeriodo` em Vendas, com o mesmo
- * vocabulário de períodos; o que muda é o campo, porque o eixo financeiro é o
- * vencimento e o de Vendas é a data do pedido.
+ * `7 dias` conta o dia de hoje e os seis anteriores — a janela é fechada dos
+ * dois lados e tem exatamente N dias.
+ */
+export function primeiroDiaDoPeriodo(periodo: Exclude<Periodo, 'all'>, baseline: number): string {
+  const hoje = new Date(baseline);
+  // UTC de propósito: o único uso é aritmética de calendário sobre a data
+  // local já extraída, e o horário de verão não pode encurtar uma janela.
+  const inicio = Date.UTC(hoje.getFullYear(), hoje.getMonth(), hoje.getDate())
+    - (Number(periodo) - 1) * 24 * 60 * 60 * 1000;
+  return new Date(inicio).toISOString().slice(0, 10);
+}
+
+/**
+ * O recorte de período, pelo vencimento — em **dia civil**, não em horas.
+ *
+ * `data_vencimento` é `date` no banco: não tem hora. A versão anterior fazia
+ * `agora - N × 24h` e comparava com `new Date('2026-09-01')`, que é meia-noite:
+ * às 12:00 do dia 8, o vencimento do dia 1 caía fora de "7 dias" por doze horas
+ * que não existem no dado. O corte agora é entre strings `AAAA-MM-DD`, então o
+ * resultado não depende da hora em que a tela foi aberta nem do fuso do
+ * navegador.
+ *
+ * A semântica de Vendas (`recortarPorPeriodo`) não muda: lá o campo é um
+ * `timestamp` de verdade, e comparar instantes é o certo.
  *
  * @param baseline - O "agora" da tela, fixado uma vez por montagem. Sem isso o
  *   corte se moveria a cada renderização e os dois gráficos poderiam discordar.
@@ -59,8 +85,8 @@ export function recortarPorVencimento<T extends { data_vencimento: string }>(
   baseline: number,
 ): T[] {
   if (periodo === 'all') return [...titulos];
-  const limite = baseline - Number(periodo) * 24 * 60 * 60 * 1000;
-  return titulos.filter((titulo) => new Date(titulo.data_vencimento).getTime() >= limite);
+  const primeiroDia = primeiroDiaDoPeriodo(periodo, baseline);
+  return titulos.filter((titulo) => diaCivil(titulo.data_vencimento) >= primeiroDia);
 }
 
 /**

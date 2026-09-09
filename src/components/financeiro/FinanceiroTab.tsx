@@ -65,7 +65,7 @@ interface FinanceiroTabProps {
  */
 export function FinanceiroTab({ fetchWithAuth, ativo = true, pedidos = null }: FinanceiroTabProps) {
   const {
-    titulos, resumo, nuncaCarregou, erroDeLeitura, carregando,
+    titulos, categorias, resumo, nuncaCarregou, erroDeLeitura, carregando,
     syncing, setSyncing, avisoSync, filtroTipo, setFiltroTipo,
     fetchFinanceiro, syncFinanceiro,
   } = useLeituraFinanceira(fetchWithAuth, ativo);
@@ -146,6 +146,7 @@ export function FinanceiroTab({ fetchWithAuth, ativo = true, pedidos = null }: F
         onSalvo={() => { void fetchFinanceiro(); }}
         syncing={syncing}
         setSyncing={setSyncing}
+        categorias={categorias}
       />
     </div>
   );

@@ -48,6 +48,7 @@ function deps(overrides: {
     },
     store: {
       upsertTitulo: vi.fn().mockResolvedValue(undefined),
+      vincularPedidos: vi.fn().mockResolvedValue(new Map()),
       marcarCheckpoint: vi.fn().mockResolvedValue(undefined),
       ...overrides.store,
     },
