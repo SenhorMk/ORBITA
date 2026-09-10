@@ -35,6 +35,9 @@ describe('database lab lifecycle', () => {
       return ok({ step: step.name });
     };
     const result = await runDatabaseLab({
+      // O alinhamento do esqueleto de `auth` fala com o Postgres do laboratorio,
+      // que nao existe aqui: entra como fake, igual as demais fronteiras.
+      alinharAuth: async () => ok({ coluna: 'auth.users.email_confirmed_at' }),
       execute,
       runMigrationTests: async () => ok({ files: 0, assertions: 0 }),
       applyMigrations: async () => err('MigrationApplyFailed', 'migration failed after order 18'),
@@ -53,6 +56,9 @@ describe('database lab lifecycle', () => {
     let migrationRuns = 0;
     let catalogCaptures = 0;
     const result = await runDatabaseLab({
+      // O alinhamento do esqueleto de `auth` fala com o Postgres do laboratorio,
+      // que nao existe aqui: entra como fake, igual as demais fronteiras.
+      alinharAuth: async () => ok({ coluna: 'auth.users.email_confirmed_at' }),
       execute: async (step: { name: string }) => {
         executedSteps.push(step.name);
         return ok({ step: step.name });
@@ -88,6 +94,9 @@ describe('database lab lifecycle', () => {
   it('fails closed before Docker when the canonical ledger is stale', async () => {
     const executedSteps: string[] = [];
     const result = await runDatabaseLab({
+      // O alinhamento do esqueleto de `auth` fala com o Postgres do laboratorio,
+      // que nao existe aqui: entra como fake, igual as demais fronteiras.
+      alinharAuth: async () => ok({ coluna: 'auth.users.email_confirmed_at' }),
       execute: async (step: { name: string }) => {
         executedSteps.push(step.name);
         return ok({ step: step.name });
@@ -102,6 +111,9 @@ describe('database lab lifecycle', () => {
   it('runs teardown when an injected dependency throws unexpectedly', async () => {
     const executedSteps: string[] = [];
     const result = await runDatabaseLab({
+      // O alinhamento do esqueleto de `auth` fala com o Postgres do laboratorio,
+      // que nao existe aqui: entra como fake, igual as demais fronteiras.
+      alinharAuth: async () => ok({ coluna: 'auth.users.email_confirmed_at' }),
       execute: async (step: { name: string }) => {
         executedSteps.push(step.name);
         return ok({ step: step.name });
@@ -122,6 +134,9 @@ describe('database lab lifecycle', () => {
   it('preserves safe diagnostics when both the primary operation and cleanup fail', async () => {
     let cleanupRuns = 0;
     const result = await runDatabaseLab({
+      // O alinhamento do esqueleto de `auth` fala com o Postgres do laboratorio,
+      // que nao existe aqui: entra como fake, igual as demais fronteiras.
+      alinharAuth: async () => ok({ coluna: 'auth.users.email_confirmed_at' }),
       execute: async (step: { name: string }) => {
         if (step.name === DATABASE_LAB_CLEANUP.name) {
           cleanupRuns += 1;

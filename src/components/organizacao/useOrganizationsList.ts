@@ -106,6 +106,12 @@ function useLeituraDeOrganizacoes(fetchWithAuth: AuthenticatedFetch, sessao: str
  * É o mesmo desenho de `usePapelNaOrganizacaoAtiva`, pela mesma razão: um dado
  * de sessão que não diz de quem é não tem como ser invalidado na hora certa.
  *
+ * A sessão também **sai** daqui, de volta. O painel precisa dela para escopar o
+ * que é da IDENTIDADE e não da organização — o erro de aceitar um convite, por
+ * exemplo, que acontece justamente quando ainda não há organização e que um
+ * carimbo por seleção deixaria invisível. Ela já entrou por parâmetro; devolvê-la
+ * não cria uma segunda fonte.
+ *
  * @param sessao - Quem está logado (o e-mail serve), ou `null` sem sessão. Sem
  *   sessão não se pergunta nada ao servidor — `fetchWithAuth` lança sem token —
  *   e não se mostra nada.
@@ -127,8 +133,16 @@ export function useOrganizationsList(fetchWithAuth: AuthenticatedFetch, sessao: 
     if (sessao !== null) await lerNaSessao(sessao);
   }, [lerNaSessao, sessao]);
 
-  async function handleCreateOrganization(nome: string, slug: string) {
-    if (sessao === null) return;
+  /**
+   * Cria a organização e relê a lista.
+   *
+   * Ticket 06 — devolve se criou. Antes não devolvia nada, e o formulário não
+   * tinha como saber se podia fechar: ficava aberto no caso de sucesso, ou
+   * fechava também no de falha. Quem chama decide o que fazer com a resposta;
+   * a mensagem da falha continua em `error`.
+   */
+  async function handleCreateOrganization(nome: string, slug: string): Promise<boolean> {
+    if (sessao === null) return false;
     setErro(null);
     const response = await fetchWithAuth('/api/organizacoes', {
       method: 'POST',
@@ -136,12 +150,13 @@ export function useOrganizationsList(fetchWithAuth: AuthenticatedFetch, sessao: 
       body: JSON.stringify({ nome, slug }),
     });
     const body = await response.json();
-    if (sessaoAtualRef.current !== sessao) return;
+    if (sessaoAtualRef.current !== sessao) return false;
     if (!response.ok) {
       setErro({ sessao, valor: body.error ?? 'Falha ao criar organização' });
-      return;
+      return false;
     }
     await lerNaSessao(sessao);
+    return true;
   }
 
   async function handleSwitchOrganization(orgId: string) {
@@ -174,6 +189,7 @@ export function useOrganizationsList(fetchWithAuth: AuthenticatedFetch, sessao: 
   }
 
   return {
+    sessao,
     organizacoes: valeAgora ? leitura.organizacoes : NENHUMA,
     activeOrg: valeAgora ? leitura.activeOrg : null,
     selectionVersion,

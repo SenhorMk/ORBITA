@@ -123,8 +123,13 @@ describe('RPCs ligadas a auth.uid() executadas com a identidade do usuário', ()
   it('POST /api/convites/aceitar executa aceitar_convite_organizacao com o JWT do usuário', async () => {
     const { createAcceptInviteHandler } = await import('./convites/aceitar/route');
     let activeOrganization: string | null = null;
-    const handler = createAcceptInviteHandler(async (organizacaoId) => {
-      activeOrganization = organizacaoId;
+    const handler = createAcceptInviteHandler({
+      // A seleção da organização ingressada passa pelo CAS (Ticket 06); aqui só
+      // interessa que a RPC do aceite viajou com o JWT do usuário.
+      selecionarSeNaoHouverSelecao: async () => ({ _tag: 'OrganizationSwitchApplied', version: 1 }),
+      gravarCookieDeOrganizacaoAtiva: async (organizacaoId) => {
+        activeOrganization = organizacaoId;
+      },
     });
 
     const response = await handler(

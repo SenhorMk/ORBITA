@@ -162,6 +162,21 @@ export async function revokeOrgMember(
 
 /**
  * List pending and historical invites for an organization.
+ *
+ * **Ticket 06 — uma leitura que falhou nao devolve lista vazia.** As duas
+ * saidas silenciosas de antes diziam a mesma mentira, uma no plural e outra no
+ * singular: `if (error || !data) return []` transformava "nao foi possivel
+ * saber" em "nao ha convite nenhum", e o `safeParse` por item descartava em
+ * silencio a linha que nao casava com o schema. Nas duas, a tela concluia que
+ * o convite **nao existe** — e um convite pendente que desaparece da lista e
+ * um convite que ninguem revoga e ninguem acompanha.
+ *
+ * E o mesmo julgamento que a rota de membros ja aplica desde o Ticket 20: um
+ * convite persistido que o servidor nao sabe ler e falha do servidor. Quem
+ * chama traduz a excecao em 500 com a frase publica fixa; o diagnostico fica
+ * no log.
+ *
+ * @throws Se a leitura falhar ou se alguma linha nao corresponder ao contrato.
  */
 export async function listOrgInvites(
   supabase: SupabaseClient,
@@ -173,17 +188,9 @@ export async function listOrgInvites(
     .eq('organizacao_id', orgId)
     .order('created_at', { ascending: false });
 
-  if (error || !data) {
-    return [];
+  if (error) {
+    throw new Error(error.message || 'Falha ao listar convites da organizacao');
   }
 
-  const convites: Convite[] = [];
-  for (const item of data) {
-    const parsed = conviteSchema.safeParse(item);
-    if (parsed.success) {
-      convites.push(parsed.data);
-    }
-  }
-
-  return convites;
+  return conviteSchema.array().parse(data ?? []);
 }

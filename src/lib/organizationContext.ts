@@ -45,6 +45,18 @@ export interface ActiveOrganizationContext {
 
 /**
  * List all organizations the user belongs to.
+ *
+ * **Ticket 06 — a falha de leitura nao pode virar "voce nao tem organizacao".**
+ * `if (error || !data) return []` dizia exatamente isso, e no eixo multi-tenant
+ * e a pior confusao possivel: a tela que recebe `[]` oferece "crie sua primeira
+ * organizacao" a quem e owner de duas. O `safeParse` por linha tinha o mesmo
+ * efeito, uma organizacao por vez.
+ *
+ * Agora a falha sobe, e quem chama a diz. O parse continua estrito — uma
+ * membership persistida que o servidor nao sabe ler e falha do servidor, e nao
+ * uma organizacao que deixou de existir.
+ *
+ * @throws Se a leitura falhar ou se alguma linha nao corresponder ao contrato.
  */
 export async function listUserOrganizations(
   supabase: SupabaseClient,
@@ -55,20 +67,13 @@ export async function listUserOrganizations(
     .select('papel, organizacoes:organizacao_id (id, nome, slug, created_at, updated_at)')
     .eq('user_id', userId);
 
-  if (error || !data) {
-    return [];
+  if (error) {
+    throw new Error(error.message || 'Falha ao listar organizacoes do usuario');
   }
 
-  const orgs: Organizacao[] = [];
-  for (const item of data) {
-    const rawOrg = Array.isArray(item.organizacoes) ? item.organizacoes[0] : item.organizacoes;
-    const parsed = organizacaoSchema.safeParse(rawOrg);
-    if (parsed.success) {
-      orgs.push(parsed.data);
-    }
-  }
-
-  return orgs;
+  return (data ?? []).map((item) => organizacaoSchema.parse(
+    Array.isArray(item.organizacoes) ? item.organizacoes[0] : item.organizacoes,
+  ));
 }
 
 /**

@@ -12,11 +12,16 @@ import {
 
 // Matrix: "organização: criação/seleção CAS, convite, papéis e revogação."
 //
-// There is no organization UI in `src/app/page.tsx` to click through (see
-// `e2e/pages/OrganizationApi.ts` for why). Every request below goes through
-// `OrganizationApi`, which is the suite's single authenticated path — the same
-// route handlers, identity verification and RLS-backed repositories a UI click
-// would cross.
+// Every request below goes through `OrganizationApi`, which is the suite's
+// single authenticated path — the same route handlers, identity verification
+// and RLS-backed repositories a UI click would cross (see
+// `e2e/pages/OrganizationApi.ts` for why).
+//
+// The Ticket 06 surface does exist now, and this spec still does not click it:
+// what these cases measure is the server's authority — CAS, nominal identity,
+// entitlement, revocation — and driving it through a form would add a layer
+// that can only obscure which side refused. The screen's own behaviour is
+// proven in `src/components/organizacao/OrganizationPanel.test.tsx`.
 //
 // **The credential is a bearer token, never a cookie.** This comment used to
 // say the requests rode "the authenticated browser session's cookies". They do
