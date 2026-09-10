@@ -172,7 +172,12 @@ function Coluna({
 }) {
   return (
     <section
-      className="flex flex-col min-h-0 min-w-0"
+      // `overflow-hidden` é a última linha de defesa da coluna: o cartão tem
+      // borda e fundo próprios, e conteúdo que passe da caixa desenharia por
+      // cima do painel, fora do arredondamento. Ele nunca deveria ser
+      // acionado — o corpo abaixo rola antes disso —, mas quando for, o que
+      // some é o excesso, e não o formato da coluna.
+      className="flex flex-col min-h-0 min-w-0 overflow-hidden"
       style={{ gap: 11, padding: 16, borderRadius: 20, background: 'var(--glass2)', border: '1px solid var(--line)' }}
     >
       <header className="flex flex-col flex-none" style={{ gap: 3 }}>
@@ -189,7 +194,28 @@ function Coluna({
           </span>
         )}
       </header>
-      {children}
+
+      {/*
+        O corpo da coluna, e o motivo de ele existir como elemento próprio.
+
+        Antes o conteúdo era filho direto da `<section>`, sem `flex-1` nem
+        `min-h-0`. Um item de flex não encolhe abaixo do próprio conteúdo, e o
+        estado vazio (`EstadoVazio`, com `py-14` fixo) não encolhe de jeito
+        nenhum: em altura reduzida ele passava da caixa e a borda dele saía
+        desenhada por cima do painel, atravessando o cartão de Convites. A
+        1366×720 sobravam **16px** — a tela não estava certa, estava por um fio.
+
+        `flex-1 min-h-0` dá ao corpo a altura que sobra e a permissão de encolher
+        até ela; `overflow-y-auto` garante que, quando o conteúdo ainda não
+        couber, ele fique alcançável por rolagem em vez de ser cortado. As
+        listas continuam com a rolagem interna delas — quem rola primeiro é
+        sempre a lista, porque ela já sabe encolher.
+
+        A correção é local, e é de propósito: `EstadoVazio` é o mesmo de Vendas,
+        Estoque, Clientes e Financeiro, e mexer nele para consertar esta coluna
+        mudaria cinco telas que não têm este problema.
+      */}
+      <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">{children}</div>
     </section>
   );
 }

@@ -619,39 +619,40 @@ export default function Home() {
 
           <SeletorDeFundo fundo={fundo} onEscolher={escolherFundo} />
 
+          {/*
+            Uma ação de sincronização na barra, e uma só.
+
+            Havia duas, lado a lado: "Sincronizar Bling" e "Completa". Elas não
+            são alternativas — a primeira traz o que mudou, a segunda relê o
+            catálogo inteiro ignorando o marcador de "última alteração" —, mas
+            postas juntas leem como duas ações concorrentes, e "Completa" não
+            diz o que completa. Numa barra onde toda ação é de uma palavra, o
+            botão que ninguém entende é o que a pessoa aperta por via das
+            dúvidas; e o que ele faz é a releitura mais cara que o produto tem.
+
+            A releitura completa **continua existindo inteira**:
+            `handleSync(true)`, a rota, o contrato e o comportamento do
+            provedor estão intocados — o que saiu foi o atalho para ela nesta
+            superfície. Ela volta depois da banca como ação avançada, de
+            recuperação, no lugar em que ações de recuperação moram; não num
+            botão colado na ação do dia a dia.
+          */}
           {isOwner && (
-            <>
-              <button
-                type="button"
-                onClick={() => { void handleSync(false); }}
-                disabled={isSyncing}
-                className="orbita-acao"
-                title={`Sincronizar o que mudou no Bling desde a última vez · ${syncAgoText}`}
-              >
-                <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                {isSyncing ? 'Sincronizando…' : 'Sincronizar Bling'}
-                <span
-                  className="w-[5px] h-[5px] rounded-full"
-                  style={{ background: isSyncing ? 'var(--info)' : 'var(--accent)' }}
-                  aria-hidden
-                />
-              </button>
-              {/*
-                Sincronização completa: relê tudo, ignorando o marcador de
-                "última alteração". É a saída quando o marcador avançou sem que
-                os dados tivessem sido realmente importados.
-              */}
-              <button
-                type="button"
-                onClick={() => { void handleSync(true); }}
-                disabled={isSyncing}
-                className="orbita-acao"
-                title="Reler todo o catálogo do Bling, ignorando a data da última sincronização"
-              >
-                <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                Completa
-              </button>
-            </>
+            <button
+              type="button"
+              onClick={() => { void handleSync(false); }}
+              disabled={isSyncing}
+              className="orbita-acao"
+              title={`Sincronizar o que mudou no Bling desde a última vez · ${syncAgoText}`}
+            >
+              <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
+              {isSyncing ? 'Sincronizando…' : 'Sincronizar Bling'}
+              <span
+                className="w-[5px] h-[5px] rounded-full"
+                style={{ background: isSyncing ? 'var(--info)' : 'var(--accent)' }}
+                aria-hidden
+              />
+            </button>
           )}
 
           {activeTab === 'sales' && (

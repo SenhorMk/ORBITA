@@ -4,7 +4,30 @@ import { Trash2 } from 'lucide-react';
 
 import { Pilula } from '@/components/ui/StatusPill';
 import { AvisoDeAtualizacaoFalhada, EstadoCarregando, EstadoDeErro, EstadoVazio } from '@/components/ui/estados';
+import { rotuloDoMembro } from '@/lib/organizacao/identidadeDoMembro';
 import type { MembroOrganizacao } from './types';
+
+/**
+ * Como o membro é chamado nesta lista.
+ *
+ * A tela imprimia `user_id`. Numa lista de autoridade — quem participa, e com
+ * qual poder — um UUID não deixa ninguém conferir se está removendo a pessoa
+ * certa; e é a primeira coisa que se lê ao lado de um botão de remover.
+ *
+ * `rotuloDoMembro` mora ao lado da política que decidiu o nome, então "sem nome
+ * cadastrado" e "identidade indisponível" chegam aqui já separados — a tela não
+ * reinventa a distinção nem a perde.
+ *
+ * Uma resposta antiga, de um servidor ainda sem esta fatia, não traz campo
+ * nenhum: aí `origem_do_nome` é `undefined` e o recurso cai em "sem nome
+ * cadastrado", que continua sendo verdade e continua sendo legível.
+ */
+function comoChamar(membro: MembroOrganizacao): string {
+  return rotuloDoMembro({
+    nome_exibicao: membro.nome_exibicao ?? null,
+    origem_do_nome: membro.origem_do_nome ?? 'ausente',
+  });
+}
 
 /** A cor de cada papel. Owner é o único que a tela nunca oferece para remover. */
 const COR_DO_PAPEL: Record<MembroOrganizacao['papel'], string> = {
@@ -100,9 +123,12 @@ export function MembersList({
               <span className="flex flex-col min-w-0" style={{ gap: 4 }}>
                 <span
                   className="truncate"
-                  style={{ font: '400 11.5px/1.2 var(--font-jetbrains-mono), monospace', color: 'var(--txt2)' }}
+                  style={{
+                    font: '500 13px/1.2 var(--font-archivo), sans-serif',
+                    color: membro.nome_exibicao ? 'var(--txt)' : 'var(--txt3)',
+                  }}
                 >
-                  {membro.user_id}
+                  {comoChamar(membro)}
                 </span>
                 <span style={{ font: '400 10.5px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt3)' }}>
                   desde {new Date(membro.created_at).toLocaleDateString('pt-BR')}
@@ -114,7 +140,7 @@ export function MembersList({
                 {canManage && membro.papel !== 'owner' && (
                   <button
                     type="button"
-                    aria-label={`Remover ${membro.user_id}`}
+                    aria-label={`Remover ${comoChamar(membro)}`}
                     onClick={() => { void onRemove(membro.user_id); }}
                     className="w-8 h-8 rounded-xl flex items-center justify-center cursor-pointer"
                     style={{ background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--danger)' }}

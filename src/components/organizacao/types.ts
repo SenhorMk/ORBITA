@@ -1,3 +1,5 @@
+import type { OrigemDoNome } from '@/lib/organizacao/identidadeDoMembro';
+
 export interface Organizacao {
   id: string;
   nome: string;
@@ -17,9 +19,28 @@ export interface Convite {
 }
 
 export interface MembroOrganizacao {
+  /**
+   * A chave do membro — é por ela que a remoção acontece.
+   *
+   * Deixou de ser o que a tela **imprime**: uma lista de autoridade
+   * identificada por UUID não deixa ninguém conferir se está removendo a pessoa
+   * certa. O que se imprime é `nome_exibicao`, com o recurso de
+   * `rotuloDoMembro`.
+   */
   user_id: string;
   papel: 'owner' | 'admin' | 'member';
   created_at: string;
+  /**
+   * Como chamar a pessoa: o nome do cadastro, ou o e-mail quando este leitor já
+   * podia vê-lo. `null` quando não há nome a mostrar — e aí `origem_do_nome`
+   * diz se é por não existir ou por não ter sido possível ler.
+   *
+   * Opcionais porque uma resposta antiga, de um servidor ainda sem esta fatia,
+   * não os traz — e a tela precisa continuar legível nesse intervalo em vez de
+   * imprimir `undefined`.
+   */
+  nome_exibicao?: string | null;
+  origem_do_nome?: OrigemDoNome;
 }
 
 /**
