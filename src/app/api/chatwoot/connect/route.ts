@@ -20,7 +20,10 @@ export const dynamic = 'force-dynamic';
  * verificação. A evidência de saúde anterior cai junto, porque ela descreve
  * uma checagem feita com as credenciais que acabaram de ser substituídas.
  */
-async function upsertChatwootConnection(organizacaoId: string, conexaoExistenteId: string | null): Promise<string> {
+async function upsertChatwootConnection(
+  organizacaoId: string,
+  conexaoExistenteId: string | null,
+): Promise<{ conexaoId: string; recemCriada: boolean }> {
   if (conexaoExistenteId) {
     const { error: updateError } = await supabaseServer
       .from('conexoes_integracao')
@@ -33,7 +36,7 @@ async function upsertChatwootConnection(organizacaoId: string, conexaoExistenteI
       .eq('id', conexaoExistenteId)
       .eq('organizacao_id', organizacaoId);
     if (updateError) throw updateError;
-    return conexaoExistenteId;
+    return { conexaoId: conexaoExistenteId, recemCriada: false };
   }
 
   const { data: inserted, error: insertError } = await supabaseServer
@@ -42,7 +45,46 @@ async function upsertChatwootConnection(organizacaoId: string, conexaoExistenteI
     .select('id')
     .single();
   if (insertError || !inserted) throw insertError || new Error('Falha ao criar conexão Chatwoot');
-  return inserted.id;
+  return { conexaoId: inserted.id, recemCriada: true };
+}
+
+/**
+ * Grava as credenciais no cofre e devolve o id da conexão, desfazendo a linha
+ * se o cofre recusar (revisão externa da PR #85).
+ *
+ * Para o Chatwoot, a existência da linha **é** a evidência de configuração —
+ * não há `client_id` em `metadata` para servir de marca, como no Bling. Uma
+ * linha sem credencial no cofre faria a tela dizer "Não verificado", isto é,
+ * "configurado, falta checar", para uma organização que não tem token nenhum
+ * guardado.
+ *
+ * A compensação desfaz apenas a linha que **este** pedido criou. Numa
+ * substituição não há o que desfazer: o cofre grava as credenciais numa linha
+ * só (upsert por `conexao_id`), então ou ele aceitou o conjunto novo ou o
+ * antigo continua inteiro — nunca metade de cada. Apagar a conexão nesse caso
+ * destruiria uma configuração que ainda funciona.
+ */
+async function gravarCredenciaisDoChatwoot(
+  organizacaoId: string,
+  conexaoExistenteId: string | null,
+  credenciais: Record<string, unknown>,
+): Promise<string> {
+  const { conexaoId, recemCriada } = await upsertChatwootConnection(organizacaoId, conexaoExistenteId);
+
+  try {
+    await credentialsVault.saveEncryptedCredentials(organizacaoId, conexaoId, credenciais);
+  } catch (falhaDoCofre) {
+    if (recemCriada) {
+      await supabaseServer
+        .from('conexoes_integracao')
+        .delete()
+        .eq('id', conexaoId)
+        .eq('organizacao_id', organizacaoId);
+    }
+    throw falhaDoCofre;
+  }
+
+  return conexaoId;
 }
 
 /**
@@ -98,9 +140,7 @@ export async function POST(request: Request) {
       .eq('provedor', 'chatwoot')
       .maybeSingle();
     if (findError) throw findError;
-    const conexaoId = await upsertChatwootConnection(scope.organizationId, existing?.id ?? null);
-
-    await credentialsVault.saveEncryptedCredentials(scope.organizationId, conexaoId, parsed.data);
+    const conexaoId = await gravarCredenciaisDoChatwoot(scope.organizationId, existing?.id ?? null, parsed.data);
 
     return NextResponse.json({
       success: true,
@@ -113,8 +153,18 @@ export async function POST(request: Request) {
       ) ?? chatwootWebhookPath(conexaoId),
     });
   } catch (error: unknown) {
-    console.error('❌ Erro ao conectar Chatwoot:', redactSensitiveData(error instanceof Error ? { message: error.message } : error));
-    const message = error instanceof Error ? error.message : 'Erro ao conectar Chatwoot';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    // O detalhe fica no log, redigido. A resposta leva uma mensagem pública
+    // fixa: `error.message` aqui vem do Postgres, do cofre ou do provedor, e
+    // carrega nome de tabela, constraint, coluna e às vezes o próprio valor
+    // recusado. Nada disso é do cliente, e o texto era a única coisa que ainda
+    // atravessava essa fronteira nesta rota.
+    console.error(
+      '❌ Erro ao conectar Chatwoot:',
+      redactSensitiveData(error instanceof Error ? { message: error.message } : error),
+    );
+    return NextResponse.json(
+      { success: false, error: 'Não foi possível salvar as credenciais do Chatwoot. Tente novamente.' },
+      { status: 500 },
+    );
   }
 }

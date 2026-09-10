@@ -6,6 +6,7 @@ import type { SelecaoDeOrganizacao } from '@/components/organizacao/usePapelNaOr
 // com o mesmo nome é como as duas divergem.
 import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizationPanel';
 import type { ConexaoObservada } from '@/lib/integrations/estadoDaIntegracao';
+import { comPrazo } from './comPrazo';
 
 /** Uma conexão como `/api/integracoes/saude` a devolve. */
 export interface ConexaoDeIntegracao extends ConexaoObservada {
@@ -51,7 +52,9 @@ export function useIntegracoes(
   selecao: SelecaoDeOrganizacao | null,
 ): LeituraPorOrganizacao<LeituraDeIntegracoes> {
   const ler = useCallback(async (): Promise<LeituraDeIntegracoes> => {
-    const resposta = await fetchWithAuth('/api/integracoes/saude');
+    // Com prazo: sem ele, uma leitura travada deixa a tela em "Lendo o estado
+    // das integracoes..." indefinidamente, sem nada que o lojista possa fazer.
+    const resposta = await comPrazo(fetchWithAuth, '/api/integracoes/saude');
     if (!resposta.ok) {
       throw new Error(`Não foi possível ler o estado das integrações (HTTP ${resposta.status}).`);
     }

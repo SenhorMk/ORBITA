@@ -10,6 +10,27 @@
  *
  * A prova é uma só: `last_health_check_at`. Sem ela, nada foi verificado, e o
  * estado honesto é dizer exatamente isso — e não pintar de verde.
+ *
+ * ## Revisão externa da PR #85 — evidência antiga não é estado atual
+ *
+ * A primeira versão aceitava qualquer `last_health_check_at` não nulo como
+ * saúde de agora, e escrevia "Conectado" a partir de uma checagem de meses
+ * atrás. É o mesmo defeito de origem num eixo diferente: dado velho
+ * apresentado como fato presente.
+ *
+ * O caminho óbvio seria um TTL — "verificação vale por N minutos". **Não
+ * existe cadência de health neste projeto**: `last_health_check_at` só é
+ * escrito pelas funções de entrega do outbox
+ * (`48_outbox_lease_correlacao.sql`), que rodam quando há tráfego real, e não
+ * de tempos em tempos. Não há job, cron ou intervalo configurado. Inventar um
+ * número aqui seria escolher, por conta própria, quando o produto passa a
+ * mentir mais devagar.
+ *
+ * Então a evidência é apresentada como o que ela é: **histórico, com data**.
+ * "Última verificação OK em 10/09/2026 12:00 UTC" é verdade para sempre;
+ * "Conectado" é uma afirmação sobre agora que nada aqui sustenta. Quando o
+ * produto ganhar uma cadência real de verificação, este módulo é o único lugar
+ * que precisa saber disso.
  */
 
 /** O que o servidor sabe sobre uma conexão, como `/api/integracoes/saude` a devolve. */
@@ -25,7 +46,7 @@ export interface ConexaoObservada {
 export type NomeDoEstado =
   | 'nao-configurado'
   | 'configurado'
-  | 'conectado'
+  | 'verificado'
   | 'nao-verificado'
   | 'erro';
 
@@ -58,19 +79,56 @@ const NAO_VERIFICADO: EstadoDaIntegracao = {
   detalhe: 'Nenhuma verificação de saúde foi feita nesta conexão até agora.',
 };
 
-const CONECTADO: EstadoDaIntegracao = {
-  nome: 'conectado',
-  rotulo: 'Conectado',
-  cor: 'var(--accent)',
-  detalhe: null,
+/**
+ * O Bling depois do OAuth, antes de qualquer verificação.
+ *
+ * A autorização é um fato: os tokens foram gravados. Saúde é outro, e não
+ * existe ainda — por isso a pílula continua dizendo "Não verificado", e quem
+ * conta a metade boa é o detalhe.
+ */
+const AUTORIZADO_NAO_VERIFICADO: EstadoDaIntegracao = {
+  ...NAO_VERIFICADO,
+  detalhe: 'Autorização concluída e tokens gravados. Nenhuma verificação de saúde foi feita até agora.',
 };
 
-function comErro(conexao: ConexaoObservada): EstadoDaIntegracao {
+/**
+ * O instante de uma verificação, em texto que não depende do fuso de quem lê.
+ *
+ * `toLocaleString` mudaria de resultado entre o navegador do lojista, o do
+ * suporte e o do teste. A data é evidência: ela precisa ser a mesma para todo
+ * mundo que a citar.
+ */
+export function instanteDaVerificacao(iso: string): string | null {
+  const quando = new Date(iso);
+  if (Number.isNaN(quando.getTime())) return null;
+  const dois = (valor: number) => String(valor).padStart(2, '0');
+  return `${dois(quando.getUTCDate())}/${dois(quando.getUTCMonth() + 1)}/${quando.getUTCFullYear()}`
+    + ` ${dois(quando.getUTCHours())}:${dois(quando.getUTCMinutes())} UTC`;
+}
+
+/** "Verificado": houve uma checagem real e ela passou. Não diz nada sobre agora. */
+function verificadoEm(iso: string): EstadoDaIntegracao {
+  const quando = instanteDaVerificacao(iso);
+  return {
+    nome: 'verificado',
+    // Deliberadamente **não** "Conectado": esta é a última notícia, não o
+    // estado atual. Nada aqui prova que a integração responde neste instante.
+    rotulo: 'Verificado',
+    cor: 'var(--info)',
+    detalhe: quando
+      ? `Última verificação OK em ${quando}. Não há verificação contínua: isto é a última notícia, não o estado de agora.`
+      : 'Última verificação OK, em data não legível.',
+  };
+}
+
+function comErro(conexao: ConexaoObservada, iso: string): EstadoDaIntegracao {
+  const quando = instanteDaVerificacao(iso);
+  const motivo = conexao.last_health_error ? `: ${conexao.last_health_error}` : '.';
   return {
     nome: 'erro',
     rotulo: 'Erro',
     cor: 'var(--danger)',
-    detalhe: conexao.last_health_error,
+    detalhe: quando ? `Última verificação falhou em ${quando}${motivo}` : `Última verificação falhou${motivo}`,
   };
 }
 
@@ -81,21 +139,22 @@ function comErro(conexao: ConexaoObservada): EstadoDaIntegracao {
  * que alguém de fato checou. Antes disso ele é apenas o default da coluna.
  */
 function resultadoDaUltimaVerificacao(conexao: ConexaoObservada): EstadoDaIntegracao | null {
-  if (conexao.last_health_check_at === null) return null;
-  return conexao.health_status === 'healthy' ? CONECTADO : comErro(conexao);
+  const quando = conexao.last_health_check_at;
+  if (quando === null) return null;
+  return conexao.health_status === 'healthy' ? verificadoEm(quando) : comErro(conexao, quando);
 }
 
 /**
  * Estado do Bling: duas etapas, e nenhuma delas vale pela outra.
  *
  * Salvar Client ID/Secret **não** é estar autorizado. Quem declara `conectado`
- * é o callback OAuth, depois de gravar os tokens — e mesmo aí, saúde só existe
- * se alguém tiver verificado.
+ * é o callback OAuth, depois de gravar os tokens — e mesmo aí a tela não diz
+ * "Conectado": autorização não é saúde, e a última verificação não é agora.
  */
 export function estadoDoBling(conexao: ConexaoObservada | undefined): EstadoDaIntegracao {
   if (!conexao || !conexao.credenciais_configuradas) return NAO_CONFIGURADO;
   if (conexao.status !== 'conectado') return CONFIGURADO;
-  return resultadoDaUltimaVerificacao(conexao) ?? NAO_VERIFICADO;
+  return resultadoDaUltimaVerificacao(conexao) ?? AUTORIZADO_NAO_VERIFICADO;
 }
 
 /**

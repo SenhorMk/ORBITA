@@ -73,10 +73,28 @@ async function authorizeBlingConnect(request: Request): Promise<AuthorizationOut
  * descreve uma checagem feita contra as chaves anteriores, e mantê-la seria a
  * mesma mentira num campo diferente. Sem `last_health_check_at`, a tela diz
  * "não verificado" — que é a verdade.
+ *
+ * ## Revisão externa da PR #85 — o `client_id` sai antes, e volta depois
+ *
+ * Esta função **abre** a gravação: ela tira o `client_id` de `metadata` em vez
+ * de já colocar o novo. Sem isso havia escrita parcial. Duas linhas do tempo:
+ *
+ * - conexão nova: a linha nascia com `client_id` gravado; se o cofre falhasse
+ *   logo depois, o reload mostrava "Configurado" para uma organização sem
+ *   Client Secret nenhum;
+ * - substituição: `metadata` já apontava para o Client ID **novo** enquanto o
+ *   cofre ainda guardava o par **antigo** — exatamente a metade-com-metade que
+ *   a revisão apontou, e o `authorize` levaria o id novo com o segredo velho.
+ *
+ * Com o `client_id` ausente durante a janela, uma falha do cofre deixa a
+ * conexão em "Não configurado": entendido de menos, nunca entendido errado. O
+ * `client_id` só é gravado por `confirmarClientIdDoBling`, depois de o cofre
+ * ter aceitado o par inteiro — e o cofre grava as duas chaves numa linha só
+ * (`credenciais_integracao`, upsert por `conexao_id`), então lá dentro nunca
+ * existe metade.
  */
-async function upsertBlingConnection(
+async function abrirGravacaoDaConexaoBling(
   scope: VerifiedOrganizationScope,
-  clientId: string,
 ): Promise<{ conexaoId: string; status: string }> {
   const { data: existing, error: findError } = await supabaseServer
     .from('conexoes_integracao')
@@ -92,13 +110,16 @@ async function upsertBlingConnection(
     typeof existing?.metadata === 'object' && existing.metadata !== null && !Array.isArray(existing.metadata)
       ? (existing.metadata as Record<string, unknown>)
       : {};
-  const metadata = { ...currentMetadata, client_id: clientId };
+  // Tudo o que havia em `metadata`, **menos** o `client_id`: durante a janela
+  // de gravação a conexão não aponta para credencial nenhuma.
+  const metadataSemClientId: Record<string, unknown> = { ...currentMetadata };
+  delete metadataSemClientId.client_id;
 
   if (existing?.id) {
     const { error: updateError } = await supabaseServer
       .from('conexoes_integracao')
       .update({
-        metadata,
+        metadata: metadataSemClientId,
         status: 'pendente',
         last_health_check_at: null,
         last_health_error: null,
@@ -117,12 +138,47 @@ async function upsertBlingConnection(
       provedor: 'bling',
       nome: BLING_CONNECTION_NAME,
       status: 'pendente',
-      metadata,
+      metadata: metadataSemClientId,
     })
     .select('id')
     .single();
   if (insertError || !inserted) throw insertError || new Error('Falha ao criar conexão Bling');
   return { conexaoId: inserted.id, status: 'pendente' };
+}
+
+/**
+ * Fecha a gravação: o `client_id` só entra em `metadata` depois de o cofre ter
+ * aceitado o par completo.
+ *
+ * Se esta escrita falhar, o cofre já tem o par novo e `metadata` não aponta
+ * para ele: `authorize` responde "Nenhum Client ID configurado" e o lojista
+ * salva de novo. Nada fica pela metade — fica **por fazer**, que é diferente.
+ */
+async function confirmarClientIdDoBling(
+  scope: VerifiedOrganizationScope,
+  conexaoId: string,
+  clientId: string,
+): Promise<void> {
+  const { data: atual, error: leituraError } = await supabaseServer
+    .from('conexoes_integracao')
+    .select('metadata')
+    .eq('id', conexaoId)
+    .eq('organizacao_id', scope.organizationId)
+    .maybeSingle();
+  if (leituraError) throw leituraError;
+
+  // SAFETY: mesmo narrowing da abertura; `metadata` e `jsonb not null`.
+  const base =
+    typeof atual?.metadata === 'object' && atual.metadata !== null && !Array.isArray(atual.metadata)
+      ? (atual.metadata as Record<string, unknown>)
+      : {};
+
+  const { error: updateError } = await supabaseServer
+    .from('conexoes_integracao')
+    .update({ metadata: { ...base, client_id: clientId }, updated_at: new Date().toISOString() })
+    .eq('id', conexaoId)
+    .eq('organizacao_id', scope.organizationId);
+  if (updateError) throw updateError;
 }
 
 /** Lê e valida o corpo com o contrato compartilhado com a UI, ou devolve a recusa 400. */
@@ -177,13 +233,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: ORGANIZACAO_ESPERADA_DIVERGENTE }, { status: 409 });
     }
 
-    const { conexaoId, status } = await upsertBlingConnection(authorization.scope, parsedBody.payload.clientId);
+    // A ordem e a garantia: abrir (sem `client_id`) -> cofre -> confirmar.
+    const { conexaoId, status } = await abrirGravacaoDaConexaoBling(authorization.scope);
 
     await credentialsVault.saveEncryptedCredentials(
       authorization.scope.organizationId,
       conexaoId,
       buildBlingVaultCredentials(parsedBody.payload),
     );
+
+    await confirmarClientIdDoBling(authorization.scope, conexaoId, parsedBody.payload.clientId);
 
     return NextResponse.json({ success: true, conexaoId, status });
   } catch (error: unknown) {

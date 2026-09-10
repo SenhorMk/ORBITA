@@ -10,6 +10,7 @@ import { estadoDoBling, estadoDoChatwoot, type EstadoDaIntegracao } from '@/lib/
 import { chaveDaSelecao } from '@/components/organizacao/useLeituraPorOrganizacao';
 import type { SelecaoDeOrganizacao } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
 import { CampoParaCopiar } from './CampoParaCopiar';
+import { comPrazo } from './comPrazo';
 import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizationPanel';
 import { useIntegracoes, type LeituraDeIntegracoes } from './useIntegracoes';
 
@@ -210,7 +211,7 @@ function CartaoBling({
     setFalhaAoSalvar(null);
     setFalhaAoAutorizar(null);
     try {
-      const resposta = await fetchWithAuth('/api/bling/connect', {
+      const resposta = await comPrazo(fetchWithAuth, '/api/bling/connect', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         // A organizacao vai junto para o servidor **recusar** a escrita se ela
@@ -243,7 +244,8 @@ function CartaoBling({
     setAutorizando(true);
     setFalhaAoAutorizar(null);
     try {
-      const resposta = await fetchWithAuth(
+      const resposta = await comPrazo(
+        fetchWithAuth,
         `/api/bling/authorize?organizacao_esperada=${encodeURIComponent(organizacaoId)}`,
       );
       if (!resposta.ok) {
@@ -364,7 +366,7 @@ function CartaoChatwoot({ fetchWithAuth, leitura, organizacaoId, podeGerir, reca
     setSalvando(true);
     setFalha(null);
     try {
-      const resposta = await fetchWithAuth('/api/chatwoot/connect', {
+      const resposta = await comPrazo(fetchWithAuth, '/api/chatwoot/connect', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -511,6 +513,12 @@ export interface IntegrationsPanelProps {
  * A `key` da secao carrega a selecao de organizacao: trocar de organizacao ou
  * sair da sessao destroi os cartoes, e com eles todo segredo em digitacao —
  * nao ha uma limpeza a ser lembrada, porque nao ha o que limpar.
+ *
+ * **Nenhuma espera e infinita.** `fetchWithAuth` nao tem timeout, e `fetch`
+ * tambem nao: uma requisicao travada deixaria "Salvando..." na tela para
+ * sempre. Toda operacao desta tela passa por `comPrazo`, que e local a
+ * Integracoes — o seam global continua sem prazo, porque ele tambem carrega as
+ * sincronizacoes longas do Bling.
  *
  * **Uma operacao pertence a organizacao que a comecou.** A leitura e carimbada
  * pelo par (organizacao, versao) do Ticket 06, entao a resposta atrasada de A

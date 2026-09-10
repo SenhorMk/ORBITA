@@ -57,8 +57,28 @@ async function resolveProductionCredentials(
   return null;
 }
 
-/** 3. Persist tokens into the organization's private credentials vault. */
-async function persistOrganizationTokens(
+/**
+ * 3. Persist tokens into the organization's private credentials vault.
+ *
+ * ## Revisao externa da PR #85 — `conectado` e a ULTIMA escrita
+ *
+ * A versao anterior marcava `status = 'conectado'` no mesmo upsert que
+ * descobria o id da conexao, ou seja **antes** de os tokens existirem no
+ * cofre. Se o cofre falhasse logo depois, a resposta virava 500 (correto), mas
+ * a linha ficava dizendo `conectado` para uma organizacao sem token nenhum — e
+ * a proxima leitura da tela repetia essa afirmacao.
+ *
+ * Agora sao tres passos, e o ultimo e o unico que afirma alguma coisa:
+ *
+ * 1. garantir a linha em `pendente`, so para obter o `id`;
+ * 2. gravar os tokens no cofre (uma linha so, nunca metade);
+ * 3. so entao declarar `conectado`.
+ *
+ * Uma falha em 2 deixa `pendente`: a tela diz "Configurado, falta autorizar",
+ * que e exatamente a verdade. Uma falha em 3 deixa tokens gravados sob um
+ * `pendente` — entendido de menos, e o lojista refaz o Passo 2 sem prejuizo.
+ */
+export async function persistOrganizationTokens(
   supabaseServer: ProductionSupabaseClient,
   credentialsVault: ProductionCredentialsVault,
   productionLogger: ProductionLogger,
@@ -72,7 +92,7 @@ async function persistOrganizationTokens(
         organizacao_id: organizacaoId,
         provedor: 'bling',
         nome: 'Principal',
-        status: 'conectado',
+        status: 'pendente',
         metadata: { client_id: input.clientId },
         updated_at: new Date().toISOString(),
       },
@@ -96,6 +116,24 @@ async function persistOrganizationTokens(
     token_expires_at: input.expiresAt,
   });
   productionLogger.info('bling_callback.credentials_saved', { subsystem: 'app', provider: 'bling' });
+
+  // Com os tokens no cofre, e so agora, a conexao pode se dizer conectada. A
+  // evidencia de saude nasce limpa: autorizar nao e ter sido verificado.
+  const { error: statusErr } = await supabaseServer
+    .from('conexoes_integracao')
+    .update({
+      status: 'conectado',
+      last_health_check_at: null,
+      last_health_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', conn.id)
+    .eq('organizacao_id', organizacaoId);
+
+  if (statusErr) {
+    productionLogger.error('bling_callback.status_persist_failed', { subsystem: 'app', provider: 'bling' });
+    throw new Error('Falha ao concluir a conexao Bling da organizacao');
+  }
 }
 
 /**

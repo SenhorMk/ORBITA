@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { blingCredentialsPayloadSchema } from '@/lib/config/blingCredentialsContract';
 import { IntegrationsPanel } from './IntegrationsPanel';
 import type { SelecaoDeOrganizacao } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
+import { PRAZO_DA_INTEGRACAO_MS } from './comPrazo';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
@@ -85,6 +86,21 @@ describe('IntegrationsPanel', () => {
       await waitFor(() => expect(screen.getAllByText(/não configurado/i)).toHaveLength(2));
     });
 
+    it('uma verificação antiga aparece como evidência datada, nunca como "Conectado"', async () => {
+      const fetchWithAuth = vi.fn(async () => jsonResponse(saude({
+        conexoes: [conexao({
+          status: 'conectado', health_status: 'healthy',
+          last_health_check_at: '2025-01-04T08:30:00Z',
+        })],
+      })));
+
+      renderPainel(fetchWithAuth);
+
+      expect(await screen.findByText(/^verificado$/i)).toBeInTheDocument();
+      expect(screen.queryByText(/^conectado$/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/04\/01\/2025 08:30 UTC/)).toBeInTheDocument();
+    });
+
     it('mostra o erro real da última verificação, e só quando houve uma', async () => {
       const fetchWithAuth = vi.fn(async () => jsonResponse(saude({
         conexoes: [conexao({
@@ -142,7 +158,10 @@ describe('IntegrationsPanel', () => {
 
       await waitFor(() => expect(redirect).toHaveBeenCalledWith('https://www.bling.com.br/Api/v3/oauth/authorize?state=abc'));
       // A organização da tela viaja junto, para o servidor recusar se ela mudou.
-      expect(fetchWithAuth).toHaveBeenCalledWith('/api/bling/authorize?organizacao_esperada=org-a');
+      expect(fetchWithAuth).toHaveBeenCalledWith(
+        '/api/bling/authorize?organizacao_esperada=org-a',
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
     });
 
     it('bloqueia o Passo 2 enquanto o Passo 1 não estiver gravado, dizendo o motivo', async () => {
@@ -306,6 +325,41 @@ describe('IntegrationsPanel', () => {
       await user.click(screen.getByRole('button', { name: /salvar credenciais do chatwoot/i }));
 
       expect(await screen.findByRole('alert')).toHaveTextContent(/network timeout/i);
+    });
+  });
+
+  describe('prazo', () => {
+    it('uma requisição travada não deixa "Salvando…" para sempre', async () => {
+      // Relógio falso: o prazo real é de 30 s, e o teste prova o caminho sem
+      // gastar 30 s de suíte.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        const fetchWithAuth = vi.fn((url: string, options?: RequestInit) => {
+          if (url === '/api/integracoes/saude') return Promise.resolve(jsonResponse(saude({ conexoes: [] })));
+          // O servidor nunca responde; só o AbortSignal encerra a espera.
+          return new Promise<Response>((_resolve, reject) => {
+            options?.signal?.addEventListener('abort', () => reject(new Error('The operation was aborted.')));
+          });
+        });
+
+        renderPainel(fetchWithAuth);
+        await screen.findByLabelText(/client secret do bling/i);
+        await user.type(screen.getByLabelText(/client id do bling/i), 'c');
+        await user.type(screen.getByLabelText(/client secret do bling/i), 's');
+        await user.click(screen.getByRole('button', { name: /salvar credenciais do bling/i }));
+
+        expect(screen.getByRole('button', { name: /salvando/i })).toBeInTheDocument();
+
+        await vi.advanceTimersByTimeAsync(PRAZO_DA_INTEGRACAO_MS + 1);
+
+        const alerta = await screen.findByRole('alert');
+        expect(alerta).toHaveTextContent(/não respondeu a tempo/i);
+        // E o botão volta a ser clicável: nada fica preso em "Salvando…".
+        expect(screen.getByRole('button', { name: /salvar credenciais do bling/i })).toBeEnabled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
