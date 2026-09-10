@@ -164,17 +164,39 @@ async function exchangeAndPersistTokens(
 
   logger.info('bling_callback.tokens_received', { subsystem: 'app', correlationId, provider: 'bling' });
 
-  await dependencies.persistTokens({
-    userId,
-    organizacaoId,
-    clientId: credentials.clientId,
-    clientSecret: credentials.clientSecret,
-    organizationConnectionId: credentials.organizationConnectionId,
-    legacyRecordId: credentials.legacyRecordId,
-    accessToken: tokenData.access_token,
-    refreshToken: tokenData.refresh_token,
-    expiresAt,
-  });
+  // A pagina de sucesso so pode ser escrita DEPOIS de os tokens estarem
+  // gravados. Antes, uma falha aqui subia como excecao e virava um 500 sem o
+  // cookie da transacao limpo — ou, pior, era engolida pela propria persistencia
+  // (`persistOrganizationTokens` retornava em silencio quando a linha da conexao
+  // nao gravava) e o usuario via "Conexao Realizada!" sem token nenhum no cofre.
+  try {
+    await dependencies.persistTokens({
+      userId,
+      organizacaoId,
+      clientId: credentials.clientId,
+      clientSecret: credentials.clientSecret,
+      organizationConnectionId: credentials.organizationConnectionId,
+      legacyRecordId: credentials.legacyRecordId,
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      expiresAt,
+    });
+  } catch (causa) {
+    logger.error('bling_callback.token_persist_failed', {
+      subsystem: 'app',
+      correlationId,
+      provider: 'bling',
+      reason: causa instanceof Error ? causa.name : 'unknown',
+    });
+    return clearOAuthTransaction(
+      htmlPage(
+        'error',
+        'A autorizacao foi concedida pelo Bling, mas os tokens nao puderam ser gravados com seguranca. '
+        + 'A conexao nao foi estabelecida. Clique em Conectar Bling para tentar de novo.',
+        500,
+      ),
+    );
+  }
 
   logger.info('bling_callback.completed', { subsystem: 'app', correlationId, provider: 'bling' });
 

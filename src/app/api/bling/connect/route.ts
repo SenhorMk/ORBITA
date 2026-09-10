@@ -4,6 +4,7 @@ import { credentialsVault, redactSensitiveData } from '@/lib/integrations/creden
 import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizationContext';
 import { organizationContextStatus } from '@/lib/organizationAuthorization';
 import { organizationContextToScope, type VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { organizacaoEsperadaDivergente, ORGANIZACAO_ESPERADA_DIVERGENTE } from '@/lib/integrations/organizacaoEsperada';
 import {
   blingCredentialsPayloadSchema,
   buildBlingVaultCredentials,
@@ -58,8 +59,20 @@ async function authorizeBlingConnect(request: Request): Promise<AuthorizationOut
  * `(organizacao_id, provedor)`.
  *
  * O `client_id` vai para `metadata` porque `GET /api/bling/authorize` o lê de
- * lá. O `status` não é tocado numa troca de chaves: quem declara a conexão
- * `conectado` é o callback OAuth, ao gravar tokens reais.
+ * lá.
+ *
+ * **Gravar credenciais novas derruba a conexão anterior.** A versão anterior
+ * preservava o `status` — a intenção era boa (só o callback OAuth declara
+ * `conectado`), mas o efeito era o oposto: os tokens guardados no cofre foram
+ * emitidos para o Client ID *antigo* e deixam de valer no instante em que
+ * outro par de chaves é gravado, enquanto a linha continuava dizendo
+ * `conectado`. A tela então afirmava uma autorização que já não existia, sem
+ * nenhuma evidência.
+ *
+ * Junto do `status`, a evidência de saúde também é apagada: `last_health_*`
+ * descreve uma checagem feita contra as chaves anteriores, e mantê-la seria a
+ * mesma mentira num campo diferente. Sem `last_health_check_at`, a tela diz
+ * "não verificado" — que é a verdade.
  */
 async function upsertBlingConnection(
   scope: VerifiedOrganizationScope,
@@ -82,14 +95,19 @@ async function upsertBlingConnection(
   const metadata = { ...currentMetadata, client_id: clientId };
 
   if (existing?.id) {
-    const status = typeof existing.status === 'string' ? existing.status : 'pendente';
     const { error: updateError } = await supabaseServer
       .from('conexoes_integracao')
-      .update({ metadata, updated_at: new Date().toISOString() })
+      .update({
+        metadata,
+        status: 'pendente',
+        last_health_check_at: null,
+        last_health_error: null,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', existing.id)
       .eq('organizacao_id', scope.organizationId);
     if (updateError) throw updateError;
-    return { conexaoId: existing.id, status };
+    return { conexaoId: existing.id, status: 'pendente' };
   }
 
   const { data: inserted, error: insertError } = await supabaseServer
@@ -154,6 +172,10 @@ export async function POST(request: Request) {
 
     const parsedBody = await parseBlingCredentialsBody(request);
     if (parsedBody._tag === 'Invalid') return parsedBody.response;
+
+    if (organizacaoEsperadaDivergente(parsedBody.payload.organizacaoEsperada, authorization.scope.organizationId)) {
+      return NextResponse.json({ success: false, error: ORGANIZACAO_ESPERADA_DIVERGENTE }, { status: 409 });
+    }
 
     const { conexaoId, status } = await upsertBlingConnection(authorization.scope, parsedBody.payload.clientId);
 

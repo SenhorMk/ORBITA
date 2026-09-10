@@ -5,8 +5,45 @@ import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizati
 import { organizationContextStatus } from '@/lib/organizationAuthorization';
 import { organizationContextToScope } from '@/lib/verifiedOrganizationScope';
 import { ChatwootCredentialsPayloadSchema } from '@/services/chatwoot/chatwootPort';
+import { resolveChatwootWebhookUrl, chatwootWebhookPath } from '@/lib/config/appBaseUrl';
+import { organizacaoEsperadaDivergente, ORGANIZACAO_ESPERADA_DIVERGENTE } from '@/lib/integrations/organizacaoEsperada';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * Cria ou atualiza a conexão Chatwoot da organização, e devolve o seu id.
+ *
+ * **Gravar credenciais não é prova de que a instância responde.** A versão
+ * anterior marcava `conectado` no próprio salvamento, e a tela pintava de
+ * verde uma URL que podia estar errada, um token revogado ou uma conta
+ * inexistente. `pendente` é o que de fato se sabe: há configuração, não há
+ * verificação. A evidência de saúde anterior cai junto, porque ela descreve
+ * uma checagem feita com as credenciais que acabaram de ser substituídas.
+ */
+async function upsertChatwootConnection(organizacaoId: string, conexaoExistenteId: string | null): Promise<string> {
+  if (conexaoExistenteId) {
+    const { error: updateError } = await supabaseServer
+      .from('conexoes_integracao')
+      .update({
+        status: 'pendente',
+        last_health_check_at: null,
+        last_health_error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', conexaoExistenteId)
+      .eq('organizacao_id', organizacaoId);
+    if (updateError) throw updateError;
+    return conexaoExistenteId;
+  }
+
+  const { data: inserted, error: insertError } = await supabaseServer
+    .from('conexoes_integracao')
+    .insert({ organizacao_id: organizacaoId, provedor: 'chatwoot', nome: 'Principal', status: 'pendente' })
+    .select('id')
+    .single();
+  if (insertError || !inserted) throw insertError || new Error('Falha ao criar conexão Chatwoot');
+  return inserted.id;
+}
 
 /**
  * Create or update the organization's Chatwoot connection: persists the
@@ -47,6 +84,13 @@ export async function POST(request: Request) {
       );
     }
 
+    // Mesma guarda de `POST /api/bling/connect`: se a organização ativa mudou
+    // desde que o formulário foi enviado, nada é gravado em lugar nenhum.
+    const esperada = (body as { organizacao_esperada?: unknown }).organizacao_esperada;
+    if (organizacaoEsperadaDivergente(typeof esperada === 'string' ? esperada : null, scope.organizationId)) {
+      return NextResponse.json({ success: false, error: ORGANIZACAO_ESPERADA_DIVERGENTE }, { status: 409 });
+    }
+
     const { data: existing, error: findError } = await supabaseServer
       .from('conexoes_integracao')
       .select('id')
@@ -54,32 +98,19 @@ export async function POST(request: Request) {
       .eq('provedor', 'chatwoot')
       .maybeSingle();
     if (findError) throw findError;
-
-    let conexaoId: string;
-    if (existing?.id) {
-      conexaoId = existing.id;
-      const { error: updateError } = await supabaseServer
-        .from('conexoes_integracao')
-        .update({ status: 'conectado', updated_at: new Date().toISOString() })
-        .eq('id', conexaoId)
-        .eq('organizacao_id', scope.organizationId);
-      if (updateError) throw updateError;
-    } else {
-      const { data: inserted, error: insertError } = await supabaseServer
-        .from('conexoes_integracao')
-        .insert({ organizacao_id: scope.organizationId, provedor: 'chatwoot', nome: 'Principal', status: 'conectado' })
-        .select('id')
-        .single();
-      if (insertError || !inserted) throw insertError || new Error('Falha ao criar conexão Chatwoot');
-      conexaoId = inserted.id;
-    }
+    const conexaoId = await upsertChatwootConnection(scope.organizationId, existing?.id ?? null);
 
     await credentialsVault.saveEncryptedCredentials(scope.organizationId, conexaoId, parsed.data);
 
     return NextResponse.json({
       success: true,
       conexaoId,
-      webhookUrl: `/api/chatwoot/webhook/${conexaoId}`,
+      // Absoluta quando a origem estavel esta configurada: o endereco e colado
+      // dentro do Chatwoot, e um caminho relativo nao serve la.
+      webhookUrl: resolveChatwootWebhookUrl(
+        { APP_BASE_URL: process.env.APP_BASE_URL, STRIPE_APP_BASE_URL: process.env.STRIPE_APP_BASE_URL },
+        conexaoId,
+      ) ?? chatwootWebhookPath(conexaoId),
     });
   } catch (error: unknown) {
     console.error('❌ Erro ao conectar Chatwoot:', redactSensitiveData(error instanceof Error ? { message: error.message } : error));

@@ -218,6 +218,32 @@ describe('POST /api/bling/connect', () => {
     expect(savedVaultCalls[0]?.conexaoId).toBe('conexao-org-1');
   });
 
+  it('credenciais novas derrubam a conexão anterior em vez de manter um "conectado" fictício', async () => {
+    // Uma organização já autorizada no Bling: os tokens no cofre foram
+    // emitidos para `client-abc`.
+    await callConnect({ clientId: 'client-abc', clientSecret: 'secret-xyz' });
+    recordedQueries.length = 0;
+
+    // Trocar o par de chaves invalida esses tokens no mesmo instante.
+    const res = await callConnect({ clientId: 'client-def', clientSecret: 'secret-uvw' });
+
+    expect(res.status).toBe(200);
+    const update = recordedQueries.find((q) => q.op === 'update');
+    expect(update?.values).toMatchObject({
+      status: 'pendente',
+      last_health_check_at: null,
+      last_health_error: null,
+    });
+    // E a própria resposta diz que a conexão voltou a pendente.
+    await expect(res.json()).resolves.toMatchObject({ success: true, status: 'pendente' });
+  });
+
+  it('a criação da conexão também nasce pendente, porque salvar chaves não é autorizar', async () => {
+    await callConnect({ clientId: 'client-abc', clientSecret: 'secret-xyz' });
+    const insert = recordedQueries.find((q) => q.op === 'insert');
+    expect(insert?.values).toMatchObject({ status: 'pendente' });
+  });
+
   it('escopa toda leitura e escrita pela organização verificada, nunca por um id vindo do corpo', async () => {
     // Lição do ticket 26: não basta conferir os parâmetros — é preciso provar
     // que o predicado organizacional vem da sessão verificada.

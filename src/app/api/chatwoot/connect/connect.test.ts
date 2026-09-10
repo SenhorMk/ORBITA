@@ -7,6 +7,8 @@ process.env.ENCRYPTION_KEY = 'cd'.repeat(32);
 
 const mockUpsertCreds = vi.fn().mockResolvedValue(undefined);
 let existingConnection: { id: string } | null = null;
+/** O que a rota realmente gravou na linha da conexão, para o teste inspecionar. */
+const escritas: Array<{ op: 'insert' | 'update'; values: Record<string, unknown> }> = [];
 
 vi.mock('@/lib/requestOrganizationContext', () => ({
   resolveActiveRequestOrganizationContext: vi.fn(),
@@ -36,12 +38,18 @@ vi.mock('@/lib/supabaseServer', () => ({
               }),
             }),
           }),
-          update: () => ({ eq: () => ({ eq: () => Promise.resolve({ error: null }) }) }),
-          insert: () => ({
-            select: () => ({
-              single: () => Promise.resolve({ data: { id: 'new-conexao-id' }, error: null }),
-            }),
-          }),
+          update: (values: Record<string, unknown>) => {
+            escritas.push({ op: 'update', values });
+            return { eq: () => ({ eq: () => Promise.resolve({ error: null }) }) };
+          },
+          insert: (values: Record<string, unknown>) => {
+            escritas.push({ op: 'insert', values });
+            return {
+              select: () => ({
+                single: () => Promise.resolve({ data: { id: 'new-conexao-id' }, error: null }),
+              }),
+            };
+          },
         };
       }
       throw new Error(`unexpected table ${table}`);
@@ -114,5 +122,41 @@ describe('POST /api/chatwoot/connect', () => {
       'new-conexao-id',
       expect.objectContaining({ api_token: 'tok-123', account_id: '42', webhook_secret: 'wh-secret-value' }),
     );
+  });
+
+  it('salvar credenciais não declara a instância conectada', async () => {
+    existingConnection = null;
+    escritas.length = 0;
+    await callConnect({ api_token: 'tok-123', account_id: '42', webhook_secret: 'wh-secret-value' });
+    // Nada aqui provou que a URL responde, que o token vale ou que a conta
+    // existe. `conectado` seria uma afirmação sem evidência nenhuma.
+    expect(escritas.at(-1)?.values).toMatchObject({ status: 'pendente' });
+    expect(JSON.stringify(escritas)).not.toContain('conectado');
+  });
+
+  it('regravar credenciais apaga a evidência de saúde das credenciais anteriores', async () => {
+    existingConnection = { id: 'conexao-existente' };
+    escritas.length = 0;
+    await callConnect({ api_token: 'tok-novo', account_id: '42', webhook_secret: 'wh-secret-value' });
+    expect(escritas.at(-1)).toMatchObject({
+      op: 'update',
+      values: { status: 'pendente', last_health_check_at: null, last_health_error: null },
+    });
+    existingConnection = null;
+  });
+
+  it('devolve a URL do webhook absoluta quando a origem estável está configurada', async () => {
+    existingConnection = null;
+    const anterior = process.env.APP_BASE_URL;
+    process.env.APP_BASE_URL = 'https://orbita.mkautobots.site';
+    try {
+      const res = await callConnect({ api_token: 'tok-123', account_id: '42', webhook_secret: 'wh-secret-value' });
+      // Relativo não serve: este endereço é colado dentro do Chatwoot.
+      await expect(res.json()).resolves.toMatchObject({
+        webhookUrl: 'https://orbita.mkautobots.site/api/chatwoot/webhook/new-conexao-id',
+      });
+    } finally {
+      process.env.APP_BASE_URL = anterior;
+    }
   });
 });

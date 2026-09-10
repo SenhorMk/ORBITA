@@ -12,7 +12,18 @@ import type { VerifiedOrganizationScope } from './verifiedOrganizationScope';
  * que isso, e o resultado era "transacao ausente" sem explicacao. 30 minutos
  * continua curto para um token de uso unico e cabe na jornada de verdade.
  */
-const OAUTH_TRANSACTION_TTL_MS = 30 * 60 * 1_000;
+export const OAUTH_TRANSACTION_TTL_MS = 30 * 60 * 1_000;
+
+/**
+ * O mesmo TTL, em segundos, para o cookie que acompanha a transacao.
+ *
+ * Exportado porque o cookie era fixado em 600s enquanto a transacao no
+ * servidor valia 1800s: entre 10 e 30 minutos o navegador ja tinha descartado
+ * o cookie, o callback chegava sem ele, e a tela dizia "a sessao de conexao
+ * nao chegou" para uma transacao que continuava valida. Duas constantes para
+ * o mesmo prazo divergem; esta e a unica.
+ */
+export const OAUTH_TRANSACTION_TTL_SECONDS = OAUTH_TRANSACTION_TTL_MS / 1_000;
 const cookieValueSchema = z.uuid();
 
 /** Protected data returned to the caller after creating a pending OAuth transaction. */

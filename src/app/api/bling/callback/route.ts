@@ -82,8 +82,10 @@ async function persistOrganizationTokens(
     .single();
 
   if (connErr || !conn?.id) {
+    // Lanca, e nao retorna: quem chama e o callback, e o retorno silencioso
+    // fazia a pagina de sucesso ser escrita sem token nenhum gravado.
     productionLogger.error('bling_callback.connection_persist_failed', { subsystem: 'app', provider: 'bling' });
-    return;
+    throw new Error('Falha ao gravar a conexao Bling da organizacao');
   }
 
   await credentialsVault.saveEncryptedCredentials(organizacaoId, conn.id, {
@@ -153,7 +155,18 @@ export async function GET(request: Request): Promise<NextResponse> {
       if (input.organizacaoId) {
         await persistOrganizationTokens(supabaseServer, credentialsVault, productionLogger, input.organizacaoId, input);
       }
-      await persistLegacyTokens(supabaseServer, encrypt, input);
+      // O espelho legado e best-effort por definicao (ver acima), entao a sua
+      // falha nao pode derrubar uma conexao que ja foi gravada de verdade no
+      // cofre da organizacao — que agora e o que decide o sucesso.
+      try {
+        await persistLegacyTokens(supabaseServer, encrypt, input);
+      } catch (causa) {
+        productionLogger.warn('bling_callback.legacy_mirror_failed', {
+          subsystem: 'app',
+          provider: 'bling',
+          reason: causa instanceof Error ? causa.name : 'unknown',
+        });
+      }
     },
   });
 

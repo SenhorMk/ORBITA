@@ -41,6 +41,7 @@ describe('GET /api/integracoes/saude', () => {
         credenciais_configuradas: true,
       }],
       blingCallbackUrl: () => 'https://orbita.mkautobots.site/api/bling/callback',
+      chatwootWebhookUrl: (id) => `https://orbita.mkautobots.site/api/chatwoot/webhook/${id}`,
     });
     const response = await handler(new Request('http://localhost/api/integracoes/saude'));
     expect(response.status).toBe(200);
@@ -56,13 +57,41 @@ describe('GET /api/integracoes/saude', () => {
       resolveContext: async () => ({ _tag: 'SessionMissing' }),
       getHealth: async () => [],
       blingCallbackUrl: () => 'https://orbita.mkautobots.site/api/bling/callback',
+      chatwootWebhookUrl: (id) => `https://orbita.mkautobots.site/api/chatwoot/webhook/${id}`,
     });
     const unavailable = createIntegrationHealthHandler({
       resolveContext: async () => ({ _tag: 'OrganizationStoreUnavailable', cause: 'private-detail' }),
       getHealth: async () => [],
       blingCallbackUrl: () => 'https://orbita.mkautobots.site/api/bling/callback',
+      chatwootWebhookUrl: (id) => `https://orbita.mkautobots.site/api/chatwoot/webhook/${id}`,
     });
     await expect(unauthorized(new Request('http://localhost'))).resolves.toMatchObject({ status: 401 });
     await expect(unavailable(new Request('http://localhost'))).resolves.toMatchObject({ status: 503 });
+  });
+
+  it('devolve a URL do webhook do Chatwoot apenas quando a conexão existe', async () => {
+    const semChatwoot = createIntegrationHealthHandler({
+      resolveContext: async () => resolved(),
+      getHealth: async () => [],
+      blingCallbackUrl: () => null,
+      chatwootWebhookUrl: (id) => `https://orbita.mkautobots.site/api/chatwoot/webhook/${id}`,
+    });
+    expect(await (await semChatwoot(new Request('http://localhost'))).json()).toMatchObject({
+      chatwoot_webhook_url: null,
+    });
+
+    const comChatwoot = createIntegrationHealthHandler({
+      resolveContext: async () => resolved(),
+      getHealth: async () => [{
+        id: 'conn-cw', provedor: 'chatwoot', nome: 'Principal', status: 'pendente',
+        health_status: 'healthy', last_health_check_at: null, last_health_error: null,
+        credenciais_configuradas: false,
+      }],
+      blingCallbackUrl: () => null,
+      chatwootWebhookUrl: (id) => `https://orbita.mkautobots.site/api/chatwoot/webhook/${id}`,
+    });
+    expect(await (await comChatwoot(new Request('http://localhost'))).json()).toMatchObject({
+      chatwoot_webhook_url: 'https://orbita.mkautobots.site/api/chatwoot/webhook/conn-cw',
+    });
   });
 });
