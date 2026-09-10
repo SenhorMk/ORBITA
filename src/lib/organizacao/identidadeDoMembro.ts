@@ -13,25 +13,21 @@
  * chegava até aqui.
  *
  * ---------------------------------------------------------------------------
- * O E-MAIL NÃO É PARA TODO MUNDO
+ * O E-MAIL NÃO ENTRA NESTA TELA
  * ---------------------------------------------------------------------------
- * A lista de membros exige `organization:access` — **qualquer** membro a lê. A
- * lista de convites, que carrega e-mails, exige `organization:manage`. Devolver
- * o e-mail de todos os colegas a um `member` alargaria a exposição que o
- * produto hoje reserva a quem administra, e alargar exposição não é ajuste de
- * apresentação.
+ * A primeira versão desta fatia usava o e-mail como recurso para quem
+ * administra — a lista de convites já expõe e-mails a esse papel, então o dado
+ * não era novo para ele. A revisão externa recusou, e com razão: "já é visível
+ * em outro lugar" não é motivo para publicar PII em mais um. Um hotfix de
+ * apresentação não é a hora de aumentar a superfície de dado pessoal, e a
+ * ausência de nome é perfeitamente dizível sem e-mail nenhum.
  *
- * Então o e-mail entra apenas como **recurso**, e só para quem já o veria de
- * outro jeito nesta organização: quem administra, e a própria pessoa olhando a
- * si mesma. Para os demais, sem nome cadastrado, a tela diz que não há nome —
- * e não inventa um.
- *
- * Nada aqui muda autorização: a decisão continua vindo de
- * `organizationCapabilitiesForRole`, a mesma tabela que a rota já usa. Esta
- * política só escolhe o que **mostrar** dentro do que já foi autorizado.
+ * Então a regra é uma só, igual para owner, admin e member: **nome do cadastro,
+ * ou a ausência dele dita em voz alta**. Nenhum papel recebe e-mail por aqui, e
+ * a rota não tem mais política de exposição para acertar ou errar.
  *
  * ---------------------------------------------------------------------------
- * QUATRO DESFECHOS, E NENHUM DELES SE CONFUNDE COM OUTRO
+ * TRÊS DESFECHOS, E NENHUM DELES SE CONFUNDE COM OUTRO
  * ---------------------------------------------------------------------------
  * `origem_do_nome` existe porque "esta pessoa não cadastrou nome" e "não
  * consegui ler a identidade desta pessoa" são coisas diferentes, e a tela de
@@ -44,9 +40,7 @@
 export type OrigemDoNome =
   /** `user_metadata.full_name`, informado no cadastro. */
   | 'cadastro'
-  /** Recurso ao e-mail, permitido para este leitor. */
-  | 'email'
-  /** A identidade foi lida e não há nome — nem e-mail que este leitor possa ver. */
+  /** A identidade foi lida e não há nome cadastrado. */
   | 'ausente'
   /** A identidade não pôde ser lida. Não é o mesmo que não ter nome. */
   | 'indisponivel';
@@ -57,14 +51,14 @@ export interface IdentidadeDeExibicao {
 }
 
 /**
- * O usuário do Auth reduzido aos dois campos que a interface pode mostrar.
+ * O usuário do Auth reduzido ao **único** campo que a interface pode mostrar.
  *
- * O tipo é estreito de propósito: a metadata do Auth é um saco aberto onde
- * qualquer integração pode ter escrito qualquer coisa, e devolvê-la inteira
- * publicaria campos que ninguém revisou.
+ * O tipo é estreito de propósito, e ficou mais estreito ainda quando o e-mail
+ * saiu: a metadata do Auth é um saco aberto onde qualquer integração pode ter
+ * escrito qualquer coisa, e devolvê-la inteira publicaria campos que ninguém
+ * revisou. O que não está aqui não tem como vazar daqui.
  */
 export interface UsuarioDoAuth {
-  readonly email?: string | null;
   readonly user_metadata?: unknown;
 }
 
@@ -100,28 +94,16 @@ function nomeCadastrado(metadata: unknown): string | null {
  *
  * @param usuario - O usuário do Auth, ou `null` quando a leitura não deu certo.
  *   `null` **não** significa "sem nome": significa que não se sabe.
- * @param opcoes.podeVerEmail - Se este leitor já pode ver o e-mail deste membro
- *   nesta organização. Ver o cabeçalho deste arquivo.
  */
-export function identidadeDeExibicao(
-  usuario: UsuarioDoAuth | null,
-  opcoes: { readonly podeVerEmail: boolean },
-): IdentidadeDeExibicao {
+export function identidadeDeExibicao(usuario: UsuarioDoAuth | null): IdentidadeDeExibicao {
   if (usuario === null) {
     return { nome_exibicao: null, origem_do_nome: 'indisponivel' };
   }
 
   const nome = nomeCadastrado(usuario.user_metadata);
-  if (nome !== null) {
-    return { nome_exibicao: nome, origem_do_nome: 'cadastro' };
-  }
-
-  const email = opcoes.podeVerEmail ? textoUtil(usuario.email) : null;
-  if (email !== null) {
-    return { nome_exibicao: email, origem_do_nome: 'email' };
-  }
-
-  return { nome_exibicao: null, origem_do_nome: 'ausente' };
+  return nome !== null
+    ? { nome_exibicao: nome, origem_do_nome: 'cadastro' }
+    : { nome_exibicao: null, origem_do_nome: 'ausente' };
 }
 
 /**
@@ -134,7 +116,7 @@ export function rotuloSemNome(origem: OrigemDoNome): string {
   return origem === 'indisponivel' ? 'Identidade indisponível' : 'Sem nome cadastrado';
 }
 
-/** O texto que identifica o membro na interface, com o recurso já aplicado. */
+/** O texto que identifica o membro na interface. */
 export function rotuloDoMembro(identidade: IdentidadeDeExibicao): string {
   return identidade.nome_exibicao ?? rotuloSemNome(identidade.origem_do_nome);
 }

@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { papelMembroSchema } from '@/lib/organizationContext';
 import { authorizeRequestOrganizationCapability } from '@/lib/requestOrganizationContext';
-import { organizationCapabilitiesForRole } from '@/lib/organizationAuthorization';
 import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 import {
   identidadeDeExibicao,
@@ -53,21 +52,11 @@ async function lerUsuarioDoAuth(
     });
     return null;
   }
-  return { email: data.user.email, user_metadata: data.user.user_metadata };
+  // Só a metadata, e dela só o nome sai (ver `identidadeDeExibicao`). O e-mail
+  // nem é lido: o que não entra aqui não tem como vazar daqui.
+  return { user_metadata: data.user.user_metadata };
 }
 
-/**
- * Quem pode ver o e-mail de quem, dentro do que esta rota já autorizou.
- *
- * Quem administra já vê e-mails nesta organização (a lista de convites exige
- * `organization:manage` e os devolve), e qualquer pessoa vê o próprio. Para o
- * resto, o e-mail não sai daqui: a lista de membros é lida por qualquer membro,
- * e alargar isso seria mudar exposição, não apresentação.
- */
-function podeVerEmailDe(userId: string, scope: VerifiedOrganizationScope): boolean {
-  if (userId === scope.actorId) return true;
-  return organizationCapabilitiesForRole(scope.role).has('organization:manage');
-}
 
 function authorizationFailureResponse(status: 401 | 403 | 503) {
   const error = status === 503
@@ -133,9 +122,10 @@ export async function GET(
   const membros: OrganizationMemberRow[] = await Promise.all(
     lista.data.map(async (membro) => ({
       ...membro,
-      ...identidadeDeExibicao(await lerUsuarioDoAuth(membro.user_id, authorization.scope), {
-        podeVerEmail: podeVerEmailDe(membro.user_id, authorization.scope),
-      }),
+      // A mesma resposta para owner, admin e member: nome do cadastro, ou a
+      // ausência dele dita em voz alta. Não há política de exposição para
+      // acertar ou errar — ver `identidadeDoMembro.ts`.
+      ...identidadeDeExibicao(await lerUsuarioDoAuth(membro.user_id, authorization.scope)),
     })),
   );
 

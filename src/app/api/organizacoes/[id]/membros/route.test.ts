@@ -165,42 +165,16 @@ describe('GET /api/organizacoes/[id]/membros', () => {
     ]);
   });
 
-  it('não entrega ao membro comum o e-mail de um colega sem nome cadastrado', async () => {
-    // A lista de membros é lida por QUALQUER membro; a de convites, que carrega
-    // e-mails, exige `organization:manage`. Devolver e-mail aqui alargaria a
-    // exposição que o produto reserva a quem administra — e alargar exposição
-    // não é ajuste de apresentação.
-    sessionOf(ACTOR_ID);
-    membershipOf('member');
-    identidades({
-      [ACTOR_ID]: { email: 'eu@exemplo.com', user_metadata: {} },
-      [OUTRO_ID]: { email: 'colega@exemplo.com', user_metadata: {} },
-    });
-    orderMock.mockResolvedValue({
-      data: [
-        { user_id: ACTOR_ID, papel: 'member', created_at: '2026-08-01T00:00:00Z' },
-        { user_id: OUTRO_ID, papel: 'member', created_at: '2026-08-02T00:00:00Z' },
-      ],
-      error: null,
-    });
-    const { GET } = await import('./route');
-
-    const body = await (await GET(request(), params())).json();
-
-    // O próprio e-mail, sim: quem olha para si mesmo já o conhece.
-    expect(body.membros[0]).toMatchObject({ nome_exibicao: 'eu@exemplo.com', origem_do_nome: 'email' });
-    // O do colega, não — e a tela dirá "sem nome cadastrado", não um nome falso.
-    expect(body.membros[1]).toMatchObject({ nome_exibicao: null, origem_do_nome: 'ausente' });
-    expect(JSON.stringify(body)).not.toContain('colega@exemplo.com');
-  });
-
-  it.each(['owner', 'admin'] as const)(
-    'para %s, o e-mail é o recurso quando não há nome — ele já vê e-mails nesta organização',
+  it.each(['owner', 'admin', 'member'] as const)(
+    'para %s, um membro sem nome cadastrado é dito assim — e nunca pelo e-mail',
     async (papel) => {
+      // A regra e uma so para os tres papeis. A revisao externa recusou o
+      // recurso ao e-mail para owner/admin: "ja e visivel em outro lugar" nao e
+      // motivo para publicar PII em mais um.
       sessionOf(ACTOR_ID);
       membershipOf(papel);
       identidades({
-        [ACTOR_ID]: { email: 'quem.administra@exemplo.com', user_metadata: { full_name: 'Quem Administra' } },
+        [ACTOR_ID]: { email: 'quem.olha@exemplo.com', user_metadata: { full_name: 'Quem Olha' } },
         [OUTRO_ID]: { email: 'legado@exemplo.com', user_metadata: {} },
       });
       orderMock.mockResolvedValue({
@@ -214,10 +188,10 @@ describe('GET /api/organizacoes/[id]/membros', () => {
 
       const body = await (await GET(request(), params())).json();
 
-      expect(body.membros[1]).toMatchObject({
-        nome_exibicao: 'legado@exemplo.com',
-        origem_do_nome: 'email',
-      });
+      expect(body.membros[0]).toMatchObject({ nome_exibicao: 'Quem Olha', origem_do_nome: 'cadastro' });
+      expect(body.membros[1]).toMatchObject({ nome_exibicao: null, origem_do_nome: 'ausente' });
+      expect(JSON.stringify(body)).not.toContain('legado@exemplo.com');
+      expect(JSON.stringify(body)).not.toContain('quem.olha@exemplo.com');
     },
   );
 
@@ -246,7 +220,7 @@ describe('GET /api/organizacoes/[id]/membros', () => {
     expect(body.membros[1]).toMatchObject({ nome_exibicao: null, origem_do_nome: 'indisponivel' });
   });
 
-  it('não devolve a metadata do Auth junto com o membro', async () => {
+  it('não devolve a metadata do Auth — nem o e-mail — junto com o membro', async () => {
     sessionOf(ACTOR_ID);
     membershipOf('owner');
     identidades({
@@ -269,6 +243,9 @@ describe('GET /api/organizacoes/[id]/membros', () => {
     expect(corpo).not.toContain('user_metadata');
     expect(corpo).not.toContain('000.000.000-00');
     expect(corpo).not.toContain('provider_token');
+    // O e-mail nem chega a ser lido do Auth (ver `lerUsuarioDoAuth`), e esta
+    // linha e o que avisa se alguem o reintroduzir no caminho.
+    expect(corpo).not.toContain('dona@exemplo.com');
   });
 
   // Uma linha persistida que o servidor não sabe ler é falha do servidor. Se ela

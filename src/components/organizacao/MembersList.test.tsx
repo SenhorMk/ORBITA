@@ -57,20 +57,6 @@ describe('MembersList — como o membro é identificado', () => {
     expect(screen.getByTestId('members-list').innerHTML).not.toContain(UUID_DA_DONA);
   });
 
-  it('mostra o e-mail quando ele foi o recurso permitido para este leitor', () => {
-    montar([
-      {
-        user_id: UUID_SEM_NOME,
-        papel: 'member',
-        created_at: '2026-08-02T00:00:00Z',
-        nome_exibicao: 'legado@exemplo.com',
-        origem_do_nome: 'email',
-      },
-    ]);
-
-    expect(screen.getByText('legado@exemplo.com')).toBeTruthy();
-  });
-
   it('diz que não há nome cadastrado, em vez de inventar um', () => {
     montar([
       {
