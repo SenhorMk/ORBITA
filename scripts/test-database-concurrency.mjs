@@ -10,16 +10,17 @@ import { runPendenciaIdenticaRaceRehearsal } from './database-concurrency-penden
 import { runFencingRehearsal } from './database-concurrency-fencing.mjs';
 import { runPosseDaVendaRehearsal } from './database-concurrency-posse-da-venda.mjs';
 import { runReservaManualRehearsal } from './database-concurrency-reserva-manual.mjs';
+import { runConviteNominalRaceRehearsal } from './database-concurrency-convite-nominal.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
  * Sobe seu proprio laboratorio descartavel (nao reaproveita o de
  * `database-lab.mjs` — este script roda DEPOIS que aquele ja derrubou o seu),
- * aplica a cadeia canonica de migrations, dispara os tres rehearsals de
- * concorrencia do ticket 30 — a tomada da linha do webhook (3ª rodada), a
- * reivindicacao da MESMA referencia (4ª), e a exclusao mutua entre
- * referencias DIFERENTES com o mesmo fingerprint (7ª) — e derruba o
- * laboratorio de novo. Reusa so as pecas ja testadas de `database-lab.mjs` — nao adiciona um
+ * aplica a cadeia canonica de migrations, dispara os rehearsals de
+ * concorrencia acumulados — a tomada da linha do webhook, a reivindicacao da
+ * MESMA referencia, a exclusao mutua entre referencias DIFERENTES com o mesmo
+ * fingerprint, o fencing, a posse da venda, a reserva da venda manual e, do
+ * Ticket 06, o aceite nominal de convite — e derruba o laboratorio de novo. Reusa so as pecas ja testadas de `database-lab.mjs` — nao adiciona um
  * passo novo a orquestracao generica de la, que tem teste proprio com fakes.
  */
 const [start] = databaseLabCycleSteps('concurrency rehearsal');
@@ -30,6 +31,7 @@ let outcomePendencia;
 let outcomeFencing;
 let outcomePosse;
 let outcomeReserva;
+let outcomeConvite;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -39,6 +41,7 @@ try {
     outcomeFencing = started;
     outcomePosse = started;
     outcomeReserva = started;
+    outcomeConvite = started;
   } else {
     const applied = await applyCanonicalMigrations({});
     if (applied._tag === 'err') {
@@ -48,6 +51,7 @@ try {
       outcomeFencing = applied;
       outcomePosse = applied;
       outcomeReserva = applied;
+      outcomeConvite = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
@@ -55,6 +59,7 @@ try {
       outcomeFencing = await runFencingRehearsal();
       outcomePosse = await runPosseDaVendaRehearsal();
       outcomeReserva = await runReservaManualRehearsal();
+      outcomeConvite = await runConviteNominalRaceRehearsal();
     }
   }
 } finally {
@@ -103,6 +108,11 @@ const relatos = [
     + `(webhook concluiu: ${v.ordem1WebhookOk}); webhook→venda libera a reserva `
     + `${v.ordem2ReservaDoWebhook} → ${v.ordem2ReservaAposTomada}, `
     + `disponibilidade final ${v.ordem2DisponibilidadeFinal}`],
+  [outcomeConvite, (v) => 'aceite nominal de convite provado nas DUAS exclusoes mutuas: dois convites '
+    + `disputando o ultimo slot deixam ${v.membrosFinais} membros com bloqueio observado no Postgres `
+    + `(wait_event=${v.bloqueioObservadoNoPostgres}), a perdedora falha com ${v.perdedoraCode} e seu `
+    + `convite fica ${v.statusDoConviteRecusado}; o mesmo token aceito duas vezes ao mesmo tempo falha `
+    + `com ${v.usoUnico.segundaTentativaCode} e deixa ${v.usoUnico.membershipsDoConvidado} membership`],
 ];
 
 const falhou = relatos.map(([outcome, resumo]) => relatar(outcome, resumo)).includes(true);

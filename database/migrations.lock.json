@@ -325,6 +325,11 @@
       "order": 65,
       "path": "../database/62_titulo_e_fornecedor_da_despesa.sql",
       "sha256": "1dfbade613e739e0ae1bacb14aeac83b32f3804ef8ead351db56efd00368e872"
+    },
+    {
+      "order": 66,
+      "path": "../database/63_convite_nominal_identidade_e_papel_preservado.sql",
+      "sha256": "d1abc15bf9400be9dc7a63ccb0dbb3ec98b69d390a339cb6b01f4adc97a4fc34"
     }
   ],
   "references": [

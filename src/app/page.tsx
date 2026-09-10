@@ -110,7 +110,7 @@ function OrbitaLogo({ className = "h-6 w-6" }: { className?: string }) {
  * Nelas a tabela é que fica com o espaço que sobra; as demais continuam
  * empilhando e rolando dentro do `main`, como sempre fizeram.
  */
-const TELAS_QUE_OCUPAM_A_JANELA = new Set(['dashboard', 'sales', 'inventory', 'contacts', 'finance']);
+const TELAS_QUE_OCUPAM_A_JANELA = new Set(['dashboard', 'sales', 'inventory', 'contacts', 'finance', 'organization']);
 
 /** Intervalo entre consultas ao estado do job de sincronização. */
 const INTERVALO_POLL_SYNC_MS = 2_000;
@@ -1046,8 +1046,8 @@ export default function Home() {
           <FinanceiroTab fetchWithAuth={fetchWithAuth} ativo={activeTab === 'finance'} pedidos={data?.pedidos ?? null} />
         </div>
 
-        {/* TAB ORGANIZAÇÃO & MEMBROS (Ticket 24b) */}
-        <div className={activeTab === 'organization' ? 'block' : 'hidden'}>
+        {/* TAB ORGANIZAÇÃO & MEMBROS (Ticket 06) */}
+        <div className={activeTab === 'organization' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
           <OrganizationPanel fetchWithAuth={fetchWithAuth} lista={listaDeOrganizacoes} />
         </div>
 

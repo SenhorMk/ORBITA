@@ -11,6 +11,7 @@ import {
 } from '@/lib/organizationContext';
 import { organizationContextStatus } from '@/lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizationContext';
+import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 
 /**
  * Organizações do usuário logado, e qual delas está ativa — se alguma estiver.
@@ -41,7 +42,18 @@ export async function GET(req: Request) {
     );
   }
 
-  const organizacoes = await listUserOrganizations(supabaseServer, identity.user.id);
+  // Ticket 06 — `listUserOrganizations` deixou de engolir a falha de leitura e
+  // devolver `[]`. Aqui ela vira 500 com a frase publica fixa: "nao foi
+  // possivel ler" e "voce nao tem organizacao" sao respostas diferentes, e a
+  // tela precisa saber qual das duas recebeu para nao oferecer "crie sua
+  // primeira organizacao" a quem e owner de duas.
+  let organizacoes;
+  try {
+    organizacoes = await listUserOrganizations(supabaseServer, identity.user.id);
+  } catch (error: unknown) {
+    registrarFalhaInterna('organizacoes.listar', error, { atorId: identity.user.id });
+    return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
+  }
 
   const contextResult = await resolveActiveRequestOrganizationContext(req);
   if (contextResult._tag !== 'OrganizationContextResolved') {

@@ -6,30 +6,80 @@ import { logger } from '@/lib/observability/logger';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import { ACTIVE_ORG_COOKIE_NAME } from '@/lib/organizationContext';
 import {
+  parseOrganizationActorId,
+  parseOrganizationId,
+  type OrganizationActorId,
+  type OrganizationId,
+  type OrganizationSwitchResult,
+} from '@/lib/organizationAuthorization';
+import {
   acceptInviteInputSchema,
   acceptOrgInvite,
 } from '@/lib/invitationService';
 
+/** As duas fronteiras que o aceite precisa depois de a RPC ter aceitado o convite. */
+export interface AcceptInviteDependencies {
+  /**
+   * Seleciona a organização ingressada como ativa **pelo CAS**, com versão
+   * esperada `0`.
+   *
+   * A versão `0` é a pergunta inteira: `alternar_organizacao_ativa_cas`
+   * (migration 38) insere com `on conflict (user_id) do nothing`, então ela
+   * aplica exatamente quando não existe seleção nenhuma, e devolve
+   * `OrganizationSwitchStale` quando já existe uma. É assim que a seleção
+   * válida de quem já estava em outra organização é preservada sem que a rota
+   * precise ler o estado e decidir por conta própria — decidir fora do CAS
+   * seria uma corrida.
+   */
+  readonly selecionarSeNaoHouverSelecao: (
+    actorId: OrganizationActorId,
+    organizationId: OrganizationId,
+  ) => Promise<OrganizationSwitchResult>;
+
+  /** Espelha no cookie a seleção que o servidor **de fato** aplicou. */
+  readonly gravarCookieDeOrganizacaoAtiva: (organizacaoId: string) => Promise<void>;
+}
+
 /**
- * Build the invite-acceptance handler around the request-scoped cookie seam.
+ * Build the invite-acceptance handler around the request-scoped seams.
  *
- * Only the cookie write is injected: session verification, actor-scoped client
- * construction and the RPC itself stay inside the handler so that tests
+ * Only the persistence seams are injected: session verification, actor-scoped
+ * client construction and the RPC itself stay inside the handler so that tests
  * exercise the real caller identity instead of a stand-in for it.
  *
- * @param setActiveOrganization - Persists the newly joined organization as active.
+ * ## Ticket 06 — o cookie não era prova de troca
+ *
+ * A versão anterior recebia um único seam, `setActiveOrganization`, e o
+ * chamava sempre: aceitar um convite gravava o cookie `orbita_active_org`
+ * apontando para a organização ingressada, e mais nada. Dois problemas, um em
+ * cada direção:
+ *
+ * - **O cookie não é a autoridade.** Quem responde "qual é a organização
+ *   ativa" é `contextos_organizacao_ativos`, pelo CAS — `activeOrganizationSelection()`
+ *   nem lê esse cookie. Então a organização recém-ingressada não passava a ser
+ *   a ativa; a tela recarregava e continuava na anterior, ou, sem seleção
+ *   nenhuma, caía na primeira membership por `created_at`, que pode ser outra.
+ * - **E ainda assim ele mentia.** Um cookie apontando para B enquanto o
+ *   servidor mantém A é uma segunda fonte de organização ativa divergente —
+ *   exatamente o que o eixo multi-tenant não pode ter.
+ *
+ * Agora a seleção passa pelo CAS, o cookie só é escrito quando o CAS aplicou,
+ * e a resposta diz qual dos dois casos ocorreu. Nenhuma troca é forçada: quem
+ * já tinha seleção válida continua onde estava, e a lista recarregada pela tela
+ * mostra a organização nova entre as suas.
+ *
+ * @param dependencies - Seleção canônica e espelho em cookie.
  * @returns The `POST /api/convites/aceitar` handler.
  */
-export function createAcceptInviteHandler(
-  setActiveOrganization: (organizacaoId: string) => Promise<void>,
-) {
+export function createAcceptInviteHandler(dependencies: AcceptInviteDependencies) {
   return async function acceptInviteHandler(req: Request) {
     // Só identidade, deliberadamente: quem aceita um convite ainda não é membro
     // de organização nenhuma, então exigir vínculo aqui negaria exatamente o
     // caso que a rota existe para atender. A autoridade sobre o convite é o
-    // token, conferido pela própria RPC. Até o Ticket 20 a rota passava pelo
-    // atalho de sessão, que exige vínculo e negava com 401 os usuários criados
-    // pelos fluxos atuais.
+    // token **e o e-mail do destinatário**, conferidos pela própria RPC contra
+    // `auth.uid()` (migration 63). Até o Ticket 20 a rota passava pelo atalho
+    // de sessão, que exige vínculo e negava com 401 os usuários criados pelos
+    // fluxos atuais.
     const bearerResult = readBearerToken(req);
     const identity = await resolveAuthenticatedIdentity(req);
     if (identity._tag !== 'IdentityVerified' || bearerResult._tag !== 'BearerTokenFound') {
@@ -63,11 +113,33 @@ export function createAcceptInviteHandler(
 
       const { organizacaoId } = await acceptOrgInvite(actorClientResult.client, validatedInput.data.token);
 
-      await setActiveOrganization(organizacaoId);
+      const actorId = parseOrganizationActorId(identity.user.id);
+      const organizationId = parseOrganizationId(organizacaoId);
+      if (!actorId || !organizationId) {
+        // A membership existe (a RPC commitou), mas a rota não consegue nomear
+        // o par para pedir a seleção. Dizer que deu tudo certo esconderia um
+        // contexto que não foi resolvido.
+        registrarFalhaInterna(
+          'convites.aceitar',
+          new Error('Identificadores fora do contrato apos o aceite do convite'),
+          { atorId: identity.user.id },
+        );
+        return NextResponse.json({ error: 'Não foi possível aceitar o convite' }, { status: 400 });
+      }
+
+      const selecao = await dependencies.selecionarSeNaoHouverSelecao(actorId, organizationId);
+      const selecaoAplicada = selecao._tag === 'OrganizationSwitchApplied';
+      if (selecaoAplicada) {
+        await dependencies.gravarCookieDeOrganizacaoAtiva(organizacaoId);
+      }
 
       return NextResponse.json({
         success: true,
         organizacaoId,
+        // Verdadeiro só quando a organização ingressada passou a ser a ativa.
+        // Falso significa que a seleção anterior era válida e foi preservada —
+        // o cliente recarrega a lista e a encontra lá, sem troca implícita.
+        organizacaoAtivada: selecaoAplicada,
       });
     } catch (error: unknown) {
       // A RPC recusa por várias razões — convite inexistente, expirado, já
@@ -90,14 +162,24 @@ export function createAcceptInviteHandler(
 /** Production invite-acceptance route. */
 export async function POST(req: Request) {
   const { cookies } = await import('next/headers');
-  const handler = createAcceptInviteHandler(async (organizacaoId) => {
-    (await cookies()).set(ACTIVE_ORG_COOKIE_NAME, organizacaoId, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/',
-      maxAge: 60 * 60 * 24 * 30, // 30 dias
-    });
+  const { supabaseServer } = await import('@/lib/supabaseServer');
+  const { SupabaseOrganizationMemberships } = await import('@/repositories/organizationMembershipRepository');
+  const memberships = new SupabaseOrganizationMemberships(supabaseServer);
+  const handler = createAcceptInviteHandler({
+    selecionarSeNaoHouverSelecao: (actorId, organizationId) => memberships.switchActiveOrganization(
+      actorId,
+      organizationId,
+      0,
+    ),
+    gravarCookieDeOrganizacaoAtiva: async (organizacaoId) => {
+      (await cookies()).set(ACTIVE_ORG_COOKIE_NAME, organizacaoId, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 60 * 60 * 24 * 30, // 30 dias
+      });
+    },
   });
   return handler(req);
 }

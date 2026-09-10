@@ -1,45 +1,110 @@
 'use client';
 
-import { Button } from '@/components/ui/button';
+import { Check } from 'lucide-react';
+
+import { Pilula } from '@/components/ui/StatusPill';
+import { AvisoDeAtualizacaoFalhada, EstadoCarregando, EstadoDeErro, EstadoVazio } from '@/components/ui/estados';
 import type { Organizacao } from './types';
 
 export interface OrganizationListProps {
+  /** As organizações da leitura que vale na sessão atual; vazia enquanto não houver uma. */
   organizacoes: readonly Organizacao[];
   activeOrgId: string | null;
   switchingOrgId: string | null;
+  carregando: boolean;
+  erroDeLeitura: string | null;
   onSwitch: (orgId: string) => void;
+  onRecarregar: () => void;
 }
 
-/** Lista de organizações do usuário com ação para trocar a ativa (CAS no chamador). */
-export function OrganizationList({ organizacoes, activeOrgId, switchingOrgId, onSwitch }: OrganizationListProps) {
+/**
+ * As organizações do usuário, com a ativa marcada e a troca pelo CAS.
+ *
+ * A troca não acontece aqui: o clique chama quem sabe comparar a versão e
+ * conversar com o servidor. Esta lista só diz qual é a ativa — e, quando a
+ * leitura falha, diz que falhou. Uma tela que respondesse "você não tem
+ * organização" a quem é owner de duas é o pior erro possível no eixo
+ * multi-tenant, e é exatamente o que uma lista vazia significaria aqui.
+ */
+export function OrganizationList({
+  organizacoes,
+  activeOrgId,
+  switchingOrgId,
+  carregando,
+  erroDeLeitura,
+  onSwitch,
+  onRecarregar,
+}: OrganizationListProps) {
+  // As cinco leituras possíveis, na ordem em que a verdade importa: uma falha
+  // sem lista boa NUNCA pode ser apresentada como "você não tem organização".
+  if (carregando) return <EstadoCarregando mensagem="Carregando as suas organizações…" />;
+
+  if (organizacoes.length === 0) {
+    return erroDeLeitura !== null ? (
+      <EstadoDeErro
+        titulo="Não foi possível carregar as suas organizações"
+        detalhe={erroDeLeitura}
+        onTentarDeNovo={onRecarregar}
+      />
+    ) : (
+      <EstadoVazio
+        titulo="Nenhuma organização ainda"
+        descricao="Crie a sua primeira organização para começar, ou aceite um convite que tenham enviado a você."
+      />
+    );
+  }
+
   return (
-    <div className="grid gap-2">
-      {organizacoes.map((org) => {
-        const isActive = activeOrgId === org.id;
-        return (
-          <div
-            key={org.id}
-            className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2"
-          >
-            <span className="text-sm text-white">{org.nome}</span>
-            {isActive ? (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#30D158]/15 text-[#30D158] border border-[#30D158]/30 font-semibold">
-                Ativa
+    <div className="flex flex-col min-h-0" style={{ gap: 8 }}>
+      {erroDeLeitura !== null && (
+        <AvisoDeAtualizacaoFalhada detalhe={erroDeLeitura} recurso="as suas organizações" />
+      )}
+      <ul className="flex flex-col overflow-y-auto min-h-0" style={{ gap: 8 }}>
+        {organizacoes.map((org) => {
+          const ativa = activeOrgId === org.id;
+          const trocando = switchingOrgId === org.id;
+          return (
+            <li
+              key={org.id}
+              className="flex items-center justify-between gap-3"
+              style={{
+                padding: '11px 14px',
+                borderRadius: 16,
+                background: ativa ? 'var(--chip)' : 'var(--glass2)',
+                border: `1px solid ${ativa ? 'var(--accent)' : 'var(--line)'}`,
+              }}
+            >
+              <span className="flex flex-col min-w-0" style={{ gap: 3 }}>
+                <span
+                  className="truncate"
+                  style={{ font: '600 13.5px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}
+                >
+                  {org.nome}
+                </span>
+                <span
+                  className="truncate"
+                  style={{ font: '400 10.5px/1.2 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}
+                >
+                  {org.slug}
+                </span>
               </span>
-            ) : (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={switchingOrgId === org.id}
-                onClick={() => onSwitch(org.id)}
-              >
-                {switchingOrgId === org.id ? 'Trocando…' : `Trocar para ${org.nome}`}
-              </Button>
-            )}
-          </div>
-        );
-      })}
+
+              {ativa ? (
+                <Pilula rotulo="Ativa" cor="var(--accent)" />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onSwitch(org.id)}
+                  disabled={switchingOrgId !== null}
+                  className="orbita-chip cursor-pointer shrink-0"
+                >
+                  {trocando ? 'Trocando…' : <><Check className="w-3.5 h-3.5" /> Tornar ativa</>}
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

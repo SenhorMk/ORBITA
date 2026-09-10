@@ -127,8 +127,16 @@ export function useOrganizationsList(fetchWithAuth: AuthenticatedFetch, sessao: 
     if (sessao !== null) await lerNaSessao(sessao);
   }, [lerNaSessao, sessao]);
 
-  async function handleCreateOrganization(nome: string, slug: string) {
-    if (sessao === null) return;
+  /**
+   * Cria a organização e relê a lista.
+   *
+   * Ticket 06 — devolve se criou. Antes não devolvia nada, e o formulário não
+   * tinha como saber se podia fechar: ficava aberto no caso de sucesso, ou
+   * fechava também no de falha. Quem chama decide o que fazer com a resposta;
+   * a mensagem da falha continua em `error`.
+   */
+  async function handleCreateOrganization(nome: string, slug: string): Promise<boolean> {
+    if (sessao === null) return false;
     setErro(null);
     const response = await fetchWithAuth('/api/organizacoes', {
       method: 'POST',
@@ -136,12 +144,13 @@ export function useOrganizationsList(fetchWithAuth: AuthenticatedFetch, sessao: 
       body: JSON.stringify({ nome, slug }),
     });
     const body = await response.json();
-    if (sessaoAtualRef.current !== sessao) return;
+    if (sessaoAtualRef.current !== sessao) return false;
     if (!response.ok) {
       setErro({ sessao, valor: body.error ?? 'Falha ao criar organização' });
-      return;
+      return false;
     }
     await lerNaSessao(sessao);
+    return true;
   }
 
   async function handleSwitchOrganization(orgId: string) {

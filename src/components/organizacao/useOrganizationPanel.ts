@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import type { SelecaoDeOrganizacao } from './usePapelNaOrganizacaoAtiva';
 import type { useOrganizationsList } from './useOrganizationsList';
 import { useOrganizationInvites } from './useOrganizationInvites';
@@ -10,7 +10,7 @@ export type AuthenticatedFetch = (url: string, options?: RequestInit) => Promise
 export type ListaDeOrganizacoes = ReturnType<typeof useOrganizationsList>;
 
 /**
- * Composição de estado do painel de organização (Ticket 24b): organizações
+ * Composição de estado do painel de organização: organizações
  * (`useOrganizationsList`), convites (`useOrganizationInvites`) e membros
  * (`useOrganizationMembers`) — cada um pequeno e focado numa única fronteira
  * de API. Nenhuma decisão de autorização é tomada aqui; cada hook apenas
@@ -21,6 +21,21 @@ export type ListaDeOrganizacoes = ReturnType<typeof useOrganizationsList>;
  * a organização ativa. Duas instâncias do mesmo estado divergiriam na primeira
  * troca feita pelo topo: o painel continuaria anunciando a organização
  * anterior. Uma organização ativa só pode ter uma fonte.
+ *
+ * ## Ticket 06 — a seleção desce inteira, e os erros não se misturam
+ *
+ * **A seleção desce inteira.** Antes só o `orgId` era repassado aos dois hooks
+ * de leitura, e a versão ficava aqui, usada apenas para avisar o shell. Com o
+ * id sozinho, A → B → A não é distinguível de continuar em A: a resposta
+ * atrasada da primeira visita chega durante a segunda e é aceita. Agora
+ * `selecao` — o par (organização, versão) — é o que os hooks recebem, e é por
+ * ele que eles carimbam o que leem.
+ *
+ * **Os erros não se misturam.** `error = list.error ?? invites.error ??
+ * members.error` colapsava três leituras independentes num campo só: a falha
+ * de convites aparecia como se fosse da tela inteira, e a de membros
+ * desaparecia atrás dela. Cada leitura agora carrega o seu próprio estado, e a
+ * tela mostra cada falha junto da lista a que ela pertence.
  */
 export function useOrganizationPanel(
   fetchWithAuth: AuthenticatedFetch,
@@ -28,23 +43,29 @@ export function useOrganizationPanel(
   onActiveOrgChange?: (selecao: SelecaoDeOrganizacao | null) => void,
 ) {
   const orgId = list.activeOrg?.organizacao.id ?? null;
-  const invites = useOrganizationInvites(fetchWithAuth, orgId, () => { void list.loadOrganizacoes(); });
-  const members = useOrganizationMembers(fetchWithAuth, orgId);
 
   // A seleção sai daqui com **id e versão**. Só o id não distingue trocar de
-  // organização e voltar para a mesma, e quem depende disso é a autoridade
-  // visual: sem a versão, um papel antigo continuaria valendo (revisão do #66).
+  // organização e voltar para a mesma, e quem depende disso é toda leitura
+  // escopada: a autoridade visual do papel (revisão do #66), os membros e os
+  // convites.
   const selecao = useMemo(
     () => (orgId === null ? null : { id: orgId, versao: list.selectionVersion }),
     [orgId, list.selectionVersion],
   );
+
+  const { loadOrganizacoes } = list;
+  // Depois de um aceite, o contexto canônico é o do servidor: a lista é relida
+  // dele. Nenhuma seleção local é inventada aqui.
+  const aoAceitar = useCallback(() => { void loadOrganizacoes(); }, [loadOrganizacoes]);
+
+  const invites = useOrganizationInvites(fetchWithAuth, selecao, aoAceitar);
+  const members = useOrganizationMembers(fetchWithAuth, selecao);
 
   useEffect(() => {
     onActiveOrgChange?.(selecao);
   }, [selecao, onActiveOrgChange]);
 
   const canManage = list.activeOrg?.papel === 'owner' || list.activeOrg?.papel === 'admin';
-  const error = list.error ?? invites.error ?? members.error;
 
   return {
     organizacoes: list.organizacoes,
@@ -52,15 +73,24 @@ export function useOrganizationPanel(
     selecao,
     isLoading: list.isLoading,
     switchingOrgId: list.switchingOrgId,
+    erroDeOrganizacoes: list.error,
     loadOrganizacoes: list.loadOrganizacoes,
     handleCreateOrganization: list.handleCreateOrganization,
     handleSwitchOrganization: list.handleSwitchOrganization,
     convites: invites.convites,
+    convitesCarregando: invites.carregando,
+    erroDeConvites: invites.erroDeLeitura,
+    erroAoCriarConvite: invites.erroDeAcao,
+    erroAoAceitarConvite: invites.erroDeAceite,
+    recarregarConvites: invites.recarregar,
     handleInvite: invites.handleInvite,
     handleAcceptInvite: invites.handleAcceptInvite,
     membros: members.membros,
+    membrosCarregando: members.carregando,
+    erroDeMembros: members.erroDeLeitura,
+    erroAoRemoverMembro: members.erroDeAcao,
+    recarregarMembros: members.recarregar,
     handleRemoveMember: members.handleRemoveMember,
     canManage,
-    error,
   };
 }
