@@ -39,6 +39,12 @@ import { requirePersonaUserId, type SeedManifest } from '../../src/lib/e2e/synth
  * demonstração, registradas como tal — nunca simuladas aqui. Um `expect` verde
  * sobre um pedido que não existiu seria exatamente o risco que o ticket nomeia:
  * prova inválida com build verde.
+ *
+ * A **troca de organização dentro de uma sessão** — o seletor agindo com o
+ * `switch` versionado por CAS no meio — também não roda aqui: nenhuma persona
+ * do seed sintético pertence a duas organizações. O que existe é o caso de
+ * resíduo entre sessões (`login A → logout → login B`), e ele está nomeado por
+ * aquilo que faz. Ver o comentário sobre ele mais abaixo.
  */
 
 let manifest: SeedManifest;
@@ -108,7 +114,27 @@ test.describe('jornada desktop da banca', () => {
     await expect(dashboard.logoutButton).not.toBeVisible();
   });
 
-  test('A → B: nenhuma tela da organização B mostra dado da organização A', async ({ page }) => {
+  /**
+   * Resíduo entre **sessões**, e não troca de organização.
+   *
+   * O que este caso executa é `login A → logout → login B`, no mesmo contexto
+   * de navegador. Ele prova uma coisa só, e prova bem: encerrar a sessão de
+   * quem pertence à organização A e entrar como quem pertence à B não deixa
+   * nenhum dado de A nas telas de B — nem em memória do shell, nem em cache de
+   * leitura, nem em painel que continua montado e escondido.
+   *
+   * **Isto não é a troca A → B.** A troca é o seletor de organização agindo
+   * dentro de uma sessão só, sem logout, com o `switch` versionado por CAS no
+   * meio: outra sequência, outro caminho de invalidação, outro risco. Este
+   * teste não a alcança porque nenhuma persona do seed sintético pertence a
+   * duas organizações, e ampliar o seed está fora desta fatia.
+   *
+   * Chamar isto de prova de switch seria dar por provada a metade que ninguém
+   * mediu — exatamente o tipo de verde que este ticket existe para não
+   * produzir. A troca real fica como validação operacional após o deploy, em
+   * organizações sintéticas/controladas.
+   */
+  test('sessões em sequência: sair da organização A e entrar na B não deixa dado de A nas telas de B', async ({ page }) => {
     const ownerA = persona(manifest, 'owner-a');
     const ownerB = persona(manifest, 'owner-b');
     const orgA = organizacao(manifest, 'org-a');
@@ -146,9 +172,11 @@ test.describe('jornada desktop da banca', () => {
     await expect(new LoginPage(page).emailInput).toBeVisible({ timeout: 15_000 });
 
     // ------------------------------------------------------------------
-    // B: **no mesmo contexto de navegador**. É isso que torna a prova real:
-    // abrir tudo do zero em outro contexto não diria nada sobre o estado que o
-    // shell guarda entre uma sessão e a seguinte.
+    // B: **no mesmo contexto de navegador**. É isso que dá sentido ao caso:
+    // abrir tudo do zero em outro contexto não diria nada sobre o que o shell
+    // guarda entre uma sessão e a seguinte. Continua sendo resíduo entre
+    // sessões — a troca de organização dentro de uma sessão é outro caminho,
+    // e não passa por aqui.
     // ------------------------------------------------------------------
     const sessaoB = await entrarComo(page, ownerB.email, ownerB.password);
     expect(await sessaoB.nomeDaOrganizacaoAtiva()).toBe(orgB.nome);
@@ -158,7 +186,7 @@ test.describe('jornada desktop da banca', () => {
       for (const marcador of marcadoresDeA) {
         expect(
           texto,
-          `resíduo da organização A na superfície "${superficie}": ${marcador}`,
+          `resíduo da sessão anterior (organização A) na superfície "${superficie}" de B: ${marcador}`,
         ).not.toContain(marcador);
       }
     }
