@@ -3,21 +3,16 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   FileText,
-  CheckCircle,
   AlertTriangle,
-  MessageSquare,
-  MessageCircle,
-  Send,
   Sparkles,
   ArrowRight,
   Lock,
   Mail,
-  Search,
   RefreshCw,
   X,
   Plus,
 } from "lucide-react";
-import type { Produto, Cliente, ChatwootConversation, ChatwootMessage, ItemPedido } from '@/types';
+import type { Produto, Cliente, ItemPedido } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
 import {
   descreverProgresso,
@@ -44,6 +39,7 @@ import { FinanceiroTab } from '@/components/financeiro/FinanceiroTab';
 import { RegisterForm } from '@/components/auth/RegisterForm';
 import { OrganizationPanel } from '@/components/organizacao/OrganizationPanel';
 import { IntegrationsPanel } from '@/components/integracoes/IntegrationsPanel';
+import { MensageriaDesktop } from '@/components/mensageria/MensageriaDesktop';
 import { BillingPanel } from '@/components/billing/BillingPanel';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import {
@@ -110,7 +106,7 @@ function OrbitaLogo({ className = "h-6 w-6" }: { className?: string }) {
  * Nelas a tabela é que fica com o espaço que sobra; as demais continuam
  * empilhando e rolando dentro do `main`, como sempre fizeram.
  */
-const TELAS_QUE_OCUPAM_A_JANELA = new Set(['dashboard', 'sales', 'inventory', 'contacts', 'finance', 'organization']);
+const TELAS_QUE_OCUPAM_A_JANELA = new Set(['dashboard', 'sales', 'inventory', 'contacts', 'finance', 'organization', 'sac']);
 
 /** Intervalo entre consultas ao estado do job de sincronização. */
 const INTERVALO_POLL_SYNC_MS = 2_000;
@@ -300,153 +296,14 @@ export default function Home() {
   const [lastSyncDate, setLastSyncDate] = useState<Date | null>(null);
   const [syncAgoText, setSyncAgoText] = useState('Não sincronizado');
 
-  // Estados do Chatwoot Recreated UI
-  const [conversas, setConversas] = useState<ChatwootConversation[]>([]);
-  const [selectedConversa, setSelectedConversa] = useState<ChatwootConversation | null>(null);
-  const [mensagens, setMensagens] = useState<ChatwootMessage[]>([]);
-  const [newMessageContent, setNewMessageContent] = useState('');
-  const [isSendingMessage, setIsSendingMessage] = useState(false);
-  const [conversaFilter, setConversaFilter] = useState<'all' | 'open' | 'resolved'>('open');
-  const [conversaSearch, setConversaSearch] = useState('');
-  const [isSyncingChatwoot, setIsSyncingChatwoot] = useState(false);
-  const [chatwootFeedback, setChatwootFeedback] = useState<string | null>(null);
-  const [isChangingStatus, setIsChangingStatus] = useState(false);
-
-  // Helper para fetch autenticado com Supabase JWT
-
-  // Carregar conversas do Supabase
-  const loadConversations = async () => {
-    try {
-      const { data: convs, error } = await supabase
-        .from('chatwoot_conversations')
-        .select(`
-          *,
-          contact:chatwoot_contacts(*)
-        `)
-        .order('updated_at', { ascending: false });
-
-      if (!error && convs) {
-        setConversas(convs);
-      }
-    } catch {
-      // Silencioso para evitar overlay de erro de RLS
-    }
-  };
-
-  // Carregar mensagens de uma conversa selecionada
-  useEffect(() => {
-    let isMounted = true;
-    void (async () => {
-      if (!selectedConversa?.id) {
-        return;
-      }
-      try {
-        const { data: msgs, error } = await supabase
-          .from('chatwoot_messages')
-          .select('*')
-          .eq('conversation_id', selectedConversa.id)
-          .order('created_at', { ascending: true });
-
-        if (!error && msgs && isMounted) {
-          setMensagens(msgs);
-        }
-      } catch {
-        // Silencioso para evitar overlay de erro de RLS
-      }
-    })();
-    return () => {
-      isMounted = false;
-    };
-  }, [selectedConversa]);
-
-  // Sincronizar conversas com o Chatwoot via API
-  const handleSyncChatwoot = async () => {
-    setIsSyncingChatwoot(true);
-    setChatwootFeedback(null);
-    try {
-      const response = await fetchWithAuth('/api/chatwoot/sync', { method: 'POST' });
-      const result = await response.json();
-      if (result.success) {
-        setChatwootFeedback(`Sincronizado! +${result.stats.conversations} conversas, +${result.stats.messages} mensagens.`);
-        await loadConversations();
-      } else {
-        setChatwootFeedback(`Erro: ${result.error}`);
-      }
-    } catch (error) {
-      console.error('Erro ao sincronizar Chatwoot:', error);
-      setChatwootFeedback('Erro ao comunicar com o servidor.');
-    } finally {
-      setIsSyncingChatwoot(false);
-      setTimeout(() => setChatwootFeedback(null), 5000);
-    }
-  };
-
-  // Enviar mensagem no chat
-  const handleSendChatMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedConversa || !newMessageContent.trim() || isSendingMessage) return;
-
-    const content = newMessageContent.trim();
-    setNewMessageContent('');
-    setIsSendingMessage(true);
-
-    const tempId = Math.floor(Math.random() * -1000000);
-    const tempMsg: ChatwootMessage = {
-      id: tempId,
-      conversation_id: selectedConversa.id,
-      content: content,
-      message_type: 'outgoing',
-      sender_name: 'Você',
-      created_at: new Date().toISOString(),
-    };
-    setMensagens((prev) => [...prev, tempMsg]);
-
-    try {
-      const response = await fetchWithAuth('/api/chatwoot/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: selectedConversa.id, content }),
-      });
-      const result = await response.json();
-      if (!result.success) {
-        alert(`Erro ao enviar: ${result.error}`);
-        setMensagens((prev) => prev.filter((m) => m.id !== tempId));
-      } else {
-        setMensagens((prev) => prev.map((m) => m.id === tempId ? { ...result.message, message_type: 'outgoing' } : m));
-      }
-    } catch (error) {
-      console.error('Erro ao enviar mensagem:', error);
-      setMensagens((prev) => prev.filter((m) => m.id !== tempId));
-    } finally {
-      setIsSendingMessage(false);
-    }
-  };
-
-  // Resolver / Reabrir conversa
-  const handleToggleConversaStatus = async () => {
-    if (!selectedConversa || isChangingStatus) return;
-    setIsChangingStatus(true);
-
-    const newStatus = selectedConversa.status === 'open' ? 'resolved' : 'open';
-    try {
-      const response = await fetchWithAuth('/api/chatwoot/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: selectedConversa.id, status: newStatus }),
-      });
-      const result = await response.json();
-      if (result.success) {
-        setSelectedConversa((prev: ChatwootConversation | null) => prev ? { ...prev, status: newStatus } : null);
-        setConversas((prev) => prev.map((c) => c.id === selectedConversa.id ? { ...c, status: newStatus } : c));
-      } else {
-        alert(`Erro ao alterar status: ${result.error}`);
-      }
-    } catch (error) {
-      console.error('Erro ao alterar status:', error);
-    } finally {
-      setIsChangingStatus(false);
-    }
-  };
+  /**
+   * O contato que a aba de Clientes pediu para abrir na Mensageria.
+   *
+   * É a única coisa que a página ainda precisa saber sobre atendimento: a
+   * superfície inteira — conversas, histórico, envio, subscriptions — vive em
+   * `MensageriaDesktop`, escopada na organização ativa.
+   */
+  const [telefoneParaAtender, setTelefoneParaAtender] = useState<string | null>(null);
 
   // Carregar itens do pedido selecionado
   useEffect(() => {
@@ -481,106 +338,6 @@ export default function Home() {
       isMounted = false;
     };
   }, [selectedPedido]);
-
-  useEffect(() => {
-    let isMounted = true;
-    if (activeTab === 'sac') {
-      void (async () => {
-        try {
-          const { data: convs, error } = await supabase
-            .from('chatwoot_conversations')
-            .select('*')
-            .order('updated_at', { ascending: false });
-
-          if (!error && convs && isMounted) {
-            setConversas(convs);
-          }
-        } catch {
-          // Silencioso para evitar overlay
-        }
-      })();
-    }
-    return () => {
-      isMounted = false;
-    };
-  }, [activeTab]);
-
-  useEffect(() => {
-    let isMounted = true;
-    if (selectedConversa) {
-      void (async () => {
-        try {
-          const { data: msgs, error } = await supabase
-            .from('chatwoot_messages')
-            .select('*')
-            .eq('conversation_id', selectedConversa.id)
-            .order('created_at', { ascending: true });
-
-          if (!error && msgs && isMounted) {
-            setMensagens(msgs);
-          }
-        } catch {
-          // Silencioso para evitar overlay
-        }
-      })();
-    }
-    return () => {
-      isMounted = false;
-    };
-  }, [selectedConversa]);
-
-  // Realtime mensagens
-  useEffect(() => {
-    if (!selectedConversa) return;
-
-    const channel = supabase
-      .channel(`realtime-messages-${selectedConversa.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'chatwoot_messages',
-          filter: `conversation_id=eq.${selectedConversa.id}`,
-        },
-        (payload) => {
-          const newMsg = payload.new as ChatwootMessage;
-          setMensagens((prev) => {
-            if (prev.some((m) => m.id === newMsg.id || (m.content === newMsg.content && Math.abs(new Date(m.created_at!).getTime() - new Date(newMsg.created_at!).getTime()) < 5000))) {
-              return prev;
-            }
-            return [...prev, newMsg];
-          });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [selectedConversa]);
-
-  // Realtime conversas
-  useEffect(() => {
-    const channel = supabase
-      .channel('realtime-conversations-list')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'chatwoot_conversations',
-        },
-        () => {
-          loadConversations();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
 
   useEffect(() => {
     // Verifica a sessão ativa real diretamente com o Supabase (respeitando a expiração JWT)
@@ -795,17 +552,8 @@ export default function Home() {
 
   const handleOpenChatwootForPhone = (phone?: string) => {
     setActiveTab('sac');
-    if (!phone) return;
-    const cleanP = phone.replace(/\D/g, '').slice(-8);
-    const targetConv = conversas.find((c) => {
-      const cPhone = c.contact?.phone_number || '';
-      return cPhone.replace(/\D/g, '').slice(-8) === cleanP;
-    });
-    if (targetConv) {
-      setSelectedConversa(targetConv);
-    }
+    setTelefoneParaAtender(phone ?? null);
   };
-
   if (!session) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 relative select-none overflow-hidden">
@@ -1133,193 +881,13 @@ export default function Home() {
           />
         )}
 
-        {/* TAB 5: SAC OMNICHANNEL (CHATWOOT RECREATED) */}
+        {/* TAB MENSAGERIA (Ticket 08) */}
         {activeTab === 'sac' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[720px]">
-
-            {/* Conversation List Sidebar */}
-            <div className="lg:col-span-4 glass-panel rounded-3xl border border-white/10 flex flex-col overflow-hidden">
-              <div className="p-4 border-b border-white/10 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <MessageCircle className="h-5 w-5 text-cyan-400" />
-                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Atendimento SAC</h3>
-                  </div>
-                  <button
-                    onClick={handleSyncChatwoot}
-                    disabled={isSyncingChatwoot}
-                    className="p-2 rounded-xl glass-button-secondary text-cyan-300 hover:text-white"
-                    title={chatwootFeedback ?? 'Sincronizar conversas'}
-                  >
-                    <RefreshCw className={`h-4 w-4 ${isSyncingChatwoot ? 'animate-spin' : ''}`} />
-                  </button>
-                </div>
-
-                {chatwootFeedback && (
-                  <p className="text-[11px] text-cyan-300/80 px-1">{chatwootFeedback}</p>
-                )}
-
-                {/* Search Box */}
-                <div className="relative">
-                  <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Buscar cliente..."
-                    value={conversaSearch}
-                    onChange={(e) => setConversaSearch(e.target.value)}
-                    className="w-full pl-9 pr-3 py-1.5 rounded-xl glass-input text-xs outline-none"
-                  />
-                </div>
-
-                {/* Filter Tabs */}
-                <div className="flex gap-1.5 p-1 rounded-xl glass-panel border border-white/10">
-                  <button
-                    onClick={() => setConversaFilter('open')}
-                    className={`flex-1 py-1 rounded-lg text-[10px] font-bold transition ${conversaFilter === 'open' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'text-slate-400'}`}
-                  >
-                    Abertos ({conversas.filter(c => c.status === 'open').length})
-                  </button>
-                  <button
-                    onClick={() => setConversaFilter('resolved')}
-                    className={`flex-1 py-1 rounded-lg text-[10px] font-bold transition ${conversaFilter === 'resolved' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'text-slate-400'}`}
-                  >
-                    Resolvidos
-                  </button>
-                  <button
-                    onClick={() => setConversaFilter('all')}
-                    className={`flex-1 py-1 rounded-lg text-[10px] font-bold transition ${conversaFilter === 'all' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'text-slate-400'}`}
-                  >
-                    Todos
-                  </button>
-                </div>
-              </div>
-
-              {/* Conversations List */}
-              <div className="flex-1 overflow-y-auto divide-y divide-white/5">
-                {conversas.filter(c => {
-                  if (conversaFilter !== 'all' && c.status !== conversaFilter) return false;
-                  if (conversaSearch.trim()) {
-                    const q = conversaSearch.toLowerCase();
-                    return c.contact?.name?.toLowerCase().includes(q) || c.contact?.phone_number?.includes(q);
-                  }
-                  return true;
-                }).map((conversa) => (
-                  <button
-                    type="button"
-                    key={conversa.id}
-                    onClick={() => setSelectedConversa(conversa)}
-                    className={`w-full p-3.5 hover:bg-white/5 cursor-pointer transition flex items-center gap-3 text-left ${selectedConversa?.id === conversa.id ? 'bg-cyan-500/10 border-l-4 border-cyan-400' : ''}`}
-                  >
-                    <div className="h-10 w-10 rounded-2xl glass-panel flex items-center justify-center font-bold text-cyan-300 border border-cyan-500/30 shrink-0">
-                      {conversa.contact?.name ? conversa.contact.name.substring(0, 2).toUpperCase() : 'SAC'}
-                    </div>
-
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs font-bold text-white truncate">{conversa.contact?.name || 'Cliente Whatsapp'}</p>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          {conversa.updated_at ? new Date(conversa.updated_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-400 truncate mt-0.5">{conversa.contact?.phone_number || 'Sem número'}</p>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Active Chat Window */}
-            <div className="lg:col-span-8 glass-panel rounded-3xl border border-white/10 flex flex-col overflow-hidden">
-              {selectedConversa ? (
-                <>
-                  {/* Chat Header */}
-                  <div className="p-4 border-b border-white/10 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-2xl glass-panel flex items-center justify-center font-bold text-purple-300 border border-purple-500/30 glow-purple">
-                        {selectedConversa.contact?.name ? selectedConversa.contact.name.substring(0, 2).toUpperCase() : 'SAC'}
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-bold text-white">{selectedConversa.contact?.name || 'Cliente'}</h4>
-                        <p className="text-xs text-slate-400">{selectedConversa.contact?.phone_number || selectedConversa.contact?.email}</p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={handleToggleConversaStatus}
-                        disabled={isChangingStatus}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                          selectedConversa.status === 'open'
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 glow-emerald'
-                            : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                        }`}
-                      >
-                        <CheckCircle className="h-3.5 w-3.5" />
-                        <span>{selectedConversa.status === 'open' ? 'Marcar Resolvido' : 'Reabrir Conversa'}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Messages Content */}
-                  <div className="flex-1 p-6 overflow-y-auto space-y-4">
-                    {mensagens.map((msg, idx) => {
-                      const isOutgoing = msg.message_type === 'outgoing' || msg.sender_name === 'Você';
-                      return (
-                        <div
-                          key={idx}
-                          className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}
-                        >
-                          <div
-                            className={`max-w-md p-3.5 rounded-2xl text-xs space-y-1 ${
-                              isOutgoing
-                                ? 'glass-button-primary text-white rounded-br-none shadow-lg'
-                                : 'glass-panel text-slate-100 border border-white/10 rounded-bl-none'
-                            }`}
-                          >
-                            <p className="font-semibold text-[10px] opacity-70">{isOutgoing ? 'Você' : (msg.sender_name || 'Cliente')}</p>
-                            <p className="leading-relaxed">{msg.content}</p>
-                            <span className="text-[9px] opacity-60 text-right block font-mono">
-                              {msg.created_at ? new Date(msg.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Send Message Input */}
-                  <form onSubmit={handleSendChatMessage} className="p-4 border-t border-white/10 flex items-center gap-3">
-                    <input
-                      type="text"
-                      placeholder="Digite sua resposta em tempo real..."
-                      value={newMessageContent}
-                      onChange={(e) => setNewMessageContent(e.target.value)}
-                      className="flex-1 px-4 py-3 rounded-2xl glass-input text-xs outline-none"
-                    />
-                    <button
-                      type="submit"
-                      disabled={isSendingMessage || !newMessageContent.trim()}
-                      className="px-5 py-3 rounded-2xl glass-button-primary text-xs font-bold flex items-center gap-2 cursor-pointer active:scale-95 transition"
-                    >
-                      <Send className="h-4 w-4" />
-                      <span className="hidden sm:inline">Enviar</span>
-                    </button>
-                  </form>
-                </>
-              ) : (
-                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-3">
-                  <div className="h-16 w-16 rounded-3xl glass-panel flex items-center justify-center text-cyan-400 border border-cyan-500/30 glow-cyan animate-float">
-                    <MessageSquare className="h-8 w-8" />
-                  </div>
-                  <h4 className="text-base font-bold text-white">Selecione um Atendimento</h4>
-                  <p className="text-xs text-slate-400 max-w-sm">
-                    Escolha uma conversa na lista à esquerda para interagir com seus clientes e visualizar integrações com o Bling.
-                  </p>
-                </div>
-              )}
-            </div>
-
-          </div>
+          <MensageriaDesktop
+            fetchWithAuth={fetchWithAuth}
+            selecao={selecaoDeOrganizacao}
+            telefoneParaAbrir={telefoneParaAtender}
+          />
         )}
 
       </main>
