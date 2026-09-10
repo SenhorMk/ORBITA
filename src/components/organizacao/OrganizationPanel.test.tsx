@@ -38,9 +38,31 @@ const ORG_B = {
   updated_at: '2026-08-01T00:00:00Z',
 };
 
-const MEMBRO_DE_A = { user_id: 'membro-de-a', papel: 'member', created_at: '2026-08-01T00:00:00Z' };
-const MEMBRO_DE_B = { user_id: 'membro-de-b', papel: 'admin', created_at: '2026-08-02T00:00:00Z' };
-const OWNER_DE_A = { user_id: 'dona-de-a', papel: 'owner', created_at: '2026-07-01T00:00:00Z' };
+// O `user_id` continua sendo a chave das acoes — a remocao e
+// `DELETE .../membros/<user_id>` —, mas o que a tela imprime e o nome. As duas
+// coisas sao deliberadamente diferentes aqui: um teste em que id e rotulo
+// coincidem nao distingue "mostrou o nome" de "mostrou o id".
+const MEMBRO_DE_A = {
+  user_id: 'membro-de-a',
+  papel: 'member',
+  created_at: '2026-08-01T00:00:00Z',
+  nome_exibicao: 'Membro de A',
+  origem_do_nome: 'cadastro',
+};
+const MEMBRO_DE_B = {
+  user_id: 'membro-de-b',
+  papel: 'admin',
+  created_at: '2026-08-02T00:00:00Z',
+  nome_exibicao: 'Membro de B',
+  origem_do_nome: 'cadastro',
+};
+const OWNER_DE_A = {
+  user_id: 'dona-de-a',
+  papel: 'owner',
+  created_at: '2026-07-01T00:00:00Z',
+  nome_exibicao: 'Dona de A',
+  origem_do_nome: 'cadastro',
+};
 
 const CONVITE_DE_A = { id: 'conv-a', email: 'convidada-a@empresa.com', papel: 'member', status: 'pending' };
 const CONVITE_DE_B = { id: 'conv-b', email: 'convidado-b@empresa.com', papel: 'admin', status: 'pending' };
@@ -126,7 +148,7 @@ describe('OrganizationPanel', () => {
     expect((await screen.findAllByText('Loja A')).length).toBeGreaterThan(1);
     expect(screen.getByText('Loja B')).toBeInTheDocument();
     expect(screen.getAllByText(/^dono$/i).length).toBeGreaterThan(0);
-    expect(await within(await secaoDeMembros()).findByText('membro-de-a')).toBeInTheDocument();
+    expect(await within(await secaoDeMembros()).findByText('Membro de A')).toBeInTheDocument();
   });
 
   it('troca a organização ativa pelo contrato CAS (organizacao_id + expected_version)', async () => {
@@ -146,15 +168,15 @@ describe('OrganizationPanel', () => {
   it('A → B invalida membros e convites de A na hora, e mostra os de B', async () => {
     const user = userEvent.setup();
     render(<PainelComEstadoDoTopo fetchWithAuth={buildFetchWithAuth({ overrides: { 'POST /api/organizacoes/switch': trocaParaB() } })} />);
-    await within(await secaoDeMembros()).findByText('membro-de-a');
+    await within(await secaoDeMembros()).findByText('Membro de A');
     expect(screen.getByText(CONVITE_DE_A.email)).toBeInTheDocument();
 
     await user.click(await screen.findByRole('button', { name: /tornar ativa/i }));
 
     // O membro de A não pode sobreviver à troca — nem por um instante depois
     // dela, nem esperando a resposta de B chegar.
-    await waitFor(async () => expect(within(await secaoDeMembros()).queryByText('membro-de-a')).toBeNull());
-    expect(await within(await secaoDeMembros()).findByText('membro-de-b')).toBeInTheDocument();
+    await waitFor(async () => expect(within(await secaoDeMembros()).queryByText('Membro de A')).toBeNull());
+    expect(await within(await secaoDeMembros()).findByText('Membro de B')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText(CONVITE_DE_A.email)).toBeNull());
     expect(await screen.findByText(CONVITE_DE_B.email)).toBeInTheDocument();
   });
@@ -179,13 +201,13 @@ describe('OrganizationPanel', () => {
     await screen.findByText('Loja B');
 
     await user.click(await screen.findByRole('button', { name: /tornar ativa/i }));
-    expect(await within(await secaoDeMembros()).findByText('membro-de-b')).toBeInTheDocument();
+    expect(await within(await secaoDeMembros()).findByText('Membro de B')).toBeInTheDocument();
 
     // A leitura de A responde só agora, depois de B já estar na tela.
     atrasada.responder({ membros: [MEMBRO_DE_A] });
 
-    await waitFor(async () => expect(within(await secaoDeMembros()).queryByText('membro-de-a')).toBeNull());
-    expect(within(await secaoDeMembros()).getByText('membro-de-b')).toBeInTheDocument();
+    await waitFor(async () => expect(within(await secaoDeMembros()).queryByText('Membro de A')).toBeNull());
+    expect(within(await secaoDeMembros()).getByText('Membro de B')).toBeInTheDocument();
   });
 
   it('A → B → A: a resposta atrasada da primeira visita a A não vale na segunda', async () => {
@@ -216,24 +238,24 @@ describe('OrganizationPanel', () => {
     render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
 
     await user.click(await screen.findByRole('button', { name: /tornar ativa/i }));
-    expect(await within(await secaoDeMembros()).findByText('membro-de-b')).toBeInTheDocument();
+    expect(await within(await secaoDeMembros()).findByText('Membro de B')).toBeInTheDocument();
 
     // De volta para A — nova seleção, nova versão, nova leitura.
     await user.click(await screen.findByRole('button', { name: /tornar ativa/i }));
-    expect(await within(await secaoDeMembros()).findByText('dona-de-a')).toBeInTheDocument();
+    expect(await within(await secaoDeMembros()).findByText('Dona de A')).toBeInTheDocument();
 
     // A resposta da PRIMEIRA visita a A chega agora. Mesma organização, seleção
     // diferente: ela é passado, e não pode ser apresentada como presente.
     primeiraDeA.responder({ membros: [MEMBRO_DE_A] });
 
-    await waitFor(async () => expect(within(await secaoDeMembros()).queryByText('membro-de-a')).toBeNull());
-    expect(within(await secaoDeMembros()).getByText('dona-de-a')).toBeInTheDocument();
+    await waitFor(async () => expect(within(await secaoDeMembros()).queryByText('Membro de A')).toBeNull());
+    expect(within(await secaoDeMembros()).getByText('Dona de A')).toBeInTheDocument();
   });
 
   it('logout não deixa membros, convites nem papel da identidade anterior na tela', async () => {
     const fetchWithAuth = buildFetchWithAuth();
     const { rerender } = render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} sessao="dona@exemplo.com" />);
-    await within(await secaoDeMembros()).findByText('membro-de-a');
+    await within(await secaoDeMembros()).findByText('Membro de A');
 
     rerender(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} sessao={null} />);
 
@@ -241,7 +263,7 @@ describe('OrganizationPanel', () => {
     // — e é por isso que a busca é na tela inteira: nada da identidade anterior
     // pode ter sobrado em lugar nenhum.
     await waitFor(() => expect(screen.queryByTestId('members-list')).toBeNull());
-    expect(screen.queryByText('membro-de-a')).toBeNull();
+    expect(screen.queryByText('Membro de A')).toBeNull();
     expect(screen.queryByText(CONVITE_DE_A.email)).toBeNull();
     expect(screen.queryByText(/^dono$/i)).toBeNull();
     // A faixa de contexto e a coluna de membros dizem a mesma coisa, cada uma
@@ -274,7 +296,7 @@ describe('OrganizationPanel', () => {
 
     expect(await screen.findByText(/não foi possível carregar os convites/i)).toBeInTheDocument();
     expect(screen.queryByText(/nenhum convite criado/i)).toBeNull();
-    expect(await within(await secaoDeMembros()).findByText('membro-de-a')).toBeInTheDocument();
+    expect(await within(await secaoDeMembros()).findByText('Membro de A')).toBeInTheDocument();
   });
 
   it('cria o convite, entrega o código copiável e não promete envio de e-mail', async () => {
@@ -321,7 +343,7 @@ describe('OrganizationPanel', () => {
     expect(await screen.findByText(/^membro$/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /criar convite/i })).toBeNull();
     expect(screen.queryByText(CONVITE_DE_A.email)).toBeNull();
-    await within(await secaoDeMembros()).findByText('membro-de-a');
+    await within(await secaoDeMembros()).findByText('Membro de A');
     expect(within(await secaoDeMembros()).queryByRole('button', { name: /remover/i })).toBeNull();
   });
 
@@ -329,9 +351,9 @@ describe('OrganizationPanel', () => {
     render(<PainelComEstadoDoTopo fetchWithAuth={buildFetchWithAuth()} />);
 
     const membros = await screen.findByTestId('members-list');
-    await within(membros).findByText('dona-de-a');
-    expect(within(membros).queryByRole('button', { name: /remover dona-de-a/i })).toBeNull();
-    expect(within(membros).getByRole('button', { name: /remover membro-de-a/i })).toBeInTheDocument();
+    await within(membros).findByText('Dona de A');
+    expect(within(membros).queryByRole('button', { name: /remover Dona de A/i })).toBeNull();
+    expect(within(membros).getByRole('button', { name: /remover Membro de A/i })).toBeInTheDocument();
   });
 
   it('aceite com contexto não resolvido não vira sucesso normal nem falha total', async () => {
@@ -382,17 +404,17 @@ describe('OrganizationPanel', () => {
       },
     });
     render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
-    await within(await secaoDeMembros()).findByText('membro-de-a');
+    await within(await secaoDeMembros()).findByText('Membro de A');
 
-    await user.click(within(await secaoDeMembros()).getByRole('button', { name: /remover membro-de-a/i }));
+    await user.click(within(await secaoDeMembros()).getByRole('button', { name: /remover Membro de A/i }));
     await user.click(await screen.findByRole('button', { name: /tornar ativa/i }));
-    expect(await within(await secaoDeMembros()).findByText('membro-de-b')).toBeInTheDocument();
+    expect(await within(await secaoDeMembros()).findByText('Membro de B')).toBeInTheDocument();
 
     // A remoção de A só falha agora, com B na tela.
     remocaoLenta.responder({ error: 'Falha ao remover membro na Loja A' });
 
     await waitFor(() => expect(screen.queryByText(/falha ao remover membro na loja a/i)).toBeNull());
-    expect(within(await secaoDeMembros()).getByText('membro-de-b')).toBeInTheDocument();
+    expect(within(await secaoDeMembros()).getByText('Membro de B')).toBeInTheDocument();
   });
 
   it('erro de ação de A deixa de valer na troca para B', async () => {
@@ -405,9 +427,9 @@ describe('OrganizationPanel', () => {
       },
     });
     render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
-    await within(await secaoDeMembros()).findByText('membro-de-a');
+    await within(await secaoDeMembros()).findByText('Membro de A');
 
-    await user.click(within(await secaoDeMembros()).getByRole('button', { name: /remover membro-de-a/i }));
+    await user.click(within(await secaoDeMembros()).getByRole('button', { name: /remover Membro de A/i }));
     expect(await screen.findByText(/falha ao remover membro na loja a/i)).toBeInTheDocument();
 
     await user.click(await screen.findByRole('button', { name: /tornar ativa/i }));
@@ -485,7 +507,7 @@ describe('OrganizationPanel', () => {
     const user = userEvent.setup();
     const postSwitch = vi.fn(async () => jsonResponse({ error: 'Contexto de organização desatualizado' }, 409));
     render(<PainelComEstadoDoTopo fetchWithAuth={buildFetchWithAuth({ overrides: { 'POST /api/organizacoes/switch': postSwitch } })} />);
-    await within(await secaoDeMembros()).findByText('membro-de-a');
+    await within(await secaoDeMembros()).findByText('Membro de A');
 
     await user.click(await screen.findByRole('button', { name: /tornar ativa/i }));
     await waitFor(() => expect(postSwitch).toHaveBeenCalledTimes(1));
@@ -493,7 +515,7 @@ describe('OrganizationPanel', () => {
     // A autoridade permanece no servidor: a organização ativa continua sendo A,
     // e os membros na tela continuam sendo os de A.
     expect(await screen.findByText(/contexto de organização desatualizado/i)).toBeInTheDocument();
-    expect(within(await secaoDeMembros()).getByText('membro-de-a')).toBeInTheDocument();
+    expect(within(await secaoDeMembros()).getByText('Membro de A')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /tornar ativa/i })).toBeInTheDocument();
   });
 });

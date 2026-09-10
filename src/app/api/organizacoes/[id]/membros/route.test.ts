@@ -14,6 +14,7 @@ const OUTRO_ID = '30000000-0000-4000-8000-000000000002';
 const OUTRA_ORG_ID = '20000000-0000-4000-8000-000000000002';
 
 const getUserMock = vi.fn();
+const getUserByIdMock = vi.fn();
 const maybeSingleMock = vi.fn();
 const orderMock = vi.fn();
 
@@ -40,8 +41,27 @@ const selectMock = vi.fn(() => ({ eq: eqMock }));
 const fromMock = vi.fn(() => ({ select: selectMock }));
 
 vi.mock('@/lib/supabaseServer', () => ({
-  supabaseServer: { auth: { getUser: getUserMock }, from: fromMock },
+  supabaseServer: {
+    auth: { getUser: getUserMock, admin: { getUserById: getUserByIdMock } },
+    from: fromMock,
+  },
 }));
+
+/**
+ * Identidades do Auth, por id. Quem nao estiver no mapa devolve erro — que e
+ * como o Auth responde para um id que ele nao resolve, e e o caminho que
+ * precisa virar `origem_do_nome: 'indisponivel'`, e nao "sem nome".
+ */
+function identidades(porId: Record<string, { email?: string | null; user_metadata?: unknown }>) {
+  getUserByIdMock.mockImplementation((id: string) => {
+    const usuario = porId[id];
+    return Promise.resolve(
+      usuario
+        ? { data: { user: { id, ...usuario } }, error: null }
+        : { data: { user: null }, error: { message: 'User not found' } },
+    );
+  });
+}
 
 function sessionOf(userId: string) {
   getUserMock.mockResolvedValue({
@@ -106,6 +126,10 @@ describe('GET /api/organizacoes/[id]/membros', () => {
   it('lista os membros para quem tem vínculo, mesmo sem papel de gestão', async () => {
     sessionOf(ACTOR_ID);
     membershipOf('member');
+    identidades({
+      [ACTOR_ID]: { email: 'dona@exemplo.com', user_metadata: { full_name: 'Dona da Loja' } },
+      [OUTRO_ID]: { email: 'colega@exemplo.com', user_metadata: { full_name: 'Colega de Balcão' } },
+    });
     orderMock.mockResolvedValue({
       data: [
         { user_id: ACTOR_ID, papel: 'owner', created_at: '2026-08-01T00:00:00Z' },
@@ -121,10 +145,130 @@ describe('GET /api/organizacoes/[id]/membros', () => {
     expect(response.status).toBe(200);
     expect(fromMock).toHaveBeenCalledWith('membros_organizacao');
     expect(eqMock).toHaveBeenCalledWith('organizacao_id', ORG_ID);
+    // O vínculo continua inteiro — `user_id` é a chave da remoção — e agora vem
+    // acompanhado de como chamar a pessoa.
     expect(body.membros).toEqual([
-      { user_id: ACTOR_ID, papel: 'owner', created_at: '2026-08-01T00:00:00Z' },
-      { user_id: OUTRO_ID, papel: 'member', created_at: '2026-08-02T00:00:00Z' },
+      {
+        user_id: ACTOR_ID,
+        papel: 'owner',
+        created_at: '2026-08-01T00:00:00Z',
+        nome_exibicao: 'Dona da Loja',
+        origem_do_nome: 'cadastro',
+      },
+      {
+        user_id: OUTRO_ID,
+        papel: 'member',
+        created_at: '2026-08-02T00:00:00Z',
+        nome_exibicao: 'Colega de Balcão',
+        origem_do_nome: 'cadastro',
+      },
     ]);
+  });
+
+  it('não entrega ao membro comum o e-mail de um colega sem nome cadastrado', async () => {
+    // A lista de membros é lida por QUALQUER membro; a de convites, que carrega
+    // e-mails, exige `organization:manage`. Devolver e-mail aqui alargaria a
+    // exposição que o produto reserva a quem administra — e alargar exposição
+    // não é ajuste de apresentação.
+    sessionOf(ACTOR_ID);
+    membershipOf('member');
+    identidades({
+      [ACTOR_ID]: { email: 'eu@exemplo.com', user_metadata: {} },
+      [OUTRO_ID]: { email: 'colega@exemplo.com', user_metadata: {} },
+    });
+    orderMock.mockResolvedValue({
+      data: [
+        { user_id: ACTOR_ID, papel: 'member', created_at: '2026-08-01T00:00:00Z' },
+        { user_id: OUTRO_ID, papel: 'member', created_at: '2026-08-02T00:00:00Z' },
+      ],
+      error: null,
+    });
+    const { GET } = await import('./route');
+
+    const body = await (await GET(request(), params())).json();
+
+    // O próprio e-mail, sim: quem olha para si mesmo já o conhece.
+    expect(body.membros[0]).toMatchObject({ nome_exibicao: 'eu@exemplo.com', origem_do_nome: 'email' });
+    // O do colega, não — e a tela dirá "sem nome cadastrado", não um nome falso.
+    expect(body.membros[1]).toMatchObject({ nome_exibicao: null, origem_do_nome: 'ausente' });
+    expect(JSON.stringify(body)).not.toContain('colega@exemplo.com');
+  });
+
+  it.each(['owner', 'admin'] as const)(
+    'para %s, o e-mail é o recurso quando não há nome — ele já vê e-mails nesta organização',
+    async (papel) => {
+      sessionOf(ACTOR_ID);
+      membershipOf(papel);
+      identidades({
+        [ACTOR_ID]: { email: 'quem.administra@exemplo.com', user_metadata: { full_name: 'Quem Administra' } },
+        [OUTRO_ID]: { email: 'legado@exemplo.com', user_metadata: {} },
+      });
+      orderMock.mockResolvedValue({
+        data: [
+          { user_id: ACTOR_ID, papel, created_at: '2026-08-01T00:00:00Z' },
+          { user_id: OUTRO_ID, papel: 'member', created_at: '2026-08-02T00:00:00Z' },
+        ],
+        error: null,
+      });
+      const { GET } = await import('./route');
+
+      const body = await (await GET(request(), params())).json();
+
+      expect(body.membros[1]).toMatchObject({
+        nome_exibicao: 'legado@exemplo.com',
+        origem_do_nome: 'email',
+      });
+    },
+  );
+
+  it('identidade que não pôde ser lida não vira "sem nome" — e não derruba a lista', async () => {
+    // As duas metades importam. Dizer "sem nome cadastrado" sobre alguém cuja
+    // identidade não foi lida é afirmar um fato que ninguém verificou; e
+    // devolver 500 tiraria do ar uma tela de autoridade por causa de uma
+    // decoração — o vínculo, que é o dado desta rota, foi lido com sucesso.
+    sessionOf(ACTOR_ID);
+    membershipOf('owner');
+    identidades({ [ACTOR_ID]: { email: 'dona@exemplo.com', user_metadata: { full_name: 'Dona da Loja' } } });
+    orderMock.mockResolvedValue({
+      data: [
+        { user_id: ACTOR_ID, papel: 'owner', created_at: '2026-08-01T00:00:00Z' },
+        { user_id: OUTRO_ID, papel: 'member', created_at: '2026-08-02T00:00:00Z' },
+      ],
+      error: null,
+    });
+    const { GET } = await import('./route');
+
+    const response = await GET(request(), params());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.membros).toHaveLength(2);
+    expect(body.membros[1]).toMatchObject({ nome_exibicao: null, origem_do_nome: 'indisponivel' });
+  });
+
+  it('não devolve a metadata do Auth junto com o membro', async () => {
+    sessionOf(ACTOR_ID);
+    membershipOf('owner');
+    identidades({
+      [ACTOR_ID]: {
+        email: 'dona@exemplo.com',
+        // O saco aberto: qualquer integração pode ter escrito qualquer coisa
+        // aqui, e nada disso passou por revisão para virar resposta pública.
+        user_metadata: { full_name: 'Dona da Loja', cpf: '000.000.000-00', provider_token: 'segredo' },
+      },
+    });
+    orderMock.mockResolvedValue({
+      data: [{ user_id: ACTOR_ID, papel: 'owner', created_at: '2026-08-01T00:00:00Z' }],
+      error: null,
+    });
+    const { GET } = await import('./route');
+
+    const corpo = JSON.stringify(await (await GET(request(), params())).json());
+
+    expect(corpo).toContain('Dona da Loja');
+    expect(corpo).not.toContain('user_metadata');
+    expect(corpo).not.toContain('000.000.000-00');
+    expect(corpo).not.toContain('provider_token');
   });
 
   // Uma linha persistida que o servidor não sabe ler é falha do servidor. Se ela

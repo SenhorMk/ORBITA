@@ -3,14 +3,71 @@ import { z } from 'zod';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { papelMembroSchema } from '@/lib/organizationContext';
 import { authorizeRequestOrganizationCapability } from '@/lib/requestOrganizationContext';
+import { organizationCapabilitiesForRole } from '@/lib/organizationAuthorization';
 import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
+import {
+  identidadeDeExibicao,
+  type IdentidadeDeExibicao,
+  type UsuarioDoAuth,
+} from '@/lib/organizacao/identidadeDoMembro';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 const membroRowSchema = z.object({
   user_id: z.string().uuid(),
   papel: papelMembroSchema,
   created_at: z.string(),
 });
-export type OrganizationMemberRow = z.infer<typeof membroRowSchema>;
+type MembroPersistido = z.infer<typeof membroRowSchema>;
+
+/**
+ * A linha que a interface recebe: o vínculo, mais como chamar a pessoa.
+ *
+ * `user_id` continua vindo — ele é a chave das ações (remover é
+ * `DELETE .../membros/[userId]`) —, mas deixou de ser a identidade que a tela
+ * imprime. Ver `src/lib/organizacao/identidadeDoMembro.ts` para o porquê de
+ * `origem_do_nome` existir.
+ */
+export type OrganizationMemberRow = MembroPersistido & IdentidadeDeExibicao;
+
+/**
+ * Lê do Auth os dois campos que a interface pode mostrar deste usuário.
+ *
+ * Devolve `null` quando a leitura não deu certo — e `null` é propagado como
+ * `origem_do_nome: 'indisponivel'`, nunca como "esta pessoa não tem nome".
+ *
+ * A falha de identidade **não** derruba a lista. O vínculo é o dado desta rota
+ * e ele foi lido com sucesso; deixar a tela de membros inutilizável porque o
+ * Auth engasgou ao resolver um nome trocaria uma decoração ausente por uma tela
+ * de autoridade fora do ar. O que não se pode é mentir sobre o motivo, e não se
+ * mente: o desfecho chega nomeado.
+ */
+async function lerUsuarioDoAuth(
+  userId: string,
+  scope: VerifiedOrganizationScope,
+): Promise<UsuarioDoAuth | null> {
+  const { data, error } = await supabaseServer.auth.admin.getUserById(userId);
+  if (error || !data?.user) {
+    registrarFalhaInterna('organizacoes.membros.identidade', error ?? new Error('usuário sem retorno'), {
+      organizacaoId: scope.organizationId,
+      atorId: scope.actorId,
+    });
+    return null;
+  }
+  return { email: data.user.email, user_metadata: data.user.user_metadata };
+}
+
+/**
+ * Quem pode ver o e-mail de quem, dentro do que esta rota já autorizou.
+ *
+ * Quem administra já vê e-mails nesta organização (a lista de convites exige
+ * `organization:manage` e os devolve), e qualquer pessoa vê o próprio. Para o
+ * resto, o e-mail não sai daqui: a lista de membros é lida por qualquer membro,
+ * e alargar isso seria mudar exposição, não apresentação.
+ */
+function podeVerEmailDe(userId: string, scope: VerifiedOrganizationScope): boolean {
+  if (userId === scope.actorId) return true;
+  return organizationCapabilitiesForRole(scope.role).has('organization:manage');
+}
 
 function authorizationFailureResponse(status: 401 | 403 | 503) {
   const error = status === 503
@@ -70,6 +127,17 @@ export async function GET(
     return NextResponse.json({ error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
 
-  const membros: OrganizationMemberRow[] = lista.data;
+  // Em paralelo: a lista é pequena por construção (o limite de assentos do
+  // plano), e resolvê-la em série somaria uma ida ao Auth por membro no tempo
+  // de resposta de uma tela que abre em toda troca de organização.
+  const membros: OrganizationMemberRow[] = await Promise.all(
+    lista.data.map(async (membro) => ({
+      ...membro,
+      ...identidadeDeExibicao(await lerUsuarioDoAuth(membro.user_id, authorization.scope), {
+        podeVerEmail: podeVerEmailDe(membro.user_id, authorization.scope),
+      }),
+    })),
+  );
+
   return NextResponse.json({ membros });
 }
