@@ -36,8 +36,12 @@ test.describe('acessibilidade', () => {
     const loginPage = new LoginPage(page);
     await loginPage.goto();
 
-    await expect(page.getByLabel('E-mail / Usuário Dev')).toBeVisible();
-    await expect(page.getByLabel('Senha Credencial')).toBeVisible();
+    // Ticket 09 — os rótulos são "E-mail" e "Senha". Eram "E-mail / Usuário Dev"
+    // e "Senha Credencial": a tela de entrada anunciava um atalho interno de
+    // desenvolvimento no rótulo de um campo público. O atalho continua
+    // existindo em `handleLogin`; o que saiu foi o anúncio.
+    await expect(page.getByLabel('E-mail', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Senha', { exact: true })).toBeVisible();
   });
 
   test('tentativa de login inválida expõe o erro em um elemento acessível, não só por cor', async ({ page }) => {

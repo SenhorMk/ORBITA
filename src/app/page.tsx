@@ -3,11 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   FileText,
-  AlertTriangle,
   Sparkles,
-  ArrowRight,
-  Lock,
-  Mail,
   RefreshCw,
   X,
   Plus,
@@ -36,7 +32,7 @@ import { ClienteEditModal } from '@/components/ClienteEditModal';
 import { ManualOrderModal } from '@/components/ManualOrderModal';
 import { StartupLoader } from '@/components/StartupLoader';
 import { FinanceiroTab } from '@/components/financeiro/FinanceiroTab';
-import { RegisterForm } from '@/components/auth/RegisterForm';
+import { TelaDeEntrada } from '@/components/auth/TelaDeEntrada';
 import { OrganizationPanel } from '@/components/organizacao/OrganizationPanel';
 import { IntegrationsPanel } from '@/components/integracoes/IntegrationsPanel';
 import { MensageriaDesktop } from '@/components/mensageria/MensageriaDesktop';
@@ -51,6 +47,7 @@ import { useOrganizationsList } from '@/components/organizacao/useOrganizationsL
 import { useLeituraDoPainel } from '@/components/painel/useLeituraDoPainel';
 import { VisaoGeral } from '@/components/painel/VisaoGeral';
 import { descreverErro } from '@/lib/erroLegivel';
+import { mensagemDeFalhaDeLogin } from '@/lib/auth/mensagemDeFalhaDeLogin';
 
 /**
  * Identidade do usuário logado — **e nada além disso**.
@@ -459,8 +456,11 @@ export default function Home() {
         localStorage.setItem('haux_session', JSON.stringify(userDetails));
       }
     } catch (error: unknown) {
-      const errMsg = error instanceof Error ? error.message : 'Falha na autenticação. Verifique os dados.';
-      setAuthError(errMsg);
+      // A mensagem do provedor chegava crua aqui — em inglês, e no vocabulário
+      // dele. `mensagemDeFalhaDeLogin` traduz os casos conhecidos sem juntar
+      // causas que pedem ações diferentes, e deixa passar inteiro o que não
+      // reconhece. Ticket 09: a primeira tela da apresentação é esta.
+      setAuthError(mensagemDeFalhaDeLogin(error));
     } finally {
       setAuthLoading(false);
     }
@@ -556,114 +556,21 @@ export default function Home() {
   };
   if (!session) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-6 relative select-none overflow-hidden">
-        <div className="absolute top-1/4 left-1/3 w-96 h-96 bg-[#5e1dad]/20 rounded-full blur-3xl animate-pulse-glow" />
-        <div className="absolute bottom-1/4 right-1/3 w-96 h-96 bg-[#42a0ed]/20 rounded-full blur-3xl animate-pulse-glow" style={{ animationDelay: '1.5s' }} />
-
-        <div className="w-full max-w-md space-y-8 z-10 perspective-1000">
-          <div className="text-center space-y-4 animate-float">
-            <div className="inline-flex h-20 w-20 items-center justify-center rounded-3xl glass-panel text-white shadow-2xl relative group border border-white/20">
-              <OrbitaLogo className="h-10 w-10 animate-orbit-spin" />
-              <div className="absolute -inset-2 rounded-3xl bg-gradient-to-r from-[#5e1dad] to-[#42a0ed] opacity-30 blur-md pointer-events-none group-hover:opacity-60 transition" />
-            </div>
-            <div>
-              <h1 className="text-4xl font-extrabold tracking-tight text-gradient-orbital uppercase">ORBITA</h1>
-              <p className="text-xs text-cyan-400/80 font-bold uppercase tracking-widest mt-1">Ecosistema ERP Bling & Chatwoot</p>
-            </div>
-          </div>
-
-          <div className="glass-panel p-8 rounded-3xl space-y-6 border border-white/10 shadow-2xl relative">
-            <div className="space-y-1">
-              <h2 className="text-xl font-bold text-slate-100">
-                {authMode === 'signin' ? 'Acesso Autenticado' : 'Criar conta na Órbita'}
-              </h2>
-              <p className="text-xs text-slate-400">
-                {authMode === 'signin'
-                  ? 'Entre com sua conta Supabase ou credenciais rápidas de dev.'
-                  : 'Cadastre-se para começar. Você receberá um e-mail de confirmação.'}
-              </p>
-            </div>
-
-            {authError && authMode === 'signin' && (
-              <div className="p-3 bg-rose-500/15 border border-rose-500/30 text-rose-300 rounded-xl text-xs font-semibold flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
-                <span>{authError}</span>
-              </div>
-            )}
-
-            {authMode === 'signup' ? <RegisterForm /> : (
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-xs text-slate-300 font-semibold" htmlFor="email-input">E-mail / Usuário Dev</label>
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400 pointer-events-none">
-                    <Mail className="h-4 w-4" />
-                  </span>
-                  <input
-                    id="email-input"
-                    type="text"
-                    required
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    placeholder="dev: admin | email@exemplo.com"
-                    className="w-full pl-10 pr-4 py-3 rounded-xl glass-input text-sm outline-none transition"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs text-slate-300 font-semibold" htmlFor="password-input">Senha Credencial</label>
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400 pointer-events-none">
-                    <Lock className="h-4 w-4" />
-                  </span>
-                  <input
-                    id="password-input"
-                    type="password"
-                    required
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    placeholder="dev: admin0 | sua senha"
-                    className="w-full pl-10 pr-4 py-3 rounded-xl glass-input text-sm outline-none transition"
-                  />
-                </div>
-              </div>
-
-              <button
-                id="btn-login-submit"
-                type="submit"
-                disabled={authLoading}
-                className="w-full py-3.5 mt-2 rounded-xl glass-button-primary font-semibold text-sm cursor-pointer active:scale-95 transition flex items-center justify-center gap-2"
-              >
-                {authLoading ? (
-                  <RefreshCw className="h-4 w-4 animate-spin text-white" />
-                ) : (
-                  <>
-                    <span>Entrar na Órbita</span>
-                    <ArrowRight className="h-4 w-4 text-white" />
-                  </>
-                )}
-              </button>
-            </form>
-            )}
-
-            <div className="pt-1 text-center text-xs text-slate-400">
-              {authMode === 'signin' ? 'Ainda não tem conta?' : 'Já tem uma conta?'}{' '}
-              <button
-                id="btn-auth-mode-toggle"
-                type="button"
-                onClick={() => {
-                  setAuthError(null);
-                  setAuthMode((mode) => (mode === 'signin' ? 'signup' : 'signin'));
-                }}
-                className="font-semibold text-cyan-300 underline underline-offset-4 hover:text-cyan-200 active:scale-[0.97] transition cursor-pointer"
-              >
-                {authMode === 'signin' ? 'Criar conta' : 'Entrar'}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+      <TelaDeEntrada
+        modo={authMode}
+        onTrocarModo={() => {
+          setAuthError(null);
+          setAuthMode((mode) => (mode === 'signin' ? 'signup' : 'signin'));
+        }}
+        email={loginEmail}
+        onEmailChange={setLoginEmail}
+        senha={loginPassword}
+        onSenhaChange={setLoginPassword}
+        onSubmit={handleLogin}
+        erro={authError}
+        carregando={authLoading}
+        logo={<OrbitaLogo className="h-7 w-7" />}
+      />
     );
   }
 

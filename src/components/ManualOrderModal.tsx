@@ -141,8 +141,6 @@ interface ManualOrderFormFieldsProps {
   setFrete: (value: number | '') => void;
   observacoes: string;
   setObservacoes: (value: string) => void;
-  syncBling: boolean;
-  setSyncBling: (value: boolean) => void;
 }
 
 /** Coluna esquerda do formulário: cliente, busca/adição de produto, forma de pagamento, desconto/frete e observações. */
@@ -152,7 +150,7 @@ function ManualOrderFormFields(props: ManualOrderFormFieldsProps) {
     searchProduto, setSearchProduto, deferredSearchProduto, addItem,
     formaPagamento, setFormaPagamento,
     desconto, setDesconto, frete, setFrete,
-    observacoes, setObservacoes, syncBling, setSyncBling,
+    observacoes, setObservacoes,
   } = props;
 
   return (
@@ -262,14 +260,40 @@ function ManualOrderFormFields(props: ManualOrderFormFieldsProps) {
           />
         </div>
       </div>
-
-      <div className="pt-2">
-        <label className="flex items-center gap-3 text-sm cursor-pointer text-slate-300 font-medium hover:text-white transition-colors">
-          <input type="checkbox" checked={syncBling} onChange={e => setSyncBling(e.target.checked)} className="w-4 h-4 rounded border-white/20 bg-white/5 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-900" />
-          Sincronizar pedido com o Bling v3
-        </label>
-      </div>
     </div>
+  );
+}
+
+/**
+ * O interruptor que decide se esta venda **também** vira pedido no Bling.
+ *
+ * Vive no rodapé, ao lado da ação que ele modifica. Estava no fim da coluna
+ * esquerda do formulário, dentro do corpo que rola — e a 1366×768, a resolução
+ * mínima da apresentação, ficava abaixo da dobra: dava para apertar "Finalizar
+ * e baixar estoque" sem nunca ter visto que aquele clique escrevia no ERP.
+ * Ligado continua sendo o padrão certo para uma loja; o que mudou é que agora
+ * a escolha está na tela na hora de decidir (Ticket 09).
+ */
+function SincronizarComOBling({
+  syncBling,
+  setSyncBling,
+  desabilitado,
+}: {
+  syncBling: boolean;
+  setSyncBling: (value: boolean) => void;
+  desabilitado: boolean;
+}) {
+  return (
+    <label className="flex items-center gap-2.5 text-sm cursor-pointer text-slate-300 font-medium hover:text-white transition-colors">
+      <input
+        type="checkbox"
+        checked={syncBling}
+        disabled={desabilitado}
+        onChange={e => setSyncBling(e.target.checked)}
+        className="w-4 h-4 rounded border-white/20 bg-white/5 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-900"
+      />
+      Sincronizar pedido com o Bling v3
+    </label>
   );
 }
 
@@ -422,6 +446,13 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess, organizacaoId 
       descricao="Cria um pedido para debitar estoque local e registrar o financeiro."
       rodape={
         <RodapeDeModal
+          esquerda={
+            <SincronizarComOBling
+              syncBling={syncBling}
+              setSyncBling={setSyncBling}
+              desabilitado={loading}
+            />
+          }
           secundaria={
             <button
               type="button"
@@ -474,8 +505,6 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess, organizacaoId 
             setFrete={setFrete}
             observacoes={observacoes}
             setObservacoes={setObservacoes}
-            syncBling={syncBling}
-            setSyncBling={setSyncBling}
           />
 
           <ManualOrderItemsPanel

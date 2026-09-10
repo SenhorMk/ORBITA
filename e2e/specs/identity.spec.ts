@@ -62,18 +62,26 @@ test.describe('identidade', () => {
     await loginPage.goto();
     await loginPage.loginAndWaitForDashboard(owner.email, owner.password);
 
-    // Force the Supabase auth token in localStorage into an already-expired
-    // JWT shape (correct structure, past `exp`) instead of just deleting it,
-    // so this exercises expiry handling specifically, not "no session at
-    // all". A privileged reload must fail closed back to the login form,
-    // never keep showing dashboard data from stale client state.
+    // Envelhece a sessão guardada no navegador em vez de apagá-la, para o que
+    // se mede ser o **vencimento**, e não "nunca houve sessão".
+    //
+    // Ticket 09 — antes daqui só o `expires_at` era empurrado para o passado, e
+    // o `refresh_token` ficava intacto e válido. O `supabase-js` fazia o que
+    // deve fazer: renovava a sessão e seguia autenticado. O teste então
+    // reprovava o produto por um comportamento correto, e a expiração de
+    // verdade — sem credencial nenhuma para renovar — continuava sem prova.
+    //
+    // Agora as duas metades vencem juntas: `expires_at` no passado **e** o
+    // `refresh_token` inutilizado. Não sobra caminho de renovação, e o único
+    // desfecho aceitável é voltar ao formulário de login.
     await page.evaluate(() => {
       const keys = Object.keys(window.localStorage).filter((key) => key.includes('auth-token'));
       for (const key of keys) {
         const stored = window.localStorage.getItem(key);
         if (!stored) continue;
-        const parsed = JSON.parse(stored) as { expires_at?: number };
+        const parsed = JSON.parse(stored) as { expires_at?: number; refresh_token?: string };
         parsed.expires_at = Math.floor(Date.now() / 1000) - 3600;
+        parsed.refresh_token = 'refresh-token-invalidado-pelo-teste';
         window.localStorage.setItem(key, JSON.stringify(parsed));
       }
     });

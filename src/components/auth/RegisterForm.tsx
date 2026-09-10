@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowRight, Lock, Mail, RefreshCw, User } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
 /** What the form is currently telling the user, if anything. */
 type RegisterFeedback =
@@ -88,68 +88,58 @@ export function RegisterForm({ onSubmitted }: RegisterFormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4" aria-describedby="register-feedback">
-      <div className="space-y-1.5">
-        <label className="text-xs text-slate-300 font-semibold" htmlFor="register-name">Nome</label>
-        <div className="relative">
-          <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400 pointer-events-none">
-            <User className="h-4 w-4" />
-          </span>
-          <input
-            id="register-name"
-            name="name"
-            type="text"
-            autoComplete="name"
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Como devemos te chamar"
-            className="w-full pl-10 pr-4 py-3 rounded-xl glass-input text-sm outline-none transition"
-          />
-        </div>
+    <form
+      onSubmit={handleSubmit}
+      className="flex flex-col"
+      style={{ gap: 14 }}
+      aria-describedby="register-feedback"
+    >
+      <div className="flex flex-col" style={{ gap: 5 }}>
+        <label className="orbita-eyebrow" htmlFor="register-name">Nome</label>
+        <input
+          id="register-name"
+          name="name"
+          type="text"
+          autoComplete="name"
+          required
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Como devemos te chamar"
+          className="orbita-campo"
+        />
       </div>
 
-      <div className="space-y-1.5">
-        <label className="text-xs text-slate-300 font-semibold" htmlFor="register-email">E-mail</label>
-        <div className="relative">
-          <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400 pointer-events-none">
-            <Mail className="h-4 w-4" />
-          </span>
-          <input
-            id="register-email"
-            name="email"
-            type="email"
-            autoComplete="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="voce@empresa.com"
-            className="w-full pl-10 pr-4 py-3 rounded-xl glass-input text-sm outline-none transition"
-          />
-        </div>
+      <div className="flex flex-col" style={{ gap: 5 }}>
+        <label className="orbita-eyebrow" htmlFor="register-email">E-mail</label>
+        <input
+          id="register-email"
+          name="email"
+          type="email"
+          autoComplete="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="voce@empresa.com"
+          className="orbita-campo"
+        />
       </div>
 
-      <div className="space-y-1.5">
-        <label className="text-xs text-slate-300 font-semibold" htmlFor="register-password">Senha</label>
-        <div className="relative">
-          <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400 pointer-events-none">
-            <Lock className="h-4 w-4" />
-          </span>
-          <input
-            id="register-password"
-            name="password"
-            type="password"
-            autoComplete="new-password"
-            required
-            minLength={6}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Mínimo de 6 caracteres"
-            aria-describedby="register-password-hint"
-            className="w-full pl-10 pr-4 py-3 rounded-xl glass-input text-sm outline-none transition"
-          />
-        </div>
-        <p id="register-password-hint" className="text-[11px] text-slate-400">
+      <div className="flex flex-col" style={{ gap: 5 }}>
+        <label className="orbita-eyebrow" htmlFor="register-password">Senha</label>
+        <input
+          id="register-password"
+          name="password"
+          type="password"
+          autoComplete="new-password"
+          required
+          minLength={6}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Mínimo de 6 caracteres"
+          aria-describedby="register-password-hint"
+          className="orbita-campo"
+        />
+        <p id="register-password-hint" className="m-0 text-[11px]" style={{ color: 'var(--txt3)' }}>
           Use ao menos 6 caracteres.
         </p>
       </div>
@@ -157,9 +147,8 @@ export function RegisterForm({ onSubmitted }: RegisterFormProps) {
       <output id="register-feedback" aria-live="polite" className="block min-h-[1.25rem]">
         {feedback._tag !== 'Idle' && (
           <span
-            className={`text-xs font-semibold ${
-              feedback._tag === 'Submitted' ? 'text-emerald-300' : 'text-rose-300'
-            }`}
+            className="text-xs font-semibold"
+            style={{ color: feedback._tag === 'Submitted' ? 'var(--accent)' : 'var(--danger)' }}
           >
             {feedback.message}
           </span>
@@ -170,16 +159,17 @@ export function RegisterForm({ onSubmitted }: RegisterFormProps) {
         id="btn-register-submit"
         type="submit"
         disabled={submitting}
-        className="w-full py-3.5 rounded-xl glass-button-primary font-semibold text-sm cursor-pointer active:scale-[0.97] transition disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+        className="orbita-chip cursor-pointer justify-center w-full"
+        style={{
+          height: 'var(--h-field)',
+          background: 'var(--accent)',
+          borderColor: 'var(--accent)',
+          color: 'var(--accent-fg)',
+          fontSize: 13,
+        }}
       >
-        {submitting ? (
-          <RefreshCw className="h-4 w-4 animate-spin text-white" />
-        ) : (
-          <>
-            <span>Criar conta</span>
-            <ArrowRight className="h-4 w-4 text-white" />
-          </>
-        )}
+        {submitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+        {submitting ? 'Criando…' : 'Criar conta'}
       </button>
     </form>
   );
