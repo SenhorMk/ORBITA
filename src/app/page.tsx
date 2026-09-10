@@ -1051,9 +1051,14 @@ export default function Home() {
           <OrganizationPanel fetchWithAuth={fetchWithAuth} lista={listaDeOrganizacoes} />
         </div>
 
-        {/* TAB INTEGRAÇÕES: Bling / Chatwoot (Ticket 24b) */}
-        <div className={activeTab === 'integrations' ? 'block' : 'hidden'}>
-          <IntegrationsPanel fetchWithAuth={fetchWithAuth} />
+        {/* TAB INTEGRAÇÕES: Bling / Chatwoot (Ticket 07) */}
+        <div className={activeTab === 'integrations' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
+          <IntegrationsPanel
+            fetchWithAuth={fetchWithAuth}
+            selecao={selecaoDeOrganizacao}
+            nomeDaOrganizacao={listaDeOrganizacoes.activeOrg?.organizacao.nome ?? null}
+            podeGerir={podeGerir}
+          />
         </div>
 
         {/* TAB PLANO & FATURAMENTO (Ticket 24b) */}

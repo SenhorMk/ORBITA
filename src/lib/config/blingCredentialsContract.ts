@@ -17,6 +17,12 @@ import { z } from 'zod';
 export const blingCredentialsPayloadSchema = z.object({
   clientId: z.string().min(1, 'Client ID do Bling é obrigatório'),
   clientSecret: z.string().min(1, 'Client Secret do Bling é obrigatório'),
+  /**
+   * A organização que a tela acreditava estar ativa quando o formulário foi
+   * enviado. **Não** é autoridade — ver `organizacaoEsperada.ts`. Opcional
+   * porque só recusa, nunca concede.
+   */
+  organizacaoEsperada: z.string().min(1).optional(),
 });
 
 /** Corpo aceito por `POST /api/bling/connect` ao salvar credenciais do Bling. */
@@ -60,14 +66,18 @@ export function buildBlingVaultCredentials(payload: BlingCredentialsPayload): Bl
  *
  * @param clientId - Client ID informado pelo usuário; espaços nas bordas são removidos.
  * @param clientSecret - Client Secret informado pelo usuário; espaços nas bordas são removidos.
+ * @param organizacaoEsperada - A organização ativa na tela no momento do envio,
+ *   para o servidor recusar a escrita se ela já tiver mudado.
  * @returns Corpo no formato exato que a rota valida.
  */
 export function buildBlingCredentialsPayload(
   clientId: string,
   clientSecret: string,
+  organizacaoEsperada?: string,
 ): BlingCredentialsPayload {
   return {
     clientId: clientId.trim(),
     clientSecret: clientSecret.trim(),
+    ...(organizacaoEsperada ? { organizacaoEsperada } : {}),
   };
 }

@@ -1,470 +1,622 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ShoppingBag, MessageCircle, CheckCircle, XCircle, AlertTriangle, Copy, Check } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { buildBlingCredentialsPayload } from '@/lib/config/blingCredentialsContract';
+import { useState, type ReactNode } from 'react';
+import { Building2, MessageCircle, RefreshCw, ShoppingBag } from 'lucide-react';
 
-interface ConexaoIntegracao {
-  id: string;
-  provedor: string;
-  nome: string;
-  status: string;
-  health_status: 'healthy' | 'degraded' | 'disconnected' | 'error';
-  last_health_check_at: string | null;
-  last_health_error: string | null;
-  /** Se o passo 1 (credenciais do aplicativo) já está gravado no servidor. */
-  credenciais_configuradas: boolean;
-}
+import { Pilula } from '@/components/ui/StatusPill';
+import { EstadoCarregando, EstadoVazio } from '@/components/ui/estados';
+import { buildBlingCredentialsPayload } from '@/lib/config/blingCredentialsContract';
+import { estadoDoBling, estadoDoChatwoot, type EstadoDaIntegracao } from '@/lib/integrations/estadoDaIntegracao';
+import { chaveDaSelecao } from '@/components/organizacao/useLeituraPorOrganizacao';
+import type { SelecaoDeOrganizacao } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
+import { CampoParaCopiar } from './CampoParaCopiar';
+import { comPrazo } from './comPrazo';
+import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizationPanel';
+import { useIntegracoes, type LeituraDeIntegracoes } from './useIntegracoes';
 
 /**
- * Falha de uma ação do painel, com o status HTTP junto da mensagem.
+ * Falha de uma acao do painel, com o status HTTP junto da mensagem.
  *
- * Sem o status, `401`, `403` e `500` chegam indistinguíveis a quem está
+ * Sem o status, `401`, `403` e `500` chegam indistinguiveis a quem esta
  * configurando — foi exatamente o que impediu diagnosticar por que as
- * credenciais do Bling não salvavam.
+ * credenciais do Bling nao salvavam. `0` marca "a requisicao nem chegou".
  */
-interface StepFailure {
+interface Falha {
   readonly status: number;
-  readonly message: string;
+  readonly mensagem: string;
 }
 
 /** Extrai a falha da resposta sem depender de o corpo ser JSON. */
-async function readFailure(response: Response): Promise<StepFailure> {
+async function lerFalha(resposta: Response): Promise<Falha> {
   try {
-    const body = await response.json();
-    const message = typeof body?.error === 'string' ? body.error : 'A requisição falhou.';
-    return { status: response.status, message };
+    const corpo = await resposta.json();
+    return { status: resposta.status, mensagem: typeof corpo?.error === 'string' ? corpo.error : 'A requisição falhou.' };
   } catch {
-    return { status: response.status, message: 'O servidor respondeu em um formato inesperado.' };
+    return { status: resposta.status, mensagem: 'O servidor respondeu em um formato inesperado.' };
   }
 }
 
-/** Mensagem única exibida ao usuário, sempre carregando o status HTTP. */
-function StepError({ failure }: { readonly failure: StepFailure | null }) {
-  if (!failure) return null;
+/** A falha de rede ou de timeout, que nao tem status HTTP nenhum. */
+function falhaDeRede(causa: unknown, quando: string): Falha {
+  return { status: 0, mensagem: causa instanceof Error && causa.message ? causa.message : quando };
+}
+
+function Erro({ falha }: { readonly falha: Falha | null }) {
+  if (!falha) return null;
   return (
-    <p role="alert" className="text-xs text-red-300">
-      <span className="font-semibold">HTTP {failure.status}</span> — {failure.message}
+    <p role="alert" className="text-xs" style={{ color: 'var(--danger)' }}>
+      <strong>{falha.status === 0 ? 'Sem resposta' : `HTTP ${falha.status}`}</strong> — {falha.mensagem}
     </p>
   );
 }
 
-/** Boundary de rede autenticada compartilhada pelos cartões de integração. */
-type FetchWithAuth = (url: string, options?: RequestInit) => Promise<Response>;
-
-export interface IntegrationsPanelProps {
-  /** Authenticated fetch boundary (Supabase bearer token attached by the caller). */
-  fetchWithAuth: FetchWithAuth;
-  /** Navigation seam so tests never trigger a real browser redirect. Defaults to `window.location.href`. */
-  onRedirect?: (url: string) => void;
-}
-
-const FIELD_CLASS =
-  'w-full rounded-lg bg-black/30 border border-white/10 px-2 py-1.5 text-sm text-white transition-colors duration-150 focus:border-[#0A84FF] focus:outline-none';
-
-function statusBadge(conexao: ConexaoIntegracao | undefined) {
-  if (!conexao) {
-    return (
-      <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-white/10 text-slate-300 border border-white/15 flex items-center gap-1">
-        <XCircle className="w-2.5 h-2.5" /> Não conectado
-      </span>
-    );
-  }
-  const isHealthy = conexao.health_status === 'healthy';
+/** O estado da integracao, com a evidencia que o sustenta logo abaixo. */
+function EstadoDoProvedor({ estado }: { readonly estado: EstadoDaIntegracao }) {
   return (
-    <span
-      className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border flex items-center gap-1 ${
-        isHealthy
-          ? 'bg-[#30D158]/15 text-[#30D158] border-[#30D158]/30'
-          : 'bg-red-500/15 text-red-300 border-red-500/30'
-      }`}
-    >
-      {isHealthy ? <CheckCircle className="w-2.5 h-2.5" /> : <AlertTriangle className="w-2.5 h-2.5" />}
-      {conexao.health_status}
-      {conexao.last_health_error ? ` — ${conexao.last_health_error}` : ''}
-    </span>
-  );
-}
-
-/**
- * Bloco da URL de retorno OAuth, que o lojista cola no cadastro do app no Bling.
- *
- * A URL vem do **servidor** (`/api/integracoes/saude`), nunca de
- * `window.location.origin`: num deploy de preview a origem do navegador é um
- * host efêmero, e o cookie da transação OAuth é gravado no host onde o fluxo
- * começa — iniciar numa origem e receber o retorno em outra nunca funciona.
- */
-function BlingCallbackUrlField({ callbackUrl }: { readonly callbackUrl: string | null }) {
-  const [copied, setCopied] = useState(false);
-  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => {
-    if (resetTimer.current) clearTimeout(resetTimer.current);
-  }, []);
-
-  async function handleCopy() {
-    if (!callbackUrl) return;
-    await navigator.clipboard.writeText(callbackUrl);
-    setCopied(true);
-    if (resetTimer.current) clearTimeout(resetTimer.current);
-    resetTimer.current = setTimeout(() => setCopied(false), 2000);
-  }
-
-  if (!callbackUrl) {
-    return (
-      <div className="space-y-1 pt-1">
-        <p role="alert" className="text-xs text-amber-300">
-          A origem pública do ORBITA ainda não está configurada no servidor, então a URL de retorno não pode
-          ser informada com segurança. Defina <code className="text-amber-200">APP_BASE_URL</code> com o
-          domínio estável (por exemplo <code className="text-amber-200">https://orbita.mkautobots.site</code>)
-          e recarregue. Cadastrar uma URL de preview no Bling faz a conexão quebrar no próximo deploy.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-1 pt-1">
-      <p className="text-xs text-slate-400">Cole esta URL de retorno no cadastro do aplicativo dentro do Bling:</p>
-      <div className="flex items-center gap-2">
-        <code className="flex-1 min-w-0 truncate rounded-lg bg-black/40 border border-white/10 px-2 py-1.5 text-[11px] text-[#0A84FF] select-all">
-          {callbackUrl}
-        </code>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          aria-label="Copiar URL de callback"
-          onClick={handleCopy}
-        >
-          {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-          {copied ? 'Copiado' : 'Copiar'}
-        </Button>
-      </div>
-      <p className="text-[11px] text-slate-500">
-        Conecte o Bling a partir deste mesmo endereço. Iniciar a autorização em outra origem (uma URL de
-        preview, por exemplo) faz o retorno chegar sem o cookie da transação e a conexão falha.
-      </p>
+    <div className="flex flex-col items-end flex-none" style={{ gap: 4 }}>
+      <Pilula rotulo={estado.rotulo} cor={estado.cor} />
+      {estado.detalhe && (
+        <span className="text-[11px] text-right" style={{ color: 'var(--txt3)', maxWidth: 280 }}>
+          {estado.detalhe}
+        </span>
+      )}
     </div>
   );
 }
 
-interface ProviderCardProps {
-  readonly fetchWithAuth: FetchWithAuth;
-  readonly conexao: ConexaoIntegracao | undefined;
-  readonly onConnectionChanged: () => Promise<void>;
+/** Um cartao de provedor: cabecalho com o estado real, e a configuracao abaixo. */
+function Cartao({
+  icone,
+  titulo,
+  estado,
+  children,
+}: {
+  readonly icone: ReactNode;
+  readonly titulo: string;
+  readonly estado: EstadoDaIntegracao;
+  readonly children: ReactNode;
+}) {
+  return (
+    <section
+      className="flex flex-col min-w-0"
+      style={{ gap: 14, padding: 16, borderRadius: 20, background: 'var(--glass2)', border: '1px solid var(--line)' }}
+    >
+      <header className="flex items-start justify-between" style={{ gap: 12 }}>
+        <h2
+          className="flex items-center m-0"
+          style={{ gap: 7, font: '600 13px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}
+        >
+          {icone}
+          {titulo}
+        </h2>
+        <EstadoDoProvedor estado={estado} />
+      </header>
+      {children}
+    </section>
+  );
+}
+
+/** Um passo numerado dentro de um cartao. */
+function Passo({
+  numero,
+  titulo,
+  children,
+}: {
+  readonly numero: number;
+  readonly titulo: string;
+  readonly children: ReactNode;
+}) {
+  return (
+    <div
+      className="flex flex-col"
+      style={{
+        gap: 8,
+        paddingTop: numero > 1 ? 14 : 0,
+        borderTop: numero > 1 ? '1px solid var(--line)' : undefined,
+      }}
+    >
+      <span className="orbita-eyebrow">Passo {numero} — {titulo}</span>
+      {children}
+    </div>
+  );
+}
+
+/** Um campo de formulario do Design System, com o rotulo acima. */
+function Campo({
+  id,
+  rotulo,
+  valor,
+  aoMudar,
+  secreto = false,
+  obrigatorio = true,
+  desabilitado = false,
+  ajuda,
+}: {
+  readonly id: string;
+  readonly rotulo: string;
+  readonly valor: string;
+  readonly aoMudar: (valor: string) => void;
+  readonly secreto?: boolean;
+  readonly obrigatorio?: boolean;
+  readonly desabilitado?: boolean;
+  readonly ajuda?: string;
+}) {
+  return (
+    <div className="flex flex-col" style={{ gap: 5 }}>
+      <label htmlFor={id} className="orbita-eyebrow">{rotulo}</label>
+      <input
+        id={id}
+        // Segredos sao sempre `password`: eles nao podem ser lidos por cima do
+        // ombro nem capturados por uma captura de tela de suporte.
+        type={secreto ? 'password' : 'text'}
+        value={valor}
+        onChange={(evento) => aoMudar(evento.target.value)}
+        autoComplete="off"
+        required={obrigatorio}
+        disabled={desabilitado}
+        className="orbita-campo"
+      />
+      {ajuda && <span className="text-[11px]" style={{ color: 'var(--txt3)' }}>{ajuda}</span>}
+    </div>
+  );
+}
+
+interface CartaoProps {
+  readonly fetchWithAuth: AuthenticatedFetch;
+  readonly leitura: LeituraDeIntegracoes;
+  /** A organizacao ativa desta tela. Acompanha toda escrita, para o servidor recusar se ela mudar. */
+  readonly organizacaoId: string;
+  readonly podeGerir: boolean;
+  readonly recarregar: () => Promise<void>;
 }
 
 /**
- * Cartão do Bling: passo 1 registra as credenciais do aplicativo da
- * organização em `POST /api/bling/connect`; passo 2 inicia o OAuth real. O
- * `client_secret` sai do formulário assim que o servidor confirma que o
- * guardou cifrado, e nenhum estado de conexão é decidido no cliente.
+ * Bling: duas etapas, e nenhuma delas vale pela outra.
+ *
+ * O Passo 1 grava o Client ID e o Client Secret do aplicativo da organizacao;
+ * o Passo 2 faz o OAuth de verdade. Salvar as chaves **nao** e estar
+ * autorizado — quem declara `conectado` e o callback, ao gravar tokens reais,
+ * e mesmo ai so uma verificacao real produz "Conectado" na tela.
  */
-function BlingIntegrationCard({
+function CartaoBling({
   fetchWithAuth,
-  conexao,
-  onConnectionChanged,
-  onRedirect,
-  callbackUrl,
-}: ProviderCardProps & {
-  readonly onRedirect: (url: string) => void;
-  readonly callbackUrl: string | null;
-}) {
-  // Um estado de falha por passo. Antes os dois compartilhavam `setError`, e o
-  // clique no passo 2 apagava a mensagem do passo 1 — a causa real do problema
-  // desaparecia da tela antes de alguém conseguir lê-la.
-  const [saveFailure, setSaveFailure] = useState<StepFailure | null>(null);
-  const [authorizeFailure, setAuthorizeFailure] = useState<StepFailure | null>(null);
-  const [connecting, setConnecting] = useState(false);
+  leitura,
+  organizacaoId,
+  podeGerir,
+  recarregar,
+  irPara,
+}: CartaoProps & { readonly irPara: (url: string) => void }) {
+  const conexao = leitura.conexoes.find((c) => c.provedor === 'bling');
+  const estado = estadoDoBling(conexao);
+  const credenciaisGravadas = conexao?.credenciais_configuradas ?? false;
+
   const [clientId, setClientId] = useState('');
+  // O Client Secret existe aqui **so enquanto esta sendo digitado**. Nunca vai
+  // para storage, nunca entra em URL, e sai do estado assim que o servidor
+  // confirma que o guardou cifrado. A troca de organizacao e o logout destroem
+  // este componente inteiro (ver a `key` em `IntegrationsPanel`), entao nao
+  // existe caminho em que ele sobreviva a uma delas.
   const [clientSecret, setClientSecret] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+  const [autorizando, setAutorizando] = useState(false);
+  // Uma falha por passo: quando os dois compartilhavam o mesmo estado, clicar
+  // no Passo 2 apagava a mensagem do Passo 1 — a causa real sumia da tela
+  // antes de alguem conseguir le-la.
+  const [falhaAoSalvar, setFalhaAoSalvar] = useState<Falha | null>(null);
+  const [falhaAoAutorizar, setFalhaAoAutorizar] = useState<Falha | null>(null);
 
-  // A autoridade sobre o passo 1 é o servidor, não estado local do React: o
-  // booleano sobrevive ao reload e diz a verdade sobre o que está gravado.
-  const credenciaisConfiguradas = conexao?.credenciais_configuradas ?? false;
-
-  async function handleSaveCredentials(event: React.FormEvent) {
-    event.preventDefault();
-    setSaving(true);
-    setSaveFailure(null);
-    setAuthorizeFailure(null);
+  async function salvar(evento: React.FormEvent) {
+    evento.preventDefault();
+    setSalvando(true);
+    setFalhaAoSalvar(null);
+    setFalhaAoAutorizar(null);
     try {
-      const response = await fetchWithAuth('/api/bling/connect', {
+      const resposta = await comPrazo(fetchWithAuth, '/api/bling/connect', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(buildBlingCredentialsPayload(clientId, clientSecret)),
+        // A organizacao vai junto para o servidor **recusar** a escrita se ela
+        // ja tiver mudado. Ela nunca concede nada: a autoridade continua sendo
+        // a sessao verificada.
+        body: JSON.stringify(buildBlingCredentialsPayload(clientId, clientSecret, organizacaoId)),
       });
-      if (!response.ok) {
-        setSaveFailure(await readFailure(response));
+      if (!resposta.ok) {
+        setFalhaAoSalvar(await lerFalha(resposta));
         return;
       }
-      const body = await response.json();
-      if (!body.success) {
-        setSaveFailure({ status: response.status, message: body.error ?? 'Falha ao salvar as credenciais do Bling' });
+      const corpo = await resposta.json();
+      if (!corpo.success) {
+        setFalhaAoSalvar({ status: resposta.status, mensagem: corpo.error ?? 'Falha ao salvar as credenciais do Bling.' });
         return;
       }
+      // O segredo sai do formulario assim que o servidor confirma que o
+      // guardou cifrado, e nao antes: limpar na hora do envio perderia o que o
+      // usuario digitou se a requisicao falhasse.
       setClientSecret('');
-      await onConnectionChanged();
-    } catch (error: unknown) {
-      // Falha de rede não tem status HTTP; `0` marca "a requisição nem chegou".
-      setSaveFailure({ status: 0, message: error instanceof Error ? error.message : 'Falha de rede ao salvar as credenciais.' });
+      await recarregar();
+    } catch (causa) {
+      setFalhaAoSalvar(falhaDeRede(causa, 'Falha de rede ao salvar as credenciais.'));
     } finally {
-      setSaving(false);
+      setSalvando(false);
     }
   }
 
-  async function handleAuthorize() {
-    setConnecting(true);
-    setAuthorizeFailure(null);
+  async function autorizar() {
+    setAutorizando(true);
+    setFalhaAoAutorizar(null);
     try {
-      const response = await fetchWithAuth('/api/bling/authorize');
-      if (!response.ok) {
-        setAuthorizeFailure(await readFailure(response));
+      const resposta = await comPrazo(
+        fetchWithAuth,
+        `/api/bling/authorize?organizacao_esperada=${encodeURIComponent(organizacaoId)}`,
+      );
+      if (!resposta.ok) {
+        setFalhaAoAutorizar(await lerFalha(resposta));
         return;
       }
-      const body = await response.json();
-      if (!body.success || typeof body.authorizeUrl !== 'string') {
-        setAuthorizeFailure({ status: response.status, message: body.error ?? 'Falha ao iniciar conexão com o Bling' });
+      const corpo = await resposta.json();
+      if (!corpo.success || typeof corpo.authorizeUrl !== 'string') {
+        setFalhaAoAutorizar({ status: resposta.status, mensagem: corpo.error ?? 'Falha ao iniciar a autorização no Bling.' });
         return;
       }
-      onRedirect(body.authorizeUrl);
-    } catch (error: unknown) {
-      setAuthorizeFailure({ status: 0, message: error instanceof Error ? error.message : 'Falha de rede ao iniciar a autorização.' });
+      irPara(corpo.authorizeUrl);
+    } catch (causa) {
+      setFalhaAoAutorizar(falhaDeRede(causa, 'Falha de rede ao iniciar a autorização.'));
     } finally {
-      setConnecting(false);
+      setAutorizando(false);
     }
   }
 
   return (
-    <div className="space-y-2 rounded-xl border border-white/10 bg-white/5 p-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-white flex items-center gap-1.5">
-          <ShoppingBag className="w-4 h-4 text-[#0A84FF]" /> Bling ERP
-        </h3>
-        {statusBadge(conexao)}
-      </div>
-
-      <form onSubmit={handleSaveCredentials} className="space-y-2 pt-1">
-        <div className="flex items-center gap-2">
-          <p className="text-xs font-semibold text-slate-300">Passo 1 — credenciais do seu aplicativo no Bling</p>
-          {credenciaisConfiguradas ? (
-            <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-[#30D158]/15 text-[#30D158] border border-[#30D158]/30 flex items-center gap-1">
-              <CheckCircle className="w-2.5 h-2.5" /> Salvo
-            </span>
-          ) : (
-            <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-white/10 text-slate-300 border border-white/15">
-              Pendente
-            </span>
+    <Cartao
+      icone={<ShoppingBag className="w-4 h-4" style={{ color: 'var(--txt3)' }} aria-hidden />}
+      titulo="Bling ERP"
+      estado={estado}
+    >
+      <form onSubmit={salvar} className="flex flex-col" style={{ gap: 10 }}>
+        <Passo numero={1} titulo="credenciais do seu aplicativo no Bling">
+          {credenciaisGravadas && (
+            <p className="text-[11px]" style={{ color: 'var(--txt3)' }}>
+              Já existem credenciais gravadas para esta organização. Preencher de novo substitui as
+              anteriores — e derruba a autorização atual, porque os tokens guardados pertencem ao Client ID
+              antigo.
+            </p>
           )}
-        </div>
-        {credenciaisConfiguradas && (
-          <p className="text-[11px] text-slate-500">
-            Já existem credenciais gravadas para esta organização. Preencher de novo substitui as anteriores.
+          <Campo id="bling-client-id" rotulo="Client ID do Bling" valor={clientId} aoMudar={setClientId} desabilitado={!podeGerir} />
+          <Campo
+            id="bling-client-secret"
+            rotulo="Client Secret do Bling"
+            valor={clientSecret}
+            aoMudar={setClientSecret}
+            secreto
+            desabilitado={!podeGerir}
+            ajuda="Guardado cifrado no servidor. Depois de salvo ele não volta a ser exibido."
+          />
+          {leitura.blingCallbackUrl ? (
+            <CampoParaCopiar
+              rotulo="URL de retorno, para colar no cadastro do aplicativo no Bling"
+              valor={leitura.blingCallbackUrl}
+              rotuloDoBotao="Copiar URL de callback"
+            />
+          ) : (
+            <p role="alert" className="text-xs" style={{ color: 'var(--warning)' }}>
+              A origem pública do ORBITA ainda não está configurada no servidor, então a URL de retorno não
+              pode ser informada com segurança. Defina <code>APP_BASE_URL</code> com o domínio estável e
+              recarregue. Cadastrar uma URL de preview no Bling faz a conexão quebrar no próximo deploy.
+            </p>
+          )}
+          <button type="submit" className="orbita-acao w-fit" disabled={salvando || !podeGerir}>
+            {salvando ? 'Salvando…' : 'Salvar credenciais do Bling'}
+          </button>
+          <Erro falha={falhaAoSalvar} />
+        </Passo>
+
+        <Passo numero={2} titulo="autorizar o acesso (OAuth)">
+          {!credenciaisGravadas && (
+            <p className="text-[11px]" style={{ color: 'var(--txt3)' }}>
+              Disponível depois que o Passo 1 for salvo — a autorização precisa do Client ID gravado no servidor.
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => { void autorizar(); }}
+            className="orbita-acao w-fit"
+            style={credenciaisGravadas && podeGerir
+              ? { background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }
+              : undefined}
+            disabled={autorizando || !credenciaisGravadas || !podeGerir}
+          >
+            {autorizando ? 'Conectando…' : 'Conectar Bling'}
+          </button>
+          <p className="text-[11px]" style={{ color: 'var(--txt3)' }}>
+            Conclua a autorização nesta mesma aba e neste mesmo endereço: o retorno precisa chegar com o
+            cookie da transação, que é gravado onde o fluxo começa. Você tem 30 minutos para concluir.
           </p>
-        )}
-
-        <label className="block text-xs text-slate-400" htmlFor="bling-client-id">
-          Client ID do Bling
-        </label>
-        <input
-          id="bling-client-id"
-          value={clientId}
-          onChange={(e) => setClientId(e.target.value)}
-          autoComplete="off"
-          className={FIELD_CLASS}
-          required
-        />
-        <label className="block text-xs text-slate-400" htmlFor="bling-client-secret">
-          Client Secret do Bling
-        </label>
-        <input
-          id="bling-client-secret"
-          type="password"
-          value={clientSecret}
-          onChange={(e) => setClientSecret(e.target.value)}
-          autoComplete="off"
-          className={FIELD_CLASS}
-          required
-        />
-
-        <BlingCallbackUrlField callbackUrl={callbackUrl} />
-
-        <Button type="submit" size="sm" disabled={saving}>
-          {saving ? 'Salvando…' : 'Salvar credenciais do Bling'}
-        </Button>
-        <StepError failure={saveFailure} />
+          <Erro falha={falhaAoAutorizar} />
+        </Passo>
       </form>
-
-      <div className="space-y-2 pt-2 border-t border-white/10">
-        <p className="text-xs font-semibold text-slate-300">Passo 2 — autorizar o acesso (OAuth)</p>
-        {!credenciaisConfiguradas && (
-          <p className="text-[11px] text-slate-500">
-            Disponível depois que o Passo 1 for salvo — a autorização precisa do Client ID gravado no servidor.
-          </p>
-        )}
-        <Button
-          type="button"
-          size="sm"
-          disabled={connecting || !credenciaisConfiguradas}
-          onClick={handleAuthorize}
-        >
-          {connecting ? 'Conectando…' : 'Conectar Bling'}
-        </Button>
-        <StepError failure={authorizeFailure} />
-      </div>
-    </div>
+    </Cartao>
   );
 }
 
-/** Cartão do Chatwoot: salva as credenciais da instância em `POST /api/chatwoot/connect`. */
-function ChatwootIntegrationCard({ fetchWithAuth, conexao, onConnectionChanged }: ProviderCardProps) {
-  const [url, setUrl] = useState('');
-  const [token, setToken] = useState('');
+/**
+ * Chatwoot: uma etapa so — as credenciais da instancia, e o endereco do
+ * webhook que o Chatwoot deve chamar de volta.
+ *
+ * Salvar aqui nao prova que a instancia responde, que o token vale ou que a
+ * conta existe. Enquanto ninguem tiver verificado, o estado e "Nao verificado"
+ * — e nao um verde decorativo.
+ */
+function CartaoChatwoot({ fetchWithAuth, leitura, organizacaoId, podeGerir, recarregar }: CartaoProps) {
+  const conexao = leitura.conexoes.find((c) => c.provedor === 'chatwoot');
+  const estado = estadoDoChatwoot(conexao);
+
+  const [apiUrl, setApiUrl] = useState('');
+  // Token e segredo do webhook seguem a mesma regra do Client Secret do Bling.
+  const [apiToken, setApiToken] = useState('');
   const [accountId, setAccountId] = useState('');
   const [webhookSecret, setWebhookSecret] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [connecting, setConnecting] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+  const [falha, setFalha] = useState<Falha | null>(null);
+  /** A URL devolvida pelo salvamento, enquanto a releitura nao chega. */
+  const [webhookUrlSalva, setWebhookUrlSalva] = useState<string | null>(null);
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    setConnecting(true);
-    setError(null);
+  const webhookUrl = leitura.chatwootWebhookUrl ?? webhookUrlSalva;
+
+  async function salvar(evento: React.FormEvent) {
+    evento.preventDefault();
+    setSalvando(true);
+    setFalha(null);
     try {
-      const response = await fetchWithAuth('/api/chatwoot/connect', {
+      const resposta = await comPrazo(fetchWithAuth, '/api/chatwoot/connect', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          api_url: url || undefined,
-          api_token: token,
-          account_id: accountId,
+          api_url: apiUrl.trim() || undefined,
+          api_token: apiToken,
+          account_id: accountId.trim(),
           webhook_secret: webhookSecret,
+          organizacao_esperada: organizacaoId,
         }),
       });
-      const body = await response.json();
-      if (!response.ok || !body.success) {
-        setError(body.error ?? 'Falha ao conectar Chatwoot');
+      if (!resposta.ok) {
+        // Timeout, 502 do proxy, HTML de erro: tudo cai aqui como falha
+        // recuperavel, com o status na tela. Antes, `response.json()` num corpo
+        // que nao era JSON lancava e o clique morria em silencio.
+        setFalha(await lerFalha(resposta));
         return;
       }
-      setToken('');
+      const corpo = await resposta.json();
+      if (!corpo.success) {
+        setFalha({ status: resposta.status, mensagem: corpo.error ?? 'Falha ao salvar as credenciais do Chatwoot.' });
+        return;
+      }
+      setApiToken('');
       setWebhookSecret('');
-      await onConnectionChanged();
+      if (typeof corpo.webhookUrl === 'string') setWebhookUrlSalva(corpo.webhookUrl);
+      await recarregar();
+    } catch (causa) {
+      setFalha(falhaDeRede(causa, 'Falha de rede ao salvar as credenciais do Chatwoot.'));
     } finally {
-      setConnecting(false);
+      setSalvando(false);
     }
   }
 
   return (
-    <div className="space-y-2 rounded-xl border border-white/10 bg-white/5 p-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-white flex items-center gap-1.5">
-          <MessageCircle className="w-4 h-4 text-green-400" /> Chatwoot
-        </h3>
-        {statusBadge(conexao)}
-      </div>
-      {error && (
-        <p role="alert" className="text-xs text-red-300">
-          {error}
-        </p>
-      )}
-      <form onSubmit={handleSubmit} className="space-y-2">
-        <label className="block text-xs text-slate-400" htmlFor="chatwoot-url">
-          URL da instância Chatwoot
-        </label>
-        <input id="chatwoot-url" value={url} onChange={(e) => setUrl(e.target.value)} className={FIELD_CLASS} />
-        <label className="block text-xs text-slate-400" htmlFor="chatwoot-token">
-          Token da API
-        </label>
-        <input
+    <Cartao
+      icone={<MessageCircle className="w-4 h-4" style={{ color: 'var(--txt3)' }} aria-hidden />}
+      titulo="Chatwoot"
+      estado={estado}
+    >
+      <form onSubmit={salvar} className="flex flex-col" style={{ gap: 10 }}>
+        <Campo
+          id="chatwoot-url"
+          rotulo="URL da instância Chatwoot"
+          valor={apiUrl}
+          aoMudar={setApiUrl}
+          obrigatorio={false}
+          desabilitado={!podeGerir}
+        />
+        <Campo
           id="chatwoot-token"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          className={FIELD_CLASS}
-          required
+          rotulo="Token da API"
+          valor={apiToken}
+          aoMudar={setApiToken}
+          secreto
+          desabilitado={!podeGerir}
+          ajuda="Guardado cifrado no servidor. Depois de salvo ele não volta a ser exibido."
         />
-        <label className="block text-xs text-slate-400" htmlFor="chatwoot-account">
-          ID da conta
-        </label>
-        <input
-          id="chatwoot-account"
-          value={accountId}
-          onChange={(e) => setAccountId(e.target.value)}
-          className={FIELD_CLASS}
-          required
-        />
-        <label className="block text-xs text-slate-400" htmlFor="chatwoot-webhook-secret">
-          Segredo do webhook
-        </label>
-        <input
+        <Campo id="chatwoot-account" rotulo="ID da conta" valor={accountId} aoMudar={setAccountId} desabilitado={!podeGerir} />
+        <Campo
           id="chatwoot-webhook-secret"
-          value={webhookSecret}
-          onChange={(e) => setWebhookSecret(e.target.value)}
-          className={FIELD_CLASS}
-          required
+          rotulo="Segredo do webhook"
+          valor={webhookSecret}
+          aoMudar={setWebhookSecret}
+          secreto
+          desabilitado={!podeGerir}
         />
-        <Button type="submit" size="sm" disabled={connecting}>
-          {connecting ? 'Conectando…' : 'Conectar Chatwoot'}
-        </Button>
+        <button type="submit" className="orbita-acao w-fit" disabled={salvando || !podeGerir}>
+          {salvando ? 'Salvando…' : 'Salvar credenciais do Chatwoot'}
+        </button>
+        <Erro falha={falha} />
       </form>
+
+      {webhookUrl && (
+        <CampoParaCopiar
+          rotulo="URL do webhook, para colar na configuração do Chatwoot"
+          valor={webhookUrl}
+          rotuloDoBotao="Copiar URL do webhook"
+        />
+      )}
+    </Cartao>
+  );
+}
+
+/** A faixa que diz de quem e tudo o que vem abaixo. */
+function FaixaDeContexto({ nome }: { readonly nome: string | null }) {
+  return (
+    <div
+      className="flex items-center flex-none"
+      style={{
+        gap: 10,
+        padding: '12px 16px',
+        borderRadius: 16,
+        background: 'var(--chip)',
+        border: `1px solid ${nome ? 'var(--accent)' : 'var(--line)'}`,
+      }}
+    >
+      <Building2 className="w-[18px] h-[18px] shrink-0" style={{ color: 'var(--accent)' }} aria-hidden />
+      <span className="flex flex-col min-w-0" style={{ gap: 2 }}>
+        <span className="orbita-eyebrow">Organização ativa</span>
+        <span
+          className="truncate"
+          style={{ font: '600 14px/1.2 var(--font-archivo), sans-serif', color: nome ? 'var(--txt)' : 'var(--txt3)' }}
+        >
+          {nome ?? 'Nenhuma organização ativa'}
+        </span>
+      </span>
     </div>
   );
 }
 
+export interface IntegrationsPanelProps {
+  /** Busca autenticada, com o bearer da sessao anexado por quem chama. */
+  readonly fetchWithAuth: AuthenticatedFetch;
+  /**
+   * A organizacao ativa e a versao que a selecionou, ou `null` sem selecao
+   * (inclusive sem sessao). E a mesma fonte unica do shell e do Ticket 06 —
+   * esta tela nao cria uma segunda.
+   */
+  readonly selecao: SelecaoDeOrganizacao | null;
+  /** O nome da organizacao ativa, so para a faixa de contexto. */
+  readonly nomeDaOrganizacao?: string | null;
+  /** Se quem olha administra a organizacao. Aparencia: o servidor recusa de novo. */
+  readonly podeGerir?: boolean;
+  /** Seam de navegacao, para os testes nunca dispararem um redirect real. */
+  readonly onRedirect?: (url: string) => void;
+}
+
 /**
- * Aba Integrações (Ticket 24b, ampliada no Ticket 28): a tela nunca decide se
- * a conexão está ativa — apenas exibe o resultado de `/api/integracoes/saude`.
- * Registrar credenciais e iniciar o OAuth chamam as rotas reais já verificadas
- * no servidor; nenhum estado de conexão é inventado no cliente. É a única UI
- * de configuração de integrações do produto desde a remoção do `SetupWizard`.
+ * Aba Integracoes.
+ *
+ * ## As tres regras que desenham esta tela
+ *
+ * **Nada de verde sem prova.** `health_status` nasce `'healthy'` por default da
+ * coluna, e a tela mostrava exatamente esse default: uma conexao nunca checada
+ * aparecia saudavel. O estado agora e derivado por
+ * `estadoDaIntegracao.ts`, que so aceita `last_health_check_at` como
+ * evidencia. Sem verificacao, o estado e "Nao verificado" — dito com todas as
+ * letras, e nao escondido atras de uma cor.
+ *
+ * **Segredo nao mora aqui.** Client Secret, token da API e segredo do webhook
+ * existem no estado do React enquanto estao sendo digitados, em campos
+ * `password`, e saem assim que o servidor confirma que os guardou cifrados.
+ * Nenhum deles vai para storage, para URL, para log, nem volta em resposta.
+ * A `key` da secao carrega a selecao de organizacao: trocar de organizacao ou
+ * sair da sessao destroi os cartoes, e com eles todo segredo em digitacao —
+ * nao ha uma limpeza a ser lembrada, porque nao ha o que limpar.
+ *
+ * **Nenhuma espera e infinita.** `fetchWithAuth` nao tem timeout, e `fetch`
+ * tambem nao: uma requisicao travada deixaria "Salvando..." na tela para
+ * sempre. Toda operacao desta tela passa por `comPrazo`, que e local a
+ * Integracoes — o seam global continua sem prazo, porque ele tambem carrega as
+ * sincronizacoes longas do Bling.
+ *
+ * **Uma operacao pertence a organizacao que a comecou.** A leitura e carimbada
+ * pelo par (organizacao, versao) do Ticket 06, entao a resposta atrasada de A
+ * nunca aparece em B. As escritas levam a organizacao esperada junto, e o
+ * servidor as recusa se ela ja tiver mudado — a resposta atrasada tambem nao
+ * *grava* em B.
  */
-export function IntegrationsPanel({ fetchWithAuth, onRedirect }: IntegrationsPanelProps) {
-  const redirect = onRedirect ?? ((url: string) => { window.location.href = url; });
-
-  const [conexoes, setConexoes] = useState<ConexaoIntegracao[]>([]);
-  const [callbackUrl, setCallbackUrl] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const loadHealth = useCallback(async () => {
-    try {
-      const response = await fetchWithAuth('/api/integracoes/saude');
-      const body = await response.json();
-      if (response.ok) {
-        setConexoes(body.conexoes ?? []);
-        // A URL de retorno é decidida no servidor; o cliente só a exibe.
-        setCallbackUrl(typeof body.bling_callback_url === 'string' ? body.bling_callback_url : null);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }, [fetchWithAuth]);
-
-  useEffect(() => {
-    void loadHealth();
-  }, [loadHealth]);
+export function IntegrationsPanel({
+  fetchWithAuth,
+  selecao,
+  nomeDaOrganizacao = null,
+  podeGerir = true,
+  onRedirect,
+}: IntegrationsPanelProps) {
+  const irPara = onRedirect ?? ((url: string) => { window.location.href = url; });
+  const integracoes = useIntegracoes(fetchWithAuth, selecao);
+  const chave = chaveDaSelecao(selecao);
 
   return (
-    <div className="space-y-6 text-slate-200">
-      <h2 className="text-lg font-semibold text-white">Integrações</h2>
+    <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
+      <div className="flex items-start gap-8 flex-none">
+        <div className="flex flex-col flex-none" style={{ width: 'var(--titulo-col)', gap: 13 }}>
+          <h1
+            className="m-0"
+            style={{
+              fontFamily: 'var(--font-space-grotesk), sans-serif',
+              fontWeight: 500,
+              fontSize: 'var(--titulo-fs)',
+              lineHeight: 1.04,
+              letterSpacing: '-0.03em',
+              color: 'var(--txt)',
+            }}
+          >
+            Integrações
+          </h1>
+          <span style={{ font: '400 11px/1.4 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
+            o que o ORBITA conversa por fora, e o que já foi provado
+          </span>
+        </div>
+        <div className="flex-1 min-w-0 flex items-start justify-end">
+          <div className="orbita-acoes flex-wrap">
+            <button
+              type="button"
+              onClick={() => { void integracoes.recarregar(); }}
+              className="orbita-chip cursor-pointer"
+              disabled={selecao === null}
+            >
+              <RefreshCw className="w-4 h-4" />
+              Atualizar
+            </button>
+          </div>
+        </div>
+      </div>
 
-      {isLoading ? (
-        <div className="text-sm text-slate-400">Carregando status das integrações…</div>
+      <FaixaDeContexto nome={nomeDaOrganizacao} />
+
+      {selecao === null ? (
+        <EstadoVazio
+          titulo="Nenhuma organização ativa"
+          descricao="Integrações são configuradas por organização. Escolha uma organização ativa para ver e configurar as desta empresa."
+        />
+      ) : integracoes.erro !== null ? (
+        <div
+          role="alert"
+          className="flex flex-col items-start"
+          style={{ gap: 10, padding: 16, borderRadius: 20, background: 'var(--glass2)', border: '1px solid var(--danger)' }}
+        >
+          <span className="text-sm font-semibold" style={{ color: 'var(--txt)' }}>
+            Não foi possível ler o estado das integrações
+          </span>
+          <span className="text-xs" style={{ color: 'var(--txt2)' }}>{integracoes.erro}</span>
+          <button type="button" onClick={() => { void integracoes.recarregar(); }} className="orbita-acao">
+            <RefreshCw className="w-4 h-4" />
+            Tentar de novo
+          </button>
+        </div>
+      ) : integracoes.dados === null ? (
+        <EstadoCarregando mensagem="Lendo o estado das integrações desta organização…" />
       ) : (
-        <>
-          <BlingIntegrationCard
+        // A `key` e a selecao: trocar de organizacao (ou voltar para a mesma,
+        // que e outra selecao) destroi os cartoes e todo segredo em digitacao.
+        <div key={chave ?? 'sem-organizacao'} className="grid" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+          <CartaoBling
             fetchWithAuth={fetchWithAuth}
-            conexao={conexoes.find((c) => c.provedor === 'bling')}
-            onConnectionChanged={loadHealth}
-            onRedirect={redirect}
-            callbackUrl={callbackUrl}
+            leitura={integracoes.dados}
+            organizacaoId={selecao.id}
+            podeGerir={podeGerir}
+            recarregar={integracoes.recarregar}
+            irPara={irPara}
           />
-          <ChatwootIntegrationCard
+          <CartaoChatwoot
             fetchWithAuth={fetchWithAuth}
-            conexao={conexoes.find((c) => c.provedor === 'chatwoot')}
-            onConnectionChanged={loadHealth}
+            leitura={integracoes.dados}
+            organizacaoId={selecao.id}
+            podeGerir={podeGerir}
+            recarregar={integracoes.recarregar}
           />
-        </>
+        </div>
       )}
     </div>
   );

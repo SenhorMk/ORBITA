@@ -4,6 +4,7 @@ import { createBlingAuthorizeHandler, type BlingAuthorizeDependencies } from './
 import type { OrganizationContextResult } from '../../../../lib/organizationAuthorization';
 import type { OAuthTransactionStorePort } from '../../../../lib/oauthTransactionStore';
 import type { RateLimitStorePort } from '../../../../lib/rateLimit';
+import { OAUTH_TRANSACTION_TTL_SECONDS } from '../../../../lib/oauth-transaction';
 
 const RESOLVED_CONTEXT: OrganizationContextResult = {
   _tag: 'OrganizationContextResolved',
@@ -97,5 +98,52 @@ describe('GET /api/bling/authorize', () => {
     const json = await response.json();
     expect(json.authorizeUrl).toContain('client_id=client-id-123');
     expect(json.authorizeUrl).toContain('state=');
+  });
+
+  it('nega com 403 quem não pode gerir integrações, igual a POST /api/bling/connect', async () => {
+    let transacoesCriadas = 0;
+    const handler = createBlingAuthorizeHandler(baseDeps({
+      resolveOrganizationContext: async () => ({
+        ...RESOLVED_CONTEXT,
+        // SAFETY: mesma fixture, com as capacidades de um `member`.
+        context: { ...RESOLVED_CONTEXT.context, capabilities: new Set(['organization:access']) } as never,
+      }),
+      oauthTransactionStore: {
+        async create() { transacoesCriadas += 1; return { _tag: 'OAuthTransactionStored', id: '11111111-1111-4111-8111-111111111111' }; },
+        async consume() { return { _tag: 'OAuthTransactionConsumeDenied' }; },
+      },
+    }));
+
+    const response = await handler(new Request('https://orbita.test/api/bling/authorize'));
+
+    expect(response.status).toBe(403);
+    // A recusa acontece antes de qualquer transação existir: um `member` não
+    // pode nem iniciar o OAuth com o Client ID do dono.
+    expect(transacoesCriadas).toBe(0);
+    expect(response.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('permite owner e admin, que são quem gere a organização', async () => {
+    for (const papel of ['owner', 'admin'] as const) {
+      const handler = createBlingAuthorizeHandler(baseDeps({
+        resolveOrganizationContext: async () => ({
+          ...RESOLVED_CONTEXT,
+          // SAFETY: mesma fixture, variando apenas o papel gestor.
+          context: { ...RESOLVED_CONTEXT.context, role: papel } as never,
+        }),
+      }));
+      const response = await handler(new Request('https://orbita.test/api/bling/authorize'));
+      expect(response.status, papel).toBe(200);
+    }
+  });
+
+  it('dá ao cookie o mesmo prazo da transação no servidor, e não um menor', async () => {
+    const handler = createBlingAuthorizeHandler(baseDeps());
+    const response = await handler(new Request('https://orbita.test/api/bling/authorize'));
+
+    // Um cookie mais curto que a transação produz "o cookie não chegou" para
+    // uma transação que ainda vale — o pior diagnóstico possível.
+    expect(response.headers.get('set-cookie') ?? '').toContain(`Max-Age=${OAUTH_TRANSACTION_TTL_SECONDS}`);
+    expect(OAUTH_TRANSACTION_TTL_SECONDS).toBe(30 * 60);
   });
 });

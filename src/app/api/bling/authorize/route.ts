@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
-import { createScopedOAuthTransaction } from '../../../../lib/oauth-transaction';
+import { createScopedOAuthTransaction, OAUTH_TRANSACTION_TTL_SECONDS } from '../../../../lib/oauth-transaction';
 import type { OAuthTransactionStorePort } from '../../../../lib/oauthTransactionStore';
 import { organizationContextStatus, type OrganizationContextResult } from '../../../../lib/organizationAuthorization';
 import { organizationContextToScope, type VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 import { checkRateLimit, normalizeIp, rateLimitDenialStatus, DEFAULT_RATE_LIMIT_POLICIES, type RateLimitStorePort } from '../../../../lib/rateLimit';
+import { organizacaoEsperadaDivergente, ORGANIZACAO_ESPERADA_DIVERGENTE } from '../../../../lib/integrations/organizacaoEsperada';
 import { logger } from '../../../../lib/observability/logger';
 import { getCorrelationId } from '../../../../lib/observability/correlation';
 
@@ -18,6 +19,60 @@ export interface BlingAuthorizeDependencies {
   readonly findBlingClientId: (scope: VerifiedOrganizationScope) => Promise<string | null>;
   readonly oauthTransactionStore: OAuthTransactionStorePort;
   readonly rateLimitStore: RateLimitStorePort;
+}
+
+/** O escopo verificado, ou a resposta HTTP que recusa a requisicao. */
+type AutorizacaoDoAuthorize =
+  | { readonly _tag: 'Autorizado'; readonly scope: VerifiedOrganizationScope }
+  | { readonly _tag: 'Negado'; readonly response: NextResponse };
+
+/**
+ * Todas as recusas do `authorize`, na ordem em que precisam acontecer.
+ *
+ * Iniciar o OAuth e uma capacidade de GESTAO, o mesmo contrato de
+ * `POST /api/bling/connect`. Sem essa verificacao, qualquer `member` da
+ * organizacao podia disparar a autorizacao com o Client ID do dono e vincular
+ * a conta Bling da empresa a uma transacao que ele controla — enquanto a rota
+ * que grava as credenciais, ao lado, o recusava.
+ */
+async function autorizarInicioDoOAuth(
+  request: Request,
+  resolveOrganizationContext: BlingAuthorizeDependencies['resolveOrganizationContext'],
+): Promise<AutorizacaoDoAuthorize> {
+  const contextResult = await resolveOrganizationContext(request);
+  if (contextResult._tag !== 'OrganizationContextResolved') {
+    const status = organizationContextStatus(contextResult);
+    return {
+      _tag: 'Negado',
+      response: NextResponse.json(
+        { success: false, error: status === 503 ? 'Serviço de autorização indisponível.' : 'Sessão inválida ou expirada.' },
+        { status },
+      ),
+    };
+  }
+
+  if (!contextResult.context.capabilities.has('organization:manage')) {
+    return {
+      _tag: 'Negado',
+      response: NextResponse.json(
+        { success: false, error: 'Capacidade insuficiente para gerenciar integrações' },
+        { status: 403 },
+      ),
+    };
+  }
+
+  // A organizacao que a tela acreditava estar ativa quando o botao foi
+  // clicado. Divergiu? A autorizacao seria iniciada com o Client ID de outra
+  // organizacao — e nao ha por que adivinhar qual delas o usuario quis.
+  const esperada = new URL(request.url).searchParams.get('organizacao_esperada');
+  if (organizacaoEsperadaDivergente(esperada, contextResult.context.organizationId)) {
+    return {
+      _tag: 'Negado',
+      response: NextResponse.json({ success: false, error: ORGANIZACAO_ESPERADA_DIVERGENTE }, { status: 409 }),
+    };
+  }
+
+  return { _tag: 'Autorizado', scope: organizationContextToScope(contextResult.context) };
 }
 
 /** Build the Bling OAuth authorize handler around explicit rate-limit, organization and transaction seams. */
@@ -39,16 +94,10 @@ export function createBlingAuthorizeHandler(dependencies: BlingAuthorizeDependen
       );
     }
 
-    const contextResult = await dependencies.resolveOrganizationContext(request);
-    if (contextResult._tag !== 'OrganizationContextResolved') {
-      const status = organizationContextStatus(contextResult);
-      return NextResponse.json(
-        { success: false, error: status === 503 ? 'Serviço de autorização indisponível.' : 'Sessão inválida ou expirada.' },
-        { status },
-      );
-    }
+    const autorizacao = await autorizarInicioDoOAuth(request, dependencies.resolveOrganizationContext);
+    if (autorizacao._tag === 'Negado') return autorizacao.response;
 
-    const scope = organizationContextToScope(contextResult.context);
+    const { scope } = autorizacao;
     const clientId = await dependencies.findBlingClientId(scope);
 
     if (!clientId) {
@@ -85,7 +134,8 @@ export function createBlingAuthorizeHandler(dependencies: BlingAuthorizeDependen
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 600,
+      // O prazo do cookie e o prazo da transacao sao o mesmo prazo.
+      maxAge: OAUTH_TRANSACTION_TTL_SECONDS,
       path: '/api/bling/callback',
     });
 

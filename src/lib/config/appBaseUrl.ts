@@ -69,3 +69,24 @@ export function resolveBlingCallbackUrl(environment: AppBaseUrlEnvironment): str
   const base = resolveAppBaseUrl(environment);
   return base._tag === 'AppBaseUrlResolved' ? `${base.origin}${BLING_CALLBACK_PATH}` : null;
 }
+
+/** Caminho do webhook do Chatwoot de uma conexão, colado dentro do Chatwoot. */
+export function chatwootWebhookPath(conexaoId: string): string {
+  return `/api/chatwoot/webhook/${conexaoId}`;
+}
+
+/**
+ * URL do webhook do Chatwoot, ou `null` sem origem estável configurada.
+ *
+ * Mesmo desenho de `resolveBlingCallbackUrl`, e pela mesma razão: quem cola o
+ * endereço numa configuração externa precisa de um host que não muda a cada
+ * deploy. Um caminho relativo — o que a rota devolvia antes — não serve para
+ * colar em lugar nenhum.
+ */
+export function resolveChatwootWebhookUrl(
+  environment: AppBaseUrlEnvironment,
+  conexaoId: string,
+): string | null {
+  const base = resolveAppBaseUrl(environment);
+  return base._tag === 'AppBaseUrlResolved' ? `${base.origin}${chatwootWebhookPath(conexaoId)}` : null;
+}

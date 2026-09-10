@@ -16,12 +16,26 @@ interface RecordedQuery {
 const recordedQueries: RecordedQuery[] = [];
 const savedVaultCalls: Array<{ orgId: string; conexaoId: string; credentials: Record<string, unknown> }> = [];
 
-/** Linhas de `conexoes_integracao` visíveis ao teste, indexadas por organização. */
-const connectionRows = new Map<string, { id: string; metadata: Record<string, unknown> }>();
+/**
+ * Linhas de `conexoes_integracao` visíveis ao teste, indexadas por organização.
+ *
+ * O duplo **aplica** o que a rota grava (metadata e status), em vez de só
+ * registrar a chamada: as provas de escrita parcial dependem de olhar o que
+ * sobrou na linha depois de uma falha, e não apenas o que foi tentado.
+ */
+const connectionRows = new Map<string, { id: string; metadata: Record<string, unknown>; status: string }>();
+
+/** A linha de uma organização, como o duplo a guarda. */
+function linhaDaOrganizacao(organizacaoId: string) {
+  return connectionRows.get(organizacaoId);
+}
 
 vi.mock('@/lib/requestOrganizationContext', () => ({
   resolveActiveRequestOrganizationContext: vi.fn(),
 }));
+
+/** Quando definido, o cofre recusa a gravação — para provar o que sobra da falha. */
+let falhaDoCofre: Error | null = null;
 
 vi.mock('@/lib/integrations/credentialsVault', async () => {
   const actual = await vi.importActual<typeof import('@/lib/integrations/credentialsVault')>(
@@ -31,6 +45,7 @@ vi.mock('@/lib/integrations/credentialsVault', async () => {
     ...actual,
     credentialsVault: {
       saveEncryptedCredentials: (orgId: string, conexaoId: string, credentials: Record<string, unknown>) => {
+        if (falhaDoCofre) return Promise.reject(falhaDoCofre);
         savedVaultCalls.push({ orgId, conexaoId, credentials });
         return Promise.resolve();
       },
@@ -49,8 +64,13 @@ vi.mock('@/lib/supabaseServer', () => {
       maybeSingle() {
         recordedQueries.push({ table, op: 'select', filters, values: null });
         const organizacaoId = String(filters.organizacao_id ?? '');
-        const row = filters.provedor === 'bling' ? connectionRows.get(organizacaoId) : undefined;
-        return Promise.resolve({ data: row ?? null, error: null });
+        const row = connectionRows.get(organizacaoId);
+        // A rota lê de dois jeitos: por (organizacao, provedor) na abertura, e
+        // por (id, organizacao) na confirmação do client_id.
+        const encontrada = filters.provedor === 'bling'
+          ? row
+          : row && row.id === filters.id ? row : undefined;
+        return Promise.resolve({ data: encontrada ?? null, error: null });
       },
     };
     return builder;
@@ -74,6 +94,7 @@ vi.mock('@/lib/supabaseServer', () => {
                     id,
                     // SAFETY: o valor gravado pela rota é serializável e apenas ecoado de volta pelo duplo de teste.
                     metadata: (values.metadata ?? {}) as Record<string, unknown>,
+                    status: String(values.status ?? 'pendente'),
                   });
                   return Promise.resolve({ data: { id }, error: null });
                 },
@@ -87,6 +108,12 @@ vi.mock('@/lib/supabaseServer', () => {
                 filters[column] = value;
                 if (Object.keys(filters).length === 2) {
                   recordedQueries.push({ table, op: 'update', filters, values });
+                  const alvo = connectionRows.get(String(filters.organizacao_id ?? ''));
+                  if (alvo) {
+                    // SAFETY: o duplo só ecoa o que a rota grava.
+                    if (values.metadata !== undefined) alvo.metadata = values.metadata as Record<string, unknown>;
+                    if (values.status !== undefined) alvo.status = String(values.status);
+                  }
                   return Promise.resolve({ error: null });
                 }
                 return builder;
@@ -130,6 +157,7 @@ describe('POST /api/bling/connect', () => {
     recordedQueries.length = 0;
     savedVaultCalls.length = 0;
     connectionRows.clear();
+    falhaDoCofre = null;
   });
 
   it('rejeita requisição sem sessão verificada', async () => {
@@ -187,8 +215,10 @@ describe('POST /api/bling/connect', () => {
       provedor: 'bling',
       nome: 'Principal',
       status: 'pendente',
-      metadata: { client_id: 'client-abc' },
     });
+    // O `client_id` não vem no insert: ele é a última escrita, depois do
+    // cofre. O que importa ao final é o estado observável da linha.
+    expect(linhaDaOrganizacao('org-1')?.metadata).toMatchObject({ client_id: 'client-abc' });
     expect(savedVaultCalls).toEqual([
       { orgId: 'org-1', conexaoId: 'conexao-org-1', credentials: { client_id: 'client-abc', client_secret: 'secret-xyz' } },
     ]);
@@ -214,8 +244,92 @@ describe('POST /api/bling/connect', () => {
     expect(recordedQueries.filter((q) => q.op === 'insert')).toHaveLength(0);
     const update = recordedQueries.find((q) => q.op === 'update');
     expect(update?.filters).toEqual({ id: 'conexao-org-1', organizacao_id: 'org-1' });
-    expect(update?.values).toMatchObject({ metadata: { client_id: 'client-def' } });
+    expect(linhaDaOrganizacao('org-1')?.metadata).toMatchObject({ client_id: 'client-def' });
     expect(savedVaultCalls[0]?.conexaoId).toBe('conexao-org-1');
+  });
+
+  it('credenciais novas derrubam a conexão anterior em vez de manter um "conectado" fictício', async () => {
+    // Uma organização já autorizada no Bling: os tokens no cofre foram
+    // emitidos para `client-abc`.
+    await callConnect({ clientId: 'client-abc', clientSecret: 'secret-xyz' });
+    recordedQueries.length = 0;
+
+    // Trocar o par de chaves invalida esses tokens no mesmo instante.
+    const res = await callConnect({ clientId: 'client-def', clientSecret: 'secret-uvw' });
+
+    expect(res.status).toBe(200);
+    const update = recordedQueries.find((q) => q.op === 'update');
+    expect(update?.values).toMatchObject({
+      status: 'pendente',
+      last_health_check_at: null,
+      last_health_error: null,
+    });
+    // E a própria resposta diz que a conexão voltou a pendente.
+    await expect(res.json()).resolves.toMatchObject({ success: true, status: 'pendente' });
+  });
+
+  it('a criação da conexão também nasce pendente, porque salvar chaves não é autorizar', async () => {
+    await callConnect({ clientId: 'client-abc', clientSecret: 'secret-xyz' });
+    const insert = recordedQueries.find((q) => q.op === 'insert');
+    expect(insert?.values).toMatchObject({ status: 'pendente' });
+  });
+
+  describe('falha do cofre (revisão externa da PR #85)', () => {
+    it('conexão nova: o cofre falhar não deixa "configurado" falso', async () => {
+      falhaDoCofre = new Error('cofre indisponível');
+
+      const res = await callConnect({ clientId: 'client-abc', clientSecret: 'secret-xyz' });
+
+      expect(res.status).toBe(500);
+      // A linha pode existir, mas sem `client_id` ela não é configuração
+      // nenhuma: `hasConfiguredCredentials` devolve false e a tela diz
+      // "Não configurado" — entendido de menos, nunca entendido errado.
+      expect(linhaDaOrganizacao('org-1')?.metadata).not.toHaveProperty('client_id');
+      expect(linhaDaOrganizacao('org-1')?.status).toBe('pendente');
+      expect(savedVaultCalls).toHaveLength(0);
+    });
+
+    it('substituição: o cofre falhar não mistura Client ID novo com segredo antigo', async () => {
+      // Uma organização já configurada, com o par antigo íntegro no cofre.
+      await callConnect({ clientId: 'client-antigo', clientSecret: 'secret-antigo' });
+      expect(linhaDaOrganizacao('org-1')?.metadata).toMatchObject({ client_id: 'client-antigo' });
+      savedVaultCalls.length = 0;
+
+      falhaDoCofre = new Error('cofre indisponível');
+      const res = await callConnect({ clientId: 'client-novo', clientSecret: 'secret-novo' });
+
+      expect(res.status).toBe(500);
+      // O `client_id` NOVO não entrou: ele só é gravado depois de o cofre
+      // aceitar o par inteiro. E o antigo saiu, porque a autorização baseada
+      // nele já não pode ser afirmada.
+      expect(linhaDaOrganizacao('org-1')?.metadata).not.toHaveProperty('client_id');
+      expect(savedVaultCalls).toHaveLength(0);
+    });
+
+    it('substituição: o cofre falhar nunca deixa a conexão anterior "conectado"', async () => {
+      await callConnect({ clientId: 'client-antigo', clientSecret: 'secret-antigo' });
+      // Simula o que o callback OAuth faria: a conexão passou a conectada.
+      const linha = linhaDaOrganizacao('org-1');
+      if (linha) linha.status = 'conectado';
+
+      falhaDoCofre = new Error('cofre indisponível');
+      await callConnect({ clientId: 'client-novo', clientSecret: 'secret-novo' });
+
+      expect(linhaDaOrganizacao('org-1')?.status).toBe('pendente');
+    });
+
+    it('sucesso: o client_id só é gravado DEPOIS de o cofre aceitar o par', async () => {
+      await callConnect({ clientId: 'client-abc', clientSecret: 'secret-xyz' });
+
+      const indiceDoCofre = savedVaultCalls.length;
+      expect(indiceDoCofre).toBe(1);
+      // A última escrita na linha é a que confirma o client_id.
+      const escritas = recordedQueries.filter((q) => q.op === 'insert' || q.op === 'update');
+      expect(escritas.at(-1)?.values).toMatchObject({ metadata: { client_id: 'client-abc' } });
+      // E a primeira escrita não o trazia.
+      expect(escritas[0]?.values?.metadata).not.toHaveProperty('client_id');
+      expect(linhaDaOrganizacao('org-1')?.metadata).toMatchObject({ client_id: 'client-abc' });
+    });
   });
 
   it('escopa toda leitura e escrita pela organização verificada, nunca por um id vindo do corpo', async () => {

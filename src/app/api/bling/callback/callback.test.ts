@@ -203,6 +203,30 @@ describe('GET /api/bling/callback', () => {
     expect(persisted).toMatchObject({ userId: 'user-tenant-1', accessToken: 'access-token-value' });
   });
 
+  it('não declara sucesso quando a persistência dos tokens falha', async () => {
+    const store = inMemoryOAuthTransactionStore();
+    const transaction = await createValidTransaction(store);
+    const handler = createBlingCallbackHandler(baseDeps({
+      oauthTransactionStore: store,
+      persistTokens: async () => { throw new Error('conexão não gravada'); },
+    }));
+
+    const response = await handler(new Request(
+      `https://orbita.test/api/bling/callback?code=test-code&state=${transaction.state}`,
+      { headers: { cookie: `orbita_oauth_transaction=${transaction.cookieValue}` } },
+    ));
+
+    expect(response.status).toBe(500);
+    const html = await response.text();
+    expect(html).not.toContain('Conexão Realizada');
+    expect(html).toContain('nao puderam ser gravados');
+    // O cookie da transação some junto: ela já foi consumida e não pode ser
+    // reapresentada.
+    expect(response.headers.get('set-cookie') ?? '').toContain('Max-Age=0');
+    // E a mensagem não vaza o detalhe interno da falha.
+    expect(html).not.toContain('conexão não gravada');
+  });
+
 
   /** Executa o callback com uma transacao valida e a query informada. */
   async function callbackWithQuery(query: string): Promise<Response> {
