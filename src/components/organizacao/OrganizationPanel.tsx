@@ -220,6 +220,7 @@ export function OrganizationPanel({ fetchWithAuth, lista, onActiveOrgChange }: O
   const [novaOrganizacaoAberta, setNovaOrganizacaoAberta] = useState(false);
   const [novoConviteAberto, setNovoConviteAberto] = useState(false);
   const [aceitarConviteAberto, setAceitarConviteAberto] = useState(false);
+  const [codigoNaTela, setCodigoNaTela] = useState(false);
 
   const ativa = painel.activeOrg;
   const papel = ativa ? PAPEL[ativa.papel] : null;
@@ -232,6 +233,17 @@ export function OrganizationPanel({ fetchWithAuth, lista, onActiveOrgChange }: O
   const houveLeituraDeOrganizacoes =
     !painel.isLoading && (painel.organizacoes.length > 0 || painel.erroDeOrganizacoes === null);
   const totalDeOrganizacoes = houveLeituraDeOrganizacoes ? painel.organizacoes.length : null;
+
+  // A troca de organizacao fica suspensa em duas janelas, e pela mesma razao:
+  // o token de um convite volta UMA vez e nao pode ser recuperado. Enquanto a
+  // criacao esta em voo, a resposta chegaria sob outro contexto; enquanto o
+  // codigo esta na tela, ele passaria a ser lido ao lado de outro tenant. Sao
+  // segundos de espera para nao ter nem token perdido nem token no lugar errado.
+  const motivoParaNaoTrocar = painel.criacaoDeConviteEmVoo
+    ? 'Aguarde a criacao do convite terminar para trocar de organizacao.'
+    : codigoNaTela
+      ? 'Feche o codigo do convite antes de trocar de organizacao — ele nao volta a aparecer.'
+      : null;
 
   return (
     <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
@@ -282,6 +294,7 @@ export function OrganizationPanel({ fetchWithAuth, lista, onActiveOrgChange }: O
             organizacoes={painel.organizacoes}
             activeOrgId={ativa?.organizacao.id ?? null}
             switchingOrgId={painel.switchingOrgId}
+            motivoParaNaoTrocar={motivoParaNaoTrocar}
             carregando={painel.isLoading}
             erroDeLeitura={painel.erroDeOrganizacoes}
             onSwitch={painel.handleSwitchOrganization}
@@ -339,6 +352,8 @@ export function OrganizationPanel({ fetchWithAuth, lista, onActiveOrgChange }: O
         onAbertoChange={setNovoConviteAberto}
         onCriar={painel.handleInvite}
         erro={painel.erroAoCriarConvite}
+        organizacaoNome={nomeDaAtiva}
+        onCodigoNaTela={setCodigoNaTela}
       />
       <AceitarConviteModal
         aberto={aceitarConviteAberto}

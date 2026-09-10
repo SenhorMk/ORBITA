@@ -38,4 +38,37 @@ export interface ConviteCriado {
   readonly token: string;
   readonly email: string;
   readonly papel: 'admin' | 'member';
+  /**
+   * A organização para a qual este convite foi criado.
+   *
+   * Ela viaja junto porque o código sobrevive na tela ao fim da requisição, e
+   * um código sem tenant seria um código que a proxima troca de organização
+   * poderia fazer parecer de outra. A tela usa isto para dizer, ao lado do
+   * codigo, de qual organização ele é — e para impedir a troca enquanto ele
+   * estiver na tela.
+   */
+  readonly organizacaoId: string;
+}
+
+/**
+ * O que a tela aprende ao aceitar um convite.
+ *
+ * O aceite são **duas etapas** no servidor, e a primeira commita sozinha: o
+ * convite é consumido antes de o contexto ser resolvido. Um booleano juntaria
+ * "entrou e o contexto está resolvido" com "entrou e o contexto ficou por
+ * resolver" — e a segunda, dita como sucesso normal, manda a pessoa procurar a
+ * organização onde ela não aparece; dita como falha, manda repetir um código
+ * que já não existe.
+ */
+export interface ResultadoDoAceite {
+  /** O convite foi consumido e a membership existe. */
+  readonly aceito: boolean;
+  /**
+   * `organizacao_ativada` — a organização ingressada passou a ser a ativa.
+   * `selecao_anterior_preservada` — já havia seleção válida, e ela continua.
+   * `nao_resolvido` — aceito, mas o servidor não resolveu a organização ativa.
+   */
+  readonly contexto?: 'organizacao_ativada' | 'selecao_anterior_preservada' | 'nao_resolvido';
+  /** O que dizer a quem aceitou, quando o contexto ficou por resolver. */
+  readonly aviso?: string;
 }

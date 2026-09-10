@@ -15,6 +15,16 @@ export interface CriarConviteModalProps {
   onCriar: (email: string, papel: 'admin' | 'member') => Promise<ConviteCriado | null>;
   /** A falha da criação, dita pelo servidor. */
   erro: string | null;
+  /** A organização a que este convite pertence — dita ao lado do código. */
+  organizacaoNome: string | null;
+  /**
+   * Avisa quando há um código **na tela**, ainda não dispensado.
+   *
+   * Quem escuta usa isto para impedir a troca de organização: o código é
+   * irrecuperável, e um código de A sob o contexto de B é a confusão de tenant
+   * que esta fatia inteira existe para não ter.
+   */
+  onCodigoNaTela: (naTela: boolean) => void;
 }
 
 /**
@@ -25,11 +35,13 @@ export interface CriarConviteModalProps {
  */
 function CodigoEntregavel({
   criado,
+  organizacaoNome,
   copiado,
   falhaAoCopiar,
   onCopiar,
 }: {
   criado: ConviteCriado;
+  organizacaoNome: string | null;
   copiado: boolean;
   falhaAoCopiar: boolean;
   onCopiar: () => void;
@@ -37,7 +49,14 @@ function CodigoEntregavel({
   return (
     <div className="flex flex-col" style={{ gap: 14 }}>
       <div className="flex flex-col" style={{ gap: 6 }}>
-        <span className="orbita-eyebrow">Código do convite</span>
+        {/*
+          O escopo vai no rótulo do próprio código. Ele sobrevive na tela ao fim
+          da requisição, e um código sem tenant é um código que a leitura
+          seguinte pode fazer parecer de outra organização.
+        */}
+        <span className="orbita-eyebrow">
+          Código do convite{organizacaoNome ? ` · ${organizacaoNome}` : ''}
+        </span>
         <div className="flex items-center" style={{ gap: 8 }}>
           <input
             readOnly
@@ -70,8 +89,10 @@ function CodigoEntregavel({
         <span>
           <strong style={{ color: 'var(--txt)' }}>A entrega é sua.</strong> O Orbita não envia e-mail nenhum:
           mande o código para <strong style={{ color: 'var(--txt)' }}>{criado.email}</strong> por WhatsApp,
-          e-mail ou o canal que preferir. Só a conta desse e-mail consegue aceitá-lo, e ele vale uma única vez.
-          Se o código se perder, crie outro convite — este não volta a aparecer.
+          e-mail ou o canal que preferir. Só a conta desse e-mail — <strong style={{ color: 'var(--txt)' }}>com
+          o e-mail já confirmado</strong> — consegue aceitá-lo, e ele vale uma única vez. Se o código se
+          perder, crie outro convite: este não volta a aparecer, e por isso a troca de organização fica
+          suspensa enquanto ele estiver aqui.
         </span>
       </div>
     </div>
@@ -101,7 +122,14 @@ function CodigoEntregavel({
  * O e-mail aparece ao lado do código porque um código sem destinatário não diz
  * para quem é — e o convite só será aceito pela conta daquele e-mail.
  */
-export function CriarConviteModal({ aberto, onAbertoChange, onCriar, erro }: CriarConviteModalProps) {
+export function CriarConviteModal({
+  aberto,
+  onAbertoChange,
+  onCriar,
+  erro,
+  organizacaoNome,
+  onCodigoNaTela,
+}: CriarConviteModalProps) {
   const [email, setEmail] = useState('');
   const [papel, setPapel] = useState<'admin' | 'member'>('member');
   const [criando, setCriando] = useState(false);
@@ -124,6 +152,8 @@ export function CriarConviteModal({ aberto, onAbertoChange, onCriar, erro }: Cri
       setCriado(null);
       setCopiado(false);
       setFalhaAoCopiar(false);
+      // Dispensar o código é o que libera a troca de organização de novo.
+      onCodigoNaTela(false);
     }
     onAbertoChange(proximo);
   }
@@ -133,7 +163,10 @@ export function CriarConviteModal({ aberto, onAbertoChange, onCriar, erro }: Cri
     setCriando(true);
     try {
       const resultado = await onCriar(email.trim(), papel);
-      if (resultado) setCriado(resultado);
+      if (resultado) {
+        setCriado(resultado);
+        onCodigoNaTela(true);
+      }
     } finally {
       setCriando(false);
     }
@@ -199,6 +232,7 @@ export function CriarConviteModal({ aberto, onAbertoChange, onCriar, erro }: Cri
       {criado ? (
         <CodigoEntregavel
           criado={criado}
+          organizacaoNome={organizacaoNome}
           copiado={copiado}
           falhaAoCopiar={falhaAoCopiar}
           onCopiar={() => { void copiar(); }}

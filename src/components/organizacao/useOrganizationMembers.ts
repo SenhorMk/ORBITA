@@ -1,7 +1,7 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MembroOrganizacao } from './types';
 import type { AuthenticatedFetch } from './useOrganizationPanel';
-import { useLeituraPorOrganizacao } from './useLeituraPorOrganizacao';
+import { chaveDaSelecao, daSelecao, useLeituraPorOrganizacao } from './useLeituraPorOrganizacao';
 import type { SelecaoDeOrganizacao } from './usePapelNaOrganizacaoAtiva';
 
 /** A frase que a tela mostra quando a leitura de membros falha sem detalhe útil. */
@@ -35,7 +35,18 @@ export function useOrganizationMembers(
   fetchWithAuth: AuthenticatedFetch,
   selecao: SelecaoDeOrganizacao | null,
 ) {
-  const [erroDeAcao, setErroDeAcao] = useState<string | null>(null);
+  // A falha de uma remoção pertence à seleção que a iniciou, e não ao hook.
+  // Uma remoção disparada em A que só falha depois da troca publicaria o erro
+  // de A sob o contexto de B — o mesmo defeito das listas, no eixo das escritas.
+  const [erroDeAcao, setErroDeAcao] = useState<{ chave: string; valor: string } | null>(null);
+
+  const chave = chaveDaSelecao(selecao);
+  // A referência é o que a resposta consulta para saber se ainda pode gravar.
+  // Ela é atualizada em efeito, e não durante o render, pelo mesmo motivo de
+  // `useOrganizationsList`: escrever ref no render é escrever fora do momento em
+  // que o React garante ordem. As respostas chegam bem depois dos efeitos.
+  const chaveAtualRef = useRef(chave);
+  useEffect(() => { chaveAtualRef.current = chave; }, [chave]);
 
   const ler = useCallback(
     async (organizacaoId: string): Promise<readonly MembroOrganizacao[]> => {
@@ -52,13 +63,20 @@ export function useOrganizationMembers(
   const handleRemoveMember = useCallback(
     async (userId: string) => {
       if (selecao === null) return;
+      const daAcao = `${selecao.id}:${selecao.versao}`;
       setErroDeAcao(null);
       const response = await fetchWithAuth(`/api/organizacoes/${selecao.id}/membros/${userId}`, {
         method: 'DELETE',
       });
       const body = await response.json().catch(() => null);
+
+      // Trocou de contexto enquanto a remoção estava em voo: o resultado é
+      // descartado. Isso não perde nada — quem decide sobre a membership é o
+      // servidor, e a próxima leitura de A mostrará o que de fato aconteceu.
+      if (chaveAtualRef.current !== daAcao) return;
+
       if (!response.ok) {
-        setErroDeAcao(body?.error ?? 'Falha ao remover membro');
+        setErroDeAcao({ chave: daAcao, valor: body?.error ?? 'Falha ao remover membro' });
         return;
       }
       await recarregar();
@@ -72,8 +90,9 @@ export function useOrganizationMembers(
     erroDeLeitura: erro,
     // A falha de uma remoção é outra coisa que a falha de ler a lista, e a tela
     // as mostra em lugares diferentes: uma lista que carregou bem continua
-    // válida quando um botão dela falha.
-    erroDeAcao,
+    // válida quando um botão dela falha. E ela vale só na seleção que a
+    // produziu — na troca ela deixa de valer, sem ninguém precisar limpá-la.
+    erroDeAcao: daSelecao(chave, erroDeAcao),
     recarregar,
     handleRemoveMember,
   };

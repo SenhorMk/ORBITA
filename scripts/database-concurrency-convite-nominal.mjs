@@ -5,7 +5,7 @@ import { err, ok } from './script-result.mjs';
 /**
  * Ticket 06 — atomicidade do aceite de convite, contra Postgres real.
  *
- * `aceitar_convite_organizacao` (migration 63, sobre a reserva atômica da 49)
+ * `aceitar_convite_organizacao` (migrations 63 e 64, sobre a reserva atômica da 49)
  * faz duas afirmações de exclusão mútua, e o pgTAP não consegue provar nenhuma
  * das duas: ele chama a função **uma vez por vez**, e uma função chamada uma
  * vez por vez nunca revela se ela seria segura chamada duas vezes ao mesmo
@@ -64,8 +64,14 @@ const JANELA_DE_OBSERVACAO_MS = 3000;
  * @returns {Promise<void>}
  */
 async function semear(client) {
+  // `email_confirmed_at` e obrigatorio desde a migration 64: o convite nominal
+  // so e aceito por identidade com e-mail PROVADO. Semear sem ele faria os dois
+  // cenarios abaixo falharem na porta de entrada, antes de haver concorrencia
+  // nenhuma para medir. A coluna existe no laboratorio porque o preparo dele a
+  // acrescenta (`alinharStubDeAuthComProducao`, em `scripts/database-lab.mjs`).
   await client.query(
-    `insert into auth.users (id, email) values ($1,$2),($3,$4),($5,$6),($7,$8)
+    `insert into auth.users (id, email, email_confirmed_at)
+     values ($1,$2,now()),($3,$4,now()),($5,$6,now()),($7,$8,now())
      on conflict (id) do nothing`,
     [OWNER_ID, EMAIL_OWNER, CONVIDADO_A_ID, EMAIL_A, CONVIDADO_B_ID, EMAIL_B, CONVIDADO_C_ID, EMAIL_C],
   );

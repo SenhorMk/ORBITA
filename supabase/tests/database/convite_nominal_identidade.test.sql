@@ -1,23 +1,39 @@
 -- convite_nominal_identidade.test.sql
--- Ticket 06: o convite é nominal, e não é mecanismo de mudança de papel.
+-- Ticket 06: o convite é nominal, exige e-mail PROVADO, e não é mecanismo de
+-- mudança de papel.
 --
--- A migration 63 muda duas coisas em `aceitar_convite_organizacao`, e este
--- teste prova as duas — junto com tudo o que a 49 já garantia e que não podia
--- regredir (expiração, uso único, entitlement, status de ciclo de vida).
+-- As migrations 63 e 64 mudam três coisas em `aceitar_convite_organizacao`, e
+-- este teste prova as três — junto com tudo o que a 49 já garantia e que não
+-- podia regredir (expiração, uso único, entitlement, status de ciclo de vida).
 --
 -- REINTRODUZIR OS DEFEITOS:
---   - apague o bloco de identidade da migration 63 → a seção 1 falha (a conta
---     errada volta a entrar, consumindo o convite de outra pessoa);
---   - troque `do nothing` por `do update set papel` → a seção 3 falha (o owner
+--   - apague o bloco de identidade → a seção 1 falha (a conta errada volta a
+--     entrar, consumindo o convite de outra pessoa);
+--   - apague a condição `email_confirmed_at is null` da migration 64 → a seção
+--     2 falha (quem apenas *digitou* o endereço do convite no cadastro passa a
+--     aceitá-lo);
+--   - troque `do nothing` por `do update set papel` → a seção 4 falha (o owner
 --     é rebaixado a member por um convite de member).
 
 begin;
 
-insert into auth.users (id, email)
+-- O `auth.users` do laboratório é o esqueleto da imagem base do Supabase, e a
+-- coluna `email_confirmed_at` só existe lá porque o preparo do laboratório a
+-- acrescenta antes das migrations (`alinharStubDeAuthComProducao`, em
+-- `scripts/database-lab.mjs`, que explica por quê). Ela nasce nula, então nada
+-- aqui é afrouxado: quem não for semeado como confirmado continua recusado.
+
+-- `email_confirmed_at` entra EXPLÍCITO em cada usuário, e é o eixo do teste.
+-- Semear todo mundo como confirmado — ou pior, semear `null` e mesmo assim
+-- chamar o cenário de "e-mail verificado" — faria o caso (b) medir outra coisa
+-- e o teste passaria sem provar nada. A convidada de e-mail não confirmado
+-- existe justamente para ser recusada.
+insert into auth.users (id, email, email_confirmed_at)
 values
-    ('63000000-0000-4000-8000-000000000001', 'owner-nominal@orbita.test'),
-    ('63000000-0000-4000-8000-000000000002', 'convidada-nominal@orbita.test'),
-    ('63000000-0000-4000-8000-000000000003', 'estranho-nominal@orbita.test')
+    ('63000000-0000-4000-8000-000000000001', 'owner-nominal@orbita.test', now()),
+    ('63000000-0000-4000-8000-000000000002', 'convidada-nominal@orbita.test', now()),
+    ('63000000-0000-4000-8000-000000000003', 'estranho-nominal@orbita.test', now()),
+    ('63000000-0000-4000-8000-000000000004', 'nao-confirmada@orbita.test', null)
 on conflict do nothing;
 
 \ir ../../../database/20_organizacao_membership_ativa.sql
@@ -27,13 +43,24 @@ on conflict do nothing;
 \ir ../../../database/35_suspensao_retencao_encerramento.sql
 \ir ../../../database/49_entitlement_reserva_atomica_ordering.sql
 \ir ../../../database/63_convite_nominal_identidade_e_papel_preservado.sql
+\ir ../../../database/64_convite_exige_email_confirmado.sql
 
 grant usage on schema public to authenticated, anon;
 grant all on all tables in schema public to authenticated, service_role;
 grant execute on function public.aceitar_convite_organizacao(text) to authenticated, service_role;
 grant execute on function public.criar_convite_organizacao(uuid, text, text, text) to authenticated, service_role;
 
-select plan(14);
+select plan(19);
+
+-- A confirmação semeada é a premissa do teste: se ela não valer, o caso (b)
+-- não estaria medindo confirmação, e o (a) passaria por acidente.
+select is(
+    (select count(*)::int from auth.users
+      where id in ('63000000-0000-4000-8000-000000000002'::uuid, '63000000-0000-4000-8000-000000000004'::uuid)
+        and email_confirmed_at is not null),
+    1,
+    'Premissa do teste: das duas convidadas, exatamente uma tem e-mail confirmado'
+);
 
 -- Setup: a owner cria a organização e convida a colaboradora pelo e-mail dela.
 set local role authenticated;
@@ -94,7 +121,61 @@ select is(
 );
 
 -- ---------------------------------------------------------------------------
--- 2. A CONTA CERTA ACEITA, UMA VEZ SÓ.
+-- 2. O E-MAIL CERTO, MAS NÃO CONFIRMADO, TAMBÉM NÃO ACEITA.
+--
+-- Este é o caso que a migration 64 existe para fechar. Sem ela, quem souber o
+-- endereço de um convite pendente cria uma conta com esse endereço, não
+-- confirma nada, e entra: `auth.users.email` sozinho é o que a pessoa digitou,
+-- não o que ela provou possuir.
+--
+-- O convite aqui é OUTRO, dirigido ao endereço não confirmado, para separar
+-- "recusada por não ser a destinatária" de "recusada por não ter confirmado".
+-- ---------------------------------------------------------------------------
+set local role authenticated;
+set local request.jwt.claim.sub = '63000000-0000-4000-8000-000000000001';
+
+create temp table temp_convite_nao_confirmada as
+select public.criar_convite_organizacao(
+    (select org_id from temp_org),
+    'nao-confirmada@orbita.test',
+    'member',
+    'token-nominal-nao-confirmada-99887766'
+) as convite_id;
+
+set local role authenticated;
+set local request.jwt.claim.sub = '63000000-0000-4000-8000-000000000004';
+
+select throws_ok(
+    $$select public.aceitar_convite_organizacao('token-nominal-nao-confirmada-99887766')$$,
+    '42501',
+    null,
+    'Conta com o e-mail EXATO do convite, mas sem confirmacao, nao aceita'
+);
+
+reset role;
+
+select is(
+    (select status from public.convites_organizacao where token = 'token-nominal-nao-confirmada-99887766'),
+    'pending',
+    'A recusa por e-mail nao confirmado nao consome o convite'
+);
+
+select is(
+    (select count(*)::int from public.membros_organizacao
+      where organizacao_id = (select org_id from temp_org)
+        and user_id = '63000000-0000-4000-8000-000000000004'::uuid),
+    0,
+    'A recusa por e-mail nao confirmado nao cria membership'
+);
+
+select is(
+    (select count(*)::int from public.membros_organizacao where organizacao_id = (select org_id from temp_org)),
+    1,
+    'A recusa por e-mail nao confirmado nao reserva vaga'
+);
+
+-- ---------------------------------------------------------------------------
+-- 3. A CONTA CERTA, COM E-MAIL CONFIRMADO, ACEITA — UMA VEZ SÓ.
 -- ---------------------------------------------------------------------------
 set local role authenticated;
 set local request.jwt.claim.sub = '63000000-0000-4000-8000-000000000002';
@@ -121,7 +202,7 @@ select throws_ok(
 );
 
 -- ---------------------------------------------------------------------------
--- 3. O CONVITE NÃO MUDA O PAPEL DE QUEM JÁ É MEMBRO — NEM O DA OWNER.
+-- 4. O CONVITE NÃO MUDA O PAPEL DE QUEM JÁ É MEMBRO — NEM O DA OWNER.
 -- ---------------------------------------------------------------------------
 set local role authenticated;
 set local request.jwt.claim.sub = '63000000-0000-4000-8000-000000000001';
@@ -164,7 +245,7 @@ select is(
 );
 
 -- ---------------------------------------------------------------------------
--- 4. CONVITE EXPIRADO FALHA, E NÃO É CONSUMIDO.
+-- 5. CONVITE EXPIRADO FALHA, E NÃO É CONSUMIDO.
 -- ---------------------------------------------------------------------------
 set local role authenticated;
 set local request.jwt.claim.sub = '63000000-0000-4000-8000-000000000001';

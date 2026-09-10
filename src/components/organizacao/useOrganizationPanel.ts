@@ -36,6 +36,11 @@ export type ListaDeOrganizacoes = ReturnType<typeof useOrganizationsList>;
  * de convites aparecia como se fosse da tela inteira, e a de membros
  * desaparecia atrás dela. Cada leitura agora carrega o seu próprio estado, e a
  * tela mostra cada falha junto da lista a que ela pertence.
+ *
+ * **A sessão desce junto da seleção** (revisão externa da PR #84). Quase tudo
+ * nesta tela é escopado por organização, mas o aceite de convite não é: quem
+ * aceita pode não ter organização nenhuma, e é o caso principal. O erro dele
+ * pertence à identidade, e é por ela que é carimbado.
  */
 export function useOrganizationPanel(
   fetchWithAuth: AuthenticatedFetch,
@@ -58,7 +63,7 @@ export function useOrganizationPanel(
   // dele. Nenhuma seleção local é inventada aqui.
   const aoAceitar = useCallback(() => { void loadOrganizacoes(); }, [loadOrganizacoes]);
 
-  const invites = useOrganizationInvites(fetchWithAuth, selecao, aoAceitar);
+  const invites = useOrganizationInvites(fetchWithAuth, selecao, list.sessao, aoAceitar);
   const members = useOrganizationMembers(fetchWithAuth, selecao);
 
   useEffect(() => {
@@ -82,6 +87,7 @@ export function useOrganizationPanel(
     erroDeConvites: invites.erroDeLeitura,
     erroAoCriarConvite: invites.erroDeAcao,
     erroAoAceitarConvite: invites.erroDeAceite,
+    criacaoDeConviteEmVoo: invites.criacaoEmVoo,
     recarregarConvites: invites.recarregar,
     handleInvite: invites.handleInvite,
     handleAcceptInvite: invites.handleAcceptInvite,

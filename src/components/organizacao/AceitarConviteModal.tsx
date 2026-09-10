@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { Info } from 'lucide-react';
+import { AlertTriangle, Info } from 'lucide-react';
 
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
+import type { ResultadoDoAceite } from './types';
 
 const ID_DO_FORMULARIO = 'form-aceitar-convite';
 
@@ -13,8 +14,8 @@ const TAMANHO_MINIMO_DO_CODIGO = 16;
 export interface AceitarConviteModalProps {
   aberto: boolean;
   onAbertoChange: (aberto: boolean) => void;
-  /** Envia o código ao servidor. `true` quando o convite foi aceito. */
-  onAceitar: (token: string) => Promise<boolean>;
+  /** Envia o código ao servidor e diz o que aconteceu com as duas etapas. */
+  onAceitar: (token: string) => Promise<ResultadoDoAceite>;
   /** A falha da aceitação, dita pelo servidor. */
   erro: string | null;
 }
@@ -37,6 +38,10 @@ export interface AceitarConviteModalProps {
 export function AceitarConviteModal({ aberto, onAbertoChange, onAceitar, erro }: AceitarConviteModalProps) {
   const [token, setToken] = useState('');
   const [aceitando, setAceitando] = useState(false);
+  // O convite foi aceito, mas o servidor nao resolveu a organizacao ativa. Nao
+  // e sucesso normal nem falha: o dialogo fica aberto para dizer isso, e o
+  // campo do codigo sai de cena para ninguem tentar de novo um token gasto.
+  const [avisoDeContexto, setAvisoDeContexto] = useState<string | null>(null);
 
   /**
    * O código digitado não sobrevive ao fechamento. Fica aqui, e não num efeito,
@@ -44,7 +49,10 @@ export function AceitarConviteModal({ aberto, onAbertoChange, onAceitar, erro }:
    * este handler.
    */
   function mudarAberto(proximo: boolean) {
-    if (!proximo) setToken('');
+    if (!proximo) {
+      setToken('');
+      setAvisoDeContexto(null);
+    }
     onAbertoChange(proximo);
   }
 
@@ -52,8 +60,21 @@ export function AceitarConviteModal({ aberto, onAbertoChange, onAceitar, erro }:
     evento.preventDefault();
     setAceitando(true);
     try {
-      const aceitou = await onAceitar(token.trim());
-      if (aceitou) mudarAberto(false);
+      const resultado = await onAceitar(token.trim());
+      if (!resultado.aceito) return;
+      if (resultado.contexto === 'nao_resolvido') {
+        // A primeira etapa commitou e a segunda nao. Fechar aqui apagaria a
+        // metade que a pessoa precisa saber; dizer "falhou" a mandaria repetir
+        // um codigo que ja nao existe.
+        setToken('');
+        setAvisoDeContexto(
+          resultado.aviso
+            ?? 'Convite aceito, mas nao foi possivel atualizar a organizacao ativa. '
+              + 'Recarregue as suas organizacoes — nao use o codigo de novo.',
+        );
+        return;
+      }
+      mudarAberto(false);
     } finally {
       setAceitando(false);
     }
@@ -64,30 +85,54 @@ export function AceitarConviteModal({ aberto, onAbertoChange, onAceitar, erro }:
       aberto={aberto}
       onAbertoChange={mudarAberto}
       tamanho="md"
-      eyebrow="Convite recebido"
-      titulo="Aceitar convite"
-      descricao="Cole o código que você recebeu de quem administra a organização."
+      eyebrow={avisoDeContexto ? 'Convite aceito' : 'Convite recebido'}
+      titulo={avisoDeContexto ? 'Você entrou, mas recarregue' : 'Aceitar convite'}
+      descricao={
+        avisoDeContexto
+          ? 'O convite foi consumido. A organização ativa é que não pôde ser resolvida agora.'
+          : 'Cole o código que você recebeu de quem administra a organização.'
+      }
       rodape={
-        <RodapeDeModal
-          secundaria={
-            <button type="button" onClick={() => mudarAberto(false)} className="orbita-chip cursor-pointer">
-              Cancelar
-            </button>
-          }
-          primaria={
-            <button
-              type="submit"
-              form={ID_DO_FORMULARIO}
-              disabled={aceitando}
-              className="orbita-acao"
-              style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
-            >
-              {aceitando ? 'Aceitando…' : 'Aceitar convite'}
-            </button>
-          }
-        />
+        avisoDeContexto ? (
+          <RodapeDeModal
+            primaria={
+              <button type="button" onClick={() => mudarAberto(false)} className="orbita-acao">
+                Entendi
+              </button>
+            }
+          />
+        ) : (
+          <RodapeDeModal
+            secundaria={
+              <button type="button" onClick={() => mudarAberto(false)} className="orbita-chip cursor-pointer">
+                Cancelar
+              </button>
+            }
+            primaria={
+              <button
+                type="submit"
+                form={ID_DO_FORMULARIO}
+                disabled={aceitando}
+                className="orbita-acao"
+                style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
+              >
+                {aceitando ? 'Aceitando…' : 'Aceitar convite'}
+              </button>
+            }
+          />
+        )
       }
     >
+      {avisoDeContexto ? (
+        <div
+          className="flex items-start px-4 py-3 rounded-xl text-xs"
+          role="alert"
+          style={{ gap: 8, background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--warning)' }}
+        >
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-px" aria-hidden />
+          <span>{avisoDeContexto}</span>
+        </div>
+      ) : (
       <form id={ID_DO_FORMULARIO} onSubmit={handleSubmit} className="flex flex-col" style={{ gap: 14 }}>
         <div className="flex flex-col" style={{ gap: 6 }}>
           <label htmlFor="convite-token" className="orbita-eyebrow">Código do convite</label>
@@ -109,9 +154,10 @@ export function AceitarConviteModal({ aberto, onAbertoChange, onAceitar, erro }:
         >
           <Info className="w-4 h-4 shrink-0 mt-px" style={{ color: 'var(--info)' }} aria-hidden />
           <span>
-            O convite é nominal: ele só é aceito pela conta cujo e-mail foi convidado, vale uma única vez e
-            expira. Se você está com a conta errada, o código continua válido — entre com a conta convidada e
-            tente de novo.
+            O convite é nominal: ele só é aceito pela conta cujo e-mail foi convidado{' '}
+            <strong style={{ color: 'var(--txt)' }}>e já confirmado</strong>, vale uma única vez e expira. Se
+            você está com a conta errada, ou ainda não confirmou o seu e-mail, o código continua válido —
+            resolva isso e tente de novo.
           </span>
         </div>
 
@@ -121,6 +167,7 @@ export function AceitarConviteModal({ aberto, onAbertoChange, onAceitar, erro }:
           </p>
         )}
       </form>
+      )}
     </Modal>
   );
 }

@@ -1,4 +1,5 @@
 import {
+  alinharStubDeAuthComProducao,
   applyCanonicalMigrations,
   databaseLabCycleSteps,
   DATABASE_LAB_CLEANUP,
@@ -43,7 +44,8 @@ try {
     outcomeReserva = started;
     outcomeConvite = started;
   } else {
-    const applied = await applyCanonicalMigrations({});
+    const alinhado = await alinharStubDeAuthComProducao();
+    const applied = alinhado._tag === 'err' ? alinhado : await applyCanonicalMigrations({});
     if (applied._tag === 'err') {
       outcomeVenda = applied;
       outcomeTentativa = applied;

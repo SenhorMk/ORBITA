@@ -334,6 +334,153 @@ describe('OrganizationPanel', () => {
     expect(within(membros).getByRole('button', { name: /remover membro-de-a/i })).toBeInTheDocument();
   });
 
+  it('aceite com contexto não resolvido não vira sucesso normal nem falha total', async () => {
+    const user = userEvent.setup();
+    const CODIGO = 'f'.repeat(64);
+    const fetchWithAuth = buildFetchWithAuth({
+      overrides: {
+        'POST /api/convites/aceitar': async () => jsonResponse({
+          success: true,
+          organizacaoId: ORG_B.id,
+          contexto: 'nao_resolvido',
+          aviso: 'Convite aceito, mas não foi possível atualizar a organização ativa. '
+            + 'Recarregue as suas organizações — não use o código de novo.',
+        }),
+      },
+    });
+    render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
+    await screen.findByText('Loja B');
+
+    await user.click(screen.getByRole('button', { name: /aceitar convite/i }));
+    const dialogo = await screen.findByRole('dialog');
+    await user.type(within(dialogo).getByLabelText(/código do convite/i), CODIGO);
+    await user.click(within(dialogo).getByRole('button', { name: /aceitar convite/i }));
+
+    // O diálogo não fecha como num sucesso normal: a pessoa precisa saber que a
+    // segunda metade não terminou.
+    expect(await within(dialogo).findByText(/não foi possível atualizar a organização ativa/i)).toBeInTheDocument();
+    // E o campo do código sai de cena, porque o token já foi consumido —
+    // deixá-lo ali convidaria a tentar de novo um código que não existe mais.
+    expect(within(dialogo).queryByLabelText(/código do convite/i)).toBeNull();
+    expect(within(dialogo).queryByRole('button', { name: /^aceitar convite$/i })).toBeNull();
+  });
+
+  /*
+   * Os quatro casos abaixo são a terceira lacuna da revisão externa da PR #84.
+   * As LEITURAS já eram carimbadas pela seleção; os estados de AÇÃO não eram —
+   * e uma ação iniciada em A que termina depois da troca publicava o resultado
+   * de A sob o contexto de B.
+   */
+
+  it('falha tardia de uma remoção iniciada em A não aparece sob B', async () => {
+    const user = userEvent.setup();
+    const remocaoLenta = respostaControlada();
+    const fetchWithAuth = buildFetchWithAuth({
+      overrides: {
+        'POST /api/organizacoes/switch': trocaParaB(),
+        'DELETE /api/organizacoes/:id/membros/membro-de-a': async () => remocaoLenta.promise,
+      },
+    });
+    render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
+    await within(await secaoDeMembros()).findByText('membro-de-a');
+
+    await user.click(within(await secaoDeMembros()).getByRole('button', { name: /remover membro-de-a/i }));
+    await user.click(await screen.findByRole('button', { name: /tornar ativa/i }));
+    expect(await within(await secaoDeMembros()).findByText('membro-de-b')).toBeInTheDocument();
+
+    // A remoção de A só falha agora, com B na tela.
+    remocaoLenta.responder({ error: 'Falha ao remover membro na Loja A' });
+
+    await waitFor(() => expect(screen.queryByText(/falha ao remover membro na loja a/i)).toBeNull());
+    expect(within(await secaoDeMembros()).getByText('membro-de-b')).toBeInTheDocument();
+  });
+
+  it('erro de ação de A deixa de valer na troca para B', async () => {
+    const user = userEvent.setup();
+    const fetchWithAuth = buildFetchWithAuth({
+      overrides: {
+        'POST /api/organizacoes/switch': trocaParaB(),
+        'DELETE /api/organizacoes/:id/membros/membro-de-a': async () =>
+          jsonResponse({ error: 'Falha ao remover membro na Loja A' }, 500),
+      },
+    });
+    render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
+    await within(await secaoDeMembros()).findByText('membro-de-a');
+
+    await user.click(within(await secaoDeMembros()).getByRole('button', { name: /remover membro-de-a/i }));
+    expect(await screen.findByText(/falha ao remover membro na loja a/i)).toBeInTheDocument();
+
+    await user.click(await screen.findByRole('button', { name: /tornar ativa/i }));
+
+    // O erro não é "limpo": ele simplesmente deixa de valer, porque pertence a
+    // uma seleção que já não é a atual.
+    await waitFor(() => expect(screen.queryByText(/falha ao remover membro na loja a/i)).toBeNull());
+  });
+
+  it('a troca de organização fica suspensa enquanto a criação do convite está em voo', async () => {
+    const user = userEvent.setup();
+    const criacaoLenta = respostaControlada();
+    const fetchWithAuth = buildFetchWithAuth({
+      overrides: {
+        'POST /api/organizacoes/switch': trocaParaB(),
+        'POST /api/organizacoes/:id/convites': async () => criacaoLenta.promise,
+      },
+    });
+    render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
+    await screen.findByText('Loja B');
+
+    await user.click(screen.getByRole('button', { name: /criar convite/i }));
+    const dialogo = await screen.findByRole('dialog');
+    await user.type(within(dialogo).getByLabelText(/e-mail do convidado/i), 'nova@empresa.com');
+    await user.click(within(dialogo).getByRole('button', { name: /criar convite/i }));
+
+    // Enquanto a resposta não chega, trocar de organização é o que faria o token
+    // de A chegar sob B. A tela recusa, e diz por quê.
+    //
+    // `hidden: true` porque o diálogo do Radix marca o resto da página como
+    // inerte enquanto está aberto. Essa inerteza é uma segunda barreira, e é
+    // bem-vinda — mas quem garante o invariante é o `disabled`, e é ele que
+    // este caso mede.
+    await waitFor(() => expect(screen.getByRole('button', { name: /tornar ativa/i, hidden: true })).toBeDisabled());
+    expect(screen.getByText(/aguarde a criacao do convite terminar/i)).toBeInTheDocument();
+
+    criacaoLenta.responder({ convite: { id: 'conv-novo', token: 'd'.repeat(64) } });
+    expect(await within(dialogo).findByDisplayValue('d'.repeat(64))).toBeInTheDocument();
+  });
+
+  it('o código criado em A fica preso a A: não some, e a troca só volta quando ele é dispensado', async () => {
+    const user = userEvent.setup();
+    const CODIGO = 'e'.repeat(64);
+    const fetchWithAuth = buildFetchWithAuth({
+      overrides: {
+        'POST /api/organizacoes/switch': trocaParaB(),
+        'POST /api/organizacoes/:id/convites': async () =>
+          jsonResponse({ convite: { id: 'conv-novo', token: CODIGO } }, 201),
+      },
+    });
+    render(<PainelComEstadoDoTopo fetchWithAuth={fetchWithAuth} />);
+    await screen.findByText('Loja B');
+
+    await user.click(screen.getByRole('button', { name: /criar convite/i }));
+    const dialogo = await screen.findByRole('dialog');
+    await user.type(within(dialogo).getByLabelText(/e-mail do convidado/i), 'nova@empresa.com');
+    await user.click(within(dialogo).getByRole('button', { name: /criar convite/i }));
+
+    // O código está na tela, e diz de qual organização ele é.
+    expect(await within(dialogo).findByDisplayValue(CODIGO)).toBeInTheDocument();
+    expect(within(dialogo).getByText(/código do convite · loja a/i)).toBeInTheDocument();
+
+    // E a troca continua suspensa: o token não volta a aparecer, então ele não
+    // pode ser abandonado nem passar a ser lido ao lado de outro tenant.
+    await waitFor(() => expect(screen.getByRole('button', { name: /tornar ativa/i, hidden: true })).toBeDisabled());
+    expect(screen.getByText(/feche o codigo do convite antes de trocar/i)).toBeInTheDocument();
+
+    // Dispensar o código é o que libera a troca — e aí ele some da tela.
+    await user.click(within(dialogo).getByRole('button', { name: /concluir/i }));
+    await waitFor(() => expect(screen.queryByDisplayValue(CODIGO)).toBeNull());
+    await waitFor(() => expect(screen.getByRole('button', { name: /tornar ativa/i })).toBeEnabled());
+  });
+
   it('conflito CAS (409) não finge que a troca ocorreu nem cria seleção local', async () => {
     const user = userEvent.setup();
     const postSwitch = vi.fn(async () => jsonResponse({ error: 'Contexto de organização desatualizado' }, 409));

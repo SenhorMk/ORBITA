@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { captureAndValidateDatabaseCatalog } from './database-catalog.mjs';
 import { readCanonicalLedger, SUPABASE_CONFIG_PATH, validateCanonicalLedger } from './database-ledger.mjs';
-import { createLocalDatabaseClient } from './local-database-client.mjs';
+import { createLocalDatabaseClient, DEFAULT_LOCAL_DATABASE_PORT } from './local-database-client.mjs';
 import { runMigrationPgTapTests } from './database-pgtap.mjs';
 import { err, ok } from './script-result.mjs';
 
@@ -110,6 +110,52 @@ export function executeSupabaseStep(step) {
 }
 
 /**
+ * Faz o `auth.users` do laboratório coincidir com o de produção na coluna
+ * `email_confirmed_at`.
+ *
+ * `supabase db start` sobe **só o Postgres**: as migrations do GoTrue não
+ * rodam, e o `auth` que sobra é o esqueleto da imagem base — um schema de
+ * GoTrue antigo, sem `email_confirmed_at`. No Staging (conferido em
+ * 2026-09-09) a coluna existe, é `timestamptz` e não é gerada, e é ela que a
+ * migration 64 lê para exigir e-mail **provado** antes de aceitar um convite
+ * nominal. Sem este alinhamento o laboratório não consegue executar a função,
+ * e o contrato mais sensível do Ticket 06 ficaria sem prova.
+ *
+ * Duas coisas que isto **não** é:
+ *
+ * - não é uma migration. O repositório não altera o schema `auth`, que não é
+ *   dele; isto é o harness ajustando o próprio laboratório descartável;
+ * - não afrouxa o teste. A coluna nasce nula, então quem não for semeado como
+ *   confirmado continua sendo recusado — que é exatamente o caso medido.
+ *
+ * A conexão é a de `supabase_auth_admin` porque `postgres` **não é dono** de
+ * `auth.users` no Supabase local (nem superusuário), e a alteração seria
+ * negada com `42501`.
+ *
+ * @param {object} [options] - Fábrica de cliente injetável para teste.
+ * @returns {Promise<{ readonly _tag: 'ok', readonly value: Readonly<Record<string, unknown>> } | { readonly _tag: 'err', readonly error: Readonly<Record<string, unknown>> }>} Confirmação ou falha tagueada.
+ */
+export async function alinharStubDeAuthComProducao({
+  createClient = () => createLocalDatabaseClient('orbita-auth-stub', console, DEFAULT_LOCAL_DATABASE_PORT, 'supabase_auth_admin'),
+} = {}) {
+  const client = createClient();
+  try {
+    await client.connect();
+    await client.query('alter table auth.users add column if not exists email_confirmed_at timestamptz');
+    return ok(Object.freeze({ coluna: 'auth.users.email_confirmed_at' }));
+  } catch (cause) {
+    return err(
+      'AuthStubAlignmentFailed',
+      'Nao foi possivel alinhar o esqueleto de auth.users do laboratorio com o schema de producao',
+      {},
+      cause,
+    );
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/**
  * Apply every checksum-locked migration in exact ledger order.
  *
  * @param {object} [options] - Injected local database, ledger and filesystem boundaries.
@@ -167,11 +213,15 @@ function safeFailure(error) {
   });
 }
 
-async function runCycle({ cycle, execute, runMigrationTests, applyMigrations, captureCatalog }) {
+async function runCycle({ cycle, execute, runMigrationTests, applyMigrations, captureCatalog, alinharAuth }) {
   const [start, finalTests] = databaseLabCycleSteps(cycle);
   let outcome;
   try {
     outcome = await execute(start);
+    // O esqueleto de `auth` sobe com o Postgres e fica para tras do schema real;
+    // alinha-lo e pre-requisito de qualquer teste que execute a aceitacao de
+    // convite. Vem antes do pgTAP, que e quem precisa dele.
+    if (outcome._tag === 'ok') outcome = await alinharAuth();
     if (outcome._tag === 'ok') outcome = await runMigrationTests();
     if (outcome._tag === 'ok') outcome = await applyMigrations();
     if (outcome._tag === 'ok') outcome = await execute(finalTests);
@@ -249,6 +299,7 @@ export async function runDatabaseLab({
   runMigrationTests = runMigrationPgTapTests,
   applyMigrations = applyCanonicalMigrations,
   captureCatalog = captureAndValidateDatabaseCatalog,
+  alinharAuth = alinharStubDeAuthComProducao,
   validateLedger = validateCanonicalLedger,
   cycles = 2,
   rehearseFailure = false,
@@ -271,7 +322,7 @@ export async function runDatabaseLab({
 
   const fingerprints = [];
   for (let cycle = 1; cycle <= cycles; cycle += 1) {
-    const cycleResult = await runCycle({ cycle, execute, runMigrationTests, applyMigrations, captureCatalog });
+    const cycleResult = await runCycle({ cycle, execute, runMigrationTests, applyMigrations, captureCatalog, alinharAuth });
     if (cycleResult._tag === 'err') return cycleResult;
     fingerprints.push(cycleResult.value);
   }

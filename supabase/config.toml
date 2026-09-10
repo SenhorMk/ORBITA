@@ -127,7 +127,8 @@ schema_paths = [
   "../database/60_reserva_nao_conta_venda_manual.sql",
   "../database/61_titulo_financeiro_vinculado_ao_pedido.sql",
   "../database/62_titulo_e_fornecedor_da_despesa.sql",
-  "../database/63_convite_nominal_identidade_e_papel_preservado.sql"
+  "../database/63_convite_nominal_identidade_e_papel_preservado.sql",
+  "../database/64_convite_exige_email_confirmado.sql"
 ]
 
 [db.seed]

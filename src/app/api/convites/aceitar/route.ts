@@ -41,6 +41,73 @@ export interface AcceptInviteDependencies {
 }
 
 /**
+ * A **segunda** etapa do aceite, depois de a primeira já ter commitado.
+ *
+ * Ela vive numa função própria porque a distinção que faz é fácil de perder de
+ * vista no meio do handler: `Stale` é o servidor funcionando, `Denied` e
+ * `MembershipStoreUnavailable` são a etapa não tendo terminado — e a diferença
+ * entre as duas coisas é o que a revisão externa da PR #84 encontrou colapsado.
+ *
+ * @param dependencies - Seleção canônica e espelho em cookie.
+ * @param contexto - O par verificado, o id devolvido pela RPC e o ator, para o log.
+ * @returns A resposta HTTP do aceite.
+ */
+async function resolverContextoAposAceite(
+  dependencies: AcceptInviteDependencies,
+  contexto: {
+    readonly actorId: OrganizationActorId;
+    readonly organizationId: OrganizationId;
+    readonly organizacaoId: string;
+    readonly atorId: string;
+  },
+) {
+  const { organizacaoId } = contexto;
+  const selecao = await dependencies.selecionarSeNaoHouverSelecao(contexto.actorId, contexto.organizationId);
+
+  if (selecao._tag === 'OrganizationSwitchApplied') {
+    // Não havia seleção, e a organização ingressada passou a ser a ativa. O
+    // cookie espelha o que o CAS de fato aplicou, e só isso.
+    await dependencies.gravarCookieDeOrganizacaoAtiva(organizacaoId);
+    return NextResponse.json({ success: true, organizacaoId, contexto: 'organizacao_ativada' });
+  }
+
+  if (selecao._tag === 'OrganizationSwitchStale') {
+    // O CAS recusou porque já existia seleção — que é o resultado correto e
+    // esperado. Nada é forçado por cima dela, e nenhum cookie novo é escrito:
+    // o convite foi aceito e a organização anterior continua ativa.
+    return NextResponse.json({ success: true, organizacaoId, contexto: 'selecao_anterior_preservada' });
+  }
+
+  // `OrganizationSwitchDenied` e `MembershipStoreUnavailable` não são isso.
+  //
+  // **O convite já foi consumido.** `aceitar_convite_organizacao` commitou
+  // antes desta linha: a membership existe, o token está gasto e não volta.
+  // Responder como se tudo tivesse terminado normalmente mandaria a pessoa
+  // procurar a organização nova onde ela não aparece; responder erro seco
+  // mandaria tentar o token de novo, e a segunda tentativa falharia com
+  // "convite já utilizado" — um beco sem saída construído por nós.
+  //
+  // Então a resposta diz as duas metades: a primeira terminou, a segunda não.
+  // `success` continua `true` porque a entrada na organização é real; o
+  // `contexto` é que carrega a falha, e o cliente reconcilia relendo o contexto
+  // canônico — não repetindo o convite. Nenhum cookie é gravado: um cookie
+  // apontando para uma seleção que o servidor não aplicou é exatamente a
+  // segunda fonte divergente que o Ticket 06 removeu.
+  registrarFalhaInterna(
+    'convites.aceitar.contexto',
+    new Error(`Selecao pos-aceite nao resolvida: ${selecao._tag}`),
+    { atorId: contexto.atorId, organizacaoId },
+  );
+  return NextResponse.json({
+    success: true,
+    organizacaoId,
+    contexto: 'nao_resolvido',
+    aviso: 'Convite aceito, mas não foi possível atualizar a organização ativa. '
+      + 'Recarregue as suas organizações — não use o código de novo.',
+  });
+}
+
+/**
  * Build the invite-acceptance handler around the request-scoped seams.
  *
  * Only the persistence seams are injected: session verification, actor-scoped
@@ -64,9 +131,23 @@ export interface AcceptInviteDependencies {
  *   exatamente o que o eixo multi-tenant não pode ter.
  *
  * Agora a seleção passa pelo CAS, o cookie só é escrito quando o CAS aplicou,
- * e a resposta diz qual dos dois casos ocorreu. Nenhuma troca é forçada: quem
- * já tinha seleção válida continua onde estava, e a lista recarregada pela tela
+ * e a resposta diz qual dos casos ocorreu. Nenhuma troca é forçada: quem já
+ * tinha seleção válida continua onde estava, e a lista recarregada pela tela
  * mostra a organização nova entre as suas.
+ *
+ * ## O campo `contexto`, e por que ele tem três valores
+ *
+ * O aceite são **duas etapas**, e a primeira commita sozinha. Colapsar as
+ * quatro saídas do CAS em um booleano juntava coisas que não são a mesma:
+ * `Stale` é o servidor funcionando (havia seleção, foi preservada), enquanto
+ * `Denied` e `MembershipStoreUnavailable` são a segunda etapa não tendo
+ * terminado — com o convite já gasto atrás dela.
+ *
+ * - `organizacao_ativada` — não havia seleção; a organização ingressada é a ativa.
+ * - `selecao_anterior_preservada` — havia seleção válida; ela continua valendo.
+ * - `nao_resolvido` — o convite foi aceito, o contexto não pôde ser resolvido.
+ *   Acompanha `aviso`, e o cliente reconcilia relendo — **nunca** repetindo o
+ *   token, que já não existe.
  *
  * @param dependencies - Seleção canônica e espelho em cookie.
  * @returns The `POST /api/convites/aceitar` handler.
@@ -127,19 +208,11 @@ export function createAcceptInviteHandler(dependencies: AcceptInviteDependencies
         return NextResponse.json({ error: 'Não foi possível aceitar o convite' }, { status: 400 });
       }
 
-      const selecao = await dependencies.selecionarSeNaoHouverSelecao(actorId, organizationId);
-      const selecaoAplicada = selecao._tag === 'OrganizationSwitchApplied';
-      if (selecaoAplicada) {
-        await dependencies.gravarCookieDeOrganizacaoAtiva(organizacaoId);
-      }
-
-      return NextResponse.json({
-        success: true,
+      return resolverContextoAposAceite(dependencies, {
+        actorId,
+        organizationId,
         organizacaoId,
-        // Verdadeiro só quando a organização ingressada passou a ser a ativa.
-        // Falso significa que a seleção anterior era válida e foi preservada —
-        // o cliente recarrega a lista e a encontra lá, sem troca implícita.
-        organizacaoAtivada: selecaoAplicada,
+        atorId: identity.user.id,
       });
     } catch (error: unknown) {
       // A RPC recusa por várias razões — convite inexistente, expirado, já

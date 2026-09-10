@@ -15,14 +15,24 @@ export const DEFAULT_LOCAL_DATABASE_PORT = 54322;
  * @param {number} [port] - Local port of the disposable instance. Defaults to the Supabase
  *   local lab port; a second port is used only for a second, equally disposable local
  *   Postgres container (e.g. the backup/restore lab's restore target), never a remote host.
+ * @param {string} [role] - Local role to connect as. Defaults to `postgres`, which owns
+ *   everything this repository creates. The only other value in use is
+ *   `supabase_auth_admin`, which owns the `auth` schema that `postgres` cannot
+ *   alter — see `alinharStubDeAuthComProducao`. The password is the same local
+ *   one either way; there is no secret here, and no remote host is reachable.
  * @returns {import('pg').Client} Unconnected local PostgreSQL client.
  */
-export function createLocalDatabaseClient(applicationName, logger = console, port = DEFAULT_LOCAL_DATABASE_PORT) {
+export function createLocalDatabaseClient(
+  applicationName,
+  logger = console,
+  port = DEFAULT_LOCAL_DATABASE_PORT,
+  role = LOCAL_DATABASE_ROLE,
+) {
   const client = new Client({
     host: '127.0.0.1',
     port,
     database: LOCAL_DATABASE_ROLE,
-    user: LOCAL_DATABASE_ROLE,
+    user: role,
     password: LOCAL_DATABASE_ROLE,
     application_name: applicationName,
   });

@@ -11,6 +11,16 @@ export interface OrganizationListProps {
   organizacoes: readonly Organizacao[];
   activeOrgId: string | null;
   switchingOrgId: string | null;
+  /**
+   * Por que a troca esta suspensa agora, ou `null` quando ela esta liberada.
+   *
+   * Existe por causa do token de convite, que volta uma vez so e nao pode ser
+   * recuperado: trocar de organizacao com uma criacao em voo, ou com o codigo
+   * ainda na tela, ou perde o token ou o mostra ao lado do tenant errado. A
+   * frase e mostrada a quem tentar, porque um botao desabilitado sem motivo e
+   * a tela recusando sem dizer o que houve.
+   */
+  motivoParaNaoTrocar: string | null;
   carregando: boolean;
   erroDeLeitura: string | null;
   onSwitch: (orgId: string) => void;
@@ -30,6 +40,7 @@ export function OrganizationList({
   organizacoes,
   activeOrgId,
   switchingOrgId,
+  motivoParaNaoTrocar,
   carregando,
   erroDeLeitura,
   onSwitch,
@@ -58,6 +69,14 @@ export function OrganizationList({
     <div className="flex flex-col min-h-0" style={{ gap: 8 }}>
       {erroDeLeitura !== null && (
         <AvisoDeAtualizacaoFalhada detalhe={erroDeLeitura} recurso="as suas organizações" />
+      )}
+      {motivoParaNaoTrocar !== null && (
+        <p
+          className="px-3 py-2 rounded-xl text-xs"
+          style={{ background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--warning)' }}
+        >
+          {motivoParaNaoTrocar}
+        </p>
       )}
       <ul className="flex flex-col overflow-y-auto min-h-0" style={{ gap: 8 }}>
         {organizacoes.map((org) => {
@@ -95,7 +114,8 @@ export function OrganizationList({
                 <button
                   type="button"
                   onClick={() => onSwitch(org.id)}
-                  disabled={switchingOrgId !== null}
+                  disabled={switchingOrgId !== null || motivoParaNaoTrocar !== null}
+                  title={motivoParaNaoTrocar ?? undefined}
                   className="orbita-chip cursor-pointer shrink-0"
                 >
                   {trocando ? 'Trocando…' : <><Check className="w-3.5 h-3.5" /> Tornar ativa</>}

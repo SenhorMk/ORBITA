@@ -48,6 +48,32 @@ interface ErroCarimbado {
   readonly valor: string;
 }
 
+/**
+ * A chave de uma seleção: a organização **e** a versão que a selecionou.
+ *
+ * Exportada porque as **ações** precisam exatamente da mesma chave que as
+ * leituras. Uma remoção iniciada em A que falha depois da troca para B não pode
+ * publicar o erro de A sob B — é o mesmo defeito das listas, no eixo das
+ * escritas, e merece o mesmo carimbo e não um segundo mecanismo.
+ */
+export function chaveDaSelecao(selecao: SelecaoDeOrganizacao | null): string | null {
+  return selecao === null ? null : `${selecao.id}:${selecao.versao}`;
+}
+
+/**
+ * O valor de um transitório carimbado, ou `null` se ele for de outra seleção.
+ *
+ * Espelha `daSessao` de `useOrganizationsList`, pela mesma razão: o estado não
+ * é limpo na troca, ele simplesmente **deixa de valer** — e assim não existe
+ * janela entre a troca e a limpeza em que o valor antigo apareceria.
+ */
+export function daSelecao(
+  chaveAtual: string | null,
+  carimbado: { readonly chave: string; readonly valor: string } | null,
+): string | null {
+  return chaveAtual !== null && carimbado !== null && carimbado.chave === chaveAtual ? carimbado.valor : null;
+}
+
 /** O que uma leitura por organização expõe para a tela. */
 export interface LeituraPorOrganizacao<T> {
   /** Os dados da seleção atual, ou `null` se ainda não há leitura válida para ela. */
@@ -79,7 +105,7 @@ export function useLeituraPorOrganizacao<T>(
   // cada render do chamador, e é o par (id, versão) que identifica a seleção.
   const selecaoId = selecao?.id ?? null;
   const selecaoVersao = selecao?.versao ?? null;
-  const chave = selecaoId === null ? null : `${selecaoId}:${selecaoVersao}`;
+  const chave = chaveDaSelecao(selecao);
   const chaveAtualRef = useRef(chave);
 
   const lerNaSelecao = useCallback(async () => {
