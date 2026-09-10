@@ -153,20 +153,33 @@ export function Modal({
  * A primária é a última na ordem de foco e fica no canto inferior direito; a
  * destrutiva fica sozinha à esquerda, longe dela. Isso não é diagramação: é o
  * que impede que "cancelar o pedido" e "salvar" fiquem coladas.
+ *
+ * `esquerda` é o mesmo grupo da destrutiva, para a decisão que **muda o que a
+ * ação primária faz** — não uma ação, um interruptor. Ela mora aqui, e não no
+ * corpo, porque o corpo rola: a 1366×768 o interruptor de "sincronizar com o
+ * Bling" ficava abaixo da dobra do modal de venda manual, e quem não rolasse
+ * apertaria "Finalizar" sem nunca ter visto que aquilo escrevia no ERP
+ * (Ticket 09). Uma escolha que não está na tela na hora de decidir não é uma
+ * escolha. O rodapé não rola nunca.
  */
 export function RodapeDeModal({
   destrutiva,
+  esquerda,
   secundaria,
   primaria,
 }: {
   destrutiva?: ReactNode;
+  esquerda?: ReactNode;
   secundaria?: ReactNode;
   primaria?: ReactNode;
 }) {
   return (
     <>
-      <div className="flex items-center gap-2">{destrutiva}</div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-3 min-w-0">
+        {destrutiva}
+        {esquerda}
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
         {secundaria}
         {primaria}
       </div>

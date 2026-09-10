@@ -49,6 +49,22 @@ const DESTINOS: ReadonlyArray<{ id: TabType; label: string; Icone: typeof Layout
 ];
 
 /**
+ * Destinos que o rail não apresenta.
+ *
+ * `billing` sai da navegação **apresentada**, e só dela: o `TabType` continua
+ * existindo, o painel continua montado em `page.tsx`, e Stripe, assinatura e
+ * entitlement seguem exatamente como estão. Ninguém perde autorização por esta
+ * linha — o que se perde é um ícone que a apresentação não vai abrir, e um
+ * destino que ninguém abre é ruído no único lugar da tela onde a ênfase
+ * precisa ser escassa.
+ *
+ * Para trazê-lo de volta, tire-o daqui. Nada mais precisa mudar.
+ */
+const DESTINOS_NAO_APRESENTADOS: ReadonlySet<TabType> = new Set<TabType>(['billing']);
+
+const DESTINOS_VISIVEIS = DESTINOS.filter((destino) => !DESTINOS_NAO_APRESENTADOS.has(destino.id));
+
+/**
  * A navegação do Orbita — e a **única** que existe.
  *
  * Antes do Ticket 01 havia duas: um dock vertical de nove ícones e, logo abaixo
@@ -91,7 +107,7 @@ export function Rail({ activeTab, setActiveTab, session, onLogout }: RailProps) 
           border: '1px solid var(--line)',
         }}
       >
-        {DESTINOS.map(({ id, label, Icone }) => (
+        {DESTINOS_VISIVEIS.map(({ id, label, Icone }) => (
           <li key={id} className="group relative flex items-center">
             <button
               type="button"

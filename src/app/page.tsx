@@ -51,6 +51,7 @@ import { useOrganizationsList } from '@/components/organizacao/useOrganizationsL
 import { useLeituraDoPainel } from '@/components/painel/useLeituraDoPainel';
 import { VisaoGeral } from '@/components/painel/VisaoGeral';
 import { descreverErro } from '@/lib/erroLegivel';
+import { mensagemDeFalhaDeLogin } from '@/lib/auth/mensagemDeFalhaDeLogin';
 
 /**
  * Identidade do usuário logado — **e nada além disso**.
@@ -459,8 +460,11 @@ export default function Home() {
         localStorage.setItem('haux_session', JSON.stringify(userDetails));
       }
     } catch (error: unknown) {
-      const errMsg = error instanceof Error ? error.message : 'Falha na autenticação. Verifique os dados.';
-      setAuthError(errMsg);
+      // A mensagem do provedor chegava crua aqui — em inglês, e no vocabulário
+      // dele. `mensagemDeFalhaDeLogin` traduz os casos conhecidos sem juntar
+      // causas que pedem ações diferentes, e deixa passar inteiro o que não
+      // reconhece. Ticket 09: a primeira tela da apresentação é esta.
+      setAuthError(mensagemDeFalhaDeLogin(error));
     } finally {
       setAuthLoading(false);
     }

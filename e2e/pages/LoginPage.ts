@@ -35,10 +35,18 @@ export class LoginPage {
     await this.submitButton.click();
   }
 
-  /** Login and wait for the authenticated dashboard shell to render. */
+  /**
+   * Login and wait for the authenticated dashboard shell to render.
+   *
+   * O sinal de "entrou" é o botão de sair do rail, e o nome dele é
+   * **"Sair da conta"** (`src/components/shell/Rail.tsx`). Estava escrito
+   * "Sair da sessão" aqui — um rótulo que a interface não tem desde o Ticket
+   * 01 —, então todo login desta suíte esperava quinze segundos por um
+   * elemento inexistente e falhava depois do login ter dado certo. Ticket 09.
+   */
   async loginAndWaitForDashboard(email: string, password: string): Promise<void> {
     await this.login(email, password);
-    await expect(this.page.getByRole('button', { name: 'Sair da sessão' })).toBeVisible({ timeout: 15_000 });
+    await expect(this.page.getByRole('button', { name: 'Sair da conta' })).toBeVisible({ timeout: 15_000 });
   }
 
   async expectLoginRejected(): Promise<void> {
