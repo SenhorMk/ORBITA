@@ -4,6 +4,7 @@ import {
   createProdutoUpdateHandler,
   type ProdutoBlingPayload,
   type ProdutoBlingPort,
+  type ProdutoCategoriaPort,
   type ProdutoDependencies,
   type ProdutoResponseBody,
   type ProdutoStorePort,
@@ -14,6 +15,11 @@ import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope'
 const ORG = '11111111-1111-4111-8111-111111111111';
 const ACTOR = '22222222-2222-4222-8222-222222222222';
 const PRODUTO_LOCAL = '33333333-3333-4333-8333-333333333333';
+/** Categoria da organização do escopo, já importada do Bling. */
+const CATEGORIA_DA_ORG = '44444444-4444-4444-8444-444444444444';
+/** Mesma tabela, outra organização — o navegador não sabe a diferença. */
+const CATEGORIA_DE_OUTRA_ORG = '55555555-5555-4555-8555-555555555555';
+const CATEGORIA_INEXISTENTE = '66666666-6666-4666-8666-666666666666';
 
 /**
  * SAFETY: o escopo é entrada do teste, não o que está sob teste — mesma
@@ -96,11 +102,37 @@ function fakeStore(options: { erro?: Error } = {}): FakeStore {
   };
 }
 
+interface FakeCategorias extends ProdutoCategoriaPort {
+  readonly consultas: Array<{ organizationId: string; categoriaId: string }>;
+}
+
+/**
+ * As linhas têm organização, como no banco. O fake filtra pelo escopo em vez de
+ * devolver a categoria pedida, que é o único jeito de o teste provar a
+ * fronteira e não apenas a passagem do campo.
+ */
+function fakeCategorias(linhas: Array<{ id: string; organizacaoId: string; blingId: string | null }> = [
+  { id: CATEGORIA_DA_ORG, organizacaoId: ORG, blingId: '900' },
+  { id: CATEGORIA_DE_OUTRA_ORG, organizacaoId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', blingId: '901' },
+]): FakeCategorias {
+  const consultas: Array<{ organizationId: string; categoriaId: string }> = [];
+  return {
+    consultas,
+    async resolverBlingId(escopo, categoriaId) {
+      consultas.push({ organizationId: escopo.organizationId, categoriaId });
+      const linha = linhas.find((l) => l.id === categoriaId && l.organizacaoId === escopo.organizationId);
+      if (!linha?.blingId || !/^\d+$/u.test(linha.blingId)) return null;
+      return Number(linha.blingId);
+    },
+  };
+}
+
 function deps(overrides: Partial<ProdutoDependencies> = {}): ProdutoDependencies {
   return {
     auth: { async authorize() { return { _tag: 'Authorized', scope }; } },
     bling: fakeBling(),
     store: fakeStore(),
+    categorias: fakeCategorias(),
     ...overrides,
   };
 }
@@ -300,5 +332,97 @@ describe('autorização', () => {
 
     expect(resposta.status).toBe(403);
     expect(bling.criados).toHaveLength(0);
+  });
+});
+
+describe('categoria do produto chega ao Bling, e só a da própria organização', () => {
+  it('resolve o UUID local no id do Bling e envia a forma oficial `categoria: { id }`', async () => {
+    // O defeito: `categoriaId` era gravado localmente e descartado antes do
+    // ERP, então escolher categoria não mudava nada no Bling.
+    const bling = fakeBling();
+    const store = fakeStore();
+    const handler = createProdutoUpdateHandler(deps({ bling, store }));
+
+    const resposta = await handler(requisicao(corpoValido({ categoriaId: CATEGORIA_DA_ORG })));
+
+    expect(resposta.status).toBe(200);
+    expect(bling.criados).toHaveLength(1);
+    expect(bling.criados[0].categoria).toEqual({ id: 900 });
+    // Inteiro, como `ProdutosCategoriaDTO.id` exige — e nunca o UUID local.
+    expect(typeof bling.criados[0].categoria?.id).toBe('number');
+    expect(JSON.stringify(bling.criados[0])).not.toContain(CATEGORIA_DA_ORG);
+    // A persistência local continua pelo UUID.
+    expect(store.gravados[0].categoriaId).toBe(CATEGORIA_DA_ORG);
+  });
+
+  it('a resolução é consultada dentro do escopo verificado', async () => {
+    const categorias = fakeCategorias();
+    const handler = createProdutoUpdateHandler(deps({ categorias }));
+
+    await handler(requisicao(corpoValido({ categoriaId: CATEGORIA_DA_ORG })));
+
+    expect(categorias.consultas).toEqual([{ organizationId: ORG, categoriaId: CATEGORIA_DA_ORG }]);
+  });
+
+  it('categoria de outra organização é recusada, sem nenhuma escrita no Bling', async () => {
+    const bling = fakeBling();
+    const store = fakeStore();
+    const handler = createProdutoUpdateHandler(deps({ bling, store }));
+
+    const resposta = await handler(requisicao(corpoValido({ categoriaId: CATEGORIA_DE_OUTRA_ORG })));
+    const corpo = (await resposta.json()) as ProdutoResponseBody;
+
+    expect(resposta.status).toBe(400);
+    expect(corpo.error).toContain('Categoria');
+    expect(bling.criados).toHaveLength(0);
+    expect(bling.atualizados).toHaveLength(0);
+    expect(store.gravados).toHaveLength(0);
+  });
+
+  it('UUID inexistente é recusado, sem nenhuma escrita externa', async () => {
+    const bling = fakeBling();
+    const handler = createProdutoUpdateHandler(deps({ bling }));
+
+    const resposta = await handler(requisicao(corpoValido({ categoriaId: CATEGORIA_INEXISTENTE })));
+
+    expect(resposta.status).toBe(400);
+    expect(bling.criados).toHaveLength(0);
+    expect(bling.atualizados).toHaveLength(0);
+  });
+
+  it('categoria local sem `bling_id` utilizável é recusada antes do ERP', async () => {
+    const bling = fakeBling();
+    const categorias = fakeCategorias([{ id: CATEGORIA_DA_ORG, organizacaoId: ORG, blingId: null }]);
+    const handler = createProdutoUpdateHandler(deps({ bling, categorias }));
+
+    const resposta = await handler(requisicao(corpoValido({ categoriaId: CATEGORIA_DA_ORG })));
+
+    expect(resposta.status).toBe(400);
+    expect(bling.criados).toHaveLength(0);
+  });
+
+  it('sem categoria segue permitido, e nenhuma categoria é inventada', async () => {
+    const bling = fakeBling();
+    const handler = createProdutoUpdateHandler(deps({ bling }));
+
+    const resposta = await handler(requisicao(corpoValido()));
+
+    expect(resposta.status).toBe(200);
+    expect(bling.criados[0]).not.toHaveProperty('categoria');
+  });
+
+  it('produto existente com categoria escolhida: o PUT leva a categoria correta', async () => {
+    const bling = fakeBling();
+    const handler = createProdutoUpdateHandler(deps({ bling }));
+
+    const resposta = await handler(requisicao(corpoValido({
+      blingId: '14077064',
+      categoriaId: CATEGORIA_DA_ORG,
+    })));
+
+    expect(resposta.status).toBe(200);
+    expect(bling.atualizados).toHaveLength(1);
+    expect(bling.atualizados[0].id).toBe('14077064');
+    expect(bling.atualizados[0].payload.categoria).toEqual({ id: 900 });
   });
 });

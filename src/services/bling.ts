@@ -104,6 +104,7 @@ function corpoProdutoBling(payload: ProdutoBlingEntrada): Record<string, unknown
     unidade: payload.unidade,
   };
   if (payload.codigo) corpo.codigo = payload.codigo;
+  if (payload.categoria) corpo.categoria = { id: payload.categoria.id };
   if (payload.formato === 'S') corpo.variacoes = [];
   return corpo;
 }
