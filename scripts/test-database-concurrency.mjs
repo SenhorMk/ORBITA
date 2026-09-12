@@ -12,6 +12,7 @@ import { runFencingRehearsal } from './database-concurrency-fencing.mjs';
 import { runPosseDaVendaRehearsal } from './database-concurrency-posse-da-venda.mjs';
 import { runReservaManualRehearsal } from './database-concurrency-reserva-manual.mjs';
 import { runConviteNominalRaceRehearsal } from './database-concurrency-convite-nominal.mjs';
+import { runItemReplayRaceRehearsal } from './database-concurrency-item-replay.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -33,6 +34,7 @@ let outcomeFencing;
 let outcomePosse;
 let outcomeReserva;
 let outcomeConvite;
+let outcomeItemReplay;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -43,6 +45,7 @@ try {
     outcomePosse = started;
     outcomeReserva = started;
     outcomeConvite = started;
+    outcomeItemReplay = started;
   } else {
     const alinhado = await alinharStubDeAuthComProducao();
     const applied = alinhado._tag === 'err' ? alinhado : await applyCanonicalMigrations({});
@@ -54,6 +57,7 @@ try {
       outcomePosse = applied;
       outcomeReserva = applied;
       outcomeConvite = applied;
+      outcomeItemReplay = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
@@ -62,6 +66,7 @@ try {
       outcomePosse = await runPosseDaVendaRehearsal();
       outcomeReserva = await runReservaManualRehearsal();
       outcomeConvite = await runConviteNominalRaceRehearsal();
+      outcomeItemReplay = await runItemReplayRaceRehearsal();
     }
   }
 } finally {
@@ -115,6 +120,7 @@ const relatos = [
     + `(wait_event=${v.bloqueioObservadoNoPostgres}), a perdedora falha com ${v.perdedoraCode} e seu `
     + `convite fica ${v.statusDoConviteRecusado}; o mesmo token aceito duas vezes ao mesmo tempo falha `
     + `com ${v.usoUnico.segundaTentativaCode} e deixa ${v.usoUnico.membershipsDoConvidado} membership`],
+  [outcomeItemReplay, (v) => v.relato],
 ];
 
 const falhou = relatos.map(([outcome, resumo]) => relatar(outcome, resumo)).includes(true);

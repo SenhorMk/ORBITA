@@ -345,6 +345,11 @@
       "order": 69,
       "path": "../database/66_replay_de_item_nao_consome_estoque.sql",
       "sha256": "576de23208120afaa9a40eaac9175991ac4773d4571ad14620f7fbd74bee4b4a"
+    },
+    {
+      "order": 70,
+      "path": "../database/67_validacao_de_estoque_trava_o_produto_primeiro.sql",
+      "sha256": "d37fef3bcc46cea21b577254d72d8d6e527987ee1cc7d01fa4317f02b047b69b"
     }
   ],
   "references": [
