@@ -4,6 +4,7 @@ import { organizationContextStatus } from '@/lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizationContext';
 import { organizationContextToScope } from '@/lib/verifiedOrganizationScope';
 import { produtoRepository } from '@/repositories/produtoRepository';
+import { supabaseServer } from '@/lib/supabaseServer';
 import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
 import { descreverErro } from '@/lib/erroLegivel';
@@ -12,6 +13,7 @@ import {
   createProdutoUpdateHandler,
   type ProdutoAuthPort,
   type ProdutoBlingPort,
+  type ProdutoCategoriaPort,
   type ProdutoStorePort,
 } from './handler';
 
@@ -88,6 +90,34 @@ function blingProdutoAdapter(client: BlingPort): ProdutoBlingPort {
   };
 }
 
+/**
+ * O UUID local vira o id do Bling aqui, e em nenhum lugar antes.
+ *
+ * O filtro por `organizacao_id` é explícito porque `supabaseServer` usa a
+ * service-role e passa por cima da RLS: sem ele, um UUID de categoria de outra
+ * organização seria resolvido normalmente e o produto acabaria apontado para a
+ * categoria de outra conta do ERP. `maybeSingle` é o que distingue "não existe"
+ * de erro, e `bling_id` é texto no banco — só um inteiro positivo serve, porque
+ * `ProdutosCategoriaDTO.id` é integer.
+ */
+const categorias: ProdutoCategoriaPort = {
+  async resolverBlingId(scope, categoriaId) {
+    const { data, error } = await supabaseServer
+      .from('categorias')
+      .select('bling_id')
+      .eq('id', categoriaId)
+      .eq('organizacao_id', scope.organizationId)
+      .maybeSingle();
+
+    if (error) throw error;
+    const bruto = data?.bling_id;
+    if (typeof bruto !== 'string' || !/^\d+$/u.test(bruto.trim())) return null;
+
+    const id = Number(bruto.trim());
+    return Number.isSafeInteger(id) && id > 0 ? id : null;
+  },
+};
+
 const store: ProdutoStorePort = {
   async upsert(scope, produto) {
     const salvo = await produtoRepository.upsert(scope, {
@@ -119,6 +149,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     auth: { async authorize() { return authorization; } },
     bling: blingProdutoAdapter(bling.forVerifiedOrganization(authorization.scope)),
     store,
+    categorias,
   });
 
   return handler(request);

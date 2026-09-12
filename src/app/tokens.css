@@ -35,6 +35,19 @@
   /* A superfície do cabeçalho fixo da tabela. */
   --head: rgba(30, 30, 34, 0.96);
 
+  /*
+   * O popup nativo de `<select>`. OPACO, e é essa a razão de existir.
+   *
+   * Todas as superfícies acima são translúcidas porque compõem com o vidro da
+   * janela. O popup das opções não compõe com nada do aplicativo: quem o pinta
+   * é o sistema, sobre o que estiver atrás. Com uma cor translúcida ali, o
+   * branco do sistema atravessa e o texto claro do tema fica ilegível em cima
+   * dele.
+   */
+  --popup: #1c1c1f;
+  --popup-txt: #f4f4f2;
+  --popup-txt2: rgba(244, 244, 242, 0.62);
+
   /* O véu que o protótipo põe entre o fundo e a janela, para o vidro ler. */
   --veu: radial-gradient(120% 90% at 50% 0%, transparent 40%, rgba(0, 0, 0, 0.35) 100%);
 
@@ -140,6 +153,9 @@
   --invTxt: #f2f1ec;
   --lav: #cfc2ff;
   --head: rgba(250, 250, 247, 0.96);
+  --popup: #fcfcfa;
+  --popup-txt: #14141a;
+  --popup-txt2: rgba(20, 20, 26, 0.62);
   --veu: radial-gradient(120% 90% at 50% 0%, transparent 40%, rgba(0, 0, 0, 0.18) 100%);
 
   --shadow-window: 0 40px 120px rgba(20, 20, 26, 0.18);

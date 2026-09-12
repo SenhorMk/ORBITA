@@ -131,6 +131,8 @@ export interface ProdutoBlingEntrada {
   situacao: string;
   formato: string;
   unidade: string;
+  /** `ProdutosCategoriaDTO`: `id` é o inteiro da categoria no Bling, resolvido no servidor. */
+  categoria?: { id: number };
 }
 
 /** Entrada de criação e atualização de contato (Ticket 32). */

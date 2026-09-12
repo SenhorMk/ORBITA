@@ -296,6 +296,40 @@ select.orbita-campo {
   cursor: pointer;
 }
 
+/* ---- O popup nativo de `<select>` ---------------------------------- */
+
+/*
+ * O controle fechado é estilizado pelo Design System; a LISTA de opções, não —
+ * e ela é desenhada pelo sistema, fora da árvore de composição da página.
+ *
+ * Daí o defeito: o `<select>` tem fundo translúcido (`--glass2` e parentes),
+ * porque compõe com o vidro da janela. O popup não compõe com nada: o sistema
+ * o pinta sobre o próprio branco, a translucidez deixa esse branco passar, e o
+ * texto claro do tema fica branco no branco.
+ *
+ * A regra é por ELEMENTO, e não por classe, de propósito: alcança todo
+ * `<select>` do produto — inclusive os que não usam `.orbita-campo`, como os
+ * filtros de toolbar e os campos ainda em utilitários legados. O controle
+ * fechado continua com o estilo que já tinha: aqui só se pinta a lista.
+ */
+select option,
+select optgroup {
+  /* Opaco por necessidade, não por escolha. Ver `--popup` em tokens.css. */
+  background-color: var(--popup);
+  color: var(--popup-txt);
+}
+
+select optgroup {
+  /* O rótulo do grupo precisa ler como rótulo, e não como opção. */
+  color: var(--popup-txt2);
+  font-weight: 600;
+}
+
+/* A opção desabilitada continua reconhecível como indisponível. */
+select option:disabled {
+  color: var(--popup-txt2);
+}
+
 textarea.orbita-campo {
   height: auto;
   padding: 11px 13px;

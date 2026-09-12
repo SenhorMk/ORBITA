@@ -33,6 +33,27 @@ export interface ProdutoBlingPayload {
   readonly situacao: string;
   readonly formato: string;
   readonly unidade: string;
+  /**
+   * `ProdutosCategoriaDTO` do OpenAPI oficial: um objeto cujo único campo
+   * obrigatório é `id`, e `id` é **integer** — o id da categoria no Bling, não
+   * o UUID local. Ausente quando ninguém escolheu categoria; omitir não é o
+   * mesmo que remover a categoria no ERP, e esta fatia não remove nada.
+   */
+  readonly categoria?: { readonly id: number };
+}
+
+/**
+ * Traduz o UUID local da categoria no id do Bling, dentro da organização
+ * verificada.
+ *
+ * O navegador só manda UUID local, e é a única coisa em que se pode confiar:
+ * um id externo vindo do cliente permitiria apontar o produto para a categoria
+ * de outra conta do ERP. A consulta é do servidor e filtra explicitamente por
+ * `organizacao_id` — service-role não dispensa o escopo.
+ */
+export interface ProdutoCategoriaPort {
+  /** `null` quando o UUID não existe, é de outra organização, ou não tem `bling_id` utilizável. */
+  resolverBlingId(scope: VerifiedOrganizationScope, categoriaId: string): Promise<number | null>;
 }
 
 export interface ProdutoPersistido {
@@ -67,6 +88,7 @@ export interface ProdutoDependencies {
   readonly auth: ProdutoAuthPort;
   readonly bling: ProdutoBlingPort;
   readonly store: ProdutoStorePort;
+  readonly categorias: ProdutoCategoriaPort;
 }
 
 export interface ProdutoResponseBody {
@@ -80,7 +102,7 @@ function fail(error: string, status: number): NextResponse {
   return NextResponse.json({ success: false, error } satisfies ProdutoResponseBody, { status });
 }
 
-function toBlingPayload(body: ProdutoRequest): ProdutoBlingPayload {
+function toBlingPayload(body: ProdutoRequest, categoriaBlingId: number | null): ProdutoBlingPayload {
   return {
     nome: body.nome,
     ...(body.codigo ? { codigo: body.codigo } : {}),
@@ -89,6 +111,7 @@ function toBlingPayload(body: ProdutoRequest): ProdutoBlingPayload {
     situacao: body.situacao,
     formato: body.formato,
     unidade: body.unidade,
+    ...(categoriaBlingId !== null ? { categoria: { id: categoriaBlingId } } : {}),
   };
 }
 
@@ -105,8 +128,9 @@ type ResolucaoBling =
 async function garantirProdutoNoBling(
   body: ProdutoRequest,
   bling: ProdutoBlingPort,
+  categoriaBlingId: number | null,
 ): Promise<ResolucaoBling> {
-  const payload = toBlingPayload(body);
+  const payload = toBlingPayload(body, categoriaBlingId);
   const avisos: string[] = [];
 
   let blingId = body.blingId ?? null;
@@ -173,7 +197,18 @@ export function createProdutoUpdateHandler(deps: ProdutoDependencies) {
     }
     const body = parsed.data;
 
-    const resolucao = await garantirProdutoNoBling(body, deps.bling);
+    // Antes de qualquer escrita no ERP: sem categoria resolvida não se cria
+    // nem se atualiza nada, porque o produto iria para lá sem a categoria que a
+    // pessoa escolheu, ou com uma que não é dela.
+    let categoriaBlingId: number | null = null;
+    if (body.categoriaId !== undefined) {
+      categoriaBlingId = await deps.categorias.resolverBlingId(scope, body.categoriaId);
+      if (categoriaBlingId === null) {
+        return fail('Categoria não encontrada nesta organização, ou sem vínculo com o Bling. Sincronize as categorias e escolha novamente.', 400);
+      }
+    }
+
+    const resolucao = await garantirProdutoNoBling(body, deps.bling, categoriaBlingId);
     if (resolucao._tag === 'Recusado') return resolucao.response;
 
     try {

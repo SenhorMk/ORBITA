@@ -300,6 +300,9 @@ const PRODUTO: Parameters<BlingPort['criarProduto']>[0] = {
   situacao: 'A',
   formato: 'S',
   unidade: 'UN',
+  // `ProdutosCategoriaDTO`: o conferidor segue o `ref` e valida o `id` como
+  // integer, então é o contrato oficial que aprova esta forma, não o teste.
+  categoria: { id: 900 },
 };
 
 beforeAll(async () => {
