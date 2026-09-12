@@ -6,7 +6,7 @@ import { ImageIcon } from 'lucide-react';
 import type { Categoria, Produto } from '@/types';
 import { Pilula } from '@/components/ui/StatusPill';
 import { MolduraDeTabela } from '@/components/ui/MolduraDeTabela';
-import { isProdutoSynced, validateProdutoForBling } from '@/lib/utils';
+import { isProdutoSynced, pendenciasLocaisDoProduto } from '@/lib/utils';
 
 /**
  * A tabela do catálogo.
@@ -101,8 +101,11 @@ export function TabelaDeProdutos({
 
       {produtos.map((produto) => {
         const sincronizado = isProdutoSynced(produto.bling_id);
-        const validacao = sincronizado ? null : validateProdutoForBling(produto);
-        const pendencias = validacao && !validacao.valid ? validacao.errors : [];
+        // Só o que o registro LOCAL guarda e a pessoa consegue corrigir nesta
+        // linha. O validador do payload do Bling exige `tipo`, `situacao` e
+        // `formato`, que esta tabela não tem por construção — pedi-los aqui
+        // relatava ausência de campo que o banco nem persiste.
+        const pendencias = sincronizado ? [] : pendenciasLocaisDoProduto(produto);
         const saldo = saldoDoProduto(produto.estoque);
         const categoria = categorias.find((c) => c.id === produto.categoria_id);
         const sku = produto.codigo?.trim()

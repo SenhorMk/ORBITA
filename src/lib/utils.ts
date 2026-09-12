@@ -135,12 +135,24 @@ export function sanitizeProductName(name: string): string {
   return name.replace(/[^a-zA-ZÀ-ÿçÇ0-9\s\-/.,()&'"]/g, '').trim();
 }
 
-import { BlingProductSchema } from '../schemas/bling';
+import { produtoRequestSchema } from './config/produtoContract';
 
 /**
- * Valida se um produto possui todos os dados obrigatórios para ser sincronizado com o Bling v3.
- * Usa o Zod Schema para garantir consistência.
- * Retorna { valid: true } ou { valid: false, errors: [...] }
+ * Valida o FORMULÁRIO de produto contra o contrato compartilhado.
+ *
+ * A validação deriva de `produtoRequestSchema`, o mesmo schema que
+ * `buildProdutoRequest` monta e que a rota executa. Antes ela derivava de um
+ * segundo enum, mantido à parte, que aceitava `tipo` P|S e `formato` S|V —
+ * enquanto o contrato oficial (transcrito do OpenAPI do Bling) aceita `tipo`
+ * S|P|N e `formato` S|V|E. O formulário oferecia "Composição" (`E`) e o
+ * validador local recusava o próprio valor que a tela acabara de oferecer.
+ *
+ * Um enum só, num lugar só: é o que impede a tela e o validador de
+ * discordarem.
+ *
+ * Só serve a quem tem os campos obrigatórios do Bling em mãos — o formulário.
+ * O registro local (`Produto`) não guarda `tipo`, `situacao` nem `formato`, e
+ * chamar isto sobre ele produzia ausências inventadas.
  */
 export function validateProdutoForBling(produto: {
   nome?: string;
@@ -153,51 +165,96 @@ export function validateProdutoForBling(produto: {
   unidade?: string;
 }): ProdutoValidationResult {
   const precoNum = typeof produto.preco === 'string' ? parseFloat(produto.preco) : produto.preco;
+  const errors: string[] = [];
 
-  // Adaptamos o input para o Zod Schema
-  const parseResult = BlingProductSchema.safeParse({
-    nome: produto.nome || '',
-    preco: precoNum || 0,
-    codigo: produto.codigo,
+  const estoqueRaw = typeof produto.estoque === 'string' ? produto.estoque : String(produto.estoque ?? '');
+  const estoqueNum = estoqueRaw.trim() === '' ? undefined : Number(estoqueRaw);
+
+  const parseResult = produtoRequestSchema.safeParse({
+    nome: produto.nome ?? '',
+    preco: Number.isFinite(precoNum) ? precoNum : 0,
+    // `estoque` é opcional no contrato — o saldo entra por outra rota —, mas o
+    // formulário o coleta, e um valor fracionário ou negativo tem de ser
+    // recusado aqui e não pelo provedor.
+    estoque: estoqueNum,
+    // O contrato recusa string vazia em `codigo`; o campo é opcional, e vazio
+    // significa "não informado", não "informado como nada".
+    codigo: produto.codigo?.trim() ? produto.codigo.trim() : undefined,
     tipo: produto.tipo,
     situacao: produto.situacao,
     formato: produto.formato,
     unidade: produto.unidade,
   });
 
-  const errors: string[] = [];
-
-  // Validar nome com caracteres especiais permitidos
-  if (produto.nome) {
-    const sanitized = sanitizeProductName(produto.nome);
-    if (sanitized !== produto.nome.trim()) {
-      errors.push(`O nome contém caracteres especiais não aceitos pelo Bling. Sugestão: "${sanitized}"`);
-    }
+  if (!parseResult.success) {
+    parseResult.error.issues.forEach((issue) => {
+      errors.push(issue.message);
+    });
   }
 
-  // Estoque (validação que ficou de fora do Zod base pq Zod foca no Bling)
+  // O contrato cobre obrigatoriedade, faixa e enums. O que ele não expressa é a
+  // sanitização do nome, que é regra do provedor sobre caracteres aceitos.
+  errors.push(...pendenciaDeNome(produto.nome));
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
+/** O nome tem caractere que o Bling recusa? */
+function pendenciaDeNome(nome: string | undefined): string[] {
+  if (!nome || nome.trim() === '') return [];
+  const sanitized = sanitizeProductName(nome);
+  return sanitized === nome.trim()
+    ? []
+    : [`O nome contém caracteres especiais não aceitos pelo Bling. Sugestão: "${sanitized}"`];
+}
+
+/**
+ * O que falta no registro LOCAL — e só o que existe nele.
+ *
+ * Esta é a lista que a tabela de estoque pode chamar de "faltando": campos que
+ * o contrato local (`Produto`) de fato guarda e que a pessoa consegue corrigir
+ * naquele registro. `tipo`, `situacao` e `formato` ficam de fora porque o banco
+ * não os persiste: exigi-los ali era relatar ausência de um dado que nunca
+ * existiu na linha.
+ */
+export function pendenciasLocaisDoProduto(produto: {
+  nome?: string;
+  preco?: number | string;
+  estoque?: number | string;
+}): string[] {
+  const errors: string[] = [];
+
+  if (!produto.nome || produto.nome.trim() === '') {
+    errors.push('O nome do produto é obrigatório.');
+  } else {
+    errors.push(...pendenciaDeNome(produto.nome));
+  }
+
+  const precoRaw = typeof produto.preco === 'string' ? produto.preco : String(produto.preco ?? '');
+  if (precoRaw.trim() === '') {
+    errors.push('O preço é obrigatório.');
+  } else {
+    const precoNum = Number(precoRaw);
+    if (Number.isNaN(precoNum)) errors.push(`O preço deve ser um número. Valor informado: ${precoRaw}`);
+    else if (precoNum < 0) errors.push('O preço não pode ser negativo.');
+  }
+
   const estoqueRaw = typeof produto.estoque === 'string' ? produto.estoque : String(produto.estoque ?? '');
   if (estoqueRaw.trim() === '') {
     errors.push('O campo de estoque é obrigatório.');
   } else {
     const estoqueNum = Number(estoqueRaw);
-    if (isNaN(estoqueNum) || !Number.isInteger(estoqueNum)) {
+    if (Number.isNaN(estoqueNum) || !Number.isInteger(estoqueNum)) {
       errors.push(`O estoque deve ser um número inteiro (sem decimais). Valor informado: ${estoqueRaw}`);
     } else if (estoqueNum < 0) {
       errors.push('O estoque não pode ser negativo.');
     }
   }
 
-  if (!parseResult.success) {
-    parseResult.error.issues.forEach(err => {
-      errors.push(err.message);
-    });
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors,
-  };
+  return errors;
 }
 
 /**

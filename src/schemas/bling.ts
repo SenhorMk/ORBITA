@@ -1,16 +1,17 @@
 import { z } from "zod";
 
-export const BlingProductSchema = z.object({
-  nome: z.string().min(1, "O nome do produto é obrigatório").max(120, "O nome não pode ter mais de 120 caracteres"),
-  tipo: z.enum(["P", "S"], { message: "O tipo deve ser 'P' (Produto) ou 'S' (Serviço)" }),
-  situacao: z.enum(["A", "I"], { message: "A situação deve ser 'A' (Ativo) ou 'I' (Inativo)" }),
-  formato: z.enum(["S", "V"], { message: "O formato deve ser 'S' (Simples) ou 'V' (Variações)" }),
-  preco: z.coerce.number().min(0, "O preço deve ser no mínimo 0"),
-  unidade: z.string().min(1, "A unidade é obrigatória (ex: UN, PÇ, KG)").max(6, "A unidade deve ter no máximo 6 caracteres"),
-  codigo: z.string().max(60, "O código (SKU) não pode ter mais de 60 caracteres").optional(),
-});
-
-export type BlingProductInput = z.infer<typeof BlingProductSchema>;
+/*
+ * `BlingProductSchema` foi REMOVIDO.
+ *
+ * Ele mantinha uma segunda cópia dos enums do produto — `tipo` P|S,
+ * `formato` S|V — ao lado do contrato compartilhado
+ * (`lib/config/produtoContract.ts`), que transcreve o OpenAPI oficial:
+ * `tipo` S|P|N, `formato` S|V|E. As duas cópias divergiram, e o formulário
+ * passou a oferecer um valor ("Composição") que o validador local recusava.
+ *
+ * A validação do produto deriva agora de `produtoRequestSchema`. Um enum só,
+ * num lugar só.
+ */
 
 export const BlingContactSchema = z.object({
   nome: z.string().min(1, "O nome do contato é obrigatório").max(120, "O nome não pode ter mais de 120 caracteres"),
