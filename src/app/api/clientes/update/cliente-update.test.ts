@@ -22,12 +22,26 @@ interface FakeBling extends ClienteBlingPort {
   readonly atualizados: Array<{ id: string; payload: ContatoBlingPayload }>;
 }
 
-function fakeBling(options: { falhaCriar?: string; falhaAtualizar?: string } = {}): FakeBling {
+function fakeBling(
+  options: {
+    falhaCriar?: string;
+    falhaAtualizar?: string;
+    /** O status que o provedor devolveu. 4xx e recusa; o resto e ambiguo. */
+    status?: number;
+    tipo?: string;
+  } = {},
+): FakeBling {
   const criados: ContatoBlingPayload[] = [];
   const atualizados: Array<{ id: string; payload: ContatoBlingPayload }> = [];
   const falha = (message: string) => ({
     _tag: 'BlingFailed' as const,
-    failure: { _tag: 'BlingProviderFailure' as const, type: 'VALIDATION_ERROR', status: 400, message, duplicateSale: false },
+    failure: {
+      _tag: 'BlingProviderFailure' as const,
+      type: options.tipo ?? 'VALIDATION_ERROR',
+      status: options.status ?? 400,
+      message,
+      duplicateSale: false,
+    },
   });
 
   return {
@@ -311,6 +325,90 @@ describe('falha parcial chega estruturada', () => {
 
     expect(resposta.status).toBe(400);
     expect(corpo.reconcileRequired).toBeUndefined();
+    // E é recusa PROVADA: o provedor respondeu 4xx dizendo que não aceita.
+    expect(corpo.retrySafe).toBe(true);
+  });
+});
+
+/**
+ * O bloqueio da revisão externa: repetir exige PROVA, e não a ausência de má
+ * notícia. Três classes, e a terceira é a que estava sendo tratada como a
+ * primeira.
+ */
+describe('as três classes de desfecho de falha', () => {
+  it('corpo inválido: repetição comprovadamente segura — nada saiu do servidor', async () => {
+    const bling = fakeBling();
+    const handler = createClienteUpdateHandler(deps({ bling }));
+
+    const resposta = await handler(
+      new Request('https://orbita.test/api/clientes/update', { method: 'POST', body: 'não é json' }),
+    );
+    const corpo = (await resposta.json()) as ClienteResponseBody;
+
+    expect(resposta.status).toBe(400);
+    expect(corpo.retrySafe).toBe(true);
+    expect(bling.criados).toHaveLength(0);
+  });
+
+  it('contrato recusado: repetição segura — o provedor nem foi procurado', async () => {
+    const bling = fakeBling();
+    const handler = createClienteUpdateHandler(deps({ bling }));
+
+    const corpo = (await (await handler(requisicao({ nome: 'Ana', uf: 'XYZ' }))).json()) as ClienteResponseBody;
+
+    expect(corpo.retrySafe).toBe(true);
+    expect(bling.criados).toHaveLength(0);
+  });
+
+  it('5xx do Bling é AMBÍGUO: nem retrySafe, nem reconcileRequired', async () => {
+    // O provedor não disse "não aceito" — ele não disse nada conclusivo. A
+    // requisição pode ter sido processada antes de ele falhar, e afirmar que
+    // nada foi criado seria inventar um fato.
+    const handler = createClienteUpdateHandler(deps({
+      bling: fakeBling({ falhaCriar: 'indisponível', status: 503, tipo: 'HTTP_503' }),
+    }));
+
+    const resposta = await handler(requisicao(corpoValido()));
+    const corpo = (await resposta.json()) as ClienteResponseBody;
+
+    expect(corpo.retrySafe).toBeUndefined();
+    expect(corpo.reconcileRequired).toBeUndefined();
+    expect(corpo.error).toMatch(/pode ter sido criado/i);
+  });
+
+  it('"sucesso sem id" do Bling é AMBÍGUO — ali o contato provavelmente existe', async () => {
+    // `INVALID_RESPONSE` nasce de uma resposta 2xx do Bling sem o id do
+    // contato criado. É o caso em que repetir mais provavelmente duplica.
+    const handler = createClienteUpdateHandler(deps({
+      bling: fakeBling({ falhaCriar: 'sucesso sem id', status: 201, tipo: 'INVALID_RESPONSE' }),
+    }));
+
+    const corpo = (await (await handler(requisicao(corpoValido()))).json()) as ClienteResponseBody;
+
+    expect(corpo.retrySafe).toBeUndefined();
+    expect(corpo.error).toMatch(/pode ter sido criado/i);
+    // E não afirma o contrário em nenhum lugar da frase.
+    expect(corpo.error).not.toMatch(/não foi criado|nada foi criado/i);
+  });
+
+  it('5xx na ATUALIZAÇÃO também é ambíguo', async () => {
+    const handler = createClienteUpdateHandler(deps({
+      bling: fakeBling({ falhaAtualizar: 'indisponível', status: 500, tipo: 'HTTP_500' }),
+    }));
+
+    const corpo = (await (await handler(requisicao(corpoValido({ blingId: '4321' })))).json()) as ClienteResponseBody;
+
+    expect(corpo.retrySafe).toBeUndefined();
+    expect(corpo.reconcileRequired).toBeUndefined();
+  });
+
+  it('commit no provedor com gravação local falhando nunca é retrySafe', async () => {
+    const handler = createClienteUpdateHandler(deps({ store: fakeStore({ erro: new Error('conexão perdida') }) }));
+
+    const corpo = (await (await handler(requisicao(corpoValido()))).json()) as ClienteResponseBody;
+
+    expect(corpo.reconcileRequired).toBe(true);
+    expect(corpo.retrySafe).toBeUndefined();
   });
 });
 
