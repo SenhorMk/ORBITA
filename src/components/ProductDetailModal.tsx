@@ -60,13 +60,15 @@ function obrigatoriosIniciais(produto: Produto | null): {
   formato: ProdutoFormato | null;
   unidade: string;
 } {
-  const unidade = produto?.unidade?.trim() ? produto.unidade.trim().toUpperCase() : 'UN';
+  const persistida = produto?.unidade?.trim() ? produto.unidade.trim().toUpperCase() : '';
 
   if (produto && isProdutoSynced(produto.bling_id)) {
-    return { tipo: null, situacao: null, formato: null, unidade };
+    // Vazia é "não se sabe", como os outros três. `UN` aqui seria mais um
+    // valor inventado indo para o ERP por baixo, só que pelo campo de texto.
+    return { tipo: null, situacao: null, formato: null, unidade: persistida };
   }
 
-  return { tipo: 'P', situacao: 'A', formato: 'S', unidade };
+  return { tipo: 'P', situacao: 'A', formato: 'S', unidade: persistida || 'UN' };
 }
 
 interface ProductDetailModalProps {
@@ -266,7 +268,8 @@ export function ProductDetailModal({
    * Enquanto isto for verdade o formulário não deixa salvar: um `PUT` daqui
    * gravaria no ERP um valor que ninguém confirmou.
    */
-  const obrigatoriosDesconhecidos = tipo === null || situacao === null || formato === null;
+  const obrigatoriosDesconhecidos =
+    tipo === null || situacao === null || formato === null || unidade.trim().length === 0;
 
   useEffect(() => {
     let ativo = true;
@@ -276,11 +279,13 @@ export function ProductDetailModal({
         const lidos = await lerObrigatoriosDoBling(fetchWithAuth, blingIdSincronizado);
         if (!ativo) return;
         if (lidos === null) {
-          // Sem valor autoritativo não se preenche nada: o salvar fica
-          // bloqueado em vez de mandar um padrão fictício para o ERP.
+          // Sem valor autoritativo não se PREENCHE nada — mas quem pode
+          // gerenciar o catálogo continua podendo informar cada valor. A
+          // invariante é "não salvar valor desconhecido", e não "não deixar a
+          // usuária dizer qual é".
           setAvisoDeObrigatorios(
-            'Não foi possível ler tipo, situação e formato deste produto no Bling. '
-            + 'Salvar está bloqueado para não sobrescrever esses campos no ERP com valores padrão.',
+            'Não foi possível ler automaticamente os dados obrigatórios deste produto no Bling. '
+            + 'Confira o cadastro no ERP ou selecione manualmente Tipo, Situação, Formato e Unidade antes de salvar.',
           );
         } else {
           setTipo(lidos.tipo);
@@ -310,13 +315,13 @@ export function ProductDetailModal({
     // Sem autoridade sobre os obrigatórios não há envio. O botão já fica
     // desabilitado; esta guarda existe porque o caminho que escreve no ERP não
     // pode depender só da UI.
-    if (tipo === null || situacao === null || formato === null) {
+    if (obrigatoriosDesconhecidos) {
       return {
         isOpen: true,
         title: 'Obrigatórios do Bling desconhecidos',
         errorMessage:
-          'Tipo, situação e formato deste produto ainda não foram lidos do Bling. '
-          + 'Salvar agora sobrescreveria esses campos no ERP com valores padrão.',
+          'Tipo, situação, formato e unidade deste produto ainda não foram confirmados. '
+          + 'Selecione cada um antes de salvar — enviar um valor não confirmado sobrescreveria o que está no ERP.',
       };
     }
 
@@ -553,7 +558,7 @@ export function ProductDetailModal({
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="product-detail-tipo">Tipo *</Rotulo>
-                <select id="product-detail-tipo" value={tipo ?? ''} disabled={obrigatoriosDesconhecidos} onChange={(e) => setTipo(produtoTipoSchema.parse(e.target.value))} className="orbita-campo">
+                <select id="product-detail-tipo" value={tipo ?? ''} disabled={buscandoObrigatorios} onChange={(e) => setTipo(produtoTipoSchema.parse(e.target.value))} className="orbita-campo">
                   {tipo === null && <option value="">{buscandoObrigatorios ? 'Lendo do Bling…' : '—'}</option>}
                   <option value="P">Produto (P)</option>
                   <option value="S">Serviço (S)</option>
@@ -562,7 +567,7 @@ export function ProductDetailModal({
               </div>
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="product-detail-situacao">Situação *</Rotulo>
-                <select id="product-detail-situacao" value={situacao ?? ''} disabled={obrigatoriosDesconhecidos} onChange={(e) => setSituacao(produtoSituacaoSchema.parse(e.target.value))} className="orbita-campo">
+                <select id="product-detail-situacao" value={situacao ?? ''} disabled={buscandoObrigatorios} onChange={(e) => setSituacao(produtoSituacaoSchema.parse(e.target.value))} className="orbita-campo">
                   {situacao === null && <option value="">{buscandoObrigatorios ? 'Lendo do Bling…' : '—'}</option>}
                   <option value="A">Ativo (A)</option>
                   <option value="I">Inativo (I)</option>
@@ -570,7 +575,7 @@ export function ProductDetailModal({
               </div>
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="product-detail-formato">Formato *</Rotulo>
-                <select id="product-detail-formato" value={formato ?? ''} disabled={obrigatoriosDesconhecidos} onChange={(e) => setFormato(produtoFormatoSchema.parse(e.target.value))} className="orbita-campo">
+                <select id="product-detail-formato" value={formato ?? ''} disabled={buscandoObrigatorios} onChange={(e) => setFormato(produtoFormatoSchema.parse(e.target.value))} className="orbita-campo">
                   {formato === null && <option value="">{buscandoObrigatorios ? 'Lendo do Bling…' : '—'}</option>}
                   <option value="S">Simples (S)</option>
                   <option value="V">Variações (V)</option>
@@ -579,7 +584,7 @@ export function ProductDetailModal({
               </div>
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="product-detail-unidade">Unidade *</Rotulo>
-                <input id="product-detail-unidade" type="text" value={unidade} onChange={(e) => setUnidade(e.target.value.toUpperCase())} maxLength={6} className="orbita-campo orbita-campo--mono" placeholder="UN, CX, KG" />
+                <input id="product-detail-unidade" type="text" value={unidade} onChange={(e) => setUnidade(e.target.value.toUpperCase())} disabled={buscandoObrigatorios} maxLength={6} className="orbita-campo orbita-campo--mono" placeholder="UN, CX, KG" />
               </div>
             </div>
             {avisoDeObrigatorios !== null && (

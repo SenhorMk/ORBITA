@@ -56,6 +56,14 @@ const SINCRONIZADO: Produto = {
   categoria_id: '9a1e7f10-0000-4000-8000-00000000cafe',
 };
 
+const SINCRONIZADO_SEM_UNIDADE: Produto = {
+  id: '3f8b6d21-0000-4000-8000-0000000000a3',
+  bling_id: '14077065',
+  nome: 'Kuripe Sem Unidade',
+  preco: 90,
+  estoque: 1,
+};
+
 const NAO_SINCRONIZADO: Produto = {
   id: '3f8b6d21-0000-4000-8000-0000000000a2',
   bling_id: 'LOCAL-2',
@@ -70,6 +78,10 @@ function valorDoSelect(id: string): string {
 
 function campoCodigo(): HTMLInputElement {
   return document.getElementById('product-detail-codigo') as HTMLInputElement;
+}
+
+function campoUnidade(): HTMLInputElement {
+  return document.getElementById('product-detail-unidade') as HTMLInputElement;
 }
 
 function botaoSalvar(): HTMLButtonElement {
@@ -114,7 +126,7 @@ describe('ProductDetailModal — produto já sincronizado não recebe valor inve
     rede();
     render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
 
-    await waitFor(() => expect(screen.getByText(/Salvar está bloqueado/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/selecione manualmente Tipo, Situação, Formato e Unidade/i)).toBeTruthy());
     expect(botaoSalvar().disabled).toBe(true);
   });
 
@@ -122,7 +134,7 @@ describe('ProductDetailModal — produto já sincronizado não recebe valor inve
     const chamadas = rede();
     render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
 
-    await waitFor(() => expect(screen.getByText(/Salvar está bloqueado/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/selecione manualmente Tipo, Situação, Formato e Unidade/i)).toBeTruthy());
     expect(chamadas.some((c) => c.includes('/api/produtos/update'))).toBe(false);
   });
 
@@ -305,5 +317,136 @@ describe('ProductDetailModal — o SKU não é inventado', () => {
 
     await waitFor(() => expect(enviados).toHaveLength(1));
     expect(enviados[0]).not.toHaveProperty('codigo');
+  });
+});
+
+describe('ProductDetailModal — recuperação manual quando a leitura do ERP falha', () => {
+  beforeEach(() => {
+    fetchWithAuthMock.mockReset();
+    enviados.length = 0;
+  });
+
+  /** Preenche os três selects como a usuária faria. */
+  async function escolherObrigatorios(usuaria: ReturnType<typeof userEvent.setup>) {
+    await usuaria.selectOptions(document.getElementById('product-detail-tipo') as HTMLSelectElement, 'S');
+    await usuaria.selectOptions(document.getElementById('product-detail-situacao') as HTMLSelectElement, 'I');
+    await usuaria.selectOptions(document.getElementById('product-detail-formato') as HTMLSelectElement, 'E');
+  }
+
+  it('(A) leitura falha: campos vazios, dropdowns utilizáveis, salvar ainda bloqueado', async () => {
+    // O beco sem saída: os selects eram desabilitados pela MESMA condição que
+    // bloqueia o salvar, então não havia como sair dela de dentro do ORBITA.
+    rede();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => expect(screen.getByText(/selecione manualmente/i)).toBeTruthy());
+
+    expect(valorDoSelect('product-detail-tipo')).toBe('');
+    expect(valorDoSelect('product-detail-situacao')).toBe('');
+    expect(valorDoSelect('product-detail-formato')).toBe('');
+    for (const id of ['product-detail-tipo', 'product-detail-situacao', 'product-detail-formato']) {
+      expect((document.getElementById(id) as HTMLSelectElement).disabled).toBe(false);
+    }
+    expect(botaoSalvar().disabled).toBe(true);
+  });
+
+  it('(B) escolhendo os três manualmente, salvar libera', async () => {
+    rede();
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => expect(screen.getByText(/selecione manualmente/i)).toBeTruthy());
+    expect(botaoSalvar().disabled).toBe(true);
+
+    await escolherObrigatorios(usuaria);
+
+    expect(botaoSalvar().disabled).toBe(false);
+  });
+
+  it('(C) salvar depois da recuperação envia o que a usuária escolheu', async () => {
+    rede();
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => expect(screen.getByText(/selecione manualmente/i)).toBeTruthy());
+    await escolherObrigatorios(usuaria);
+    await usuaria.click(botaoSalvar());
+
+    await waitFor(() => expect(enviados).toHaveLength(1));
+    expect(enviados[0]).toMatchObject({ tipo: 'S', situacao: 'I', formato: 'E', unidade: 'CX' });
+    // Nada de P/A/S/UN entrando por baixo.
+    expect(enviados[0].tipo).not.toBe('P');
+    expect(enviados[0].situacao).not.toBe('A');
+    expect(enviados[0].formato).not.toBe('S');
+  });
+
+  it('(D) sincronizado sem unidade local: unidade fica vazia e segura o salvar', async () => {
+    rede();
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO_SEM_UNIDADE} cliente={null} />);
+
+    await waitFor(() => expect(screen.getByText(/selecione manualmente/i)).toBeTruthy());
+    expect(campoUnidade().value).toBe('');
+
+    await escolherObrigatorios(usuaria);
+    // Os três selects já estão preenchidos; só a unidade segura o botão.
+    expect(botaoSalvar().disabled).toBe(true);
+
+    await usuaria.type(campoUnidade(), 'kg');
+
+    expect(campoUnidade().value).toBe('KG');
+    expect(botaoSalvar().disabled).toBe(false);
+  });
+
+  it('(D) e a unidade informada é a que vai no envio', async () => {
+    rede();
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO_SEM_UNIDADE} cliente={null} />);
+
+    await waitFor(() => expect(screen.getByText(/selecione manualmente/i)).toBeTruthy());
+    await escolherObrigatorios(usuaria);
+    await usuaria.type(campoUnidade(), 'kg');
+    await usuaria.click(botaoSalvar());
+
+    await waitFor(() => expect(enviados).toHaveLength(1));
+    expect(enviados[0].unidade).toBe('KG');
+  });
+
+  it('(E) sincronizado COM unidade local a preserva mesmo com a leitura falhando', async () => {
+    rede();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => expect(screen.getByText(/selecione manualmente/i)).toBeTruthy());
+    expect(campoUnidade().value).toBe('CX');
+  });
+
+  it('(F) durante a leitura os controles ficam bloqueados, e depois editáveis', async () => {
+    // Bloquear enquanto a resposta não chegou evita a corrida entre a escolha
+    // manual e o valor que ainda pode vir do ERP.
+    let responder: (() => void) | null = null;
+    const espera = new Promise<void>((resolve) => { responder = resolve; });
+    fetchWithAuthMock.mockImplementation(async (url: string) => {
+      if (url === '/api/categorias/sync') return json({ success: true, data: [] });
+      if (url.startsWith('/api/produtos/bling/')) {
+        await espera;
+        return json({ success: false, error: 'indisponível' }, 502);
+      }
+      throw new Error(`Requisição não prevista: ${url}`);
+    });
+
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => {
+      expect((document.getElementById('product-detail-tipo') as HTMLSelectElement).disabled).toBe(true);
+    });
+    expect(screen.getAllByText(/Lendo do Bling/i)).toHaveLength(3);
+
+    responder!();
+
+    await waitFor(() => {
+      expect((document.getElementById('product-detail-tipo') as HTMLSelectElement).disabled).toBe(false);
+    });
+    expect(campoUnidade().disabled).toBe(false);
+    expect(botaoSalvar().disabled).toBe(true);
   });
 });
