@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 
 import { ProductDetailModal } from './ProductDetailModal';
 import type { Produto } from '@/types';
+import { produtoFormatoSchema, produtoSituacaoSchema, produtoTipoSchema } from '@/lib/config/produtoContract';
 
 const fetchWithAuthMock = vi.fn();
 
@@ -20,11 +21,15 @@ function json(corpo: unknown, status = 200): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => corpo } as Response;
 }
 
+/** Os corpos enviados a `POST /api/produtos/update` na chamada corrente. */
+const enviados: Record<string, unknown>[] = [];
+
 /** Categorias já no catálogo local, e os obrigatórios reais do ERP. */
 function rede({ obrigatorios }: { obrigatorios?: unknown } = {}) {
   const chamadas: string[] = [];
   fetchWithAuthMock.mockImplementation(async (url: string, options: RequestInit = {}) => {
     chamadas.push(`${options.method ?? 'GET'} ${url}`);
+    if (typeof options.body === 'string') enviados.push(JSON.parse(options.body));
     if (url === '/api/categorias/sync') {
       return json({ success: true, data: [{ id: '9a1e7f10-0000-4000-8000-00000000cafe', bling_id: '900', descricao: 'Kuripe' }] });
     }
@@ -63,6 +68,10 @@ function valorDoSelect(id: string): string {
   return (document.getElementById(id) as HTMLSelectElement).value;
 }
 
+function campoCodigo(): HTMLInputElement {
+  return document.getElementById('product-detail-codigo') as HTMLInputElement;
+}
+
 function botaoSalvar(): HTMLButtonElement {
   return screen.getByRole('button', { name: /Salvar alterações/i }) as HTMLButtonElement;
 }
@@ -70,6 +79,7 @@ function botaoSalvar(): HTMLButtonElement {
 describe('ProductDetailModal — produto já sincronizado não recebe valor inventado', () => {
   beforeEach(() => {
     fetchWithAuthMock.mockReset();
+    enviados.length = 0;
   });
 
   it('não abre com UN quando a unidade persistida é outra', async () => {
@@ -127,6 +137,7 @@ describe('ProductDetailModal — produto já sincronizado não recebe valor inve
 describe('ProductDetailModal — produto novo e produto local', () => {
   beforeEach(() => {
     fetchWithAuthMock.mockReset();
+    enviados.length = 0;
   });
 
   it('produto novo começa com os padrões seguros', () => {
@@ -162,6 +173,7 @@ describe('ProductDetailModal — produto novo e produto local', () => {
 describe('ProductDetailModal — salvar sinaliza, e não devolve o registro', () => {
   beforeEach(() => {
     fetchWithAuthMock.mockReset();
+    enviados.length = 0;
   });
 
   it('avisa `onSaved` sem passar objeto nenhum', async () => {
@@ -178,5 +190,120 @@ describe('ProductDetailModal — salvar sinaliza, e não devolve o registro', ()
 
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
     expect(onSaved).toHaveBeenCalledWith();
+  });
+});
+
+describe('ProductDetailModal — todo valor do contrato tem representação no controle', () => {
+  beforeEach(() => {
+    fetchWithAuthMock.mockReset();
+    enviados.length = 0;
+  });
+
+  it('tipo `N` aparece, é mantido, e é o que vai no envio', async () => {
+    // `produtoTipoSchema` aceita S|P|N. Sem a opção `N`, um produto real desse
+    // tipo não tinha representação e salvar o rebaixava a P ou S.
+    rede({ obrigatorios: { tipo: 'N', situacao: 'A', formato: 'S', unidade: 'UN' } });
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => expect(valorDoSelect('product-detail-tipo')).toBe('N'));
+    await waitFor(() => expect(botaoSalvar().disabled).toBe(false));
+    await usuaria.click(botaoSalvar());
+
+    await waitFor(() => expect(enviados).toHaveLength(1));
+    expect(enviados[0].tipo).toBe('N');
+  });
+
+  it('o select de tipo oferece exatamente os valores do schema', () => {
+    rede();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} />);
+
+    const valores = [...(document.getElementById('product-detail-tipo') as HTMLSelectElement).options]
+      .map((o) => o.value)
+      .filter((v) => v !== '');
+
+    expect(valores.sort()).toEqual([...produtoTipoSchema.options].sort());
+  });
+
+  it('situação e formato também cobrem o schema inteiro', () => {
+    rede();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} />);
+
+    for (const [id, schema] of [
+      ['product-detail-situacao', produtoSituacaoSchema],
+      ['product-detail-formato', produtoFormatoSchema],
+    ] as const) {
+      const valores = [...(document.getElementById(id) as HTMLSelectElement).options]
+        .map((o) => o.value)
+        .filter((v) => v !== '');
+      expect(valores.sort()).toEqual([...schema.options].sort());
+    }
+  });
+});
+
+describe('ProductDetailModal — o SKU não é inventado', () => {
+  beforeEach(() => {
+    fetchWithAuthMock.mockReset();
+    enviados.length = 0;
+  });
+
+  const OBRIGATORIOS = { tipo: 'P', situacao: 'A', formato: 'S', unidade: 'CX' };
+
+  it('produto sincronizado sem código abre com o campo vazio', async () => {
+    // `BLING-<id>` entrava no campo editável como se tivesse sido digitado.
+    rede({ obrigatorios: OBRIGATORIOS });
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    expect(campoCodigo().value).toBe('');
+    expect(campoCodigo().value).not.toMatch(/BLING-/);
+  });
+
+  it('e salvar não grava código nenhum no ERP', async () => {
+    rede({ obrigatorios: OBRIGATORIOS });
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => expect(botaoSalvar().disabled).toBe(false));
+    await usuaria.click(botaoSalvar());
+
+    await waitFor(() => expect(enviados).toHaveLength(1));
+    expect(enviados[0]).not.toHaveProperty('codigo');
+    expect(JSON.stringify(enviados[0])).not.toMatch(/BLING-/);
+  });
+
+  it('o id do Bling continua identificando o produto no cabeçalho', () => {
+    // Aparecer no cabeçalho é diferente de ocupar o campo de SKU.
+    rede({ obrigatorios: OBRIGATORIOS });
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    expect(screen.getByText(/ID Bling 14077064/)).toBeTruthy();
+  });
+
+  it('código real é preservado e enviado igual quando ninguém o altera', async () => {
+    rede({ obrigatorios: OBRIGATORIOS });
+    const usuaria = userEvent.setup();
+    render(
+      <ProductDetailModal isOpen onClose={vi.fn()} produto={{ ...SINCRONIZADO, codigo: 'KUR-001' }} cliente={null} />,
+    );
+
+    expect(campoCodigo().value).toBe('KUR-001');
+    await waitFor(() => expect(botaoSalvar().disabled).toBe(false));
+    await usuaria.click(botaoSalvar());
+
+    await waitFor(() => expect(enviados).toHaveLength(1));
+    expect(enviados[0].codigo).toBe('KUR-001');
+  });
+
+  it('produto novo sem código continua permitido, e nada é gerado', async () => {
+    rede();
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} />);
+
+    expect(campoCodigo().value).toBe('');
+    await usuaria.type(document.getElementById('product-detail-nome') as HTMLInputElement, 'Rape Nov');
+    await usuaria.click(botaoSalvar());
+
+    await waitFor(() => expect(enviados).toHaveLength(1));
+    expect(enviados[0]).not.toHaveProperty('codigo');
   });
 });

@@ -154,7 +154,7 @@ export function ProductDetailModal({
 }: ProductDetailModalProps) {
   // Form editable state
   const [nome, setNome] = useState(produto?.nome || '');
-  const [codigo, setCodigo] = useState(produto?.codigo || (produto?.bling_id ? `BLING-${produto.bling_id}` : ''));
+  const [codigo, setCodigo] = useState(produto?.codigo ?? '');
   const [preco, setPreco] = useState(produto?.preco !== undefined ? String(produto.preco) : '0.00');
   const [estoque, setEstoque] = useState(produto?.estoque !== undefined ? String(produto.estoque) : '0');
   const [categoriaId, setCategoriaId] = useState(produto?.categoria_id || '');
@@ -190,7 +190,7 @@ export function ProductDetailModal({
     setPrevProduto(produto);
     if (produto) {
       setNome(produto.nome || '');
-      setCodigo(produto.codigo || `BLING-${produto.bling_id}`);
+      setCodigo(produto.codigo ?? '');
       setPreco(produto.preco !== undefined ? String(produto.preco) : '0.00');
       setEstoque(produto.estoque !== undefined ? String(produto.estoque) : '0');
       const iniciais = obrigatoriosIniciais(produto);
@@ -557,6 +557,7 @@ export function ProductDetailModal({
                   {tipo === null && <option value="">{buscandoObrigatorios ? 'Lendo do Bling…' : '—'}</option>}
                   <option value="P">Produto (P)</option>
                   <option value="S">Serviço (S)</option>
+                  <option value="N">Serviço 06 21 22 (N)</option>
                 </select>
               </div>
               <div className="flex flex-col gap-1.5">
