@@ -20,6 +20,43 @@ import { fetchWithAuth } from '@/lib/fetchWithAuth';
  * quando a chamada falha.
  */
 
+/** O que a resposta de falha de `POST /api/clientes/update` diz à tela. */
+interface FalhaDoContato {
+  readonly error?: string;
+  readonly reconcileRequired?: boolean;
+}
+
+/**
+ * Traduz a falha da rota no estado do diálogo de erro.
+ *
+ * `details` e `logs` NÃO vêm mais do corpo da resposta. Era por aí que a linha
+ * recusada pelo Postgres — nome, e-mail e telefone do contato — chegava ao
+ * diálogo na captura da revisão. O servidor deixou de mandar; a tela deixa de
+ * pedir. O que sobra é o status HTTP, que é informação dela.
+ *
+ * `reconcileRequired` decide se existe "tentar novamente": quando o Bling já
+ * criou o contato, repetir não conserta a gravação local e pode cadastrar um
+ * segundo contato no ERP.
+ */
+function estadoDeFalhaDoContato(
+  resposta: FalhaDoContato,
+  status: number,
+  isNew: boolean,
+) {
+  const precisaReconciliar = resposta.reconcileRequired === true;
+  return {
+    isOpen: true,
+    title: precisaReconciliar
+      ? 'Contato criado no Bling, gravação local pendente'
+      : isNew
+        ? 'Falha ao Cadastrar Contato'
+        : 'Falha ao Atualizar Contato',
+    errorMessage: resposta.error || 'Erro ao processar sincronização.',
+    logs: [`[${new Date().toISOString()}] HTTP Status: ${status}`],
+    reconcileRequired: precisaReconciliar,
+  };
+}
+
 interface ClienteEditModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -114,6 +151,15 @@ export function ClienteEditModal({
     errorMessage: string;
     details?: string;
     logs?: string[];
+    /**
+     * O Bling já criou/atualizou o contato e só a gravação local falhou.
+     *
+     * Quando isto é verdade, **não** existe "tentar novamente": repetir a
+     * requisição não conserta a gravação e pode cadastrar um segundo contato no
+     * ERP. O servidor diz isso nomeadamente (`reconcileRequired`), e a tela
+     * obedece em vez de adivinhar pelo texto da mensagem.
+     */
+    reconcileRequired?: boolean;
   }>({
     isOpen: false,
     title: '',
@@ -185,13 +231,7 @@ export function ClienteEditModal({
       const resData = await res.json();
 
       if (!res.ok || !resData.success) {
-        setErrorLogData({
-          isOpen: true,
-          title: isNew ? 'Falha ao Cadastrar Contato' : 'Falha ao Atualizar Contato',
-          errorMessage: resData.error || 'Erro ao processar sincronização.',
-          details: resData.details || '',
-          logs: resData.logs || [`[${new Date().toISOString()}] HTTP Status: ${res.status}`],
-        });
+        setErrorLogData(estadoDeFalhaDoContato(resData, res.status, isNew));
         setIsSaving(false);
         return;
       }
@@ -210,12 +250,14 @@ export function ClienteEditModal({
         onClose();
       }, 1500);
     } catch (err: unknown) {
+      // Aqui a requisição não chegou a completar — rede, JSON, aborto. Nada foi
+      // confirmado por provedor nenhum, então repetir continua sendo seguro.
       const errMsg = err instanceof Error ? err.message : 'Falha ao enviar dados.';
       setErrorLogData({
         isOpen: true,
-        title: 'Erro de Execução (Node.js)',
+        title: 'Não foi possível enviar o contato',
         errorMessage: errMsg,
-        details: String(err),
+        reconcileRequired: false,
       });
       setIsSaving(false);
     }
@@ -392,7 +434,10 @@ export function ClienteEditModal({
         errorMessage={errorLogData.errorMessage}
         details={errorLogData.details}
         logs={errorLogData.logs}
-        onRetry={handleSave}
+        // Sem `onRetry`, o `ErrorLogModal` não desenha o botão — e é essa a
+        // decisão local que o ticket pediu, em vez de redesenhar um diálogo
+        // usado por outras telas. Ver `reconcileRequired`.
+        onRetry={errorLogData.reconcileRequired ? undefined : handleSave}
       />
     </>
   );

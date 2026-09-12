@@ -1,4 +1,5 @@
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
+import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 
 /** Tenant-owned category represented independently from provider and database field names. */
 export interface CategoryRecord {
@@ -55,12 +56,26 @@ export class CategoryCatalog {
         _tag: 'CategoryListSucceeded',
         categories: await this.store.list(scope),
       };
-    } catch {
+    } catch (erro: unknown) {
+      registrarFalhaInterna('categorias.listar', erro, {
+        organizacaoId: scope.organizationId,
+        atorId: scope.actorId,
+      });
       return { _tag: 'CategoryCatalogUnavailable' };
     }
   }
 
-  /** Fetch every provider page and persist each category inside one organization. */
+  /**
+   * Fetch every provider page and persist each category inside one organization.
+   *
+   * A falha é **registrada**, e não engolida. Antes o `catch {}` não tomava nem
+   * parâmetro: a importação falhava e nem servidor nem tela sabiam por quê.
+   * Medido no staging, era isso que deixava o seletor de categoria do produto
+   * permanentemente vazio sem explicação em lugar nenhum — o `23502` de
+   * `categorias.user_id` ficou visível na primeira execução depois deste
+   * registro. O log é o sanitizado do projeto: classe do erro, SQLSTATE,
+   * organização e ator, sem `message` nem `details`.
+   */
   async sync(scope: VerifiedOrganizationScope): Promise<CategorySyncResult> {
     const pageSize = 100;
     let page = 1;
@@ -79,7 +94,11 @@ export class CategoryCatalog {
       }
 
       return { _tag: 'CategorySyncSucceeded', count };
-    } catch {
+    } catch (erro: unknown) {
+      registrarFalhaInterna('categorias.sincronizar', erro, {
+        organizacaoId: scope.organizationId,
+        atorId: scope.actorId,
+      });
       return { _tag: 'CategoryCatalogUnavailable' };
     }
   }

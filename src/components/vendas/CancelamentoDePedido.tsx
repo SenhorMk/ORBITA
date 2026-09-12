@@ -11,22 +11,42 @@ import { descreverErro } from '@/lib/erroLegivel';
 /**
  * O cancelamento de um pedido.
  *
- * A lógica veio inteira de `TransactionList`, sem alteração: ler as situações do
- * Bling, achar a de cancelamento, chamar `POST /api/pedidos/status` e recarregar
- * a tela. Inclusive a conferência da forma da resposta — a rota devolve lista no
- * sucesso e `{ error }` na falha, e presumir lista virava
- * "(intermediate value).find is not a function", uma mensagem que não diz nada
- * sobre a causa.
+ * A lógica veio de `TransactionList`: ler as situações do Bling, achar a de
+ * cancelamento e chamar `POST /api/pedidos/status`. Inclusive a conferência da
+ * forma da resposta — a rota devolve lista no sucesso e `{ error }` na falha, e
+ * presumir lista virava "(intermediate value).find is not a function", uma
+ * mensagem que não diz nada sobre a causa.
  *
- * O que mudou é a casca: agora é o `Modal sm` destrutivo do Design System, com a
- * ação de cancelar sozinha à esquerda, longe de "Voltar".
+ * ## O `window.location.reload()` saiu
+ *
+ * Ele veio junto na herança e era o defeito: cancelar um pedido recarregava a
+ * aplicação inteira. Com isso voltavam o `page.tsx`, o shell, a resolução da
+ * organização ativa, o `StartupLoader` e todas as leituras — e quando a
+ * inicialização do ERP não concluía, quem só quis cancelar um pedido terminava
+ * olhando "Erro na Inicialização" e caindo em modo offline. Um recarregamento
+ * de página não é atualizar uma lista: é reiniciar o produto para trocar uma
+ * linha de uma tabela.
+ *
+ * Agora o cancelamento avisa quem chamou (`onCancelado`), e quem chamou relê o
+ * que já sabe reler. Nenhuma navegação, nenhum reload, nenhuma inicialização
+ * refeita — o estado da sessão e da organização continua exatamente onde estava.
  */
 export function CancelamentoDePedido({
   pedido,
   onFechar,
+  onCancelado,
 }: {
   pedido: PedidoEnriquecido | null;
   onFechar: () => void;
+  /**
+   * O cancelamento foi confirmado pelo servidor.
+   *
+   * Quem recebe decide o que reler — em Vendas & Pedidos é o `onRecarregar` que
+   * a tela já tinha. Opcional porque o `DrawerDoPedido` monta este mesmo
+   * diálogo por outro caminho, e um fluxo sem releitura é melhor que um fluxo
+   * que recarrega a aplicação.
+   */
+  onCancelado?: () => void;
 }) {
   const [cancelando, setCancelando] = useState(false);
 
@@ -67,7 +87,9 @@ export function CancelamentoDePedido({
       if (!cancelRes.ok) throw new Error(cancelData.error || 'Falha ao cancelar');
 
       alert('Pedido cancelado e estoque alinhado com sucesso!');
-      window.location.reload();
+      // Releitura, não recarregamento: a pessoa continua na aba Vendas &
+      // Pedidos, com a mesma sessão e a mesma organização ativa.
+      onCancelado?.();
     } catch (err: unknown) {
       alert(`Erro: ${descreverErro(err)}`);
     } finally {

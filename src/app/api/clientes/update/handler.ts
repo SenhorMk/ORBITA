@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { clienteRequestSchema, type ClienteRequest } from '@/lib/config/clienteContract';
 import type { BlingCallResult } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
-import { descreverErro } from '@/lib/erroLegivel';
+import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 
 export interface ContatoBlingPayload {
   readonly nome: string;
@@ -72,11 +72,35 @@ export interface ClienteResponseBody {
   readonly success: boolean;
   readonly client?: ClientePersistido;
   readonly error?: string;
+  /**
+   * O provedor **já criou/atualizou** o contato e só a gravação local falhou.
+   *
+   * É o desfecho mais perigoso deste fluxo, e por isso ele chega nomeado em vez
+   * de escondido dentro de uma frase: repetir a requisição não conserta nada e
+   * pode cadastrar um **segundo** contato no Bling. Quem consome esta resposta
+   * deve oferecer sincronização/reconciliação, nunca "tentar novamente".
+   */
+  readonly reconcileRequired?: boolean;
+  /** O contato que o Bling confirmou, para a reconciliação ter por onde começar. */
+  readonly blingId?: string;
 }
 
 function fail(error: string, status: number): NextResponse {
   return NextResponse.json({ success: false, error } satisfies ClienteResponseBody, { status });
 }
+
+/**
+ * Frase pública da falha parcial. Fixa, e sem nada da linha recusada.
+ *
+ * A versão anterior interpolava `descreverErro(error)` aqui, e o que o Postgres
+ * põe em `message`/`details` numa violação de constraint são **valores da
+ * linha**: nome, e-mail, telefone do contato apareceram no diálogo de erro da
+ * tela. Diagnóstico técnico é assunto do servidor; a tela recebe o que dá para
+ * agir, e nada além.
+ */
+const FALHA_PARCIAL_PUBLICA =
+  'Contato salvo no Bling, mas não foi possível concluir a gravação no ORBITA. '
+  + 'Sincronize os clientes para reconciliar.';
 
 function toContatoPayload(body: ClienteRequest): ContatoBlingPayload {
   const opcional = (valor: string | undefined) => (valor && valor.trim() ? valor.trim() : undefined);
@@ -169,10 +193,24 @@ export function createClienteUpdateHandler(deps: ClienteDependencies) {
 
       return NextResponse.json({ success: true, client } satisfies ClienteResponseBody, { status: 200 });
     } catch (error: unknown) {
-      const causa = descreverErro(error);
-      return fail(
-        `Contato salvo no Bling (id ${blingId}), mas falhou ao gravar no ORBITA: ${causa}. Sincronize os clientes para reconciliar.`,
-        500,
+      // O diagnóstico fica aqui — operação, organização, ator, classe do erro e
+      // SQLSTATE, sem `message`, `details` nem `hint`, que é onde o Postgres
+      // escreve valores da linha (CWE-209, e PII no caso de um contato).
+      registrarFalhaInterna('clientes.update.gravar', error, {
+        organizacaoId: scope.organizationId,
+        atorId: scope.actorId,
+      });
+
+      // E o desfecho chega **estruturado**: o Bling confirmou, então repetir a
+      // requisição não conserta e pode criar um segundo contato lá.
+      return NextResponse.json(
+        {
+          success: false,
+          error: FALHA_PARCIAL_PUBLICA,
+          reconcileRequired: true,
+          blingId,
+        } satisfies ClienteResponseBody,
+        { status: 500 },
       );
     }
   };

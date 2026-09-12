@@ -19,6 +19,7 @@ import {
   type ProdutoSituacao,
   type ProdutoTipo,
 } from '@/lib/config/produtoContract';
+import { avisoDoBootstrap, carregarCategoriasDoProduto } from '@/components/produtos/bootstrapDeCategorias';
 
 /**
  * O detalhe e a edição de um produto, agora no `Modal` do Design System.
@@ -119,6 +120,8 @@ export function ProductDetailModal({
   const [estoque, setEstoque] = useState(produto?.estoque !== undefined ? String(produto.estoque) : '0');
   const [categoriaId, setCategoriaId] = useState(produto?.categoria_id || '');
   const [categorias, setCategorias] = useState<Categoria[]>([]);
+  /** O que dizer sobre as categorias quando não há categorias para escolher. */
+  const [avisoDeCategorias, setAvisoDeCategorias] = useState<string | null>(null);
 
   // Bling mandatory fields
   // Tipados pelos enums do contrato: os valores aceitos por `POST /produtos`
@@ -184,19 +187,22 @@ export function ProductDetailModal({
     let isMounted = true;
     if (isOpen) {
       void (async () => {
-        try {
-          const { data: { session } } = await supabase.auth.getSession();
-          const token = session?.access_token;
-          const res = await fetchWithAuth('/api/categorias/sync', {
-            headers: token ? { Authorization: `Bearer ${token}` } : {}
-          });
-          const data = (await res.json()) as { success?: boolean; data?: Categoria[] };
-          if (isMounted && data.success && Array.isArray(data.data)) {
-            setCategorias(data.data);
-          }
-        } catch (err) {
-          console.warn('Erro ao buscar categorias:', err);
-        }
+        // O aviso anterior sai de cena antes da nova tentativa. Fica aqui, e
+        // não no corpo do efeito, porque escrever estado sincronamente ali é o
+        // que a regra `set-state-in-effect` do projeto proíbe.
+        setAvisoDeCategorias(null);
+        // `GET /api/categorias/sync` só LISTA o catálogo local; quem vai ao
+        // Bling é o `POST` da mesma rota. Com o catálogo vazio — que é o estado
+        // real do staging — este efeito abria o seletor com "Sem categoria" e
+        // mais nada, para sempre. `carregarCategoriasDoProduto` lê, e só busca
+        // no ERP se não houver nada para ler.
+        const resultado = await carregarCategoriasDoProduto(fetchWithAuth);
+        if (!isMounted) return;
+        if (resultado._tag === 'Carregadas') setCategorias(resultado.categorias);
+        // O desfecho vai para a TELA. Antes terminava em `console.warn`, e
+        // "não tem categoria", "não consegui ler" e "não consegui importar"
+        // desenhavam exatamente o mesmo seletor vazio.
+        setAvisoDeCategorias(avisoDoBootstrap(resultado));
       })();
     }
     return () => {
@@ -407,6 +413,11 @@ export function ProductDetailModal({
                     <option key={cat.id} value={cat.id}>{cat.descricao}</option>
                   ))}
                 </select>
+                {avisoDeCategorias !== null && (
+                  <output className="text-[11px]" style={{ color: 'var(--warning)' }}>
+                    {avisoDeCategorias}
+                  </output>
+                )}
               </div>
 
               <div className="flex flex-col gap-1.5">
