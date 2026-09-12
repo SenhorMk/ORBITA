@@ -1,5 +1,6 @@
 import { TituloFinanceiro, CategoriaFinanceira } from '../types';
 import { supabaseServer } from '../lib/supabaseServer';
+import { SITUACOES_ATIVAS, movimentacaoContaComoAtiva } from '../lib/metricas/movimentacaoAtiva';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
 export class FinanceiroRepository {
@@ -35,23 +36,25 @@ export class FinanceiroRepository {
   }
 
   /**
-   * Entradas, saídas e saldo ATIVOS.
+   * Entradas, saídas e saldo ATIVOS — os três cards do topo do Financeiro.
    *
-   * `cancelado` e `estornado` são estados terminais: o título continua no
-   * histórico e nas Últimas Movimentações, mas sai dos totais. Um pedido
-   * revertido no ERP não pode seguir somando receita — era o que acontecia
-   * enquanto o título ficava `pago` para sempre, sem vínculo com o pedido.
+   * O recorte é `SITUACOES_ATIVAS` (`aberto` + `pago`), a **mesma** noção que
+   * a tabela e os gráficos usam via `titulosElegiveis`. Filtrava
+   * `situacao = 'pago'`, e era esse o defeito reproduzido no staging: lançar
+   * uma despesa em aberto movia o gráfico e a tabela, e os cards acima ficavam
+   * parados. Duas respostas para a mesma pergunta, na mesma tela.
    *
-   * O filtro é por `situacao = 'pago'`, então os dois estados novos já ficam
-   * de fora por construção; a asserção existe para que uma mudança futura
-   * nesse filtro não os traga de volta em silêncio.
+   * `cancelado` e `estornado` seguem fora: são terminais, continuam no
+   * histórico e nas Últimas Movimentações, e não somam. Ver
+   * `src/lib/metricas/movimentacaoAtiva.ts` para o porquê de a regra morar num
+   * lugar só.
    */
   async getResumo(scope: VerifiedOrganizationScope): Promise<{ receitas: number; despesas: number; saldo: number }> {
     const { data, error } = await supabaseServer
       .from('titulos_financeiros')
       .select('tipo, valor, situacao')
       .eq('organizacao_id', scope.organizationId)
-      .eq('situacao', 'pago');
+      .in('situacao', [...SITUACOES_ATIVAS]);
 
     if (error) {
       console.error('Erro ao buscar resumo financeiro:', error.message);
@@ -62,9 +65,10 @@ export class FinanceiroRepository {
     let despesas = 0;
 
     data?.forEach((titulo) => {
-      // Defesa em profundidade: se o filtro acima algum dia deixar passar um
-      // terminal, ele ainda não entra no total.
-      if (titulo.situacao === 'cancelado' || titulo.situacao === 'estornado') return;
+      // Defesa em profundidade: a mesma função que decide o recorte acima
+      // decide aqui. Se a consulta algum dia deixar passar uma situação que
+      // não é ativa, ela ainda não entra no total.
+      if (!movimentacaoContaComoAtiva(titulo.situacao)) return;
       if (titulo.tipo === 'receber') receitas += Number(titulo.valor);
       if (titulo.tipo === 'pagar') despesas += Number(titulo.valor);
     });

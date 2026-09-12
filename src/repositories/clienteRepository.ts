@@ -1,4 +1,5 @@
 import { supabaseServer } from '../lib/supabaseServer';
+import { normalizarUf } from '../lib/normalizacao/ufDoCliente';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { Cliente } from '../types';
 
@@ -37,6 +38,13 @@ export class ClienteRepository {
       ...cliente,
       organizacao_id: scope.organizationId,
       user_id: scope.actorId,
+      // `chk_cliente_uf` aceita `NULL` ou dois caracteres, e está certa. O que
+      // chegava aqui era o `''` do formulário sem estado escolhido — e o
+      // contato acabava criado no Bling e recusado no ORBITA. A normalização
+      // mora nesta fronteira porque três caminhos gravam contato (a tela, o
+      // webhook e a sincronização), e um deles normalizar não impede os outros
+      // dois de reintroduzir o vazio. Ver `lib/normalizacao/ufDoCliente.ts`.
+      uf: normalizarUf(cliente.uf),
     };
     delete payload.telefone_normalizado;
 

@@ -361,7 +361,13 @@ export function VendasEPedidos({
         }}
       />
 
-      <CancelamentoDePedido pedido={pedidoParaCancelar} onFechar={() => setPedidoParaCancelar(null)} />
+      <CancelamentoDePedido
+        pedido={pedidoParaCancelar}
+        onFechar={() => setPedidoParaCancelar(null)}
+        // A releitura que esta tela já sabe fazer, no lugar do
+        // `window.location.reload()` que reiniciava o produto inteiro.
+        onCancelado={onRecarregar}
+      />
     </div>
   );
 }

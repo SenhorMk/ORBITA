@@ -20,6 +20,83 @@ import { fetchWithAuth } from '@/lib/fetchWithAuth';
  * quando a chamada falha.
  */
 
+/** O que a resposta de falha de `POST /api/clientes/update` diz à tela. */
+interface FalhaDoContato {
+  readonly error?: string;
+  readonly retrySafe?: boolean;
+  readonly reconcileRequired?: boolean;
+}
+
+/**
+ * A frase do desfecho ambíguo — quando o navegador não sabe o que aconteceu.
+ *
+ * Ela não afirma que o contato não foi criado, porque ninguém verificou. O
+ * `fetch` pode ter rejeitado **depois** de o servidor receber o POST e o Bling
+ * criar o contato: a resposta se perde, e o navegador cai no `catch` sem saber
+ * de nada.
+ */
+const FALHA_AMBIGUA =
+  'O envio não pôde ser confirmado. O contato pode ter sido criado no Bling. '
+  + 'Sincronize os clientes e confira antes de tentar de novo.';
+
+/**
+ * O estado do diálogo quando o navegador não sabe o que aconteceu.
+ *
+ * Era aqui que estava o bloqueio da revisão externa. O `catch` de `handleSave`
+ * afirmava que "nada foi confirmado por provedor nenhum, então repetir continua
+ * sendo seguro" — e a premissa é falsa: o POST pode ter chegado ao servidor, o
+ * Bling pode ter criado o contato, e só a resposta ter se perdido no caminho de
+ * volta. Rede caindo, aborto e JSON ilegível são o mesmo estado — **não se
+ * sabe** —, e repetir daqui cadastra um segundo contato no ERP.
+ *
+ * A mensagem técnica do erro também não vai para a tela: ela não diz nada
+ * acionável sobre o efeito externo, que é justamente o que está em dúvida.
+ */
+function estadoAmbiguo() {
+  return {
+    isOpen: true,
+    title: 'Resultado do envio não confirmado',
+    errorMessage: FALHA_AMBIGUA,
+    permiteRepetir: false,
+  };
+}
+
+/**
+ * Traduz a falha da rota no estado do diálogo de erro.
+ *
+ * `details` e `logs` NÃO vêm mais do corpo da resposta. Era por aí que a linha
+ * recusada pelo Postgres — nome, e-mail e telefone do contato — chegava ao
+ * diálogo na captura da revisão. O servidor deixou de mandar; a tela deixa de
+ * pedir. O que sobra é o status HTTP, que é informação dela.
+ *
+ * **"Tentar novamente" exige prova, não ausência de má notícia.** O botão só
+ * aparece com `retrySafe: true`, que é o servidor afirmando que nada foi
+ * confirmado do outro lado. Antes a tela usava `reconcileRequired === false`
+ * como sinônimo de seguro — e isso tratava "não sei o que houve" como "nada
+ * houve", que é a premissa que duplica contato no ERP.
+ */
+function estadoDeFalhaDoContato(
+  resposta: FalhaDoContato,
+  status: number,
+  isNew: boolean,
+) {
+  const precisaReconciliar = resposta.reconcileRequired === true;
+  const permiteRepetir = resposta.retrySafe === true && !precisaReconciliar;
+  return {
+    isOpen: true,
+    title: precisaReconciliar
+      ? 'Contato criado no Bling, gravação local pendente'
+      : permiteRepetir
+        ? isNew
+          ? 'Falha ao Cadastrar Contato'
+          : 'Falha ao Atualizar Contato'
+        : 'Resultado do envio não confirmado',
+    errorMessage: resposta.error || (permiteRepetir ? 'Erro ao processar sincronização.' : FALHA_AMBIGUA),
+    logs: [`[${new Date().toISOString()}] HTTP Status: ${status}`],
+    permiteRepetir,
+  };
+}
+
 interface ClienteEditModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -114,6 +191,16 @@ export function ClienteEditModal({
     errorMessage: string;
     details?: string;
     logs?: string[];
+    /**
+     * Existe prova de que repetir é seguro?
+     *
+     * Fecha por omissão, e é isso que importa: só é `true` quando o servidor
+     * **afirmou** `retrySafe`. Falha de transporte, JSON ilegível, 5xx do
+     * provedor e commit conhecido no Bling caem todos no `false` — o navegador
+     * não sabe se o contato foi criado, e um botão "tentar novamente" ali é um
+     * convite a duplicar cadastro no ERP.
+     */
+    permiteRepetir?: boolean;
   }>({
     isOpen: false,
     title: '',
@@ -185,13 +272,7 @@ export function ClienteEditModal({
       const resData = await res.json();
 
       if (!res.ok || !resData.success) {
-        setErrorLogData({
-          isOpen: true,
-          title: isNew ? 'Falha ao Cadastrar Contato' : 'Falha ao Atualizar Contato',
-          errorMessage: resData.error || 'Erro ao processar sincronização.',
-          details: resData.details || '',
-          logs: resData.logs || [`[${new Date().toISOString()}] HTTP Status: ${res.status}`],
-        });
+        setErrorLogData(estadoDeFalhaDoContato(resData, res.status, isNew));
         setIsSaving(false);
         return;
       }
@@ -209,14 +290,9 @@ export function ClienteEditModal({
         setSavedSuccess(false);
         onClose();
       }, 1500);
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : 'Falha ao enviar dados.';
-      setErrorLogData({
-        isOpen: true,
-        title: 'Erro de Execução (Node.js)',
-        errorMessage: errMsg,
-        details: String(err),
-      });
+    } catch {
+      // Desfecho ambíguo. Ver `estadoAmbiguo`.
+      setErrorLogData(estadoAmbiguo());
       setIsSaving(false);
     }
   };
@@ -392,7 +468,14 @@ export function ClienteEditModal({
         errorMessage={errorLogData.errorMessage}
         details={errorLogData.details}
         logs={errorLogData.logs}
-        onRetry={handleSave}
+        // Sem `onRetry`, o `ErrorLogModal` não desenha o botão — e é essa a
+        // decisão local que o ticket pediu, em vez de redesenhar um diálogo
+        // usado por outras telas.
+        //
+        // A condição é **positiva**: só oferece repetir quem tem prova de que
+        // repetir é seguro. `permiteRepetir` fecha por omissão, então qualquer
+        // desfecho que o navegador não entendeu cai no lado sem botão.
+        onRetry={errorLogData.permiteRepetir ? handleSave : undefined}
       />
     </>
   );

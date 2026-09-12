@@ -1,5 +1,6 @@
 import type { Periodo } from '@/components/vendas/filtrosDeVendas';
 import type { TituloFinanceiro } from './useLeituraFinanceira';
+import { movimentacaoContaComoAtiva } from '@/lib/metricas/movimentacaoAtiva';
 
 /**
  * As derivações do Financeiro — puras, e **uma só fonte para os dois gráficos**.
@@ -120,6 +121,11 @@ export function recortarPorVencimento<T extends { data_vencimento: string }>(
  *
  * Existe para que não haja duas agregações discordando: as barras e as curvas
  * partem desta mesma lista, no mesmo período, com o mesmo recorte de situação.
+ *
+ * O recorte de situação saiu daqui para `movimentacaoContaComoAtiva`, porque
+ * havia um terceiro interessado que ninguém tinha contado: os cards do topo,
+ * que vêm do servidor e filtravam só `pago`. Dois gráficos concordando entre si
+ * e discordando dos cards é o mesmo defeito num eixo maior.
  */
 export function titulosElegiveis(
   titulos: readonly TituloFinanceiro[],
@@ -127,7 +133,7 @@ export function titulosElegiveis(
   baseline: number,
 ): TituloFinanceiro[] {
   return recortarPorVencimento(titulos, periodo, baseline)
-    .filter((t) => t.situacao === 'pago' || t.situacao === 'aberto');
+    .filter((t) => movimentacaoContaComoAtiva(t.situacao));
 }
 
 /** Soma por dia, devolvendo os dias em ordem. */

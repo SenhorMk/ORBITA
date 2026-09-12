@@ -28,6 +28,10 @@ vi.mock('@/lib/supabaseServer', () => ({
           filtrosAplicados.push({ coluna, valor });
           return encadeavel;
         },
+        in: (coluna: string, valor: unknown) => {
+          filtrosAplicados.push({ coluna, valor });
+          return encadeavel;
+        },
         then: (resolve: (r: unknown) => unknown) => resolve({ data: linhasDeTitulos, error: null }),
       };
       return encadeavel;
@@ -94,14 +98,20 @@ describe('resumo financeiro', () => {
 
   it('entradas, saídas e saldo saem dos TÍTULOS — o pedido não é somado de novo', async () => {
     // O dataset real do staging: 3 títulos a receber pagos e 4 a pagar pagos.
+    //
+    // A `situacao` é explícita em cada linha, e passou a ser obrigatória para o
+    // caso medir algo: o recorte fecha por omissão, então uma linha sem
+    // situação — que a consulta real nunca devolve, porque filtra por ela —
+    // ficaria fora do total. Dizer "pagos" no comentário e omitir o campo no
+    // dado era o teste descrevendo um dataset que ele não montava.
     linhasDeTitulos = [
-      { tipo: 'receber', valor: '40.00' },
-      { tipo: 'receber', valor: '40.00' },
-      { tipo: 'receber', valor: '40.00' },
-      { tipo: 'pagar', valor: '20.00' },
-      { tipo: 'pagar', valor: '50.00' },
-      { tipo: 'pagar', valor: '20.00' },
-      { tipo: 'pagar', valor: '50.00' },
+      { tipo: 'receber', valor: '40.00', situacao: 'pago' },
+      { tipo: 'receber', valor: '40.00', situacao: 'pago' },
+      { tipo: 'receber', valor: '40.00', situacao: 'pago' },
+      { tipo: 'pagar', valor: '20.00', situacao: 'pago' },
+      { tipo: 'pagar', valor: '50.00', situacao: 'pago' },
+      { tipo: 'pagar', valor: '20.00', situacao: 'pago' },
+      { tipo: 'pagar', valor: '50.00', situacao: 'pago' },
     ];
 
     const resumo = await financeiroRepository.getResumo(scope);
@@ -112,16 +122,19 @@ describe('resumo financeiro', () => {
   });
 
   it('cada título entra uma vez só', async () => {
-    linhasDeTitulos = [{ tipo: 'receber', valor: '40.00' }];
+    linhasDeTitulos = [{ tipo: 'receber', valor: '40.00', situacao: 'pago' }];
     const resumo = await financeiroRepository.getResumo(scope);
     expect(resumo.receitas).toBe(40);
   });
 
-  it('a agregação é escopada à organização e só considera título pago', async () => {
+  it('a agregação é escopada à organização e recorta pelas situações ATIVAS', async () => {
+    // Era `.eq('situacao', 'pago')`. A tabela e os graficos sempre contaram
+    // `aberto` tambem, e os cards nao — era esse o defeito: lancar uma despesa
+    // em aberto movia o grafico e deixava os cards parados.
     await financeiroRepository.getResumo(scope);
 
     expect(filtrosAplicados).toContainEqual({ coluna: 'organizacao_id', valor: ORG });
-    expect(filtrosAplicados).toContainEqual({ coluna: 'situacao', valor: 'pago' });
+    expect(filtrosAplicados).toContainEqual({ coluna: 'situacao', valor: ['aberto', 'pago'] });
     expect(filtrosAplicados.some((f) => f.valor === OUTRA_ORG)).toBe(false);
   });
 });
@@ -156,5 +169,99 @@ describe('estados terminais do título', () => {
     const resumo = await financeiroRepository.getResumo(scope);
 
     expect(resumo.receitas).toBe(60);
+  });
+});
+
+/**
+ * O defeito reproduzido no staging: despesa lancada em aberto mudava tabela e
+ * grafico, e os tres cards nao se moviam. Os cards liam `pago`; a tabela e os
+ * graficos liam `pago` + `aberto`. Duas respostas para a mesma pergunta, na
+ * mesma tela — e num painel de dinheiro isso le como numero errado.
+ */
+describe('os cards contam a mesma coisa que a tabela e os gráficos', () => {
+  beforeEach(() => {
+    filtrosAplicados.length = 0;
+    linhasDeTitulos = [];
+  });
+
+  it('uma despesa em ABERTO entra em Total Saídas', async () => {
+    linhasDeTitulos = [{ tipo: 'pagar', valor: '150.00', situacao: 'aberto' }];
+
+    const resumo = await financeiroRepository.getResumo(scope);
+
+    expect(resumo.despesas).toBe(150);
+  });
+
+  it('uma receita em ABERTO entra em Total Entradas', async () => {
+    linhasDeTitulos = [{ tipo: 'receber', valor: '90.00', situacao: 'aberto' }];
+
+    const resumo = await financeiroRepository.getResumo(scope);
+
+    expect(resumo.receitas).toBe(90);
+  });
+
+  it('PAGO continua entrando, ao lado do aberto', async () => {
+    linhasDeTitulos = [
+      { tipo: 'receber', valor: '100.00', situacao: 'pago' },
+      { tipo: 'receber', valor: '50.00', situacao: 'aberto' },
+      { tipo: 'pagar', valor: '30.00', situacao: 'pago' },
+      { tipo: 'pagar', valor: '20.00', situacao: 'aberto' },
+    ];
+
+    const resumo = await financeiroRepository.getResumo(scope);
+
+    expect(resumo.receitas).toBe(150);
+    expect(resumo.despesas).toBe(50);
+  });
+
+  it('CANCELADO não entra em nenhum dos totais', async () => {
+    linhasDeTitulos = [
+      { tipo: 'receber', valor: '70.00', situacao: 'cancelado' },
+      { tipo: 'pagar', valor: '80.00', situacao: 'cancelado' },
+    ];
+
+    const resumo = await financeiroRepository.getResumo(scope);
+
+    expect(resumo).toEqual({ receitas: 0, despesas: 0, saldo: 0 });
+  });
+
+  it('ESTORNADO não entra em nenhum dos totais', async () => {
+    linhasDeTitulos = [
+      { tipo: 'receber', valor: '70.00', situacao: 'estornado' },
+      { tipo: 'pagar', valor: '80.00', situacao: 'estornado' },
+    ];
+
+    const resumo = await financeiroRepository.getResumo(scope);
+
+    expect(resumo).toEqual({ receitas: 0, despesas: 0, saldo: 0 });
+  });
+
+  it('saldo é entradas menos saídas, com aberto e pago misturados', async () => {
+    linhasDeTitulos = [
+      { tipo: 'receber', valor: '200.00', situacao: 'pago' },
+      { tipo: 'receber', valor: '100.00', situacao: 'aberto' },
+      { tipo: 'pagar', valor: '120.00', situacao: 'aberto' },
+      { tipo: 'pagar', valor: '30.00', situacao: 'pago' },
+      // Os terminais ficam no historico e fora da conta.
+      { tipo: 'receber', valor: '999.00', situacao: 'cancelado' },
+      { tipo: 'pagar', valor: '999.00', situacao: 'estornado' },
+    ];
+
+    const resumo = await financeiroRepository.getResumo(scope);
+
+    expect(resumo.receitas).toBe(300);
+    expect(resumo.despesas).toBe(150);
+    expect(resumo.saldo).toBe(resumo.receitas - resumo.despesas);
+    expect(resumo.saldo).toBe(150);
+  });
+
+  it('uma situação desconhecida fica fora: o recorte fecha por omissão', async () => {
+    // Incluir por engano num painel de dinheiro e pior que excluir por engano:
+    // o segundo aparece como numero faltando, o primeiro como numero errado.
+    linhasDeTitulos = [{ tipo: 'receber', valor: '500.00', situacao: 'situacao-que-o-bling-inventou' }];
+
+    const resumo = await financeiroRepository.getResumo(scope);
+
+    expect(resumo.receitas).toBe(0);
   });
 });
