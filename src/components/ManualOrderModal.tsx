@@ -159,7 +159,7 @@ function ManualOrderFormFields(props: ManualOrderFormFieldsProps) {
         <label htmlFor="manual-order-cliente" className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Cliente</label>
         <select
           id="manual-order-cliente"
-          className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium text-white bg-transparent [&>option]:bg-slate-900"
+          className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium text-white bg-transparent"
           value={selectedCliente}
           onChange={e => setSelectedCliente(e.target.value)}
         >
@@ -211,7 +211,7 @@ function ManualOrderFormFields(props: ManualOrderFormFieldsProps) {
         <label htmlFor="manual-order-forma-pagamento" className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Forma de Pagamento</label>
         <select
           id="manual-order-forma-pagamento"
-          className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium text-white bg-transparent [&>option]:bg-slate-900"
+          className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium text-white bg-transparent"
           value={formaPagamento}
           onChange={e => setFormaPagamento(e.target.value)}
         >
