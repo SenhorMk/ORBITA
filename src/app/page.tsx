@@ -903,12 +903,10 @@ export default function Home() {
           data?.pedidos?.find(p => p.itens?.some(i => i.produto_id === selectedProdutoModal?.id))?.cliente ||
           null
         }
-        onSave={(updated) => {
-          painel.atualizarDados((anterior) => ({
-            ...anterior,
-            produtos: anterior.produtos.map((p) => (p.id === updated.id || p.bling_id === updated.bling_id) ? updated : p),
-          }));
-        }}
+        // Releitura autoritativa, e não remendo local: o produto volta do
+        // repositório na forma canônica de `Produto`, com `bling_id`,
+        // `categoria_id` e `unidade` no lugar. Sem reload de página.
+        onSaved={() => { void loadDashboardData(); }}
         onOpenChatwoot={handleOpenChatwootForPhone}
       />
 

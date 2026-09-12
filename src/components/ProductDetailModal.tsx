@@ -6,7 +6,7 @@ import type { Produto, Cliente, Categoria } from '@/types';
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import { Pilula } from '@/components/ui/StatusPill';
 import { ErrorLogModal } from './ErrorLogModal';
-import { validateProdutoForBling, sanitizeProductName } from '@/lib/utils';
+import { isProdutoSynced, validateProdutoForBling, sanitizeProductName } from '@/lib/utils';
 import { supabase } from '@/lib/supabaseClient';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import {
@@ -20,6 +20,7 @@ import {
   type ProdutoTipo,
 } from '@/lib/config/produtoContract';
 import { avisoDoBootstrap, carregarCategoriasDoProduto } from '@/components/produtos/bootstrapDeCategorias';
+import { lerObrigatoriosDoBling } from '@/components/produtos/obrigatoriosDoBling';
 
 /**
  * O detalhe e a edição de um produto, agora no `Modal` do Design System.
@@ -40,12 +41,50 @@ import { avisoDoBootstrap, carregarCategoriasDoProduto } from '@/components/prod
  * tela diga a verdade.
  */
 
+/**
+ * Os obrigatórios do Bling com que o formulário ABRE.
+ *
+ * Três casos, e a diferença entre eles é quem tem autoridade sobre o valor:
+ *
+ * - produto novo: ninguém — padrão seguro;
+ * - produto local ainda sem par no ERP: ninguém lá fora — padrão seguro, mas a
+ *   `unidade` persistida, quando existe, é a resposta;
+ * - produto já sincronizado: o ERP. Aqui não se preenche nada: `null` é
+ *   "desconhecido", e é o que mantém o salvar bloqueado até a leitura
+ *   autoritativa responder. Preencher com o padrão e salvar sobrescreveria no
+ *   Bling o tipo, a situação e o formato que estavam lá.
+ */
+function obrigatoriosIniciais(produto: Produto | null): {
+  tipo: ProdutoTipo | null;
+  situacao: ProdutoSituacao | null;
+  formato: ProdutoFormato | null;
+  unidade: string;
+} {
+  const unidade = produto?.unidade?.trim() ? produto.unidade.trim().toUpperCase() : 'UN';
+
+  if (produto && isProdutoSynced(produto.bling_id)) {
+    return { tipo: null, situacao: null, formato: null, unidade };
+  }
+
+  return { tipo: 'P', situacao: 'A', formato: 'S', unidade };
+}
+
 interface ProductDetailModalProps {
   isOpen: boolean;
   onClose: () => void;
   produto: Produto | null;
   cliente?: Cliente | null;
-  onSave?: (updatedProduto: Produto) => void;
+  /**
+   * O produto foi gravado com sucesso.
+   *
+   * É um SINAL, e não o registro: quem chama relê o catálogo da fonte
+   * autoritativa. A versão anterior entregava aqui o `ProdutoPersistido` da
+   * rota — outro contrato, com `blingId` em vez de `bling_id` e sem
+   * `categoria_id` nem `unidade` — e a linha do catálogo era substituída por
+   * ele. O produto gravado passava a aparecer como não sincronizado, sem
+   * categoria e "faltando dados", enquanto o banco tinha tudo.
+   */
+  onSaved?: () => void;
   onOpenChatwoot?: (phone?: string, name?: string) => void;
 }
 
@@ -111,7 +150,7 @@ export function ProductDetailModal({
   isOpen,
   onClose,
   produto,
-  onSave,
+  onSaved,
 }: ProductDetailModalProps) {
   // Form editable state
   const [nome, setNome] = useState(produto?.nome || '');
@@ -123,14 +162,20 @@ export function ProductDetailModal({
   /** O que dizer sobre as categorias quando não há categorias para escolher. */
   const [avisoDeCategorias, setAvisoDeCategorias] = useState<string | null>(null);
 
-  // Bling mandatory fields
-  // Tipados pelos enums do contrato: os valores aceitos por `POST /produtos`
-  // são `tipo` S|P|N, `situacao` A|I e `formato` S|V|E. Como string livre, um
-  // valor inválido só apareceria como recusa do Bling em produção.
-  const [tipo, setTipo] = useState<ProdutoTipo>('P');
-  const [situacao, setSituacao] = useState<ProdutoSituacao>('A');
-  const [formato, setFormato] = useState<ProdutoFormato>('S');
-  const [unidade, setUnidade] = useState('UN');
+  // Obrigatórios do Bling. `null` significa DESCONHECIDO — e desconhecido não
+  // é `P`/`A`/`S`: num produto que já existe no ERP, preencher com o padrão e
+  // salvar sobrescreve lá o que estava.
+  //
+  // O valor inicial vem do MESMO cálculo que a sincronização de props usa. Sem
+  // isso, o primeiro render de um produto sincronizado já nasceria com o padrão
+  // — e o bloco de sincronização abaixo não roda no primeiro render.
+  const [tipo, setTipo] = useState<ProdutoTipo | null>(obrigatoriosIniciais(produto).tipo);
+  const [situacao, setSituacao] = useState<ProdutoSituacao | null>(obrigatoriosIniciais(produto).situacao);
+  const [formato, setFormato] = useState<ProdutoFormato | null>(obrigatoriosIniciais(produto).formato);
+  const [unidade, setUnidade] = useState(obrigatoriosIniciais(produto).unidade);
+  /** O que dizer quando os obrigatórios do produto sincronizado não vieram. */
+  const [avisoDeObrigatorios, setAvisoDeObrigatorios] = useState<string | null>(null);
+  const [buscandoObrigatorios, setBuscandoObrigatorios] = useState(false);
 
   const [observacao, setObservacao] = useState('');
   const [isCopied, setIsCopied] = useState(false);
@@ -148,10 +193,12 @@ export function ProductDetailModal({
       setCodigo(produto.codigo || `BLING-${produto.bling_id}`);
       setPreco(produto.preco !== undefined ? String(produto.preco) : '0.00');
       setEstoque(produto.estoque !== undefined ? String(produto.estoque) : '0');
-      setTipo('P');
-      setSituacao('A');
-      setFormato('S');
-      setUnidade('UN');
+      const iniciais = obrigatoriosIniciais(produto);
+      setUnidade(iniciais.unidade);
+      setTipo(iniciais.tipo);
+      setSituacao(iniciais.situacao);
+      setFormato(iniciais.formato);
+      setAvisoDeObrigatorios(null);
       setCategoriaId(produto.categoria_id || '');
       setObservacao(`Produto sincronizado via API Bling ERP. ID Bling: ${produto.bling_id}.`);
     } else {
@@ -159,10 +206,12 @@ export function ProductDetailModal({
       setCodigo('');
       setPreco('0.00');
       setEstoque('0');
-      setTipo('P');
-      setSituacao('A');
-      setFormato('S');
-      setUnidade('UN');
+      const iniciais = obrigatoriosIniciais(null);
+      setTipo(iniciais.tipo);
+      setSituacao(iniciais.situacao);
+      setFormato(iniciais.formato);
+      setUnidade(iniciais.unidade);
+      setAvisoDeObrigatorios(null);
       setCategoriaId('');
       setObservacao('Novo produto a ser cadastrado simultaneamente no Bling ERP v3 e Supabase.');
     }
@@ -210,6 +259,42 @@ export function ProductDetailModal({
     };
   }, [isOpen]);
 
+  const blingIdSincronizado = produto && isProdutoSynced(produto.bling_id) ? produto.bling_id : null;
+  /**
+   * Falta autoridade sobre algum obrigatório?
+   *
+   * Enquanto isto for verdade o formulário não deixa salvar: um `PUT` daqui
+   * gravaria no ERP um valor que ninguém confirmou.
+   */
+  const obrigatoriosDesconhecidos = tipo === null || situacao === null || formato === null;
+
+  useEffect(() => {
+    let ativo = true;
+    if (isOpen && blingIdSincronizado !== null) {
+      void (async () => {
+        setBuscandoObrigatorios(true);
+        const lidos = await lerObrigatoriosDoBling(fetchWithAuth, blingIdSincronizado);
+        if (!ativo) return;
+        if (lidos === null) {
+          // Sem valor autoritativo não se preenche nada: o salvar fica
+          // bloqueado em vez de mandar um padrão fictício para o ERP.
+          setAvisoDeObrigatorios(
+            'Não foi possível ler tipo, situação e formato deste produto no Bling. '
+            + 'Salvar está bloqueado para não sobrescrever esses campos no ERP com valores padrão.',
+          );
+        } else {
+          setTipo(lidos.tipo);
+          setSituacao(lidos.situacao);
+          setFormato(lidos.formato);
+          setUnidade(lidos.unidade.toUpperCase());
+          setAvisoDeObrigatorios(null);
+        }
+        setBuscandoObrigatorios(false);
+      })();
+    }
+    return () => { ativo = false; };
+  }, [isOpen, blingIdSincronizado]);
+
   if (!isOpen) return null;
 
   const handleCopyCode = () => {
@@ -222,6 +307,19 @@ export function ProductDetailModal({
 
   /** Erros de validação local, já no formato do modal de log. */
   const validarAntesDeEnviar = () => {
+    // Sem autoridade sobre os obrigatórios não há envio. O botão já fica
+    // desabilitado; esta guarda existe porque o caminho que escreve no ERP não
+    // pode depender só da UI.
+    if (tipo === null || situacao === null || formato === null) {
+      return {
+        isOpen: true,
+        title: 'Obrigatórios do Bling desconhecidos',
+        errorMessage:
+          'Tipo, situação e formato deste produto ainda não foram lidos do Bling. '
+          + 'Salvar agora sobrescreveria esses campos no ERP com valores padrão.',
+      };
+    }
+
     const validation = validateProdutoForBling({ nome, preco, estoque, codigo, tipo, situacao, formato, unidade });
     if (validation.valid) return null;
     return {
@@ -251,6 +349,14 @@ export function ProductDetailModal({
       // forma falha aqui, antes da requisição, em vez de virar um `as` no
       // servidor. O SKU só é enviado quando o usuário informou um — nem o
       // modal nem o adapter inventam código.
+      // Os obrigatórios já foram exigidos por `validarAntesDeEnviar`; repetir a
+      // conferência aqui é o que impede um `PUT` com valor não confirmado caso
+      // este caminho passe a ser chamado de outro lugar.
+      if (tipo === null || situacao === null || formato === null) {
+        setIsSaving(false);
+        return;
+      }
+
       const payload = buildProdutoRequest({
         id: produto?.id,
         blingId: /^\d+$/.test(String(produto?.bling_id ?? '')) ? String(produto?.bling_id) : undefined,
@@ -280,12 +386,10 @@ export function ProductDetailModal({
         return;
       }
 
-      if (onSave && result.product) {
-        // Só o registro devolvido pelo servidor — ele carrega o id real do
-        // Bling. Ecoar o payload local aqui mascarava uma sincronização que
-        // não aconteceu.
-        onSave(result.product as Produto);
-      }
+      // Nada de devolver o registro: os dois contratos têm formas diferentes, e
+      // converter um no outro por `as` é como a linha do catálogo perdia
+      // `bling_id`, `categoria_id` e `unidade`. Quem chama relê.
+      onSaved?.();
 
       setIsSaving(false);
       setSavedSuccess(true);
@@ -337,7 +441,7 @@ export function ProductDetailModal({
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={isSaving}
+                disabled={isSaving || obrigatoriosDesconhecidos}
                 className="orbita-chip cursor-pointer"
                 style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
               >
@@ -449,21 +553,24 @@ export function ProductDetailModal({
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="product-detail-tipo">Tipo *</Rotulo>
-                <select id="product-detail-tipo" value={tipo} onChange={(e) => setTipo(produtoTipoSchema.parse(e.target.value))} className="orbita-campo">
+                <select id="product-detail-tipo" value={tipo ?? ''} disabled={obrigatoriosDesconhecidos} onChange={(e) => setTipo(produtoTipoSchema.parse(e.target.value))} className="orbita-campo">
+                  {tipo === null && <option value="">{buscandoObrigatorios ? 'Lendo do Bling…' : '—'}</option>}
                   <option value="P">Produto (P)</option>
                   <option value="S">Serviço (S)</option>
                 </select>
               </div>
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="product-detail-situacao">Situação *</Rotulo>
-                <select id="product-detail-situacao" value={situacao} onChange={(e) => setSituacao(produtoSituacaoSchema.parse(e.target.value))} className="orbita-campo">
+                <select id="product-detail-situacao" value={situacao ?? ''} disabled={obrigatoriosDesconhecidos} onChange={(e) => setSituacao(produtoSituacaoSchema.parse(e.target.value))} className="orbita-campo">
+                  {situacao === null && <option value="">{buscandoObrigatorios ? 'Lendo do Bling…' : '—'}</option>}
                   <option value="A">Ativo (A)</option>
                   <option value="I">Inativo (I)</option>
                 </select>
               </div>
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="product-detail-formato">Formato *</Rotulo>
-                <select id="product-detail-formato" value={formato} onChange={(e) => setFormato(produtoFormatoSchema.parse(e.target.value))} className="orbita-campo">
+                <select id="product-detail-formato" value={formato ?? ''} disabled={obrigatoriosDesconhecidos} onChange={(e) => setFormato(produtoFormatoSchema.parse(e.target.value))} className="orbita-campo">
+                  {formato === null && <option value="">{buscandoObrigatorios ? 'Lendo do Bling…' : '—'}</option>}
                   <option value="S">Simples (S)</option>
                   <option value="V">Variações (V)</option>
                   <option value="E">Composição (E)</option>
@@ -474,6 +581,11 @@ export function ProductDetailModal({
                 <input id="product-detail-unidade" type="text" value={unidade} onChange={(e) => setUnidade(e.target.value.toUpperCase())} maxLength={6} className="orbita-campo orbita-campo--mono" placeholder="UN, CX, KG" />
               </div>
             </div>
+            {avisoDeObrigatorios !== null && (
+              <output className="text-[11px]" style={{ color: 'var(--warning)' }}>
+                {avisoDeObrigatorios}
+              </output>
+            )}
           </Secao>
 
           <Secao titulo="Observações">
