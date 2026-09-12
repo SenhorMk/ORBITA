@@ -128,7 +128,9 @@ schema_paths = [
   "../database/61_titulo_financeiro_vinculado_ao_pedido.sql",
   "../database/62_titulo_e_fornecedor_da_despesa.sql",
   "../database/63_convite_nominal_identidade_e_papel_preservado.sql",
-  "../database/64_convite_exige_email_confirmado.sql"
+  "../database/64_convite_exige_email_confirmado.sql",
+  "../database/65_checkpoint_de_sync_por_organizacao.sql",
+  "../database/66_replay_de_item_nao_consome_estoque.sql"
 ]
 
 [db.seed]

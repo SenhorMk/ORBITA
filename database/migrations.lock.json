@@ -335,6 +335,16 @@
       "order": 67,
       "path": "../database/64_convite_exige_email_confirmado.sql",
       "sha256": "61de32b99874efd7164c49e09f096a0c5b5181c174893840b85ee4375ce0a996"
+    },
+    {
+      "order": 68,
+      "path": "../database/65_checkpoint_de_sync_por_organizacao.sql",
+      "sha256": "e724fbf1b3066c1d94fdd3025a4d66c8d31c4a05a6033d75d9220960c94d483b"
+    },
+    {
+      "order": 69,
+      "path": "../database/66_replay_de_item_nao_consome_estoque.sql",
+      "sha256": "576de23208120afaa9a40eaac9175991ac4773d4571ad14620f7fbd74bee4b4a"
     }
   ],
   "references": [

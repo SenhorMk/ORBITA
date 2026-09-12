@@ -133,6 +133,9 @@ function registrarFalha(
     // Sem o status, um 403 e um 500 do provedor viravam a mesma linha
     // `BlingLeituraError` — o log existia e nao distinguia causa nenhuma.
     status: statusTecnico(erro),
+    // Falha de banco não carrega status HTTP, e sem o SQLSTATE a linha do log
+    // não diz nada além de "algo falhou".
+    codigo: codigoTecnico(erro),
   });
 }
 
@@ -140,6 +143,12 @@ function registrarFalha(
 function statusTecnico(erro: unknown): number | undefined {
   const bruto = (erro as { status?: unknown } | null | undefined)?.status;
   return typeof bruto === 'number' && Number.isInteger(bruto) && bruto >= 0 && bruto <= 599 ? bruto : undefined;
+}
+
+/** SQLSTATE do erro, apenas quando tem a forma fechada de um código técnico. */
+function codigoTecnico(erro: unknown): string | undefined {
+  const bruto = (erro as { code?: unknown } | null | undefined)?.code;
+  return typeof bruto === 'string' && /^[0-9A-Z]{5}$/u.test(bruto) ? bruto : undefined;
 }
 
 function toTitulo(
@@ -293,7 +302,16 @@ async function sincronizarEntidade(
     };
   }
 
-  await store.marcarCheckpoint(scope, entidade);
+  try {
+    await store.marcarCheckpoint(scope, entidade);
+  } catch (err: unknown) {
+    // Continua sendo falha: sem checkpoint, a próxima execução relê a partir do
+    // marcador antigo. O que muda é o diagnóstico — etapa, entidade e SQLSTATE
+    // em vez de um `Erro interno` sem origem.
+    registrarFalha(err, { etapa: 'marcar-checkpoint', entidade, organizacaoId: scope.organizationId });
+    throw err;
+  }
+
   return {
     processados, falhasTemporarias, falhasPermanentes, itensInvalidos,
     leituraFalhou: false, leituraIncompleta: false,

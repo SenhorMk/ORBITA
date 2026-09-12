@@ -44,7 +44,16 @@ function supabaseFinanceiroSyncStore(): FinanceiroSyncStorePort {
       const { error } = await supabaseServer
         .from('sync_state')
         .upsert(
-          { organizacao_id: scope.organizationId, entidade, last_synced_at: agora, updated_at: agora },
+          {
+            organizacao_id: scope.organizationId,
+            // Ator que gravou o checkpoint. `sync_state.user_id` é `NOT NULL`;
+            // a identidade do checkpoint, porém, é `(organizacao_id, entidade)`
+            // — é ela que resolve o conflito abaixo.
+            user_id: scope.actorId,
+            entidade,
+            last_synced_at: agora,
+            updated_at: agora,
+          },
           { onConflict: 'organizacao_id, entidade' },
         );
       if (error) throw error;
