@@ -35,7 +35,12 @@ export const switchOrgInputSchema = z.object({
 });
 export type SwitchOrgInput = z.infer<typeof switchOrgInputSchema>;
 
-/** Outcome of comparing the observed and current active organization. */
+/**
+ * Nome do cookie que espelha a organização ativa depois de uma troca aplicada.
+ *
+ * É só um espelho para o navegador: a autoridade sobre a organização ativa é
+ * `contextos_organizacao_ativos`, e nenhuma fronteira de autorização lê este cookie.
+ */
 export const ACTIVE_ORG_COOKIE_NAME = 'orbita_active_org';
 
 export interface ActiveOrganizationContext {
@@ -46,15 +51,12 @@ export interface ActiveOrganizationContext {
 /**
  * List all organizations the user belongs to.
  *
- * **Ticket 06 — a falha de leitura nao pode virar "voce nao tem organizacao".**
- * `if (error || !data) return []` dizia exatamente isso, e no eixo multi-tenant
- * e a pior confusao possivel: a tela que recebe `[]` oferece "crie sua primeira
- * organizacao" a quem e owner de duas. O `safeParse` por linha tinha o mesmo
- * efeito, uma organizacao por vez.
+ * **Falha de leitura não é "você não tem organização".** Devolver `[]` num erro
+ * faria a tela oferecer "crie sua primeira organização" a quem já pertence a
+ * várias. Por isso a falha sobe, e quem chama a apresenta como erro.
  *
- * Agora a falha sobe, e quem chama a diz. O parse continua estrito — uma
- * membership persistida que o servidor nao sabe ler e falha do servidor, e nao
- * uma organizacao que deixou de existir.
+ * O parse é estrito pelo mesmo motivo: uma membership persistida que o servidor
+ * não sabe ler é falha do servidor, e não uma organização que deixou de existir.
  *
  * @throws Se a leitura falhar ou se alguma linha nao corresponder ao contrato.
  */
@@ -164,18 +166,13 @@ export async function createOrganizationAtomic(
 /**
  * Resolve `organizacao_id` a partir de um tenant ou userId.
  *
- * **Esta função ainda contém o modelo por usuário**, e é importante dizê-lo:
- * quando não acha vínculo, ela devolve o próprio `userId` como se fosse a
- * organização — a mesma equivalência "tenant = usuário" que o Ticket 22 removeu
- * de `auth.ts`. Ou seja, a fatia C removeu os **caminhos de produção** do modelo
- * antigo, não a última linha dele.
+ * **Não usar em código de produção.** Quando não acha vínculo, ela devolve o
+ * próprio `userId` como se fosse a organização — a equivalência
+ * "tenant = usuário", que não vale no modelo por organização. Não tem chamador
+ * de produção; é exercitada apenas por testes.
  *
- * Ela ficou de propósito, por decisão de revisão: tem **zero chamadores de
- * produção** (medido em 01/09/2026) mas é exercitada por testes, e decidir o
- * destino dela e deles é assunto próprio — ver o ticket 25.
- *
- * Enquanto existir, a regra `tenancy-legacy-resolver` do `boundaries:check`
- * impede que ela ganhe chamador novo em código de produção.
+ * A regra `tenancy-legacy-resolver` do `boundaries:check` impede que ela ganhe
+ * chamador novo fora deste arquivo.
  */
 export async function resolveTenantOrgId(
   supabase: SupabaseClient,
@@ -191,7 +188,7 @@ export async function resolveTenantOrgId(
     .limit(1)
     .maybeSingle();
 
-  // O fallback é o modelo antigo em uma linha: sem vínculo, o usuário *é* a
-  // organização. Nenhum caminho de produção passa por aqui.
+  // Sem vínculo, o usuário é tratado como a organização. Por isso nenhum
+  // caminho de produção pode passar por aqui.
   return data?.organizacao_id ?? userId;
 }

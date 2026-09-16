@@ -1,3 +1,17 @@
+/**
+ * Autoriza operações dentro de uma organização do ORBITA (núcleo puro).
+ *
+ * Fluxo: identidade → membership persistida → papel → capabilities → contexto.
+ *
+ * O identificador de organização enviado pelo navegador não concede autoridade:
+ * ele só escolhe qual vínculo consultar. O contexto resultante carrega um
+ * símbolo privado, então só este módulo o constrói — quem recebe um
+ * `OrganizationContext` sabe que ator e organização já foram comprovados.
+ *
+ * Não conhece Supabase: identidade e memberships entram por portas
+ * (`OrganizationAuthorizationDependencies`), o que permite testar a regra sem
+ * banco. O adaptador de produção está em `requestOrganizationContext`.
+ */
 import { z } from 'zod';
 
 import {
@@ -17,7 +31,13 @@ export type OrganizationActorId = z.infer<typeof actorIdSchema>;
 /** UUID brand for organizations. */
 export type OrganizationId = z.infer<typeof organizationIdSchema>;
 
-/** Organization selection resolved at the HTTP boundary. */
+/**
+ * Qual vínculo consultar.
+ *
+ * `FirstMembership` significa "a organização ativa persistida do ator"; sem
+ * seleção persistida, o adaptador usa o vínculo mais antigo. `ExactOrganization`
+ * pede um par ator/organização específico e falha se ele não existir.
+ */
 export type OrganizationSelection =
   | { readonly _tag: 'FirstMembership' }
   | { readonly _tag: 'ExactOrganization'; readonly organizationId: OrganizationId };
@@ -37,7 +57,13 @@ export type MembershipLookupResult =
   | { readonly _tag: 'MembershipNotFound' }
   | { readonly _tag: 'MembershipStoreUnavailable'; readonly cause: string };
 
-/** Outcome of an atomic persisted active-organization switch. */
+/**
+ * Resultado da troca da organização ativa por compare-and-swap (CAS).
+ *
+ * `Stale` quer dizer que a versão esperada não é a atual — outra aba ou
+ * requisição já trocou a seleção, ou, com versão esperada `0`, já existe uma
+ * seleção. Em nenhum dos casos a troca é aplicada por cima.
+ */
 export type OrganizationSwitchResult =
   | { readonly _tag: 'OrganizationSwitchApplied'; readonly version: number }
   | { readonly _tag: 'OrganizationSwitchStale' }
@@ -88,11 +114,11 @@ export interface OrganizationAuthorizationDependencies {
 }
 
 /**
- * Capabilities granted by one persisted organization role.
+ * Capabilities concedidas por um papel persistido — a única tabela papel → permissão.
  *
- * Exported so that boundaries authorizing an organization named in the URL —
- * and not the actor's active one — derive capabilities from the same table as
- * `resolveOrganizationContext`, instead of re-deciding what a role may do.
+ * `member` só acessa; `owner` e `admin` também gerenciam. Rotas que autorizam
+ * uma organização nomeada na URL usam esta mesma função, para que nenhuma
+ * fronteira redecida por conta própria o que um papel pode fazer.
  */
 export function organizationCapabilitiesForRole(role: PapelMembro): ReadonlySet<OrganizationCapability> {
   return role === 'member'
@@ -117,7 +143,14 @@ export function activeOrganizationSelection(): OrganizationSelection {
   return { _tag: 'FirstMembership' };
 }
 
-/** Resolve verified identity and persisted membership into canonical organization context. */
+/**
+ * Transforma identidade verificada + membership persistida em contexto canônico.
+ *
+ * A ordem importa: sem identidade não se consulta vínculo, e sem vínculo não se
+ * derivam capabilities. Ausência de vínculo vira `OrganizationAccessDenied`
+ * (403); falha do banco vira `OrganizationStoreUnavailable` (503) — uma
+ * indisponibilidade nunca é confundida com "você não pertence a esta organização".
+ */
 export async function resolveOrganizationContext(
   request: Request,
   selection: OrganizationSelection | null,

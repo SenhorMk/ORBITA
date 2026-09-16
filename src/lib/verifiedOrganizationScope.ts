@@ -1,3 +1,12 @@
+/**
+ * Escopo verificado: o par organização/ator que os adaptadores privilegiados aceitam.
+ *
+ * Repositórios que usam a chave `service_role` ignoram RLS, então não podem
+ * confiar num `organizacao_id` qualquer. Eles recebem um
+ * `VerifiedOrganizationScope`, que só é construído aqui — a partir de um
+ * contexto canônico já resolvido ou de uma consulta ao vínculo persistido.
+ * O símbolo privado impede que outro módulo monte esse objeto à mão.
+ */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import {
@@ -74,10 +83,9 @@ export async function verifyOrganizationScope(
 /**
  * A capacidade que o papel do escopo já verificado concede.
  *
- * Existe para as rotas que faziam `session.role !== 'dono'`: aquele papel vinha
- * de `app_metadata`, do modelo antigo de tenancy por usuário, e não dizia nada
- * sobre o papel da pessoa *na organização*. A pergunta certa é sobre a
- * capacidade, e a fonte certa é o vínculo persistido (Ticket 22).
+ * As rotas perguntam pela capacidade (`organization:manage`), não pelo nome do
+ * papel: a tabela papel → capacidade existe num único lugar
+ * (`organizationCapabilitiesForRole`), e o papel vem do vínculo persistido.
  *
  * Mora aqui, e não em `requestOrganizationContext`, porque aquele módulo
  * constrói o cliente Supabase no load: um adaptador HTTP não deve carregar

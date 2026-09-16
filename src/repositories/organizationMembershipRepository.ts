@@ -51,7 +51,15 @@ export class SupabaseOrganizationMemberships implements OrganizationMembershipPo
   /** Construct the adapter with a server-side Supabase client. */
   constructor(private readonly supabase: SupabaseClient) {}
 
-  /** Find and parse the requested persisted membership, classifying provider failures. */
+  /**
+   * Encontra o vínculo pedido e o devolve junto com a versão da seleção ativa.
+   *
+   * A seleção ativa é lida primeiro porque sua versão acompanha qualquer
+   * resultado: é ela que a tela devolve na próxima troca, para o CAS. Com
+   * `FirstMembership`, a organização ativa persistida tem precedência; sem ela,
+   * vale o vínculo mais antigo. Linha que não passa no schema é tratada como
+   * falha do banco (`MembershipStoreUnavailable`), não como ausência de vínculo.
+   */
   async findMembership(
     actorId: OrganizationActorId,
     selection: OrganizationSelection,
@@ -95,7 +103,14 @@ export class SupabaseOrganizationMemberships implements OrganizationMembershipPo
   }
 
 
-  /** Atomically switch the persisted active organization and classify stale/denied outcomes. */
+  /**
+   * Troca a organização ativa pela RPC `alternar_organizacao_ativa_cas`.
+   *
+   * A RPC confere o vínculo e compara a versão na mesma transação do banco:
+   * com versão esperada `0` só insere se ainda não houver seleção; com versão
+   * `n` só atualiza se a atual ainda for `n`. `42501` (sem vínculo) vira
+   * `Denied`; resposta sem `aplicado = true` e versão válida vira `Stale`.
+   */
   async switchActiveOrganization(
     actorId: OrganizationActorId,
     organizationId: OrganizationId,
