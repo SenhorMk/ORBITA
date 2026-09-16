@@ -12,10 +12,13 @@ import type { BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaC
  *
  *     "não recebi resposta" → "não criou"   (inferência inválida)
  *
- * **Faixa numérica de status HTTP não é prova de ausência de efeito.** Um
- * `429`, por exemplo, plausivelmente acontece antes do processamento, mas o
- * contrato do Bling não afirma isso — e a inferência seria usada para
- * autorizar uma nova criação externa.
+ * **Faixa numérica de status HTTP, sozinha, não é prova de ausência de efeito.**
+ * O caso do `429` mostra a política adotada: a página de limites da
+ * documentação atual do Bling afirma que, atingido o limite, os próximos
+ * requests não são processados. Ainda assim, esta implementação mantém
+ * `TOO_MANY_REQUESTS` como `Ambigua` — é uma escolha conservadora local desta
+ * versão, porque a classificação autoriza reabrir a chave e permitir uma nova
+ * criação externa.
  *
  * A política é **reconhecimento positivo por tipo de erro do contrato**,
  * a mesma forma já usada em `classificacaoDeFalha.ts` para o banco:
@@ -38,8 +41,8 @@ import type { BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaC
  * ## O custo de errar para cada lado, que é o que justifica a assimetria
  *
  * Classificar como `Ambigua` algo que de fato não criou nada: a venda fica
- * bloqueada até alguém conferir. Incômodo, visível, e com saída pronta — a
- * reconciliação por `numeroLoja` responde em uma chamada de leitura.
+ * bloqueada até alguém conferir. Incômodo e visível, e há um caminho de saída:
+ * a reconciliação por `numeroLoja`.
  *
  * Classificar como `Definitiva` algo que criou: a chave reabre, a retentativa
  * cria um SEGUNDO pedido real na conta do lojista, e ninguém fica sabendo.
@@ -66,9 +69,10 @@ export type ClassificacaoDeFalhaBling = 'Definitiva' | 'Ambigua';
  *
  * **Deliberadamente fora desta lista**, embora estejam no mesmo enum:
  *
- * - `TOO_MANY_REQUESTS` (`429`) — plausivelmente uma recusa anterior ao
- *   processamento, mas o contrato não afirma isso, e a inferência seria usada
- *   para autorizar uma segunda criação externa.
+ * - `TOO_MANY_REQUESTS` (`429`) — a documentação de limites do Bling afirma
+ *   que requisições excedentes não são processadas, mas esta implementação o
+ *   mantém fora da lista por política conservadora local: é a classificação que
+ *   autorizaria uma segunda criação externa.
  * - `RESOURCE_NOT_FOUND` — num `POST` de criação, não é inequívoco o que não
  *   foi encontrado nem em que ponto do processamento.
  * - `UNKNOWN_ERROR`, `SERVER_ERROR`, `NOT_IMPLEMENTED` — nada afirmam sobre

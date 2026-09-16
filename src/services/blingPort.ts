@@ -14,9 +14,10 @@ import type { Situacao } from '../lib/integrations/bling/situacoesContract';
  * Os métodos que devolvem `BlingCallResult` foram conferidos contra o OpenAPI
  * oficial: payload validado antes do envio e falha tipada com mensagem
  * legível. Os demais sinalizam falha por exceção: as leituras de sincronização
- * (`getPedidos`, `getPedido`, `getClientes`, `getProdutos`) lançam
- * `BlingLeituraError`, e alguns métodos auxiliares, como `getContatosByNome`,
- * devolvem lista vazia.
+ * (`getPedidos`, `getPedido`, `getClientes`, `getProdutos`) sinalizam falha de
+ * leitura com `BlingLeituraError` — com uma exceção deliberada: `getPedido`
+ * devolve `null` para `404`, que significa "o pedido não existe", e só isso.
+ * Alguns métodos auxiliares, como `getContatosByNome`, devolvem lista vazia.
  *
  * A distinção está no tipo de retorno de propósito: um método que devolve
  * `BlingCallResult` obriga o chamador a tratar a falha.

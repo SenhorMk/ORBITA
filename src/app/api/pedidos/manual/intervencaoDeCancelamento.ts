@@ -167,12 +167,16 @@ async function encerrarComoAmbigua(
 }
 
 /**
- * O efeito externo aconteceu (ou pode ter acontecido) e o registro local não
- * foi gravado.
+ * A finalização local da intervenção (`finalizarIntervencaoETentativa`) não
+ * pôde ser confirmada.
  *
- * Nunca responde sucesso e nunca diz que a referência foi liberada: o claim e
- * o bloqueio ficam de pé, e uma nova conferência converge sem repetir o efeito
- * remoto — porque o claim segue ocupado.
+ * O desfecho remoto depende do ponto de chamada: o cancelamento no Bling pode
+ * ter sido confirmado, ter ficado ambíguo ou ter sido recusado. Como não se
+ * sabe o que ficou registrado localmente, esta resposta é sempre
+ * `NaoReconciliavel` e nunca declara a referência liberada.
+ *
+ * Este resultado, sozinho, não autoriza repetir a mutação remota: a próxima
+ * ação deve partir de uma nova conferência do estado atual.
  */
 function respostaDeFalhaAoPersistir(causa: unknown): ResultadoDaReconciliacao {
   registrarFalhaInterna('pedidos.manual.reconciliar.persistencia', causa);
