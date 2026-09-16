@@ -3,6 +3,14 @@ import { supabaseServer } from '../lib/supabaseServer';
 import { SITUACOES_ATIVAS, movimentacaoContaComoAtiva } from '../lib/metricas/movimentacaoAtiva';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
+/**
+ * Persistência dos títulos financeiros (contas a pagar e a receber) por organização.
+ *
+ * Usa o cliente `service_role`, que ignora RLS: toda consulta filtra pelo
+ * `organizacao_id` do `VerifiedOrganizationScope`, e toda escrita tira a
+ * organização e o ator do escopo, nunca do objeto recebido. Títulos vindos do
+ * Bling são gravados por upsert em `(organizacao_id, bling_id)`.
+ */
 export class FinanceiroRepository {
   async getCategorias(scope: VerifiedOrganizationScope): Promise<CategoriaFinanceira[]> {
     const { data, error } = await supabaseServer
@@ -39,10 +47,8 @@ export class FinanceiroRepository {
    * Entradas, saídas e saldo ATIVOS — os três cards do topo do Financeiro.
    *
    * O recorte é `SITUACOES_ATIVAS` (`aberto` + `pago`), a **mesma** noção que
-   * a tabela e os gráficos usam via `titulosElegiveis`. Filtrava
-   * `situacao = 'pago'`, e era esse o defeito reproduzido no staging: lançar
-   * uma despesa em aberto movia o gráfico e a tabela, e os cards acima ficavam
-   * parados. Duas respostas para a mesma pergunta, na mesma tela.
+   * a tabela e os gráficos usam via `titulosElegiveis`, para que a mesma tela
+   * não dê duas respostas à mesma pergunta.
    *
    * `cancelado` e `estornado` seguem fora: são terminais, continuam no
    * histórico e nas Últimas Movimentações, e não somam. Ver
