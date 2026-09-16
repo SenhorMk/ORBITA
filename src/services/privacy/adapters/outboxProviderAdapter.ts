@@ -1,23 +1,21 @@
 /**
- * outboxProviderAdapter.ts
- * Ticket 17: adapter genérico para sistemas alcançados através do outbox
- * durável já existente (`src/services/outboxService.ts`, ticket 12) —
- * usado por `blingAdapter.ts` e `chatwootAdapter.ts`.
+ * Adapter de direitos do titular para sistemas alcançados pelo outbox durável
+ * (`src/services/outboxService.ts`) — usado por `blingAdapter.ts` e
+ * `chatwootAdapter.ts`.
  *
- * Reuso deliberado em vez de recriar clientes HTTP: enfileira um evento real
- * e durável (mesma tabela/RPC que já processa `chatwoot`/`bling` hoje) e
- * reflete o status *real* desse evento — nunca declara `completed` sem o
- * outbox ter reportado `sent`. A chave de idempotência é determinística
- * (solicitação + sistema + direito), então reprocessar a mesma tarefa nunca
- * duplica o evento (`registrar_evento_outbox`, migration 31, já deduplica
- * por `idempotency_key`).
+ * O que ele faz: **enfileira** um evento no outbox e reflete o status desse
+ * evento na tarefa do titular. Não chama o Bling nem o Chatwoot diretamente, e
+ * não declara `completed` sem o outbox ter registrado `sent`. A chave de
+ * idempotência é determinística (solicitação + sistema + direito), e
+ * `registrar_evento_outbox` (migration 31) deduplica por `idempotency_key`:
+ * reprocessar a mesma tarefa não enfileira um segundo evento.
  *
- * Gap de infraestrutura pré-existente documentado em
- * `docs/adr/ticket-17-direitos-titular.md` seção 4: nenhuma rota de
- * produção ainda registra adapters reais de provider em
- * `runOutboxWorkerOnce` (ticket 12 deixou o worker pronto mas não ligado).
- * Enquanto isso não for fechado, uma tarefa endereçada a estes destinos
- * permanece honestamente `retryable` até ser efetivamente entregue.
+ * **Limite real:** a entrega desses eventos depende do outbox worker
+ * (`runOutboxWorkerOnce`) ser executado com adapters de provider. No código
+ * atual nenhuma rota, cron ou processo registra esses adapters nem agenda o
+ * worker. Consequência: uma tarefa endereçada a `bling` ou `chatwoot` fica
+ * `retryable` (evento pendente) e não é concluída automaticamente em
+ * produção.
  */
 
 import type { AdapterOutcome, DireitoTipo, TarefaSistema, TitularSystemAdapter, TitularTaskContext } from './types';

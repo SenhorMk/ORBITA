@@ -6,28 +6,29 @@ import type { ReconciliacaoDeps, ResultadoDaReconciliacao } from './reconciliaca
 import type { TentativaRegistrada } from './ports';
 
 /**
- * A intervenção que escreve no ERP: cancelar o pedido órfão e encerrar a
- * tentativa (ticket 30, fatia 3 — 6ª a 8ª rodadas de revisão).
+ * A intervenção que escreve no ERP: cancelar o pedido órfão ("existe no Bling,
+ * não existe no ORBITA") e encerrar a tentativa.
  *
- * Separada de `reconciliacao.ts` porque é a única parte do fluxo que MUTA algo
- * fora do ORBITA, e porque o arquivo passou do limite de tamanho do gate de
- * qualidade quando ela cresceu para cobrir claim, ambiguidade e finalização
- * atômica.
+ * Separada de `reconciliacao.ts` porque é a reconciliação que MUTA algo fora
+ * do ORBITA. Sequência: claim da intervenção no banco → `PATCH` de cancelamento
+ * no Bling → finalização da intervenção e da tentativa numa única RPC do banco.
+ * O `PATCH` e a finalização local não são atômicos entre si; por isso existem
+ * os desfechos `ambigua` e "executado no Bling, mas não registrado".
  */
 
 /**
  * A intervenção operacional explícita: cancela no Bling o pedido órfão e
- * encerra a tentativa (ticket 30 — 6ª rodada de revisão).
+ * encerra a tentativa.
  *
- * É o caminho que faltava para o terceiro desfecho não terminar em "fica
- * bloqueada para sempre". Depois de um cancelamento CONFIRMADO, o Bling não
- * tem mais nada pendente para esta referência, e a chave pode ser reaberta com
- * segurança — a venda é registrada de novo pelo fluxo normal.
+ * Depois de um cancelamento CONFIRMADO, o Bling não tem mais nada pendente para
+ * esta referência, e a chave pode ser reaberta — a venda é registrada de novo
+ * pelo fluxo normal.
  *
- * **Idempotente.** Cancelar um pedido já cancelado é inócuo no Bling, e a
- * elegibilidade é reavaliada antes (uma tentativa já `falhou` ou `concluida`
- * nem chega aqui, ver `tentativaPodeSerReconciliada`). Repetir a intervenção
- * converge para o mesmo estado em vez de acumular efeito.
+ * **Repetição.** Não se supõe que o Bling trate um segundo cancelamento como
+ * inócuo. O que evita repetir o efeito é local: a elegibilidade é reavaliada
+ * antes (uma tentativa `falhou` ou `concluida` nem chega aqui, ver
+ * `tentativaPodeSerReconciliada`), e o claim recusa uma segunda intervenção
+ * enquanto a anterior não tiver desfecho, ou tiver ficado `ambigua`.
  *
  * **Só grava `falhou` com o cancelamento confirmado.** Se o cancelamento
  * falhar, a tentativa permanece `indeterminada` — é a mesma regra da máquina
@@ -66,7 +67,7 @@ export async function cancelarNoBlingEEncerrar(
     };
   }
 
-  // A PARTIR DAQUI o cancelamento pode ter acontecido (8ª rodada de revisão).
+  // A PARTIR DAQUI o cancelamento pode ter acontecido.
   // Uma exceção lançada — timeout, conexão perdida, abort — não prova que o
   // PATCH não chegou; prova só que a resposta não voltou.
   let cancelamento: Awaited<ReturnType<ReconciliacaoDeps['bling']['cancelarPedidoVenda']>>;

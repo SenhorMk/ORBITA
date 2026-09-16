@@ -188,9 +188,10 @@ async function lerTentativaPorReferencia(
  * existente e devolve: nova (com época), conflito de conteúdo, valores
  * divergentes, pendência idêntica, ou o estado da tentativa repetida.
  *
- * **Nunca lança.** Toda falha vira `TentativaIndisponivel` — inclusive
- * `42P01` (tabela/RPC ausente). Tratar infraestrutura ausente como "segue sem
- * a proteção" desligaria em silêncio a garantia contra duplicação. Falha
+ * **Erro da RPC vira valor.** Toda falha devolvida pela RPC vira
+ * `TentativaIndisponivel` — inclusive `42P01` (tabela/RPC ausente). Tratar
+ * infraestrutura ausente como "segue sem a proteção" desligaria em silêncio a
+ * proteção contra duplicação. Falha
  * fechada: sem conseguir reivindicar, o handler não chama o Bling.
  */
 async function reivindicarTentativa(

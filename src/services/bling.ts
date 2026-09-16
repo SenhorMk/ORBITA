@@ -480,11 +480,11 @@ export class BlingClient implements BlingPort {
   /**
    * Busca um produto pelo SKU exato, conferindo o `codigo` do resultado.
    *
-   * A conferencia existe porque um filtro ignorado pelo provedor devolve uma
-   * lista qualquer, e confiar nela ja causou o pior tipo de bug: cadastrar um
-   * produto novo disparava um PUT sobrescrevendo nome, codigo e preco de um
-   * produto nao relacionado, seguido de um lancamento de saldo absoluto nele.
-   * Um filtro que nao filtra nunca mais pode virar escrita destrutiva.
+   * A conferência existe porque um filtro ignorado pelo provedor devolve uma
+   * lista qualquer. Confiar nela faria o cadastro de um produto novo disparar
+   * um PUT sobrescrevendo nome, código e preço de um produto não relacionado,
+   * seguido de um lançamento de saldo absoluto nele. Só um resultado com o
+   * `codigo` idêntico ao pedido é devolvido.
    */
   async buscarProdutoPorCodigo(codigo: string): Promise<BlingProduto | null> {
     const alvo = codigo.trim();
@@ -840,8 +840,9 @@ export class BlingClient implements BlingPort {
    * Marca um pedido de venda como cancelado, com falha tipada.
    *
    * Serve de compensação: quando o Bling aceita a venda e o ORBITA não
-   * consegue gravá-la, é isto que impede o pedido de ficar órfão na conta do
-   * lojista. Cancelar em vez de apagar preserva o rastro de que a venda chegou
+   * consegue gravá-la, é isto que tenta evitar que o pedido fique órfão na conta
+   * do lojista. Se o cancelamento falhar ou ficar sem resposta, a tentativa fica
+   * `indeterminada` e segue para reconciliação. Cancelar em vez de apagar preserva o rastro de que a venda chegou
    * a existir no ERP, e a sincronização traz o pedido cancelado para cá — os
    * dois lados convergem.
    *

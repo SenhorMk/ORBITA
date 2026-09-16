@@ -8,16 +8,17 @@ import { credentialsVault } from '../../../../lib/integrations/credentialsVault'
 /**
  * Resolução do tenant do webhook do Bling a partir do cofre de credenciais.
  *
- * Existe como módulo próprio porque era exatamente aqui que a fronteira estava
- * testada de um lado só. O ticket 10b moveu a credencial do Bling para o cofre
- * (`conexoes_integracao` + `credenciais_integracao`) e o webhook continuou
- * lendo `integracoes_bling`, que ficou com zero linhas — nenhum secret para
- * conferir contra a assinatura, portanto `403` em **todo** evento legítimo. O
- * teste do webhook não pegou porque semeava `integracoes_bling` ele mesmo.
+ * O secret que assina os eventos é o `client_secret` do aplicativo, guardado
+ * cifrado no cofre por conexão (`conexoes_integracao` +
+ * `credenciais_integracao`). A tabela legada `integracoes_bling` não é lida.
  *
- * A defesa é a inversão: a leitura passa por `blingVaultCredentialsSchema`, o
- * mesmo schema que `POST /api/bling/connect` usa para **escrever**. Renomear a
- * chave quebra as duas pontas de uma vez, em vez de silenciar uma delas.
+ * A leitura passa por `blingVaultCredentialsSchema`, o mesmo schema que
+ * `POST /api/bling/connect` usa para **escrever**: renomear uma chave quebra as
+ * duas pontas de uma vez, em vez de silenciar uma delas.
+ *
+ * Para autenticar, as conexões Bling de todas as organizações são candidatas;
+ * a primeira cujo secret confere o HMAC define a organização
+ * (`authorizeSignedServiceTenant`).
  */
 
 /** Conexão Bling candidata a autenticar um evento, já ligada à sua organização. */
@@ -80,9 +81,8 @@ export function createSupabaseBlingWebhookTenantStore(
 /**
  * Descobre qual conexão Bling assinou o corpo bruto recebido.
  *
- * A organização vem da própria linha da conexão: não há resolução por
- * `user_id` legado, nem por `membros_organizacao`, nem ramo de ambiguidade —
- * uma conexão pertence a exatamente uma organização, por construção.
+ * A organização vem da própria linha da conexão, que tem um único
+ * `organizacao_id`: não há resolução por usuário nem por `membros_organizacao`.
  *
  * @param store - Porta de leitura das conexões e dos secrets.
  * @param rawBody - Corpo exatamente como recebido, antes de qualquer parse.

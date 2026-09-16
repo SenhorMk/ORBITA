@@ -6,23 +6,17 @@ import type { Situacao } from '../lib/integrations/bling/situacoesContract';
  * Porta de aplicação para o Bling ERP.
  *
  * Os consumidores (rotas, serviços de sync, webhook) dependem **deste tipo**,
- * nunca da classe concreta. Isso permite que os testes de unidade desses
- * módulos usem um fake da porta em vez de mock de módulo — que era a única
- * opção enquanto o tipo era `ReturnType<typeof bling.forVerifiedOrganization>`,
- * um apelido para a implementação.
+ * e não da classe concreta `BlingClient`. Isso permite que os testes desses
+ * módulos usem um fake completo da porta em vez de mock de módulo.
  *
- * A superfície aqui é a que tem chamador real, apurada no inventário do
- * Ticket 10b (`docs/migrations/ticket-10b-bling-callers-inventory.md`): 43
- * métodos públicos existiam em `BlingClient`, 33 com chamador de produção e 7
- * completamente mortos, removidos.
+ * ## Dois estilos de método convivendo
  *
- * ## Duas gerações de método convivendo
- *
- * Os métodos que devolvem `BlingCallResult` são os revisados nos Tickets 30-33
- * contra o OpenAPI oficial: payload validado antes do envio e falha tipada com
- * mensagem legível. Os que lançam exceção ou devolvem lista vazia em erro são
- * os anteriores, ainda não revisados — leitura e sincronização, onde uma falha
- * degrada para "sem dados" em vez de corromper o ERP.
+ * Os métodos que devolvem `BlingCallResult` foram conferidos contra o OpenAPI
+ * oficial: payload validado antes do envio e falha tipada com mensagem
+ * legível. Os demais sinalizam falha por exceção: as leituras de sincronização
+ * (`getPedidos`, `getPedido`, `getClientes`, `getProdutos`) lançam
+ * `BlingLeituraError`, e alguns métodos auxiliares, como `getContatosByNome`,
+ * devolvem lista vazia.
  *
  * A distinção está no tipo de retorno de propósito: um método que devolve
  * `BlingCallResult` obriga o chamador a tratar a falha.
@@ -38,24 +32,23 @@ export interface BlingPort {
   updatePedido(id: string, payload: unknown): Promise<unknown>;
   deletePedido(id: string): Promise<unknown>;
   updateSituacaoPedido(idPedido: string | number, idSituacao: string | number): Promise<unknown>;
-  /** Revisado no Ticket 30 contra o schema oficial. */
+  /** Payload validado contra o schema oficial antes do envio. */
   criarPedidoVenda(payload: PedidoVendaPayload): Promise<BlingCallResult<{ id: string; alertas: readonly string[] }>>;
-  /** Baixa de estoque vinculada ao pedido (Ticket 30). */
+  /** Baixa de estoque vinculada ao pedido. */
   lancarEstoquePedidoVenda(idPedido: string): Promise<BlingCallResult<void>>;
   /**
-   * Procura um pedido de venda pela referência local enviada em `numeroLoja`
-   * (Ticket 30, 5ª rodada de revisão).
+   * Procura um pedido de venda pela referência local enviada em `numeroLoja`.
    *
    * `GET /pedidos/vendas?numerosLojas[]=<ref>`. Existe para a reconciliação de
    * uma tentativa cujo `createPedidoVenda` não devolveu resposta: sem
-   * `bling_id`, a referência local é a única coisa que os dois lados
-   * compartilham. `null` = o Bling respondeu e não há pedido com essa
-   * referência.
+   * `bling_id`, a referência local é o que os dois lados compartilham.
+   * `NenhumPedido` = o Bling respondeu e esta consulta não viu pedido com essa
+   * referência, o que não prova que ele não foi criado.
    */
   buscarPedidoVendaPorNumeroLoja(numeroLoja: string): Promise<BlingCallResult<BuscaDePedidoPorNumeroLoja>>;
-  /** Compensacao: marca como cancelado um pedido que o ORBITA nao conseguiu gravar. */
+  /** Compensação: marca como cancelado um pedido que o ORBITA não conseguiu gravar. */
   cancelarPedidoVenda(idPedido: string): Promise<BlingCallResult<void>>;
-  /** Forma de pagamento padrão da conta (Ticket 30). */
+  /** Forma de pagamento padrão da conta. */
   obterFormaPagamentoPadraoId(): Promise<BlingCallResult<number>>;
 
   // ── Produtos e estoque ─────────────────────────────────────────────────
@@ -64,7 +57,7 @@ export interface BlingPort {
   deleteProduto(id: string): Promise<unknown>;
   getEstoquesSaldos(idsProdutos: string[]): Promise<unknown[]>;
   getCategoriasProdutos(pagina?: number, limite?: number): Promise<BlingCategoria[]>;
-  /** Busca por SKU exato, com conferência do código (Ticket 31). */
+  /** Busca por SKU exato, com conferência do código. */
   buscarProdutoPorCodigo(codigo: string): Promise<BlingProduto | null>;
   criarProduto(payload: ProdutoBlingEntrada): Promise<BlingCallResult<{ id: string }>>;
   atualizarProduto(id: string, payload: ProdutoBlingEntrada): Promise<BlingCallResult<void>>;
@@ -74,10 +67,10 @@ export interface BlingPort {
   getClientes(pagina?: number, limite?: number, dataAlteracaoInicial?: string): Promise<BlingCliente[]>;
   getContatosByNome(nome: string): Promise<BlingCliente[]>;
   deleteContato(id: string): Promise<unknown>;
-  /** Revisados no Ticket 32: campos `telefone` e `indicadorIe`. */
+  /** Campos conforme o OpenAPI oficial: `telefone` e `indicadorIe`. */
   criarContato(payload: ContatoBlingEntrada): Promise<BlingCallResult<{ id: string }>>;
   atualizarContato(id: string, payload: ContatoBlingEntrada): Promise<BlingCallResult<void>>;
-  /** Cadastro de contato durante a venda manual (Ticket 30). */
+  /** Cadastro de contato durante a venda manual. */
   criarContatoParaVenda(input: {
     nome: string;
     email: string | null;
@@ -91,33 +84,31 @@ export interface BlingPort {
   getContasPagar(pagina?: number, limite?: number, dataInicial?: string, dataFinal?: string): Promise<unknown[]>;
   getContasReceber(pagina?: number, limite?: number, dataInicial?: string, dataFinal?: string): Promise<unknown[]>;
   getCategorias(): Promise<unknown[]>;
-  /** Revisados no Ticket 33 contra o schema oficial. */
+  /** Conferidos contra o schema oficial; quitar é uma chamada separada da criação. */
   criarContaPagar(payload: ContaPagarBlingEntrada): Promise<BlingCallResult<{ id: string }>>;
   baixarContaPagar(idConta: string, payload: BaixaContaPagarEntrada): Promise<BlingCallResult<void>>;
-  /** Portador (`GET /contas-contabeis`), necessário para quitar (Ticket 33). */
+  /** Portador (`GET /contas-contabeis`), necessário para quitar. */
   obterContaFinanceiraPadraoId(): Promise<BlingCallResult<number>>;
 
   // ── Fiscal e configuração ──────────────────────────────────────────────
   createNfe(payload: unknown): Promise<unknown>;
   /**
-   * Situações do módulo de pedidos de venda da conta (Ticket 31).
+   * Situações do módulo de pedidos de venda da conta.
    *
-   * Substitui `getSituacoesModulo(idModulo)`, que lia a rota errada e devolvia
-   * `[]` em qualquer conta. O id do módulo é por conta e passou a ser
-   * descoberto, então não há mais parâmetro a passar.
+   * O id do módulo é por conta e é descoberto dentro da operação, então não há
+   * parâmetro a passar.
    *
-   * **Nunca lança:** devolve `BlingCallResult`, e o ramo `BlingFailed` precisa
-   * ser tratado. Envolver a chamada em `try/catch` e seguir com a lista vazia
-   * reproduz o defeito de origem deste ticket, em que lista vazia por engano
-   * virava "a conta não tem a situação".
+   * **Falha como valor:** devolve `BlingCallResult`, e o ramo `BlingFailed`
+   * precisa ser tratado — `comOrcamento` converte exceções em falha tipada.
+   * Tratar falha como lista vazia transformaria "não consegui ler" em "a conta
+   * não tem a situação".
    *
    * **Lista vazia é resposta legítima:** significa módulo encontrado e sem
-   * situações cadastradas. Formato irreconhecível vem como falha, não como
-   * `[]` — a distinção é o conserto do ticket.
+   * situações cadastradas. Formato irreconhecível vem como falha, não como `[]`.
    *
-   * **Tem teto de tempo próprio** (`BlingClient.TEMPO_LIMITE_OPERACAO_MS`), que
-   * cobre as duas requisições e as esperas entre elas. O chamador não precisa
-   * impor o dele.
+   * **Tem teto de tempo próprio** (`BlingClient.TEMPO_LIMITE_OPERACAO_MS`) para
+   * a resposta, cobrindo as duas requisições e as esperas entre elas. O trabalho
+   * já em voo quando o teto estoura pode terminar depois, fora da requisição.
    */
   obterSituacoesDePedidoDeVenda(): Promise<BlingCallResult<readonly Situacao[]>>;
 }
@@ -135,7 +126,7 @@ export interface ProdutoBlingEntrada {
   categoria?: { id: number };
 }
 
-/** Entrada de criação e atualização de contato (Ticket 32). */
+/** Entrada de criação e atualização de contato. */
 export interface ContatoBlingEntrada {
   nome: string;
   email?: string;
@@ -152,9 +143,9 @@ export interface ContatoBlingEntrada {
 }
 
 /**
- * Entrada do cadastro de contato ainda no formato antigo, usada pela rota de
- * fornecedores. Mantida separada de `ContatoBlingEntrada` para não dar a
- * entender que já passou pela revisão contra o schema oficial.
+ * Entrada do cadastro de contato no formato simplificado, usada pela rota de
+ * fornecedores e pela venda manual. Mantida separada de `ContatoBlingEntrada`
+ * porque não é validada por schema antes do envio.
  */
 export interface ContatoLegadoEntrada {
   nome: string;
@@ -163,10 +154,8 @@ export interface ContatoLegadoEntrada {
   cnpj?: string;
   tipo?: string;
   /**
-   * Indicador de IE — `indicadorIe` no OpenAPI oficial.
-   *
-   * Chamava-se `contribuinte` ate o ticket 06, nome que o Bling **nao** tem: a
-   * requisicao era aceita e o campo descartado em silencio.
+   * Indicador de IE — `indicadorIe` no OpenAPI oficial. Um nome que o Bling não
+   * tem (como `contribuinte`) seria aceito na requisição e descartado em silêncio.
    */
   indicadorIe?: number;
   cep?: string;
@@ -177,7 +166,7 @@ export interface ContatoLegadoEntrada {
   uf?: string;
 }
 
-/** Entrada de `POST /contas/pagar` (Ticket 33). */
+/** Entrada de `POST /contas/pagar`. */
 export interface ContaPagarBlingEntrada {
   contatoId: number;
   vencimento: string;
@@ -188,7 +177,7 @@ export interface ContaPagarBlingEntrada {
   categoriaId?: number;
 }
 
-/** Entrada de `POST /contas/pagar/{id}/baixar` (Ticket 33). */
+/** Entrada de `POST /contas/pagar/{id}/baixar`. */
 export interface BaixaContaPagarEntrada {
   data: string;
   historico: string;

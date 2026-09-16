@@ -1,10 +1,10 @@
 /**
- * A saída da intervenção que ficou `ambigua` (ticket 30 — 9ª rodada, B3), e a
- * regra que impede uma conferência de afirmar o que não gravou (B4).
+ * A saída da intervenção de cancelamento que ficou `ambigua`, e a resposta
+ * padrão para quando o ledger não gravou uma conclusão.
  *
- * Separado de `reconciliacao.ts` porque é um caminho próprio — não consulta o
- * Bling, não toma posse, não compensa — e porque aquele arquivo passou do
- * limite de tamanho do gate de qualidade.
+ * Separado de `reconciliacao.ts` porque é um caminho próprio: não consulta o
+ * Bling, não toma posse, não compensa. Uma pessoa conferiu o ERP e registra o
+ * que viu; o sistema só guarda essa decisão.
  */
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
@@ -19,7 +19,7 @@ export interface ResolucaoPedida {
 }
 
 /**
- * Encerra a intervenção `ambigua` com a decisão humana (9ª rodada, B3).
+ * Encerra a intervenção `ambigua` com a decisão humana.
  *
  * Não fala com o Bling: a pessoa já foi lá e está afirmando o que viu. A
  * gravação é append-only — o fato original continua `ambigua`, e a decisão
@@ -81,8 +81,8 @@ export async function resolverAmbiguidade(
 }
 
 /**
- * O ledger não gravou (9ª rodada, B4): nenhuma resposta pode dizer que a
- * referência foi liberada, porque nada foi liberado.
+ * O ledger não gravou: a resposta não pode dizer que a referência foi
+ * liberada, porque nada foi liberado.
  */
 export function ledgerNaoGravado(causa: unknown): ResultadoDaReconciliacao {
   registrarFalhaInterna('pedidos.manual.reconciliar.ledger', causa);

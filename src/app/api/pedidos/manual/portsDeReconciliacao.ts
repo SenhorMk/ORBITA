@@ -10,12 +10,12 @@
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 /**
- * Desfecho de uma escrita no ledger de tentativas (9ª rodada de revisão, B4).
+ * Desfecho de uma escrita no ledger de tentativas.
  *
- * Era `Promise<void>` com o erro genérico apenas logado — e por isso a rota
- * respondia `201` (e a reconciliação, `referenciaLiberada: true`) sobre um
- * registro que não existia. Uma resposta de sucesso não pode ser emitida sem o
- * estado durável correspondente, e para isso quem chama precisa **saber**.
+ * É um valor, e não `void`, porque uma resposta de sucesso (`201`, ou
+ * `referenciaLiberada: true` na reconciliação) não pode ser emitida sem o
+ * estado durável correspondente — e para isso quem chama precisa **saber** se
+ * a escrita aconteceu.
  */
 export type RegistroDeDesfecho =
   | { readonly _tag: 'DesfechoGravado' }
@@ -24,7 +24,7 @@ export type RegistroDeDesfecho =
 /** Resposta de `confirmarPosse`: ainda sou dono desta tentativa? */
 export type PosseDaTentativa =
   | { readonly _tag: 'PosseVigente' }
-  /** Alguém tomou a posse: nenhum efeito novo pode ser iniciado. */
+  /** Alguém tomou a posse: quem chama não inicia efeito novo. */
   | { readonly _tag: 'PossePerdida' }
   /** Não deu para perguntar. Falha fechada: também não inicia efeito. */
   | { readonly _tag: 'PosseIndeterminada'; readonly causa: unknown };
@@ -75,7 +75,7 @@ export interface FinalizacaoDeIntervencao {
 
 /**
  * `NaoPersistiu` é a diferença entre "deu certo" e "o efeito externo
- * aconteceu e não conseguimos registrar" — e é o que impede a resposta de
+ * aconteceu e não conseguimos registrar" — e é por ele que a resposta deixa de
  * dizer que a referência foi liberada quando ela não foi.
  */
 export type FinalizacaoResultado =
@@ -85,6 +85,6 @@ export type FinalizacaoResultado =
 /** O que a reivindicação de intervenção devolve. */
 export type ReivindicacaoDeIntervencao =
   | { readonly _tag: 'IntervencaoReivindicada'; readonly intervencaoId: string }
-  /** Já existe uma intervenção em voo para esta tentativa: nada foi executado. */
+  /** Já existe uma intervenção sem desfecho (ou ambígua) para esta tentativa: nada foi executado. */
   | { readonly _tag: 'IntervencaoJaEmAndamento' }
   | { readonly _tag: 'IntervencaoIndisponivel'; readonly causa: unknown };

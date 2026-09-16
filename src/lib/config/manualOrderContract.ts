@@ -3,20 +3,16 @@ import { z } from 'zod';
 /**
  * Contrato único do corpo de `POST /api/pedidos/manual`.
  *
- * Existe pelo mesmo motivo de `blingCredentialsContract.ts`: os dois lados da
- * fronteira eram construídos e verificados isoladamente, cada um coerente
- * consigo mesmo. O `ManualOrderModal` montava `parcelas` e a rota simplesmente
- * não lia esse campo no destructuring do corpo — o mesmo arranjo que produziu
- * os bugs dos tickets 26, 27 e 28.
- *
- * Agora o cliente monta o corpo com `buildManualOrderRequest` e o servidor o
- * valida com `manualOrderRequestSchema`. Um campo que um lado produz e o outro
- * ignora passa a ser impossível por construção.
+ * O cliente monta o corpo com `buildManualOrderRequest` e o servidor o valida
+ * com `manualOrderRequestSchema` — o mesmo schema nos dois lados da fronteira,
+ * então os dois concordam sobre quais campos existem. Campos fora do schema são
+ * descartados na validação (comportamento padrão de `z.object`), não gravados.
+ * O schema valida o formato; não substitui o servidor conferir cliente,
+ * produtos e posse.
  *
  * O campo `total` **não existe** neste contrato de propósito: o valor da venda
- * é derivado no servidor a partir dos preços cadastrados. Antes o cliente
- * enviava `total` e ele era gravado em `pedidos.total` e no título financeiro,
- * o que permitia registrar uma venda por qualquer valor.
+ * é derivado no servidor a partir dos preços cadastrados. Se o cliente enviasse
+ * `total`, poderia registrar uma venda por qualquer valor.
  */
 
 export const manualOrderItemSchema = z.object({
@@ -36,21 +32,21 @@ export const manualOrderRequestSchema = z.object({
   /**
    * Id da forma de pagamento **na conta Bling do proprietário**
    * (`GET /formas-pagamentos`). Opcional: quando ausente, o servidor usa a
-   * forma marcada como padrão na conta. Nunca é um número fixo no código —
-   * a versão anterior enviava `1` ou `2` com o comentário "Exemplo simples".
+   * forma marcada como padrão na conta. Não é um número fixo no código: os
+   * ids são por conta.
    */
   formaPagamentoId: z.number().int().positive().optional(),
   /** Rótulo exibido ao usuário e gravado em `pedidos.forma_pagamento`. */
   formaPagamentoRotulo: z.string().trim().min(1).max(60).optional(),
   /**
-   * Ticket 30, fatia 3 - ancora de idempotencia entre retentativas da MESMA
-   * submissao (ver `tentativas_venda_manual`, migration 59). O cliente gera
-   * um UUID uma vez por tentativa e reenvia o MESMO valor se retentar depois
-   * de uma resposta ambigua - nunca um novo a cada clique.
+   * Âncora de idempotência entre retentativas da MESMA submissão (ver
+   * `tentativas_venda_manual`, migration 59). O cliente gera um UUID uma vez
+   * por venda e reenvia o MESMO valor se retentar depois de uma resposta
+   * ambígua — não um novo a cada clique.
    *
-   * Opcional de proposito: um cliente mais antigo que nao o envie continua
-   * funcionando, so sem a protecao contra retentativa. O servidor gera uma
-   * referencia propria quando este campo esta ausente, como sempre fez.
+   * Opcional: um cliente que não o envie continua funcionando, só sem a
+   * proteção contra retentativa, porque o servidor gera uma referência nova a
+   * cada chamada.
    */
   referenciaLocal: z.string().uuid('referenciaLocal precisa ser um UUID').optional(),
 });

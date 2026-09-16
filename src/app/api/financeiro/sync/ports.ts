@@ -1,10 +1,9 @@
 /**
  * Portas e tipos da sincronização financeira (`POST /api/financeiro/sync`).
  *
- * Mesma costura firmada no ticket 04 e já usada por `pedidos/manual`,
- * `pedidos/status` e `categorias/sync`. Este era o maior arquivo sem teste do
- * caminho do Bling — e repetia, inteiras, as cinco camadas que transformaram a
- * sincronização de catálogo em "0 produtos" com 17 no Bling.
+ * Mesma costura de portas usada por `pedidos/manual`, `pedidos/status` e
+ * `categorias/sync`: o handler depende destas interfaces, e os testes montam
+ * dublês completos em vez de mockar módulos.
  */
 import type { NextResponse } from 'next/server';
 
@@ -23,9 +22,8 @@ export type EntidadeFinanceira = 'financeiro_contas_pagar' | 'financeiro_contas_
  * divergir.
  */
 export interface ContaFinanceiraOficial {
-  /** `integer` no spec. Declarar `number | string` era o mesmo hedge que
-   * escondeu `situacao.valor`: o tipo aceitava tudo e não afirmava nada. As
-   * conversões no handler seguem defensivas, o tipo é que passou a ser honesto. */
+  /** `integer` no spec. O tipo afirma o contrato; as conversões no handler
+   * continuam defensivas contra o que o provedor de fato mandar. */
   id?: number;
   situacao?: number;
   valor?: number;
@@ -45,8 +43,8 @@ export interface ContaFinanceiraOficial {
    * Declarado em várias linhas de propósito: é assim que `camposDeclarados`
    * enxerga os campos aninhados, e é isso que faz a guarda do OpenAPI comparar
    * `id` e `tipoOrigem` contra o catálogo congelado em vez de parar em "existe
-   * um objeto chamado origem". Os dois sustentam um relacionamento financeiro;
-   * uma troca silenciosa de tipo lá seria o `situacao.valor` de novo.
+   * um objeto chamado origem". Os dois sustentam um relacionamento financeiro,
+   * e uma troca silenciosa de tipo lá precisa quebrar o teste.
    */
   origem?: {
     id?: number;
@@ -57,18 +55,14 @@ export interface ContaFinanceiraOficial {
 /**
  * Campos que o código lê e o OpenAPI oficial **não declara**.
  *
- * Descoberto em 31/08 ao conferir os tipos contra o spec, como o ticket 05
- * exigia: nem `pagamento` nem `historico` existem em qualquer um dos dois
- * DTOs. Ou seja, `data_pagamento` provavelmente chega sempre `undefined` e
- * `descricao` provavelmente cai sempre no rótulo genérico.
+ * Nem `pagamento` nem `historico` existem em qualquer um dos dois DTOs do
+ * spec. Se o spec estiver certo, `data_pagamento` chega sempre `undefined` e
+ * `descricao` cai sempre no rótulo genérico.
  *
- * **Ficam aqui, e não são removidos**, por dois motivos: o ticket exige
- * comportamento externo idêntico, e o spec do Bling já se provou incompleto
- * antes. Removê-los apagaria a descrição das contas de todo mundo caso a API
- * de fato os devolva.
- *
- * O que decide isto é observação da resposta real — trabalho do ticket 15, que
- * tem esta pergunta registrada.
+ * **Ficam aqui mesmo assim**, porque o spec do Bling nem sempre descreve tudo
+ * o que a API devolve: removê-los apagaria a descrição das contas caso a API
+ * de fato os envie. Questão em aberto: só uma resposta real da API confirma
+ * se esses campos existem.
  */
 export interface ContaFinanceiraNaoDocumentada {
   pagamento?: { data?: string };
@@ -81,11 +75,9 @@ export type RawContaFinanceira = ContaFinanceiraOficial & ContaFinanceiraNaoDocu
 /**
  * Leitura das contas no Bling.
  *
- * **Lança** quando a leitura falha. Até o ticket 05 o cliente devolvia `[]` em
- * 401, 403, 500 e timeout — o laço via lista vazia, parava, o checkpoint
- * avançava e a rota respondia sucesso com zero processados. É literalmente a
- * primeira das cinco camadas que mantiveram a sincronização de catálogo
- * quebrada, e ela estava intacta aqui.
+ * **Lança** quando a leitura falha. Devolver `[]` em 401, 403, 500 ou timeout
+ * faria o laço ver lista vazia, parar, avançar o checkpoint e responder
+ * sucesso com zero processados.
  */
 export interface FinanceiroSyncBlingPort {
   lerPagina(entidade: EntidadeFinanceira, pagina: number, limite: number): Promise<readonly RawContaFinanceira[]>;
@@ -112,8 +104,7 @@ export interface FinanceiroSyncStorePort {
    *   admite um título de cada tipo por pedido, e roubar o vínculo do que já
    *   está lá reescreveria história;
    * - o pedido apontado por MAIS DE UMA conta no mesmo lote (venda parcelada):
-   *   escolher uma das parcelas seria arbitrário, e arbitrário é exatamente o
-   *   que não pode acontecer com receita.
+   *   escolher uma das parcelas seria arbitrário.
    */
   vincularPedidos(
     scope: VerifiedOrganizationScope,
@@ -164,7 +155,7 @@ export interface SyncStats {
   readonly leituraIncompleta: boolean;
 }
 
-/** Corpo de resposta da rota. A forma `{ success, stats }` é a de antes. */
+/** Corpo de resposta da rota: `{ success, stats }`, ou `{ success: false, error }`. */
 export interface FinanceiroSyncResponseBody {
   readonly success: boolean;
   readonly stats?: {

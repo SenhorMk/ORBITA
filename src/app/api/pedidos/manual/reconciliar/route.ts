@@ -15,24 +15,22 @@ import { respostaDaReconciliacao } from '../respostaDaReconciliacao';
 
 /**
  * `POST /api/pedidos/manual/reconciliar` — o caminho de saída de uma tentativa
- * de venda manual que ficou indeterminada (ticket 30, fatia 3).
+ * de venda manual cujo desfecho não foi confirmado.
  *
  * Bloquear uma tentativa cujo desfecho ninguém confirmou é o comportamento
  * seguro; sem esta rota, seria também um beco sem saída, cuja única "solução"
- * seria apagar a chave de idempotência do navegador — ou seja, furar
- * exatamente a proteção contra duplicação. Ver `reconciliacao.ts` para a
- * máquina de estados e para como se pergunta ao Bling sem ter o `bling_id`.
+ * seria apagar a chave de idempotência do navegador — ou seja, furar a
+ * proteção contra duplicação. Ver `reconciliacao.ts` para a máquina de estados
+ * e para como se pergunta ao Bling sem ter o `bling_id`.
  *
- * **Autorização pelo EFEITO, não pelo nome da ação (9ª rodada, B5).** A 8ª
- * rodada classificava `conferir` como leitura porque ela se chama assim — e o
- * que ela fazia era tomar posse da tentativa (avançando a época) e escrever no
- * ledger. Um `member`, com apenas `organization:access`, conseguia com isso
- * CERCAR um executor legítimo e alterar o desfecho de uma venda.
+ * Fluxo: escopo verificado → corpo → autorização da ação → leitura da
+ * tentativa nesta organização → elegibilidade → `reconciliarTentativa`.
  *
- * Agora: qualquer alteração de posse, de ledger ou do ERP exige
- * `organization:manage`. Sem gestão, `conferir` continua disponível, mas como
- * INSPEÇÃO de verdade — não escreve nada e nunca declara a referência
- * liberada.
+ * **Autorização pelo EFEITO, não pelo nome da ação.** Tomar a posse (avançar a
+ * época), escrever no ledger ou tocar no ERP exige `organization:manage`; sem
+ * isso, um `member` poderia cercar um executor legítimo e alterar o desfecho
+ * de uma venda. Sem gestão, `conferir` continua disponível como INSPEÇÃO: não
+ * escreve nada e não declara a referência liberada.
  */
 
 /**
@@ -42,9 +40,9 @@ import { respostaDaReconciliacao } from '../respostaDaReconciliacao';
  * Ela é um override humano: "conferi direto no Bling, aceito que a API não
  * provou a ausência, e confirmo que este pedido não existe; libere esta
  * tentativa". Isso é decisão da proprietária — envolve aceitar que uma pessoa
- * assuma uma afirmação que o provedor não sustenta (ver
- * `evidence/30-visibilidade-do-bling-e-ausencia-2026-09-03.md`) — e ela não
- * foi tomada.
+ * assuma uma afirmação que o provedor não sustenta, já que o contrato do Bling
+ * não garante visibilidade imediata de um pedido recém-criado — e ela ainda
+ * não foi tomada.
  *
  * Enquanto não for, a rota **reconhece** a ação, para que o caminho fique
  * testável de ponta a ponta, e **recusa executá-la**. Virar `true` é uma
@@ -65,7 +63,7 @@ const corpoSchema = z.object({
     .default('conferir'),
   /**
    * Só para `resolver-ambiguidade`: o que a pessoa observou no Bling sobre o
-   * pedido cujo cancelamento ficou sem resposta (9ª rodada, B3).
+   * pedido cujo cancelamento ficou sem resposta.
    */
   decisao: z.enum(['cancelado', 'nao-cancelado']).optional(),
   /**

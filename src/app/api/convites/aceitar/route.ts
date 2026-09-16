@@ -147,8 +147,8 @@ export function createAcceptInviteHandler(dependencies: AcceptInviteDependencies
     // Só identidade, deliberadamente: quem aceita um convite ainda não é membro
     // de organização nenhuma, então exigir vínculo aqui negaria exatamente o
     // caso que a rota existe para atender. A autoridade sobre o convite é o
-    // token **e o e-mail do destinatário**, conferidos pela própria RPC contra
-    // `auth.uid()` (migration 63).
+    // token **e o e-mail confirmado do destinatário**, conferidos pela própria
+    // RPC contra `auth.uid()` (migrations 63 e 64).
     const bearerResult = readBearerToken(req);
     const identity = await resolveAuthenticatedIdentity(req);
     if (identity._tag !== 'IdentityVerified' || bearerResult._tag !== 'BearerTokenFound') {

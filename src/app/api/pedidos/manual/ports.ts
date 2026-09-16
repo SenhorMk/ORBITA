@@ -1,9 +1,11 @@
 /**
- * Portas e tipos da venda manual (`POST /api/pedidos/manual`).
+ * Portas e tipos da venda manual (`POST /api/pedidos/manual`) e da reconciliação.
  *
- * Separado de `handler.ts` para manter cada arquivo dentro do limite de
- * tamanho do gate de qualidade e para que o adapter Supabase da rota importe
- * apenas o contrato, sem depender da lógica do handler.
+ * O handler depende destas interfaces, não do Supabase nem do Bling: os
+ * adapters de produção ficam em `dependencias.ts` e
+ * `dependenciasDeReconciliacao.ts`, e os testes montam dublês completos.
+ * As regras de concorrência (claim, época, CAS, imutabilidade das
+ * intervenções) são impostas pelas RPCs e constraints do banco.
  */
 import type { NextResponse } from 'next/server';
 
@@ -66,7 +68,7 @@ export interface PersistManualOrderInput {
   readonly scope: VerifiedOrganizationScope;
   /**
    * A tentativa que autoriza esta gravação, e a época em que ela foi
-   * reivindicada (9ª rodada de revisão, B1).
+   * reivindicada.
    *
    * Não são metadados: a RPC recusa a gravação inteira se a posse já tiver
    * mudado. É o que impede um executor cercado de commitar a venda depois de
@@ -87,17 +89,18 @@ export interface PersistManualOrderInput {
 }
 
 /**
- * Desfecho de `persistVenda` (ticket 30, fatia 3 — retentativa após resposta
- * perdida). Três casos, não dois, porque "a chamada lançou" mistura duas
- * situações que exigem reações opostas:
+ * Desfecho de `persistVenda`. As falhas são separadas em dois casos porque "a
+ * chamada lançou" mistura duas situações que exigem reações opostas:
  *
  * - `PersistVendaOk` — a venda foi gravada, com o id do pedido local.
  * - `PersistVendaFalhouDefinitivamente` — o servidor **respondeu** com um erro
- *   estruturado (código SQL/PostgREST não vazio). Uma resposta assim só existe
+ *   estruturado cujo código está na allowlist de `classificacaoDeFalha.ts`.
+ *   Uma resposta assim só existe
  *   depois que o servidor terminou de processar a requisição — a transação já
  *   foi revertida. É seguro compensar.
- * - `PersistVendaAmbigua` — a chamada falhou **sem** resposta estruturada do
- *   servidor (timeout, conexão perdida, abort). Não há como saber, só por
+ * - `PersistVendaAmbigua` — a chamada falhou **sem** resposta reconhecida do
+ *   servidor (timeout, conexão perdida, abort, código fora da allowlist).
+ *   Não há como saber, só por
  *   isso, se a transação chegou a commitar antes da falha aparecer do lado do
  *   cliente. Compensar aqui pode cancelar no Bling uma venda que está, neste
  *   exato momento, sendo gravada com sucesso do outro lado.
@@ -107,7 +110,7 @@ export type PersistVendaResult =
   | { readonly _tag: 'PersistVendaFalhouDefinitivamente'; readonly causa: unknown }
   | { readonly _tag: 'PersistVendaAmbigua'; readonly causa: unknown }
   /**
-   * A posse da tentativa já não é de quem chamou (9ª rodada de revisão, B1).
+   * A posse da tentativa já não é de quem chamou (`55P03`).
    * **Nada foi gravado** — a RPC recusa antes de qualquer efeito, com a linha
    * da tentativa travada. Não é falha a compensar: quem tomou a posse é quem
    * decide o desfecho, e escrever qualquer coisa daqui seria escrever por cima
@@ -116,24 +119,23 @@ export type PersistVendaResult =
   | { readonly _tag: 'PersistVendaSemPosse' };
 
 /**
- * Persistência da venda manual. É uma porta única de propósito porque pedido,
- * itens, baixa de estoque e título financeiro precisam cair juntos — a versão
- * anterior espalhava esses quatro efeitos pelo handler e deixava o título
- * financeiro sem `organizacao_id`.
+ * Persistência da venda manual e do ledger de tentativas. `persistVenda` é uma
+ * operação só porque pedido, itens, baixa de estoque e título financeiro
+ * precisam cair juntos, na mesma transação do banco.
  */
 export interface ManualOrderStorePort {
   findClienteById(scope: VerifiedOrganizationScope, clienteId: string): Promise<ManualOrderCliente | null>;
   linkClienteBlingId(scope: VerifiedOrganizationScope, clienteId: string, blingId: string): Promise<void>;
   findProdutosByIds(scope: VerifiedOrganizationScope, produtoIds: readonly string[]): Promise<readonly ManualOrderProduto[]>;
   /**
-   * Nunca lança — `PersistVendaResult` é o valor, não a exceção, exatamente
-   * porque o handler precisa **distinguir** os três desfechos acima para
+   * Não deve lançar — `PersistVendaResult` é o valor, não a exceção, porque o
+   * handler precisa **distinguir** os desfechos acima para
    * decidir se pode compensar. Um `throw` apaga essa distinção antes mesmo de
    * ela chegar ao chamador.
    */
   persistVenda(input: PersistManualOrderInput): Promise<PersistVendaResult>;
   /**
-   * Ticket 30, fatia 3 — recuperação de confirmação perdida.
+   * Recuperação de confirmação perdida.
    *
    * Confere se a venda já foi de fato registrada, por `bling_id` + origem.
    * Chamado antes de compensar (cancelar no Bling) sempre que o resultado de
@@ -143,25 +145,18 @@ export interface ManualOrderStorePort {
    */
   findVendaManualJaRegistrada(scope: VerifiedOrganizationScope, blingPedidoId: string): Promise<{ readonly pedidoId: string } | null>;
   /**
-   * Ticket 30, fatia 3 — reivindica a referência local como uma tentativa
-   * nova, ou devolve o desfecho de uma tentativa ANTERIOR com a mesma
-   * referência.
+   * CLAIM: reivindica a referência local como uma tentativa nova, ou devolve o
+   * desfecho de uma tentativa ANTERIOR com a mesma referência.
    *
    * Chamado ANTES de qualquer chamada ao Bling. Sem isto, uma retentativa —
-   * humana, de proxy, de navegador, de qualquer camada — depois de um
-   * `PersistVendaAmbigua` não resolvido geraria uma referência nova e criaria
-   * um SEGUNDO pedido real no Bling: a mensagem "não tente de novo" não é
-   * garantia nenhuma sozinha.
+   * humana, de proxy, de navegador — depois de um desfecho não resolvido
+   * poderia criar um SEGUNDO pedido real no Bling: a mensagem "não tente de
+   * novo" sozinha não protege nada.
    *
-   * **FAIL CLOSED (4ª rodada de revisão).** Se a infraestrutura de
-   * idempotência não estiver disponível (a tabela/RPC da migration 59 ainda
-   * não existir, ou qualquer outra falha ao reivindicar), devolve
-   * `TentativaIndisponivel` — e o handler NÃO chama o Bling. A versão
-   * anterior caía para `TentativaNova` nesse caso, o que desligava
-   * silenciosamente a proteção exatamente na janela em que o código novo
-   * mais precisa dela. Ver `evidence/30-compatibilidade-de-deploy-*.md`: a
-   * ordem de deploy recomendada passou a ser migrations primeiro, código
-   * depois — não o inverso.
+   * **FAIL CLOSED.** Se a infraestrutura de idempotência não estiver disponível
+   * (a tabela/RPC da migration 59 ainda não existir, ou qualquer outra falha ao
+   * reivindicar), devolve `TentativaIndisponivel` — e o handler NÃO chama o
+   * Bling. Por isso a ordem de deploy é migrations primeiro, código depois.
    */
   reivindicarTentativa(
     scope: VerifiedOrganizationScope,
@@ -173,40 +168,42 @@ export interface ManualOrderStorePort {
    * Grava o desfecho final de uma tentativa já reivindicada.
    *
    * Recebe o escopo porque a RPC é `security definer` — ela ignora RLS, e o
-   * predicado de organização dentro dela é a única barreira que resta. A
-   * assinatura anterior atualizava só por id (5ª rodada de revisão).
+   * predicado de organização dentro dela é a barreira entre organizações.
+   * Uma escrita recusada pela RPC volta como `DesfechoNaoGravado`, não como exceção.
    */
   registrarDesfechoDaTentativa(
     scope: VerifiedOrganizationScope,
     tentativaId: string,
     desfecho: DesfechoDaTentativa,
     /**
-     * Compare-and-set (7ª rodada de revisão). Quando informado, a escrita só
-     * acontece se o estado atual for exatamente este; caso contrário lança.
+     * Compare-and-set de estado. Quando informado, a escrita só acontece se o
+     * estado atual for exatamente este.
      *
-     * Quem PRODUZIU o efeito (o handler da venda) escreve sem CAS: ele sabe o
-     * que aconteceu. Quem chega DEPOIS e opina sobre uma tentativa alheia (a
-     * reconciliação) passa o estado que leu — sem isso, uma reconciliação
-     * disparada por idade poderia sobrescrever o desfecho de uma requisição
-     * ainda em voo. **Idade não é sincronização.**
+     * O handler passa `'em_andamento'` ao gravar `falhou` ou `indeterminada`:
+     * um desfecho que rebaixa não pode passar por cima de uma tentativa que já
+     * mudou de estado. Grava `concluida` sem CAS de estado, porque escrever
+     * `concluida` sobre `concluida` é idempotente. A reconciliação não passa
+     * estado: ela já assumiu a posse, e a época é o que a protege.
      */
     estadoEsperado?: TentativaRegistrada['estado'],
     /**
-     * Fencing token (8ª rodada de revisão). Quem produziu o efeito apresenta a
-     * época que recebeu ao reivindicar; se a tentativa foi tomada por uma
-     * reconciliação nesse meio-tempo, a escrita é RECUSADA em vez de gravar
-     * por cima. CAS sozinho protegia só o sentido inverso.
+     * Fencing token. Quem escreve apresenta a época que recebeu ao reivindicar
+     * ou ao assumir a posse; se a tentativa foi tomada nesse meio-tempo, a
+     * escrita é RECUSADA em vez de gravar por cima. **Idade não é
+     * sincronização.**
      */
     epocaEsperada?: number,
   ): Promise<RegistroDeDesfecho>;
   /**
-   * Confere se a época apresentada ainda é a vigente (9ª rodada, B2).
+   * Confere se a época apresentada ainda é a vigente.
    *
-   * Chamada IMEDIATAMENTE antes de cada efeito externo do fluxo — criar o
-   * pedido no Bling, lançar o estoque de lá. Não fecha a janela física entre a
-   * resposta e o pacote HTTP (nenhum mecanismo local fecha), mas garante que
-   * um executor que JÁ perdeu a posse não inicia efeito novo. O efeito local
-   * durável tem garantia mais forte: `persistVenda` é atômico com a posse.
+   * Chamada imediatamente antes de criar o pedido no Bling (e, na preparação
+   * do envio, antes de cadastrar o contato). Não fecha a janela entre esta
+   * resposta e o envio HTTP — a posse pode mudar nesse intervalo, e nenhum
+   * mecanismo local fecha essa janela —, mas evita que um executor que já
+   * sabidamente perdeu a posse inicie um efeito novo. O efeito local durável
+   * tem proteção mais forte: `persistVenda` confere a época dentro da mesma
+   * transação do banco que grava a venda.
    */
   confirmarPosse(
     scope: VerifiedOrganizationScope,
@@ -214,12 +211,12 @@ export interface ManualOrderStorePort {
     epoca: number,
   ): Promise<PosseDaTentativa>;
   /**
-   * Toma a posse de uma tentativa antiga para reconciliar (8ª rodada).
-   * Avança a época, cercando o executor anterior. Devolve a época nova.
+   * Toma a posse de uma tentativa antiga para reconciliar. Avança a época,
+   * cercando o executor anterior. Devolve a época nova.
    *
-   * O estado esperado entra junto com a época (9ª rodada, B6): a época sozinha
-   * não registra que o estado andou, e sem ele uma reconciliação podia assumir
-   * uma tentativa que o handler acabara de concluir na MESMA época.
+   * O estado esperado entra junto com a época: a época sozinha não registra
+   * que o estado andou, e sem ele uma reconciliação poderia assumir uma
+   * tentativa que o handler acabou de concluir na MESMA época.
    */
   assumirTentativaParaReconciliacao(
     scope: VerifiedOrganizationScope,
@@ -229,31 +226,33 @@ export interface ManualOrderStorePort {
   ): Promise<TomadaDePosse>;
   /**
    * Encerra, com decisão humana registrada, uma intervenção que ficou
-   * `ambigua` (9ª rodada, B3).
+   * `ambigua`.
    *
    * **Não chama o ERP.** A pessoa foi ao Bling, olhou a situação real do
-   * pedido e afirma o que viu; o registro é append-only — o fato original
-   * continua `ambigua`, e a decisão nova é uma linha própria, com ator e
+   * pedido e afirma o que viu. O fato original continua `ambigua` (um trigger
+   * do banco impede reescrevê-lo), e a decisão nova é registrada com ator e
    * evidência próprios.
    */
   resolverIntervencaoAmbigua(input: ResolucaoDeIntervencaoAmbigua): Promise<ResolucaoDeAmbiguidade>;
   /**
-   * Finaliza tentativa e intervenção numa transação só (8ª rodada).
+   * Finaliza tentativa e intervenção numa única RPC, isto é, numa transação só
+   * do banco.
    *
-   * Depois de um efeito externo confirmado, a gravação local não pode ser
-   * fire-and-forget: se falhar, a resposta não pode dizer que a referência foi
-   * liberada. Ou as duas pontas valem, ou nenhuma vale e o chamador sabe.
+   * Depois de um efeito externo, a gravação local não pode ser fire-and-forget:
+   * se falhar, a resposta não pode dizer que a referência foi liberada. As duas
+   * linhas locais valem juntas ou nenhuma vale, e o chamador sabe. O efeito no
+   * Bling fica fora dessa transação.
    */
   finalizarIntervencaoETentativa(input: FinalizacaoDeIntervencao): Promise<FinalizacaoResultado>;
   /**
    * Reivindica o direito de executar uma intervenção operacional sobre a
-   * tentativa (7ª rodada de revisão).
+   * tentativa.
    *
-   * É um CLAIM, não um log: no máximo uma intervenção em voo por tentativa,
-   * imposto por índice único parcial. Duas requisições simultâneas de
-   * cancelamento não podem produzir duas chamadas ao ERP — e isso **não** se
-   * apoia em "cancelar duas vezes é inócuo", que o contrato do Bling não
-   * afirma.
+   * É um CLAIM, não um log: no máximo uma intervenção sem desfecho (ou
+   * `ambigua`) por tentativa, imposto por índice único parcial do banco. Duas
+   * requisições simultâneas de cancelamento sobre a mesma tentativa não
+   * produzem duas chamadas ao ERP — e isso **não** se apoia em "cancelar duas
+   * vezes é inócuo", que o contrato do Bling não afirma.
    */
   reivindicarIntervencao(
     scope: VerifiedOrganizationScope,
@@ -261,7 +260,11 @@ export interface ManualOrderStorePort {
     acao: 'cancelar-no-bling',
     blingPedidoId: string | null,
   ): Promise<ReivindicacaoDeIntervencao>;
-  /** Fecha o registro de intervenção com o desfecho. O rastro é imutável depois disto. */
+  /**
+   * Fecha o registro de intervenção com o desfecho; depois disso um trigger do
+   * banco impede alterá-lo. Os fluxos atuais usam `finalizarIntervencaoETentativa`;
+   * esta operação existe no adapter, mas não tem chamador.
+   */
   encerrarIntervencao(
     scope: VerifiedOrganizationScope,
     intervencaoId: string,
@@ -271,7 +274,7 @@ export interface ManualOrderStorePort {
   /**
    * Lê uma tentativa pela referência local, dentro da organização verificada.
    *
-   * Usada pela reconciliação (5ª rodada de revisão): uma tentativa
+   * Usada pela reconciliação: uma tentativa
    * `indeterminada` precisa de um caminho de saída que não seja "limpe o
    * localStorage", e para isso é preciso saber em que estado ela está e o que
    * já se sabe dela.
@@ -296,11 +299,13 @@ export interface TentativaRegistrada {
 
 /**
  * O que uma reivindicação de tentativa devolve. `TentativaNova` segue o
- * fluxo normal; os outros cinco casos são situações em que o handler NÃO
- * chama o Bling: três são o desfecho de uma tentativa ANTERIOR com a MESMA
- * venda, `TentativaConflitante` é a mesma chave usada para OUTRA venda, e
- * `TentativaIndisponivel` é a infraestrutura de idempotência não estando
- * disponível — falha fechada, nunca aberta.
+ * fluxo normal; nos outros sete casos o handler NÃO chama o Bling:
+ * `TentativaConcluida`, `TentativaIndeterminada` e `TentativaEmAndamento` são o
+ * estado de uma tentativa ANTERIOR com a mesma referência;
+ * `TentativaConflitante`, `TentativaComValoresDivergentes` e
+ * `TentativaComPendenciaIdentica` são conflitos de conteúdo; e
+ * `TentativaIndisponivel` é a infraestrutura de idempotência não respondendo —
+ * falha fechada.
  */
 export type ReivindicacaoDeTentativa =
   | { readonly _tag: 'TentativaNova'; readonly tentativaId: string; readonly epoca: number }
@@ -308,22 +313,20 @@ export type ReivindicacaoDeTentativa =
   | { readonly _tag: 'TentativaIndeterminada'; readonly blingPedidoId: string | null }
   | { readonly _tag: 'TentativaEmAndamento' }
   /**
-   * A referência já existe, mas para uma venda DIFERENTE (5ª rodada de
-   * revisão). Não é retentativa: nada executa, e o desfecho da outra operação
+   * A referência já existe, mas para uma venda DIFERENTE. Não é retentativa: nada executa, e o desfecho da outra operação
    * NÃO é devolvido — devolvê-lo diria "sua venda já foi registrada" sobre uma
    * venda que ninguém registrou.
    */
   | { readonly _tag: 'TentativaConflitante' }
   /**
    * A venda pedida é a mesma, mas os VALORES resolvidos no servidor mudaram
-   * entre as tentativas (6ª rodada de revisão). Uma tentativa `falhou` não
+   * entre as tentativas. Uma tentativa `falhou` não
    * reabre em silêncio executando o preço novo — quem confirmou a venda
    * confirmou um total, e esse total mudou.
    */
   | { readonly _tag: 'TentativaComValoresDivergentes' }
   /**
-   * Existe OUTRA tentativa sem desfecho para exatamente esta mesma venda (6ª
-   * rodada de revisão). Não dá para saber, do servidor, se esta submissão é a
+   * Existe OUTRA tentativa sem desfecho para exatamente esta mesma venda. Não dá para saber, do servidor, se esta submissão é a
    * mesma venda tentada de novo por um cliente que perdeu a referência, ou uma
    * segunda venda legitimamente idêntica — então nenhuma das duas: recusa e
    * aponta a pendência, para ser resolvida antes.
@@ -368,7 +371,8 @@ export interface ManualOrderDependencies {
    * Monta `ORBITA-<uuid>`. Recebe o UUID que o cliente enviou em
    * `referenciaLocal`, quando presente — para que uma retentativa da mesma
    * submissão gere a MESMA referência, e `reivindicarTentativa` a reconheça.
-   * Sem UUID do cliente, gera um novo, como sempre fez.
+   * Sem UUID do cliente, gera um novo — e essa submissão fica sem proteção
+   * entre retentativas.
    */
   readonly newLocalReference: (referenciaClienteFornecida?: string) => string;
   /** Espera entre tentativas de confirmar uma `PersistVendaAmbigua`. Ver `Dormir`. */
