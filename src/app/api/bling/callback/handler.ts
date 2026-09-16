@@ -1,3 +1,17 @@
+/**
+ * Retorno do OAuth do Bling (`GET /api/bling/callback`), sem dependências de produção.
+ *
+ * Ordem das etapas, e por que ela importa:
+ * 1. rate limit por IP;
+ * 2. consumo da transação de uso único — antes de olhar `code` ou `error`,
+ *    para que um retorno repetido nunca produza efeito;
+ * 3. rate limit por ator, agora conhecido;
+ * 4. recusa do provedor ou ausência de `code`;
+ * 5. credenciais do aplicativo da organização vinculada à transação;
+ * 6. troca do código por tokens e persistência — só então a página de sucesso.
+ *
+ * Toda resposta limpa o cookie da transação.
+ */
 import { NextResponse } from 'next/server';
 import { consumeOAuthTransaction } from '../../../../lib/oauth-transaction';
 import type { OAuthTransactionStorePort } from '../../../../lib/oauthTransactionStore';
@@ -76,8 +90,7 @@ async function resolveCallbackTransaction(
 
   if (!stateParam || !transactionCookie) {
     // As duas metades falham por motivos completamente diferentes, e juntá-las
-    // numa mensagem só apagava o diagnóstico — o mesmo defeito que o Ticket
-    // 30b corrigiu na tela de Integrações.
+    // numa mensagem só apagaria o diagnóstico.
     const semState = !stateParam;
     const semCookie = !transactionCookie;
     logger.warn('bling_callback.transaction_missing', {
@@ -103,10 +116,10 @@ async function resolveCallbackTransaction(
     };
   }
 
-  // Consume the single-use transaction (constant-time state check, CAS
-  // consumption) BEFORE branching on provider error/success and BEFORE any
-  // token exchange. A replayed callback URL (same cookie/state) is denied
-  // here with no further effect: no second consumption, no second exchange.
+  // Consume the single-use transaction (state hash match + conditional update)
+  // BEFORE branching on provider error/success and BEFORE any token exchange.
+  // A replayed callback URL (same cookie/state) is denied here with no
+  // further effect: no second consumption, no second exchange.
   const transaction = await consumeOAuthTransaction(transactionCookie, stateParam, oauthTransactionStore);
   if (transaction._tag === 'InvalidOAuthTransaction') {
     logger.warn('bling_callback.transaction_denied', {
@@ -164,11 +177,9 @@ async function exchangeAndPersistTokens(
 
   logger.info('bling_callback.tokens_received', { subsystem: 'app', correlationId, provider: 'bling' });
 
-  // A pagina de sucesso so pode ser escrita DEPOIS de os tokens estarem
-  // gravados. Antes, uma falha aqui subia como excecao e virava um 500 sem o
-  // cookie da transacao limpo — ou, pior, era engolida pela propria persistencia
-  // (`persistOrganizationTokens` retornava em silencio quando a linha da conexao
-  // nao gravava) e o usuario via "Conexao Realizada!" sem token nenhum no cofre.
+  // A página de sucesso só pode ser escrita DEPOIS de os tokens estarem
+  // gravados. Uma falha de persistência vira página de erro com o cookie da
+  // transação limpo, nunca "Conexão Realizada!" sem token no cofre.
   try {
     await dependencies.persistTokens({
       userId,
@@ -222,9 +233,8 @@ export function createBlingCallbackHandler(dependencies: BlingCallbackDependenci
     if (actorDenial) return actorDenial;
 
     if (errorParam) {
-      // O Bling diz por que recusou (`error` e `error_description` da RFC 6749).
-      // A versão anterior descartava os dois e mostrava só "recusou a
-      // autorização", deixando o proprietário sem nada para agir.
+      // O Bling diz por que recusou (`error` e `error_description` da RFC 6749);
+      // a página mostra um motivo acionável, sem ecoar texto arbitrário.
       const motivo = describeProviderDenial(errorParam, searchParams.get('error_description'));
       logger.warn('bling_callback.provider_denied', {
         subsystem: 'app',

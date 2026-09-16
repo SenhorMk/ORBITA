@@ -1,3 +1,17 @@
+/**
+ * Transação OAuth de uso único (proteção CSRF do fluxo authorization_code).
+ *
+ * Fluxo:
+ * 1. `authorize` cria a transação no banco, vinculada a ator e organização, e
+ *    guarda apenas o hash SHA-256 do `state`;
+ * 2. o `state` viaja pelo redirect do provedor; o id da transação vai num
+ *    cookie `httpOnly` restrito a `/api/bling/callback`;
+ * 3. o `callback` consome a transação com cookie + `state`. O consumo é um
+ *    `UPDATE` condicional no banco: só vale uma vez e só antes de expirar.
+ *
+ * A organização que recebe os tokens vem da transação persistida, nunca de um
+ * parâmetro do retorno do provedor.
+ */
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 
@@ -5,23 +19,20 @@ import type { OAuthProvider, OAuthTransactionStorePort } from './oauthTransactio
 import type { VerifiedOrganizationScope } from './verifiedOrganizationScope';
 
 /**
- * Janela para concluir a autorizacao no provedor.
+ * Janela para concluir a autorização no provedor.
  *
- * Eram 10 minutos, que nao cobrem uma primeira autorizacao real: entrar no
- * Bling, passar por 2FA, escolher a conta e ler a tela de permissoes leva mais
- * que isso, e o resultado era "transacao ausente" sem explicacao. 30 minutos
- * continua curto para um token de uso unico e cabe na jornada de verdade.
+ * Uma primeira autorização real — entrar no Bling, passar por 2FA, escolher a
+ * conta e ler a tela de permissões — pode levar vários minutos. 30 minutos
+ * cobre essa jornada e continua curto para um token de uso único.
  */
 export const OAUTH_TRANSACTION_TTL_MS = 30 * 60 * 1_000;
 
 /**
- * O mesmo TTL, em segundos, para o cookie que acompanha a transacao.
+ * O mesmo TTL, em segundos, para o cookie que acompanha a transação.
  *
- * Exportado porque o cookie era fixado em 600s enquanto a transacao no
- * servidor valia 1800s: entre 10 e 30 minutos o navegador ja tinha descartado
- * o cookie, o callback chegava sem ele, e a tela dizia "a sessao de conexao
- * nao chegou" para uma transacao que continuava valida. Duas constantes para
- * o mesmo prazo divergem; esta e a unica.
+ * Deriva da constante acima para que cookie e transação expirem juntos: um
+ * cookie que expirasse antes faria o callback chegar sem ele enquanto a
+ * transação no servidor ainda é válida.
  */
 export const OAUTH_TRANSACTION_TTL_SECONDS = OAUTH_TRANSACTION_TTL_MS / 1_000;
 const cookieValueSchema = z.uuid();
@@ -101,9 +112,12 @@ export function createScopedOAuthTransaction(
 }
 
 /**
- * Validate the received state in constant time against its stored hash and
- * atomically consume the transaction so a replayed callback (same cookie,
- * same state) can never succeed twice or trigger a second token exchange.
+ * Consome a transação comparando o hash do `state` recebido com o hash guardado.
+ *
+ * O consumo acontece num único `UPDATE` condicional (`consumir_transacao_oauth`):
+ * id, hash, ainda não consumida e ainda não expirada. Um callback repetido
+ * (mesmo cookie, mesmo `state`) encontra a linha já consumida e é negado, sem
+ * disparar uma segunda troca de código por token.
  */
 export async function consumeOAuthTransaction(
   cookieValue: string,

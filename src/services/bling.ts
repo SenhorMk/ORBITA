@@ -27,14 +27,31 @@ import { FilaDeRequisicoes, esperar, type Dormir } from './filaDeRequisicoes';
 import type { TokenDoBling } from './blingToken';
 import { tokenDoBlingReal } from './blingCredenciaisSupabase';
 
+/**
+ * Adapter HTTP da API v3 do Bling — a única camada que fala com o ERP.
+ *
+ * Responsabilidades:
+ * - **escopo**: um `BlingClient` pertence a uma organização; a credencial é
+ *   descoberta no cofre dessa organização (`TokenDoBling`), nunca por usuário;
+ * - **transporte**: `fetchWithAuth` injeta o bearer, espaça as requisições
+ *   (`FilaDeRequisicoes`), faz backoff em 429 e renova o token uma vez em 401/403;
+ * - **contrato**: operações de escrita validam a resposta com schemas e devolvem
+ *   falha tipada (`BlingCallResult`); leituras de sincronização lançam
+ *   `BlingLeituraError` em vez de devolver lista vazia;
+ * - **privacidade**: mensagens públicas derivam do status HTTP, não do corpo
+ *   devolvido pelo provedor.
+ *
+ * Uma requisição de rede não é atômica: se a resposta se perde, o Bling pode ter
+ * aplicado a escrita. Quem cria pedidos trata esse caso como resultado ambíguo
+ * (ver `app/api/pedidos/manual`).
+ */
 
 /**
  * As peças externas que o cliente usa além do HTTP com o Bling.
  *
- * **Completas, sempre.** Uma versão anterior aceitava peças parciais e
- * completava o resto com a infraestrutura real — o que permitia um teste rodar
- * meio dublado e meio contra Supabase e cofre de verdade, sem nada avisando. É
- * o pior dos dois mundos: nem isolado nem real.
+ * **Completas, sempre.** Aceitar peças parciais e completar o resto com a
+ * infraestrutura real permitiria um teste rodar meio dublado e meio contra
+ * Supabase e cofre de verdade, sem nada avisando.
  *
  * A construção normal usa exatamente esta composição, montada em
  * `portasReais`. A porta não existe para o teste; ela existe porque este é o
@@ -61,10 +78,8 @@ const orgClientCache = new Map<string, BlingClient>();
  *
  * Vocabulário fechado, escrito aqui: nada do corpo da resposta do provedor
  * chega ao usuário — e **nada dele vai para o log tampouco**. O corpo sequer é
- * lido: `falhaPublicaDoBling` cancela o fluxo da resposta. Uma versão anterior
- * deste comentário dizia que ele "vai inteiro para o log", e era falso duas
- * vezes: `registrarFalhaInterna` grava a classe do erro, não o conteúdo, e o
- * texto nunca chega até lá.
+ * lido: `falhaPublicaDoBling` cancela o fluxo da resposta, e
+ * `registrarFalhaInterna` grava a classe do erro, não o conteúdo.
  *
  * O status entra na frase de propósito — é número, não texto de terceiro, e é
  * o que permite alguém correlacionar a queixa com o log, onde ele aparece no
@@ -112,15 +127,14 @@ function corpoProdutoBling(payload: ProdutoBlingEntrada): Record<string, unknown
 /**
  * Erro de leitura do Bling.
  *
- * Existe porque os metodos de listagem devolviam `[]` em qualquer falha —
- * 401, 403, 500, timeout — tornando "o provedor recusou" indistinguivel de
- * "nao ha nada". Numa sincronizacao isso e desastroso: a etapa "conclui" com
- * zero itens, o checkpoint avanca para agora, e as execucoes seguintes filtram
- * por `dataAlteracaoInicial` a partir do momento da falha. O erro some e nunca
- * mais volta sozinho.
+ * Distingue "o provedor recusou" (401, 403, 500, timeout) de "não há nada".
+ * Numa sincronização a diferença é decisiva: se uma falha virasse `[]`, a etapa
+ * "concluiria" com zero itens, o checkpoint avançaria, e as execuções seguintes
+ * filtrariam por `dataAlteracaoInicial` a partir do momento da falha — os itens
+ * daquele intervalo nunca seriam lidos.
  *
- * Quem realmente quiser degradar para lista vazia agora precisa dizer isso no
- * ponto da chamada.
+ * Quem realmente quiser degradar para lista vazia precisa dizer isso no ponto
+ * da chamada.
  */
 export class BlingLeituraError extends Error {
   readonly status: number;
@@ -139,7 +153,7 @@ export class BlingClient implements BlingPort {
    * Não é o teto de uma requisição: cobre todas as que a operação fizer, mais
    * as esperas entre elas. Hoje são duas operações, e a maior tem três
    * requisições — as duas leituras da descoberta e o `PATCH` que cancela o
-   * pedido. O nome anterior dizia "situações" e descrevia só a primeira.
+   * pedido.
    *
    * Generoso de propósito: `enforceRateLimit` espaça as requisições em 340 ms,
    * o backoff de 429 pode somar segundos, e um teto apertado transformaria
@@ -161,10 +175,8 @@ export class BlingClient implements BlingPort {
    * @param portas composição alternativa — ver `comPortas`.
    */
   private constructor(organizacaoId: string, conexaoId?: string, portas?: PortasDoClienteBling) {
-    // O guarda existia antes em `getAccessToken` e em `forceRefreshToken`, e a
-    // extração da capacidade de token o levou junto. Sem ele, `organizacaoId`
-    // ausente virava `''` e o usuário recebia "Bling não conectado" para um
-    // defeito de escopo no chamador.
+    // Sem este guarda, `organizacaoId` ausente viraria `''` e o usuário
+    // receberia "Bling não conectado" para um defeito de escopo no chamador.
     if (!organizacaoId) {
       throw new Error('Organizacao verificada e obrigatoria para operacoes com o Bling.');
     }
@@ -185,12 +197,11 @@ export class BlingClient implements BlingPort {
   }
 
   /**
-   * Cliente Bling da organizacao ja provada contra a associacao persistida.
+   * Cliente Bling da organização já provada contra a associação persistida.
    *
-   * Substitui `forUser(tenant)`, removido no Ticket 10b. Exigir o escopo
-   * verificado no tipo torna impossivel chamar o Bling sem uma organizacao
-   * autorizada — antes bastava um `user_id` de sessao, e a credencial vinha de
-   * uma tabela que o `service_role` nem consegue ler.
+   * É a entrada das rotas: exigir `VerifiedOrganizationScope` no tipo impede que
+   * elas chamem o Bling sem uma organização autorizada. Clientes são
+   * reaproveitados por organização + conexão, junto com a fila de requisições.
    */
   static forVerifiedOrganization(scope: VerifiedOrganizationScope, conexaoId?: string): BlingClient {
     return BlingClient.forOrganization(scope.organizationId, conexaoId);
@@ -206,16 +217,11 @@ export class BlingClient implements BlingPort {
     return c;
   }
 
-  // Renovação forçada de token OAuth v3 junto ao Bling
   /**
-   * Renova o token OAuth da conexao Bling da organizacao.
+   * Renova o token OAuth da conexão Bling da organização, mesmo ainda válido.
    *
-   * O caminho por `user_id` sobre `integracoes_bling` foi removido no Ticket
-   * 10b: `service_role` nao tem privilegio nenhum naquela tabela (comprovado
-   * com `set local role service_role` no laboratorio e no staging), entao toda
-   * chamada interativa do Bling falhava com `42501 permission denied` antes de
-   * chegar ao provedor. A credencial agora vem sempre do cofre por
-   * organizacao criado no Ticket 28.
+   * A credencial vem sempre do cofre da organização. A coordenação entre
+   * processos concorrentes fica em `TokenDoBlingOrquestrado.renovar`.
    */
   async forceRefreshToken(): Promise<string> {
     const resultado = await this.portas.token.renovar();
@@ -225,31 +231,14 @@ export class BlingClient implements BlingPort {
     throw new Error(resultado.falha.mensagem);
   }
 
-  // `_doForceRefreshToken` (renovacao por `user_id` em `integracoes_bling`) foi
-  // removido no Ticket 10b junto com o ultimo chamador.
-
   /**
-   * Access token valido da conexao Bling **da organizacao**.
+   * Access token válido da conexão Bling **da organização**, traduzindo a falha
+   * tipada em exceção.
    *
-   * O caminho legado lia `integracoes_bling` por `user_id`. Ele foi removido no
-   * Ticket 10b por dois motivos independentes, cada um suficiente:
-   *
-   * 1. `service_role` nao tem privilegio algum naquela tabela — comprovado com
-   *    `set local role service_role; select 1 from public.integracoes_bling`,
-   *    que devolve `42501 permission denied` tanto no laboratorio quanto no
-   *    staging. Toda rota interativa do Bling morria ali.
-   * 2. O Ticket 28 tornou a conexao do Bling **por organizacao**. Manter uma
-   *    segunda fonte de credencial, por usuario, e a mesma configuracao que
-   *    produziu os bugs dos tickets 26, 27 e 28: dois lados coerentes consigo
-   *    mesmos e divergentes entre si.
-   */
-  /**
-   * Token para a requisição, traduzindo a falha tipada em exceção.
-   *
-   * A tradução acontece **aqui** de propósito: `fetchWithAuth` e seus chamadores
-   * são a geração anterior, que sinaliza por exceção. A fronteira nova devolve
-   * valor; converter na borda evita espalhar um segundo estilo pelo cliente
-   * inteiro, e deixa o ponto de conversão visível num lugar só.
+   * Existe uma única fonte de credencial — o cofre por organização. A tradução
+   * acontece **aqui** de propósito: `fetchWithAuth` e seus chamadores sinalizam
+   * por exceção, enquanto `TokenDoBling` devolve valor; converter na borda deixa
+   * o ponto de conversão visível num lugar só.
    *
    * A `causa` da falha vai para o log, não para a mensagem: ela guarda a
    * rejeição original da porta, que pode carregar diagnóstico interno.
@@ -267,8 +256,10 @@ export class BlingClient implements BlingPort {
     await this.fila.aguardarVez(signal);
   }
 
-  // Fetch autenticado com auto-refresh em caso de 401 Unauthorized
-  // Fetch autenticado com auto-refresh em caso de 401 Unauthorized e retry em caso de 429
+  /**
+   * Requisição autenticada: fila → bearer → backoff exponencial em 429 →
+   * uma renovação de token em 401/403. No máximo duas passagens pelo laço.
+   */
   private async fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
     // Quem passa `signal` está sob orçamento de tempo (ver `comOrcamento`).
     //
@@ -306,7 +297,7 @@ export class BlingClient implements BlingPort {
         void response.body?.cancel().catch(() => {});
 
         // Conferir **antes** de entrar no backoff: sem isto, uma chamada já
-        // fora do prazo dormia o intervalo inteiro só para descobrir na volta
+        // fora do prazo dormiria o intervalo inteiro só para descobrir na volta
         // que não deveria ter esperado.
         options.signal?.throwIfAborted();
         retries++;
@@ -391,11 +382,9 @@ export class BlingClient implements BlingPort {
    * Detalhes de um pedido específico — a única fonte de `itens`, que a
    * listagem não devolve.
    *
-   * `null` significa **não existe** (404), e só isso. Antes, qualquer falha
-   * — rede caída, token expirado, 500 do Bling — também virava `null`, e a
-   * sincronização lia isso como "pedido sem itens" e seguia em frente
-   * gravando um pedido vazio. Um erro de leitura não pode ser indistinguível
-   * de um pedido inexistente.
+   * `null` significa **não existe** (404), e só isso. Qualquer outra falha —
+   * rede caída, token expirado, 500 do Bling — lança `BlingLeituraError`: se
+   * virasse `null`, a sincronização gravaria um "pedido sem itens".
    */
   async getPedido(id: string): Promise<BlingPedido | null> {
     try {
@@ -436,7 +425,7 @@ export class BlingClient implements BlingPort {
     }
   }
 
-  // Obter contatos filtrados por nome (tenta pesquisa na API, faz fallback local)
+  // Contatos filtrados por nome via `pesquisa` do Bling; qualquer falha devolve `[]`.
   async getContatosByNome(nome: string): Promise<BlingCliente[]> {
     try {
       // Bling v3 aceita 'pesquisa' como filtro parcial de nome
@@ -465,11 +454,9 @@ export class BlingClient implements BlingPort {
       const url = new URL(`${this.baseUrl}/produtos`);
       url.searchParams.append('pagina', pagina.toString());
       url.searchParams.append('limite', limite.toString());
-      // `codigos[]` e o filtro documentado por SKU no OpenAPI oficial. Antes o
-      // codigo ia como `codigo`, parametro que NAO existe em `GET /produtos`:
-      // o Bling o ignorava e devolvia o primeiro produto da conta, que o
-      // chamador entao tratava como "ja existe" e sobrescrevia com PUT. Ver
-      // `buscarProdutoPorCodigo`, que confere o resultado antes de confiar.
+      // `codigos[]` é o filtro documentado por SKU no OpenAPI oficial; `codigo`
+      // não existe em `GET /produtos` e seria ignorado, devolvendo o primeiro
+      // produto da conta. `buscarProdutoPorCodigo` ainda confere o resultado.
       if (codigo) url.searchParams.append('codigos[]', codigo);
       if (dataAlteracaoInicial) {
         url.searchParams.append('dataAlteracaoInicial', dataAlteracaoInicial);
@@ -634,19 +621,12 @@ export class BlingClient implements BlingPort {
     return this.emitirNfe(pedidoId);
   }
 
-  // Criar um novo contato no Bling ERP v3
-  // Campos obrigatórios: nome, tipo, contribuinte
   /**
    * `POST /contatos`.
    *
-   * Os nomes de campo aqui sao os do OpenAPI oficial: `telefone` e
-   * `indicadorIe`. Ate o ticket 06 este metodo mandava `fone` e `contribuinte`,
-   * que **nao existem** na API — o Bling aceitava a requisicao e descartava os
-   * dois em silencio, entao todo contato criado pela venda manual e pelo
-   * cadastro de fornecedor nascia sem telefone e sem indicador de IE. Havia
-   * ate um comentario no codigo afirmando que `fone` era o nome correto.
-   *
-   * O `ClienteEditModal` ja tinha sido corrigido; este caminho nao.
+   * Os nomes de campo são os do OpenAPI oficial: `telefone` e `indicadorIe`.
+   * Campos inexistentes no schema (como `fone` ou `contribuinte`) seriam
+   * aceitos pelo Bling e descartados em silêncio.
    */
   async createContato(payload: { nome: string; email?: string; telefone?: string; cnpj?: string; tipo?: string; indicadorIe?: number; cep?: string; endereco?: string; numero?: string; bairro?: string; cidade?: string; uf?: string }): Promise<unknown> {
     const url = `${this.baseUrl}/contatos`;
@@ -703,19 +683,18 @@ export class BlingClient implements BlingPort {
     return await response.json();
   }
 
-  // ── Contatos com contrato oficial e falha tipada (Ticket 32) ───────────
+  // ── Contatos com contrato oficial e falha tipada ───────────────────────
 
   /**
    * Corpo de `POST`/`PUT /contatos` conforme o OpenAPI oficial.
    *
-   * Duas correcoes do Ticket 32, ambas de campo que **nao existe** no schema e
-   * por isso era descartado em silencio pelo provedor:
+   * Campos que **não existem** no schema são descartados em silêncio pelo
+   * provedor, então os nomes seguem o contrato:
    *
-   * - o telefone ia como `fone`; o campo e `telefone`;
-   * - o indicador de ICMS ia como `contribuinte`; o campo e `indicadorIe`
-   *   (`1` contribuinte, `2` isento, `9` nao contribuinte).
-   *
-   * O endereco fica sob `endereco.geral`, que ja estava correto.
+   * - telefone em `telefone` (não `fone`);
+   * - indicador de ICMS em `indicadorIe` (`1` contribuinte, `2` isento,
+   *   `9` não contribuinte), não `contribuinte`;
+   * - endereço sob `endereco.geral`.
    */
   private corpoContatoBling(payload: ContatoBlingEntrada): Record<string, unknown> {
     const corpo: Record<string, unknown> = {
@@ -815,23 +794,24 @@ export class BlingClient implements BlingPort {
     const data = await response.json();
     return data.data;
   }
-  // `createPedido(payload: unknown)` foi removido no Ticket 30: era o caminho
-  // não tipado que deixou o payload divergir do schema oficial em quatro
-  // campos obrigatórios. Use `criarPedidoVenda`, que só aceita um
-  // `PedidoVendaPayload` já validado.
+  // Criação de pedido só existe tipada: use `criarPedidoVenda`, que aceita
+  // apenas um `PedidoVendaPayload` já validado.
 
 
   // ── Pedido de venda com contrato oficial e falha tipada ────────────────
-  // As três operações abaixo substituem, na jornada de venda manual, o par
-  // `createPedido` + `lancarBaixaEstoqueProduto`. Elas devolvem
+  // As operações abaixo servem à jornada de venda manual. Elas devolvem
   // `BlingCallResult` em vez de lançar string concatenada, porque o corpo de
   // erro da v3 é estruturado (`error.type`, `error.description`,
   // `error.fields[]`) e a UI precisa dele legível.
 
   /**
    * Cria o pedido de venda com o payload já validado contra o OpenAPI oficial.
-   * A resposta `201` traz apenas `data.id` — não existe `data.numero` na
-   * criação, ao contrário do que o código anterior supunha.
+   * A resposta `201` traz apenas `data.id` — não existe `data.numero` na criação.
+   *
+   * Uma falha de rede aqui **não prova** que o pedido não foi criado: o Bling
+   * pode ter aplicado a escrita e a resposta ter se perdido. Por isso o payload
+   * leva uma referência (`numeroLoja`) decidida antes do envio, que permite
+   * procurar o pedido depois (`buscarPedidoVendaPorNumeroLoja`).
    */
   async criarPedidoVenda(payload: PedidoVendaPayload): Promise<BlingCallResult<{ id: string; alertas: readonly string[] }>> {
     const response = await this.fetchWithAuth(`${this.baseUrl}/pedidos/vendas`, {
@@ -856,14 +836,6 @@ export class BlingClient implements BlingPort {
   }
 
   /**
-   * Lança o estoque do pedido no depósito padrão.
-   *
-   * Substitui o `POST /estoques` com `operacao: 'S'` que a venda manual usava:
-   * aquele endpoint cria um **ajuste manual desvinculado do pedido**, que se
-   * soma à baixa que o próprio Bling faz quando a situação do pedido a
-   * dispara. Este é o endpoint que o Bling documenta para a operação.
-   */
-  /**
    * Marca um pedido de venda como cancelado, com falha tipada.
    *
    * Serve de compensação: quando o Bling aceita a venda e o ORBITA não
@@ -879,11 +851,9 @@ export class BlingClient implements BlingPort {
   async cancelarPedidoVenda(idPedido: string): Promise<BlingCallResult<void>> {
     // **Um** orçamento para a compensação inteira — descoberta e mutação.
     //
-    // Antes o prazo cobria só a descoberta e terminava antes do `PATCH`, que é
-    // justamente o passo que cancela o pedido. Uma espera ou uma exceção ali
-    // deixava a venda manual sem devolver a instrução de cancelar à mão, que é
-    // o que impede a próxima tentativa de criar um segundo pedido órfão. O teto
-    // estava em toda parte menos onde importava.
+    // O prazo cobre também o `PATCH`, que é o passo que cancela o pedido: uma
+    // espera sem teto ali impediria a venda manual de devolver a tempo a
+    // instrução de cancelar à mão.
     return this.comOrcamento('bling.pedido.cancelar', 'cancelar o pedido', (prazo) =>
       this.cancelarPedidoVendaComPrazo(idPedido, prazo),
     );
@@ -939,6 +909,13 @@ export class BlingClient implements BlingPort {
     return { _tag: 'BlingOk', value: undefined };
   }
 
+  /**
+   * Procura pedidos pela referência estável (`numeroLoja`) que o ORBITA decidiu.
+   *
+   * Classifica o resultado em `NenhumPedido`, `UmPedido` ou `VariosPedidos`.
+   * `NenhumPedido` descreve só o que esta consulta viu: não prova que a
+   * criação anterior falhou, e quem reconcilia não pode concluir isso sozinho.
+   */
   async buscarPedidoVendaPorNumeroLoja(numeroLoja: string): Promise<BlingCallResult<BuscaDePedidoPorNumeroLoja>> {
     const url = new URL(`${this.baseUrl}/pedidos/vendas`);
     // `numerosLojas[]` é o filtro oficial do `GET /pedidos/vendas` — "Conjunto
@@ -992,6 +969,13 @@ export class BlingClient implements BlingPort {
     };
   }
 
+  /**
+   * Lança o estoque do pedido no depósito padrão (`POST .../lancar-estoque`).
+   *
+   * É o endpoint que o Bling documenta para a operação. Um `POST /estoques` com
+   * `operacao: 'S'` criaria um **ajuste manual desvinculado do pedido**, que se
+   * somaria à baixa que o próprio Bling faz quando a situação do pedido a dispara.
+   */
   async lancarEstoquePedidoVenda(idPedido: string): Promise<BlingCallResult<void>> {
     const response = await this.fetchWithAuth(`${this.baseUrl}/pedidos/vendas/${encodeURIComponent(idPedido)}/lancar-estoque`, {
       method: 'POST',
@@ -1007,7 +991,7 @@ export class BlingClient implements BlingPort {
   /**
    * Id da forma de pagamento marcada como padrão (`padrao = 1`) e ativa
    * (`situacao = 1`) na conta. Os ids são por conta, então fixá-los no código
-   * — como o `1`/`2` "Exemplo simples" que o modal enviava — inventa um valor.
+   * inventaria um valor.
    */
   async obterFormaPagamentoPadraoId(): Promise<BlingCallResult<number>> {
     const url = new URL(`${this.baseUrl}/formas-pagamentos`);
@@ -1058,15 +1042,14 @@ export class BlingClient implements BlingPort {
     }
   }
 
-  // ── Produtos com contrato oficial e falha tipada (Ticket 31) ───────────
+  // ── Produtos com contrato oficial e falha tipada ───────────────────────
 
   /**
    * Cria o produto no Bling e devolve o id real.
    *
-   * Nao inventa SKU: `codigo` e opcional no OpenAPI oficial, e a versao
-   * anterior preenchia `ORB-<timestamp>` quando o usuario nao informava —
-   * gravando no ERP um codigo que ninguem escolheu e que o registro local nao
-   * guardava, o que fazia a busca seguinte falhar e duplicar o produto.
+   * Não inventa SKU: `codigo` é opcional no OpenAPI oficial. Um código gerado
+   * que o registro local não guarda faria a busca seguinte falhar e duplicar
+   * o produto.
    */
   async criarProduto(payload: ProdutoBlingEntrada): Promise<BlingCallResult<{ id: string }>> {
     const corpo = corpoProdutoBling(payload);
@@ -1138,9 +1121,8 @@ export class BlingClient implements BlingPort {
 
     return { success: true };
   }
-  // `getDefaultDepositoId` e `lancarBaixaEstoqueProduto` foram removidos no
-  // Ticket 30 junto com o último chamador: davam baixa por ajuste manual
-  // desvinculado do pedido. Ver `lancarEstoquePedidoVenda`.
+  // A baixa de estoque de uma venda é feita por `lancarEstoquePedidoVenda`,
+  // vinculada ao pedido — nunca por ajuste manual desvinculado.
 
 
   // Alterar situação (status) de um pedido no Bling ERP
@@ -1175,14 +1157,8 @@ export class BlingClient implements BlingPort {
   /**
    * As situações do módulo de **pedidos de venda** desta conta.
    *
-   * Ticket 31. A versão anterior chamava `GET /situacoes/modulos` — a lista de
-   * **módulos** — e procurava um campo `situacoes` dentro de cada módulo. Esse
-   * campo não existe nessa rota, então a função devolvia `[]` em **qualquer**
-   * conta, e quem dependia dela concluía que a conta não tinha a situação
-   * procurada. Dois recursos ficaram sem funcionar por causa disso: a
-   * compensação da venda manual e o botão de cancelar pedido da listagem.
-   *
-   * São duas chamadas porque são dois recursos, e o id do módulo é por conta:
+   * `GET /situacoes/modulos` devolve só a lista de **módulos**, sem as situações
+   * de cada um. Por isso são duas chamadas, e o id do módulo é por conta:
    *
    *   1. `GET /situacoes/modulos` → acha o módulo de pedidos de venda pelo nome;
    *   2. `GET /situacoes/modulos/{idModuloSistema}` → as situações dele.
@@ -1223,8 +1199,7 @@ export class BlingClient implements BlingPort {
    *
    * A mensagem do erro nunca entra na resposta: aqui dentro cai o que o cofre e
    * o Postgres lançam, e `descreverErro` de um erro do Postgres carrega
-   * `details` e `hint` — valor de linha (CWE-209, a política do ticket 22,
-   * critério 13).
+   * `details` e `hint` — valor de linha (CWE-209).
    */
   private async comOrcamento<T>(
     operacao: string,
@@ -1232,10 +1207,9 @@ export class BlingClient implements BlingPort {
     trabalho: (prazo: AbortSignal) => Promise<BlingCallResult<T>>,
   ): Promise<BlingCallResult<T>> {
     // `AbortController` próprio em vez de `AbortSignal.timeout`: o timer deste
-    // dá para cancelar. Com `AbortSignal.timeout` o temporizador continua vivo
-    // até disparar mesmo quando a chamada terminou em 50 ms, e cada chamada
-    // deixava um timer e um listener pendurados — irrelevante numa, somado numa
-    // sincronização inteira, não.
+    // dá para cancelar. Com `AbortSignal.timeout` o temporizador continuaria
+    // vivo até disparar mesmo quando a chamada terminou em 50 ms, e cada
+    // chamada deixaria um timer e um listener pendurados.
     const controle = new AbortController();
     const temporizador = setTimeout(
       () => controle.abort(new Error(`prazo esgotado ao ${oQue} no Bling`)),
@@ -1326,32 +1300,27 @@ export class BlingClient implements BlingPort {
    * ou seja, com a razão do provedor removida.
    *
    * Serve tanto leitura quanto mutação: os dois `GET` da descoberta e o
-   * `PATCH` que cancela o pedido passam por aqui. O nome anterior dizia
-   * "leitura" e já era falso quando o `PATCH` entrou.
+   * `PATCH` que cancela o pedido passam por aqui.
    *
    * `parseBlingFailure` monta a mensagem a partir do corpo que o provedor
    * mandou: `description`/`message` do envelope, os `fields[]` — que ecoam o
    * que foi enviado — e, quando o corpo não é o envelope da v3, os primeiros
    * 300 caracteres crus. Isso é **texto livre de terceiro** indo para uma
    * resposta pública: uma página de erro de proxy, um host interno, um valor
-   * submetido de volta. Publicar isso é o mesmo risco que a política do ticket
-   * 22 (critério 13) fechou do lado do Postgres, só que pela outra ponta.
+   * submetido de volta. Publicar isso é o mesmo risco (CWE-209) que
+   * `comOrcamento` evita do lado do Postgres, só que pela outra ponta.
    *
    * A mensagem pública é montada a partir do **status** — número, vocabulário
    * fechado —, e nunca do corpo. O `type` também não sai: é `error.type` do
    * corpo, string livre do provedor.
    *
-   * **O que fica registrado, dito com precisão.** Uma versão anterior deste
-   * comentário afirmava que "a falha completa vai para o log", e era falso:
-   * `registrarFalhaInterna` grava a **classe** do erro e um código técnico
-   * validado, não o conteúdo. O corpo do provedor, portanto, **não é guardado
-   * em lugar nenhum** — some da resposta e some do log.
+   * **O que fica registrado.** `registrarFalhaInterna` grava a **classe** do
+   * erro e um código técnico validado, não o conteúdo. O corpo do provedor,
+   * portanto, **não é guardado em lugar nenhum** — nem na resposta, nem no log.
    *
-   * Isso é escolha, não descuido: guardar texto livre de terceiro num log que
-   * ninguém redige seria trocar uma superfície de vazamento por outra. O que dá
-   * para correlacionar é o **status**, que entra no rótulo da operação. Se um
-   * dia o diagnóstico exigir mais, o lugar de decidir é o ticket 32, junto com
-   * os outros chamadores de `parseBlingFailure`.
+   * Isso é escolha: guardar texto livre de terceiro num log que ninguém redige
+   * seria trocar uma superfície de vazamento por outra. O que dá para
+   * correlacionar é o **status**, que entra no rótulo da operação.
    *
    * @param operacao rótulo da telemetria — `bling.situacoes.ler-modulos`,
    *   `bling.situacoes.ler-situacoes`, `bling.pedido.cancelar`. Identifica o
@@ -1366,11 +1335,9 @@ export class BlingClient implements BlingPort {
   ): BlingCallResult<never> {
     const { status } = response;
 
-    // O corpo **não é lido**. Antes vinha um `await response.text()` de cada
-    // chamador, só para o valor ser descartado aqui — trabalho e memória gastos
-    // com um texto que não vai para lugar nenhum, e um `await` a mais que pode
-    // falhar por conta própria (corpo truncado, conexão caída) e mascarar um
-    // status HTTP que já estava perfeitamente conhecido.
+    // O corpo **não é lido**: ele seria descartado de qualquer forma, e um
+    // `await` a mais poderia falhar por conta própria (corpo truncado, conexão
+    // caída) e mascarar um status HTTP já conhecido.
     //
     // Cancelar o fluxo em vez de consumi-lo solta a conexão de imediato. A
     // rejeição é **observada e engolida de propósito**: se o cancelamento
@@ -1392,16 +1359,14 @@ export class BlingClient implements BlingPort {
     }
   }
 
-  // ── Contas a pagar com contrato oficial e falha tipada (Ticket 33) ─────
+  // ── Contas a pagar com contrato oficial e falha tipada ─────────────────
 
   /**
-   * Cria a conta a pagar. Obrigatorios no OpenAPI oficial: `contato.id`,
+   * Cria a conta a pagar. Obrigatórios no OpenAPI oficial: `contato.id`,
    * `vencimento` (`format: date`) e `valor`.
    *
-   * **Nao envia `situacao`**: no schema oficial ela e `readOnly`, entao o
-   * valor era descartado pelo Bling. A versao anterior mandava `2` para
-   * "pago" e gravava `situacao: 'pago'` localmente — a conta ficava aberta no
-   * ERP e quitada no ORBITA. Quitar exige `POST /contas/pagar/{id}/baixar`.
+   * **Não envia `situacao`**: no schema oficial ela é `readOnly` e seria
+   * descartada pelo Bling. Quitar exige `POST /contas/pagar/{id}/baixar`.
    */
   async criarContaPagar(payload: ContaPagarBlingEntrada): Promise<BlingCallResult<{ id: string }>> {
     const corpo: Record<string, unknown> = {

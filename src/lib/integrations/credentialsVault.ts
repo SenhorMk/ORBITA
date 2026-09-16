@@ -1,3 +1,16 @@
+/**
+ * Cofre de credenciais de integração (Bling e demais provedores).
+ *
+ * As credenciais de uma conexão — Client Secret, access token, refresh token —
+ * são serializadas em JSON e cifradas no servidor com AES-256-GCM (`../crypto`,
+ * chave em `ENCRYPTION_KEY`) antes de chegar ao banco. A tabela
+ * `credenciais_integracao` só guarda o texto cifrado e não tem grant para
+ * `anon`/`authenticated`: apenas adaptadores de servidor com `service_role`
+ * a leem.
+ *
+ * Leitura e remoção filtram pelo par organização + conexão. O GCM
+ * autentica o conteúdo: texto adulterado não decifra e a leitura devolve `null`.
+ */
 import { z } from 'zod';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { encrypt, decrypt } from '../crypto';

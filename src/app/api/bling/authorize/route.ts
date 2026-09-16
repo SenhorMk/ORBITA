@@ -29,11 +29,13 @@ type AutorizacaoDoAuthorize =
 /**
  * Todas as recusas do `authorize`, na ordem em que precisam acontecer.
  *
- * Iniciar o OAuth e uma capacidade de GESTAO, o mesmo contrato de
- * `POST /api/bling/connect`. Sem essa verificacao, qualquer `member` da
- * organizacao podia disparar a autorizacao com o Client ID do dono e vincular
- * a conta Bling da empresa a uma transacao que ele controla — enquanto a rota
- * que grava as credenciais, ao lado, o recusava.
+ * Iniciar o OAuth é uma capacidade de GESTÃO, o mesmo contrato de
+ * `POST /api/bling/connect`. Sem essa verificação, qualquer `member` poderia
+ * disparar a autorização com o Client ID da organização e vincular a conta
+ * Bling da empresa a uma transação que ele controla.
+ *
+ * Ordem: contexto verificado (401/403/503) → capacidade `organization:manage`
+ * (403) → organização esperada pela tela (409).
  */
 async function autorizarInicioDoOAuth(
   request: Request,
@@ -75,7 +77,16 @@ async function autorizarInicioDoOAuth(
   return { _tag: 'Autorizado', scope: organizationContextToScope(contextResult.context) };
 }
 
-/** Build the Bling OAuth authorize handler around explicit rate-limit, organization and transaction seams. */
+/**
+ * `GET /api/bling/authorize` — inicia a conexão OAuth com o Bling.
+ *
+ * Fluxo: rate limit → autorização de gestão → Client ID da organização →
+ * transação OAuth persistida → URL de autorização + cookie da transação.
+ *
+ * Não grava credenciais nem tokens: só prepara a transação que o callback
+ * consumirá. O cookie é `httpOnly`, restrito ao caminho do callback e expira
+ * junto com a transação.
+ */
 export function createBlingAuthorizeHandler(dependencies: BlingAuthorizeDependencies) {
   return async function blingAuthorizeHandler(request: Request): Promise<NextResponse> {
     const correlationId = getCorrelationId(request);

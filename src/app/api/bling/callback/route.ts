@@ -15,7 +15,13 @@ type ProductionLogger = typeof import('../../../../lib/observability/logger').lo
 type ProductionDecrypt = typeof import('../../../../lib/crypto').decrypt;
 type ProductionEncrypt = typeof import('../../../../lib/crypto').encrypt;
 
-/** 1–2. Look up organization-scoped credentials, then fall back to the legacy per-user row. */
+/**
+ * Lê do cofre o Client ID e o Client Secret do aplicativo Bling da organização.
+ *
+ * A organização vem da transação OAuth consumida. Sem organização, sem conexão
+ * ou com credencial fora do contrato, devolve `null` — não há leitura
+ * alternativa por usuário.
+ */
 async function resolveProductionCredentials(
   supabaseServer: ProductionSupabaseClient,
   credentialsVault: ProductionCredentialsVault,
@@ -49,34 +55,27 @@ async function resolveProductionCredentials(
     }
   }
 
-  // O fallback por `user_id` sobre `integracoes_bling` foi removido no Ticket
-  // 10b. Ele nunca poderia ter funcionado: `service_role` nao tem privilegio
-  // naquela tabela (`42501 permission denied`, comprovado no laboratorio e no
-  // staging), entao a consulta so produzia um log de erro e `null`. A
-  // credencial do aplicativo vive no cofre por organizacao desde o Ticket 28.
+  // A credencial do aplicativo vive apenas no cofre por organização; a tabela
+  // legada `integracoes_bling` não é fonte de leitura.
   return null;
 }
 
 /**
- * 3. Persist tokens into the organization's private credentials vault.
+ * Persiste os tokens no cofre privado da organização.
  *
- * ## Revisao externa da PR #85 — `conectado` e a ULTIMA escrita
+ * ## `conectado` é a ÚLTIMA escrita
  *
- * A versao anterior marcava `status = 'conectado'` no mesmo upsert que
- * descobria o id da conexao, ou seja **antes** de os tokens existirem no
- * cofre. Se o cofre falhasse logo depois, a resposta virava 500 (correto), mas
- * a linha ficava dizendo `conectado` para uma organizacao sem token nenhum — e
- * a proxima leitura da tela repetia essa afirmacao.
+ * São três escritas separadas (não uma transação), e só a última afirma que a
+ * conexão existe:
  *
- * Agora sao tres passos, e o ultimo e o unico que afirma alguma coisa:
- *
- * 1. garantir a linha em `pendente`, so para obter o `id`;
- * 2. gravar os tokens no cofre (uma linha so, nunca metade);
- * 3. so entao declarar `conectado`.
+ * 1. garantir a linha em `pendente`, só para obter o `id`;
+ * 2. gravar os tokens cifrados no cofre (um único upsert da credencial inteira);
+ * 3. só então declarar `conectado`, com a evidência de saúde zerada.
  *
  * Uma falha em 2 deixa `pendente`: a tela diz "Configurado, falta autorizar",
- * que e exatamente a verdade. Uma falha em 3 deixa tokens gravados sob um
- * `pendente` — entendido de menos, e o lojista refaz o Passo 2 sem prejuizo.
+ * que é a verdade. Uma falha em 3 deixa tokens gravados sob um `pendente` —
+ * o estado afirma menos do que existe, e refazer a autorização não causa dano.
+ * Qualquer falha lança, e o callback responde com página de erro.
  */
 export async function persistOrganizationTokens(
   supabaseServer: ProductionSupabaseClient,
@@ -102,8 +101,8 @@ export async function persistOrganizationTokens(
     .single();
 
   if (connErr || !conn?.id) {
-    // Lanca, e nao retorna: quem chama e o callback, e o retorno silencioso
-    // fazia a pagina de sucesso ser escrita sem token nenhum gravado.
+    // Lança, e não retorna: um retorno silencioso faria o callback escrever a
+    // página de sucesso sem token nenhum gravado.
     productionLogger.error('bling_callback.connection_persist_failed', { subsystem: 'app', provider: 'bling' });
     throw new Error('Falha ao gravar a conexao Bling da organizacao');
   }
@@ -137,10 +136,9 @@ export async function persistOrganizationTokens(
 }
 
 /**
- * Espelho legado em `integracoes_bling`, mantido apenas enquanto a coluna
- * existir. Nenhum caminho de runtime le essa tabela desde o Ticket 10b, e o
- * `service_role` nem tem privilegio para isso — a escrita e best-effort e o
- * seu resultado nunca decide o sucesso da conexao.
+ * Espelho legado em `integracoes_bling`, mantido apenas enquanto a tabela
+ * existir. Nenhum caminho de runtime lê essa tabela; a escrita é best-effort e
+ * o seu resultado nunca decide o sucesso da conexão.
  */
 async function persistLegacyTokens(
   supabaseServer: ProductionSupabaseClient,
@@ -193,9 +191,9 @@ export async function GET(request: Request): Promise<NextResponse> {
       if (input.organizacaoId) {
         await persistOrganizationTokens(supabaseServer, credentialsVault, productionLogger, input.organizacaoId, input);
       }
-      // O espelho legado e best-effort por definicao (ver acima), entao a sua
-      // falha nao pode derrubar uma conexao que ja foi gravada de verdade no
-      // cofre da organizacao — que agora e o que decide o sucesso.
+      // O espelho legado é best-effort, então a sua falha não pode derrubar
+      // uma conexão já gravada no cofre da organização — que é o que decide
+      // o sucesso.
       try {
         await persistLegacyTokens(supabaseServer, encrypt, input);
       } catch (causa) {
