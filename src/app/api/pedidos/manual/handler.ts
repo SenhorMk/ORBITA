@@ -1,8 +1,9 @@
 /**
  * `POST /api/pedidos/manual` — registra uma venda manual e, opcionalmente, cria
  * o pedido no Bling. Duas fontes de verdade (ERP e banco local) sem transação
- * distribuída entre elas: este fluxo existe para que uma retentativa nunca
- * produza um segundo pedido real.
+ * distribuída entre elas: este fluxo coordena idempotência, posse e
+ * reconciliação para impedir que uma retentativa repita a criação remota
+ * enquanto o desfecho anterior ainda não foi resolvido.
  *
  * Fluxo:
  * 1. `prepararPedido` — escopo verificado, corpo validado, cliente e itens
@@ -364,8 +365,8 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     // CLAIM: reivindica a referência ANTES de qualquer chamada ao Bling. Uma
     // retentativa (humana, de proxy, de navegador) que reenvie a MESMA
     // `referenciaLocal` recebe de `decidirSobreTentativa` uma resposta pronta
-    // em vez de criar um segundo pedido remoto — é isso que torna "não tente
-    // de novo" uma garantia do sistema, não só uma instrução de texto.
+    // em vez de repetir a criação remota — a proteção contra duplicação fica
+    // no servidor, e não depende de o usuário seguir a instrução da tela.
     const decisao = decidirSobreTentativa(
       await deps.store.reivindicarTentativa(scope, referenciaLocal, fingerprint, valoresFingerprint),
     );

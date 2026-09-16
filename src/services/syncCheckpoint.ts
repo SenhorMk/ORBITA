@@ -4,11 +4,13 @@ import { supabaseServer } from '../lib/supabaseServer';
 /**
  * Marcadores de progresso e utilitários de paginação da sincronização.
  *
- * O checkpoint é o instante da última sincronização bem-sucedida de uma
- * entidade; a execução seguinte pede ao Bling só o que foi alterado depois
- * dele. Por isso ele só pode avançar quando a etapa inteira foi lida e
- * gravada: um checkpoint adiantado esconde para sempre os dados do intervalo
- * que falhou (a saída é a sincronização `completa`).
+ * Para produtos e pedidos, o checkpoint limita a próxima leitura aos dados
+ * alterados depois da última sincronização concluída. Clientes são relidos
+ * integralmente; nesse caso o marcador registra apenas a conclusão da etapa.
+ *
+ * Um checkpoint incremental só avança depois que a etapa inteira termina,
+ * para não ocultar dados de um intervalo que falhou (a saída, se isso
+ * acontecer, é a sincronização `completa`).
  */
 
 export async function getLastSyncedAt(orgId: string, entidade: string): Promise<string | null> {

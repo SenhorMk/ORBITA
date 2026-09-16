@@ -5,7 +5,8 @@
  * confiar num `organizacao_id` qualquer. Eles recebem um
  * `VerifiedOrganizationScope`, que só é construído aqui — a partir de um
  * contexto canônico já resolvido ou de uma consulta ao vínculo persistido.
- * O símbolo privado impede que outro módulo monte esse objeto à mão.
+ * O símbolo privado impede, no sistema de tipos, que outro módulo monte esse
+ * objeto à mão sem um cast explícito.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';

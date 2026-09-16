@@ -57,7 +57,8 @@ export type AuthenticatedIdentityResult =
  * Usado pelo webhook do Bling: `authorizeSignedServiceTenant` prova a origem por
  * HMAC contra segredos que o servidor possui, e devolve a organização daquela
  * conexão. A autoridade é a assinatura, não um metadado do usuário. O símbolo
- * privado impede que outro módulo fabrique um `VerifiedTenant` sem essa prova.
+ * privado impede, no sistema de tipos, que outro módulo fabrique um
+ * `VerifiedTenant` sem essa prova (salvo por cast explícito).
  */
 export interface VerifiedTenant {
   readonly id: z.infer<typeof tenantIdSchema>;

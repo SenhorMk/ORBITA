@@ -28,7 +28,8 @@ import type { TokenDoBling } from './blingToken';
 import { tokenDoBlingReal } from './blingCredenciaisSupabase';
 
 /**
- * Adapter HTTP da API v3 do Bling — a única camada que fala com o ERP.
+ * Adapter HTTP da API REST v3 do Bling. A troca OAuth (código ou refresh token
+ * por access token) fica à parte, em `blingOAuth.ts`.
  *
  * Responsabilidades:
  * - **escopo**: um `BlingClient` pertence a uma organização; a credencial é

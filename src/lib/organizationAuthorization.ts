@@ -5,8 +5,10 @@
  *
  * O identificador de organização enviado pelo navegador não concede autoridade:
  * ele só escolhe qual vínculo consultar. O contexto resultante carrega um
- * símbolo privado, então só este módulo o constrói — quem recebe um
- * `OrganizationContext` sabe que ator e organização já foram comprovados.
+ * símbolo privado: no sistema de tipos, só este módulo o constrói (sem um cast
+ * explícito). É uma proteção de compilação, não de runtime — quem recebe um
+ * `OrganizationContext` construído normalmente sabe que ator e organização
+ * já foram comprovados.
  *
  * Não conhece Supabase: identidade e memberships entram por portas
  * (`OrganizationAuthorizationDependencies`), o que permite testar a regra sem
@@ -114,11 +116,14 @@ export interface OrganizationAuthorizationDependencies {
 }
 
 /**
- * Capabilities concedidas por um papel persistido — a única tabela papel → permissão.
+ * Capabilities concedidas por um papel persistido — a tabela papel → permissão
+ * das fronteiras do servidor.
  *
  * `member` só acessa; `owner` e `admin` também gerenciam. Rotas que autorizam
  * uma organização nomeada na URL usam esta mesma função, para que nenhuma
- * fronteira redecida por conta própria o que um papel pode fazer.
+ * fronteira do servidor redecida por conta própria o que um papel pode fazer.
+ * A interface repete a regra apenas para exibir ou esconder ações; isso não
+ * concede acesso.
  */
 export function organizationCapabilitiesForRole(role: PapelMembro): ReadonlySet<OrganizationCapability> {
   return role === 'member'
