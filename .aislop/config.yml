@@ -19,8 +19,8 @@ scoring:
     good: 75
     ok: 50
 
-# `scripts/check-aislop-ratchet.mjs` compares per-file diagnostic
-# fingerprints with `quality/aislop-baseline.json`.
+# `scripts/check-aislop-ratchet.mjs` is zero-tolerance: every non-info
+# diagnostic fingerprint must be listed in `quality/aislop-allowlist.json`.
 
 telemetry:
   enabled: false
