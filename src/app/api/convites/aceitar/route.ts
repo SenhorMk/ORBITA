@@ -44,9 +44,8 @@ export interface AcceptInviteDependencies {
  * A **segunda** etapa do aceite, depois de a primeira já ter commitado.
  *
  * Ela vive numa função própria porque a distinção que faz é fácil de perder de
- * vista no meio do handler: `Stale` é o servidor funcionando, `Denied` e
- * `MembershipStoreUnavailable` são a etapa não tendo terminado — e a diferença
- * entre as duas coisas é o que a revisão externa da PR #84 encontrou colapsado.
+ * vista no meio do handler: `Stale` é o servidor funcionando, enquanto `Denied`
+ * e `MembershipStoreUnavailable` são a etapa não tendo terminado.
  *
  * @param dependencies - Seleção canônica e espelho em cookie.
  * @param contexto - O par verificado, o id devolvido pela RPC e o ator, para o log.
@@ -91,8 +90,8 @@ async function resolverContextoAposAceite(
   // `success` continua `true` porque a entrada na organização é real; o
   // `contexto` é que carrega a falha, e o cliente reconcilia relendo o contexto
   // canônico — não repetindo o convite. Nenhum cookie é gravado: um cookie
-  // apontando para uma seleção que o servidor não aplicou é exatamente a
-  // segunda fonte divergente que o Ticket 06 removeu.
+  // apontando para uma seleção que o servidor não aplicou seria uma segunda
+  // fonte de organização ativa, divergente da canônica.
   registrarFalhaInterna(
     'convites.aceitar.contexto',
     new Error(`Selecao pos-aceite nao resolvida: ${selecao._tag}`),
@@ -114,23 +113,14 @@ async function resolverContextoAposAceite(
  * client construction and the RPC itself stay inside the handler so that tests
  * exercise the real caller identity instead of a stand-in for it.
  *
- * ## Ticket 06 — o cookie não era prova de troca
+ * ## O cookie não é prova de troca
  *
- * A versão anterior recebia um único seam, `setActiveOrganization`, e o
- * chamava sempre: aceitar um convite gravava o cookie `orbita_active_org`
- * apontando para a organização ingressada, e mais nada. Dois problemas, um em
- * cada direção:
+ * Quem responde "qual é a organização ativa" é `contextos_organizacao_ativos`,
+ * pelo CAS — `activeOrganizationSelection()` nem lê o cookie `orbita_active_org`.
+ * Um cookie apontando para B enquanto o servidor mantém A seria uma segunda
+ * fonte de organização ativa, divergente da canônica.
  *
- * - **O cookie não é a autoridade.** Quem responde "qual é a organização
- *   ativa" é `contextos_organizacao_ativos`, pelo CAS — `activeOrganizationSelection()`
- *   nem lê esse cookie. Então a organização recém-ingressada não passava a ser
- *   a ativa; a tela recarregava e continuava na anterior, ou, sem seleção
- *   nenhuma, caía na primeira membership por `created_at`, que pode ser outra.
- * - **E ainda assim ele mentia.** Um cookie apontando para B enquanto o
- *   servidor mantém A é uma segunda fonte de organização ativa divergente —
- *   exatamente o que o eixo multi-tenant não pode ter.
- *
- * Agora a seleção passa pelo CAS, o cookie só é escrito quando o CAS aplicou,
+ * Por isso a seleção passa pelo CAS, o cookie só é escrito quando o CAS aplicou,
  * e a resposta diz qual dos casos ocorreu. Nenhuma troca é forçada: quem já
  * tinha seleção válida continua onde estava, e a lista recarregada pela tela
  * mostra a organização nova entre as suas.
@@ -158,9 +148,7 @@ export function createAcceptInviteHandler(dependencies: AcceptInviteDependencies
     // de organização nenhuma, então exigir vínculo aqui negaria exatamente o
     // caso que a rota existe para atender. A autoridade sobre o convite é o
     // token **e o e-mail do destinatário**, conferidos pela própria RPC contra
-    // `auth.uid()` (migration 63). Até o Ticket 20 a rota passava pelo atalho
-    // de sessão, que exige vínculo e negava com 401 os usuários criados pelos
-    // fluxos atuais.
+    // `auth.uid()` (migration 63).
     const bearerResult = readBearerToken(req);
     const identity = await resolveAuthenticatedIdentity(req);
     if (identity._tag !== 'IdentityVerified' || bearerResult._tag !== 'BearerTokenFound') {
@@ -172,7 +160,8 @@ export function createAcceptInviteHandler(dependencies: AcceptInviteDependencies
     }
 
     // `aceitar_convite_organizacao` cria a membership para `auth.uid()`; com a
-    // service_role key o sujeito é NULL e a RPC aborta (Ticket 26).
+    // service_role key o sujeito é NULL e a RPC aborta. Por isso o cliente é
+    // construído com o token do próprio ator.
     const actorClientResult = createActorScopedSupabaseClient(bearerResult.token);
     if (actorClientResult._tag !== 'ActorScopedClientCreated') {
       logger.error('convites.aceitar.actor_client_unavailable', {
@@ -219,13 +208,11 @@ export function createAcceptInviteHandler(dependencies: AcceptInviteDependencies
       // aceito, e-mail de outro destinatário. A mensagem dela é texto do
       // Postgres, que carrega valor de linha em vários casos, e ainda diria a
       // quem tenta um token qualquer *por que* aquele token não serve. As duas
-      // coisas são vazamento, então a resposta é uma só (CWE-209, Ticket 20).
+      // coisas são vazamento, então a resposta é uma só (CWE-209).
       //
-      // DÍVIDA (preservada): quem tinha um convite legítimo e expirado também
-      // deixa de saber que ele expirou. Recuperar essa informação sem devolver
-      // o oráculo exige classificar as recusas da RPC em erros de domínio
-      // tipados, com mensagem escrita pelo aplicativo — como
-      // `EntitlementDeniedError` já é. É trabalho próprio, e não deste PR.
+      // Limitação conhecida: quem tinha um convite legítimo e expirado também
+      // não fica sabendo que ele expirou. Informar isso sem criar um oráculo
+      // exigiria classificar as recusas da RPC em erros de domínio tipados.
       registrarFalhaInterna('convites.aceitar', error, { atorId: identity.user.id });
       return NextResponse.json({ error: 'Não foi possível aceitar o convite' }, { status: 400 });
     }

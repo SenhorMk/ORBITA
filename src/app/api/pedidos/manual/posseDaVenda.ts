@@ -1,10 +1,16 @@
 /**
- * A POSSE da tentativa, e o que ela autoriza (ticket 30 — 9ª rodada de revisão).
+ * A POSSE da tentativa, e o que ela autoriza.
  *
- * Separado de `handler.ts` porque é uma responsabilidade própria: decidir se
- * este executor ainda pode produzir efeito não é a mesma coisa que montar e
- * enviar a venda. E porque `handler.ts` passou do limite de tamanho do gate de
- * qualidade quando o fencing dos efeitos comerciais entrou.
+ * Toda tentativa de venda manual tem uma **época**. Reivindicar a referência
+ * devolve a época vigente; a reconciliação, ao assumir uma tentativa antiga,
+ * avança a época. Quem carrega uma época velha perdeu a posse (fencing):
+ *
+ * - antes de um efeito externo, `posseAindaVigente` confere a época no banco;
+ * - na gravação local, a própria transação recusa uma época velha (`55P03`).
+ *
+ * A conferência antes do efeito externo reduz a janela, mas não a fecha — uma
+ * chamada ao Bling já iniciada não é desfeita. Por isso a gravação local, que é
+ * atômica com a época, é a decisão final.
  */
 import type { NextResponse } from 'next/server';
 
@@ -17,8 +23,8 @@ import { falhaDaVendaManual as fail } from './resposta';
 /**
  * A tentativa que este executor reivindicou, e a época em que a reivindicou.
  *
- * Viaja junto em todo o fluxo desde a 9ª rodada de revisão: é o token de posse
- * que autoriza cada efeito — externo (B2) e local (B1).
+ * Viaja junto em todo o fluxo: é o token de posse que autoriza cada efeito,
+ * externo e local.
  */
 export interface PosseDaVenda {
   readonly tentativaId: string;
@@ -26,11 +32,11 @@ export interface PosseDaVenda {
 }
 
 /**
- * Confere a posse imediatamente antes de um efeito externo (9ª rodada, B2).
+ * Confere a posse imediatamente antes de um efeito externo.
  *
- * Falha fechada: não conseguir perguntar conta como "não sou dono". A
- * alternativa — seguir e chamar o ERP mesmo assim — é exatamente o efeito
- * zumbi que esta rodada existe para fechar.
+ * Falha fechada: não conseguir perguntar conta como "não sou dono". Seguir e
+ * chamar o ERP mesmo assim permitiria um efeito de um executor que já não
+ * tem autoridade sobre a tentativa.
  */
 export async function posseAindaVigente(
   scope: VerifiedOrganizationScope,
@@ -57,7 +63,7 @@ export function respostaPosseTomada(): NextResponse {
 }
 
 /**
- * A resposta de "o efeito aconteceu e o registro não" (9ª rodada, B4).
+ * A resposta de "o efeito aconteceu e o registro não".
  *
  * Nenhuma resposta de sucesso sem o estado durável correspondente. A venda
  * pode existir; o que NÃO existe é a garantia de idempotência que um `2xx`

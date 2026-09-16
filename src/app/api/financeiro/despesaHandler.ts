@@ -104,9 +104,10 @@ type SincronizacaoBling =
  * Cria a conta a pagar no Bling e, quando a despesa é marcada como paga,
  * quita-a pelo endpoint próprio.
  *
- * A quitação é um passo separado porque `situacao` é `readOnly` na criação: a
- * versão anterior mandava `situacao: 2` e gravava `'pago'` localmente, então a
- * conta ficava **aberta no ERP e quitada no ORBITA**.
+ * A quitação é um passo separado porque `situacao` é `readOnly` na criação:
+ * enviá-la seria ignorado, e gravar `'pago'` localmente deixaria a conta
+ * **aberta no ERP e quitada no ORBITA**. São duas chamadas de rede separadas,
+ * sem atomicidade entre elas: a quitação pode falhar depois da criação.
  */
 async function sincronizarComBling(
   body: DespesaRequest,
@@ -241,9 +242,8 @@ export function createDespesaHandler(deps: DespesaDependencies) {
         titulo: body.titulo,
         descricao: body.descricao,
         categoriaId: body.categoriaId,
-        // Quem recebeu a despesa fica no histórico. Antes o contato só
-        // existia na chamada ao Bling e o ORBITA não sabia de quem era a
-        // saída; o id é a referência, o nome é o retrato do momento.
+        // Quem recebeu a despesa fica no histórico: o id é a referência, o
+        // nome é o retrato do momento.
         fornecedorBlingId: sincronizacao.contatoId,
         fornecedorNome: body.contatoNome,
         // A situação gravada é a real do ERP. Se a quitação não aconteceu, o

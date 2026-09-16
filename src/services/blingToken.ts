@@ -18,12 +18,18 @@ import {
  * **já renova** quando o token venceu, e renovar precisa de tudo o que obter
  * precisa.
  *
- * **A falha é valor, não exceção.** É a convenção das fronteiras revisadas
- * deste repositório (`BlingCallResult`, `BlingOAuthTokenExchangeResult`), e
- * aqui ela resolve um problema concreto: enquanto a falha era exceção, o
- * contrato "toda falha é tipada" ficava sempre maior que o código — bastava uma
- * porta rejeitar, um `AbortSignal` disparar ou um `dormir` quebrar para algo
- * cru atravessar. Com união, o compilador cobra o tratamento.
+ * **Renovação concorrente.** Vários processos podem encontrar o token vencido
+ * ao mesmo tempo. Antes de renovar, cada um disputa um lease no banco
+ * (`acquire_conexao_token_lock`, 30 s, marcado em `conexoes_integracao`):
+ * quem obtém troca o refresh token e grava o par novo no cofre; quem encontra o
+ * lease ocupado relê o cofre em intervalos até ver um token válido. O lease
+ * reduz renovações duplicadas, mas não é exclusão perfeita — uma renovação que
+ * passe de 30 s deixa o lease ser tomado por outro processo, e a liberação é
+ * feita só por `conexao_id`.
+ *
+ * **A falha é valor, não exceção.** Toda rejeição de porta (banco, cofre, rede,
+ * `dormir`) é convertida em `ResultadoDoToken`; com união, o compilador cobra
+ * o tratamento de cada motivo.
  */
 export interface TokenDoBling {
   /**
@@ -247,8 +253,7 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
 
     if (lock.valor._tag === 'Indisponivel') {
       // **Falhar ao disputar não é "outro está renovando".** Tratar as duas
-      // igual mandava o chamador esperar meio minuto por uma renovação que
-      // ninguém estava fazendo.
+      // igual faria o chamador esperar por uma renovação que ninguém faz.
       return falhar('lock-indisponivel', lock.valor.causa);
     }
 
@@ -259,11 +264,9 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
 
     // **Operação e limpeza separadas, com no máximo uma liberação.**
     //
-    // A versão anterior liberava dentro do `try` e de novo no `catch`: quando a
-    // primeira liberação falhava depois de uma renovação bem-sucedida, o
-    // `soltarLock` rodava **duas vezes**. Como o RPC libera só por
-    // `conexao_id`, uma repetição depois de um resultado de rede ambíguo pode
-    // apagar o lock que outro processo já tinha adquirido.
+    // Como o RPC libera só por `conexao_id`, liberar duas vezes — por exemplo,
+    // repetir depois de um resultado de rede ambíguo — poderia apagar o lock
+    // que outro processo já tinha adquirido.
     const renovacao = await this.renovarComLock(conexaoId);
     const liberacao = await this.executar(() => this.armazenamento.soltarLock(conexaoId), 'lock-indisponivel');
 
@@ -295,8 +298,8 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
 
     if (encontrada.valor._tag === 'Indisponivel') {
       // **Falha de infraestrutura não é "sem conexão".** Confundir as duas
-      // mandava o lojista reconectar uma conta que já estava conectada, e
-      // escondia que o problema era do banco.
+      // mandaria o lojista reconectar uma conta que já está conectada, e
+      // esconderia que o problema é do banco.
       return { ok: false, falha: falhar('armazenamento-falhou', encontrada.valor.causa) };
     }
 
@@ -390,9 +393,9 @@ export class TokenDoBlingOrquestrado implements TokenDoBling {
   /**
    * Executa uma porta convertendo rejeição em falha tipada.
    *
-   * Sem isto o contrato mentia: a união cobria os caminhos que **este** módulo
-   * decide, e qualquer rejeição das portas — banco fora, cofre indisponível,
-   * rede, um `dormir` que quebra — atravessava crua para o chamador.
+   * Sem isto a união cobriria só os caminhos que **este** módulo decide, e
+   * qualquer rejeição das portas — banco fora, cofre indisponível, rede, um
+   * `dormir` que quebra — atravessaria crua para o chamador.
    */
   private async executar<T>(acao: () => Promise<T>, motivo: MotivoDaFalhaDeToken): Promise<Passo<T>> {
     try {

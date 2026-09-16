@@ -26,7 +26,17 @@ interface OrganizationSwitchDependencies {
   readonly setActiveOrganization: (organizationId: string) => Promise<void>;
 }
 
-/** Build the organization-switch HTTP handler around explicit authorization and cookie seams. */
+/**
+ * `POST /api/organizacoes/switch` — troca a organização ativa do ator.
+ *
+ * Fluxo: valida o corpo → confirma o vínculo com a organização pedida
+ * (`ExactOrganization`) → aplica a troca por CAS com a versão que a tela viu →
+ * só então espelha a seleção no cookie.
+ *
+ * O `organizacao_id` do corpo apenas escolhe qual vínculo conferir; quem é
+ * gravado vem do contexto resolvido. Se a versão enviada já estiver velha
+ * (outra aba trocou antes), a resposta é 409 e nada é sobrescrito.
+ */
 export function createOrganizationSwitchHandler(dependencies: OrganizationSwitchDependencies) {
   return async function organizationSwitchHandler(req: Request) {
 

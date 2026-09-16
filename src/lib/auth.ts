@@ -4,19 +4,17 @@ import { z } from 'zod';
 import { readBearerToken } from './bearer-token';
 
 /**
- * Identidade e autorização de serviço.
+ * Identidade e autorização de serviço — o primeiro degrau da autorização.
  *
- * O modelo de tenancy **por usuário** foi removido daqui no Ticket 22, fatia C:
- * `resolveLegacyMembership`, `resolveActorContext`, `actorContextDenialStatus`,
- * `verifySessionAndRole`, `ActorContext`, `ActorCapability`, `ActorRole` e
- * `AuthSession`. Eles liam papel de `app_metadata.role`, campo que nenhum fluxo
- * deste sistema escreve, e ficaram sem chamador quando as 19 fronteiras
- * migraram para `membros_organizacao`.
+ * Este módulo responde "quem é o chamador", nunca "o que ele pode fazer".
+ * Identidade não é autorização: papel e capacidade vêm do vínculo persistido
+ * em `membros_organizacao`, resolvido por `organizationAuthorization` e
+ * `requestOrganizationContext`. `app_metadata` do provedor não concede papel.
  *
- * O que resta tem duas responsabilidades, e nenhuma delas decide papel:
+ * Duas responsabilidades:
  *
- * - **identidade** — `resolveAuthenticatedIdentity` verifica o bearer e para
- *   por aí; quem decide vínculo e capacidade é `requestOrganizationContext`;
+ * - **identidade** — `resolveAuthenticatedIdentity` verifica o bearer junto ao
+ *   Supabase Auth e distingue sessão ausente, inválida e provedor indisponível;
  * - **autorização de serviço** — `authorizeSignedServiceTenant` prova a origem
  *   de um webhook por HMAC contra segredos do servidor.
  */
@@ -56,10 +54,10 @@ export type AuthenticatedIdentityResult =
 /**
  * Escopo de tenant que só pode ser construído depois de uma verificação confiável.
  *
- * **Não é o modelo antigo.** Sobrou de propósito porque o webhook do Bling o usa:
- * `authorizeSignedServiceTenant` prova a origem por HMAC contra segredos que o
- * servidor possui, e devolve a organização daquela conexão. Nada disso passa por
- * `app_metadata` — a autoridade é a assinatura, não um metadado do usuário.
+ * Usado pelo webhook do Bling: `authorizeSignedServiceTenant` prova a origem por
+ * HMAC contra segredos que o servidor possui, e devolve a organização daquela
+ * conexão. A autoridade é a assinatura, não um metadado do usuário. O símbolo
+ * privado impede que outro módulo fabrique um `VerifiedTenant` sem essa prova.
  */
 export interface VerifiedTenant {
   readonly id: z.infer<typeof tenantIdSchema>;
@@ -84,7 +82,14 @@ const defaultAuthUserLookup: AuthUserLookup = {
   },
 };
 
-/** Verify a bearer session without treating identity-provider metadata as membership authority. */
+/**
+ * Verifica o bearer da requisição e devolve apenas a identidade.
+ *
+ * Erros 4xx do provedor (exceto 429) significam token recusado → `SessionInvalid`,
+ * que vira 401. Erros 5xx, 429 ou falha de rede significam que não foi possível
+ * decidir → `IdentityProviderUnavailable`, que vira 503. Assim uma instabilidade
+ * do provedor não é apresentada ao usuário como "sessão inválida".
+ */
 export async function resolveAuthenticatedIdentity(
   request: Request,
   authUserLookup: AuthUserLookup = defaultAuthUserLookup,
@@ -108,16 +113,14 @@ export async function resolveAuthenticatedIdentity(
 }
 
 /**
- * Resolve a privileged tenant from an HMAC signature and server-owned mappings.
+ * Resolve o tenant de um webhook a partir da assinatura HMAC.
  *
- * Candidate mappings must come from server-side configuration, and each one
- * carries the secret already in clear text. Decryption is deliberately NOT done
- * here: the credential now lives in the vault (`credenciais_integracao`), and
- * only the vault knows how to open it. Ticket 11 — while this function decrypted
- * its own candidates, its single caller (the Bling webhook) kept reading the
- * aposentada `integracoes_bling`, which has been empty since ticket 10b. Every
- * legitimate event got 403. Taking the secret in clear text forces the caller to
- * name where the credential came from.
+ * Os candidatos vêm do servidor (organização → segredo), nunca do corpo da
+ * requisição. Cada segredo chega já em claro: abrir a credencial cifrada é
+ * responsabilidade do vault (`credenciais_integracao`), e o chamador precisa
+ * dizer de onde a tirou. A comparação usa `timingSafeEqual` para não vazar,
+ * pelo tempo de resposta, quantos bytes da assinatura estavam corretos.
+ * O primeiro candidato cuja assinatura confere define o tenant.
  */
 export function authorizeSignedServiceTenant(
   rawBody: string,

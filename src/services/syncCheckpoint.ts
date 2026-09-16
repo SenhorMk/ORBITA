@@ -4,10 +4,11 @@ import { supabaseServer } from '../lib/supabaseServer';
 /**
  * Marcadores de progresso e utilitários de paginação da sincronização.
  *
- * Extraídos de `sync.ts` para manter cada arquivo dentro do limite do gate de
- * qualidade — e porque o checkpoint merece um lugar próprio: foi ele que, ao
- * avançar depois de uma leitura que falhava em silêncio, transformou um erro
- * momentâneo numa sincronização permanentemente vazia.
+ * O checkpoint é o instante da última sincronização bem-sucedida de uma
+ * entidade; a execução seguinte pede ao Bling só o que foi alterado depois
+ * dele. Por isso ele só pode avançar quando a etapa inteira foi lida e
+ * gravada: um checkpoint adiantado esconde para sempre os dados do intervalo
+ * que falhou (a saída é a sincronização `completa`).
  */
 
 export async function getLastSyncedAt(orgId: string, entidade: string): Promise<string | null> {
@@ -84,9 +85,8 @@ export async function syncPaginatedEntities<T>(
 
     // Um item que falha e tolerável; a página inteira falhando é um defeito
     // sistemático — coluna que não existe, constraint violada, permissão
-    // negada. Antes isso virava só `console.warn`, e a etapa concluía com
-    // total zero: a sincronização dizia "Sincronizado! 0 produtos" com o
-    // catálogo cheio no Bling, para sempre.
+    // negada. Tratá-lo como aviso faria a etapa concluir com total zero e o
+    // checkpoint avançar com o catálogo cheio no Bling.
     if (falhasNaPagina === items.length) {
       throw new Error(
         `nenhum dos ${items.length} registros da página ${page} pôde ser gravado. Primeira falha: ${primeiraFalha}`,

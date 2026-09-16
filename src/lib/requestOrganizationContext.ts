@@ -1,3 +1,17 @@
+/**
+ * Fronteira HTTP da autorização por organização (adaptador de produção).
+ *
+ * Liga o núcleo puro de `organizationAuthorization` ao Supabase Auth e ao
+ * repositório de memberships, e entrega às rotas um `VerifiedOrganizationScope`
+ * ou uma resposta de negação pronta (401/403/503).
+ *
+ * Dois caminhos:
+ * - organização ativa do ator → `resolveVerifiedOrganizationScope`;
+ * - organização nomeada na URL → `authorizeRequestOrganizationCapability`.
+ *
+ * Em ambos o `organizacao_id` usado pelas camadas seguintes vem do vínculo
+ * persistido, nunca de corpo, query ou cookie enviados pelo cliente.
+ */
 import { NextResponse } from 'next/server';
 import { supabaseServer } from './supabaseServer';
 import {
@@ -17,9 +31,9 @@ import {
 } from './verifiedOrganizationScope';
 
 // Reexportado por conveniência das rotas, que já importam deste módulo. A
-// definição vive em `verifiedOrganizationScope`, que é puro — este módulo
-// constrói o cliente Supabase no load, e um adaptador HTTP não deve carregar
-// isso só para perguntar o que um papel pode fazer (Ticket 22).
+// definição vive em `verifiedOrganizationScope`, que não constrói cliente
+// Supabase no load — este módulo constrói, e um adaptador HTTP não deve
+// carregar isso só para perguntar o que um papel pode fazer.
 export { escopoTemCapacidade } from './verifiedOrganizationScope';
 import { SupabaseOrganizationMemberships } from '@/repositories/organizationMembershipRepository';
 
@@ -36,7 +50,11 @@ export function resolveRequestOrganizationContext(
   });
 }
 
-/** Resolve the request's active cookie, or its first persisted membership when no cookie exists. */
+/**
+ * Resolve a organização ativa persistida do ator (`contextos_organizacao_ativos`),
+ * ou o vínculo mais antigo quando não há seleção. O cookie `orbita_active_org`
+ * não é lido aqui: ele não carrega autoridade.
+ */
 export function resolveActiveRequestOrganizationContext(
   request: Request,
 ): Promise<OrganizationContextResult> {
@@ -83,10 +101,8 @@ export type RequestOrganizationCapabilityResult =
  * membership is looked up for the exact pair, and the role that comes back
  * decides the capability.
  *
- * Ticket 20 — the three denials this replaces all collapsed into `401` through
- * `verifySessionAndRole`, which returns `null` for "no session" and for "no
- * membership" alike. A member who had just proven who they were was told the
- * server did not know them. The distinction is kept here instead:
+ * The three denials stay distinct, so an authenticated caller without
+ * permission is never told that the server does not know who they are:
  *
  * - no session, or an invalid one → `401`;
  * - authenticated, but without the capability in that organization → `403`;

@@ -35,19 +35,23 @@ import type {
  *
  * Separado de `route.ts` porque DUAS rotas os usam — a criação
  * (`POST /api/pedidos/manual`) e a reconciliação
- * (`POST /api/pedidos/manual/reconciliar`, 5ª rodada de revisão). Duplicar os
- * adapters faria as duas rotas divergirem em silêncio, que é a forma de erro
- * que este ticket inteiro existe para fechar.
+ * (`POST /api/pedidos/manual/reconciliar`). Duplicar os adapters faria as duas
+ * rotas divergirem em silêncio.
+ *
+ * As regras de concorrência (claim, época, CAS) vivem nas RPCs do banco; este
+ * arquivo só as chama com o `organizacao_id` do escopo verificado e traduz cada
+ * erro em valor tipado.
  */
 
 /**
  * Referência da venda enviada ao Bling em `numeroLoja` — o número do pedido no
  * sistema de origem, que é o campo que o Bling reserva para isso.
  *
- * Desde a migration 53 ela **não** é mais gravada em `pedidos.bling_id`: sem
- * sincronização não existe id do Bling, e a coluna aceita NULL. Antes essa
- * posição era ocupada por `MANUAL-<Math.random()>`, um identificador fictício
- * se passando por ID do ERP.
+ * É a **referência estável** da tentativa quando o cliente envia o UUID que
+ * gerou (e o reenvia nas retentativas); sem ele, cada chamada recebe um UUID
+ * novo e fica sem proteção entre retentativas. Ela **não** é gravada em
+ * `pedidos.bling_id` — sem
+ * sincronização não existe id do Bling, e a coluna aceita NULL.
  */
 export function newLocalReference(referenciaClienteFornecida?: string): string {
   return `ORBITA-${referenciaClienteFornecida ?? randomUUID()}`;
@@ -147,8 +151,7 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
 }
 
 /**
- * Lê a tentativa pela referência, dentro do escopo verificado (ticket 30,
- * fatia 3 — 5ª rodada de revisão, reconciliação).
+ * Lê a tentativa pela referência, dentro do escopo verificado.
  *
  * `supabaseServer` usa a service role e ignora RLS, então o predicado
  * `organizacao_id` aqui é a única barreira que separa as tentativas de uma
@@ -179,14 +182,16 @@ async function lerTentativaPorReferencia(
 }
 
 /**
+ * CLAIM da referência (`reivindicar_tentativa_venda_manual`).
+ *
+ * A RPC compara a referência e os dois fingerprints com a tentativa já
+ * existente e devolve: nova (com época), conflito de conteúdo, valores
+ * divergentes, pendência idêntica, ou o estado da tentativa repetida.
+ *
  * **Nunca lança.** Toda falha vira `TentativaIndisponivel` — inclusive
- * `42P01` (tabela/RPC da migration 59 ausente). A versão anterior tratava
- * `42P01` como "segue sem a proteção" (`TentativaNova`); a 4ª rodada de
- * revisão apontou, corretamente, que isso desliga silenciosamente a
- * garantia que a migration 59 existe para dar — código novo contra banco
- * antigo voltaria a poder duplicar no Bling numa retentativa, exatamente a
- * janela que a fatia 3 foi escrita para fechar. Falha fechada: sem
- * conseguir reivindicar, o handler não chama o Bling.
+ * `42P01` (tabela/RPC ausente). Tratar infraestrutura ausente como "segue sem
+ * a proteção" desligaria em silêncio a garantia contra duplicação. Falha
+ * fechada: sem conseguir reivindicar, o handler não chama o Bling.
  */
 async function reivindicarTentativa(
   scope: VerifiedOrganizationScope,
@@ -212,7 +217,7 @@ async function reivindicarTentativa(
 
   // Conflito de conteúdo antes de qualquer outra leitura: a mesma chave para
   // OUTRA venda não é retentativa, e o desfecho da outra operação não pode
-  // vazar para esta (5ª rodada de revisão).
+  // vazar para esta.
   if (linha.fingerprint_conflitante) {
     return { _tag: 'TentativaConflitante' };
   }
@@ -243,7 +248,8 @@ async function reivindicarTentativa(
  *
  * A organização entra como argumento porque a RPC é `security definer` e
  * ignora RLS: o predicado dentro dela é a única barreira contra concluir uma
- * tentativa de outra organização (5ª rodada de revisão).
+ * tentativa de outra organização. `estadoEsperado` e `epocaEsperada` formam o
+ * CAS: a RPC só grava se a tentativa ainda estiver nesse estado e nessa época.
  */
 async function registrarDesfechoDaTentativa(
   scope: VerifiedOrganizationScope,
@@ -262,14 +268,9 @@ async function registrarDesfechoDaTentativa(
     p_epoca_esperada: epocaEsperada ?? null,
   });
 
-  // TODA falha vira VALOR (9ª rodada de revisão, B4).
-  //
-  // A versão anterior lançava em `55P03`/`40001` e apenas LOGAVA o resto — e
-  // era esse "resto" que produzia o falso sucesso: a venda gravada, o ledger
-  // não, e a rota respondendo `201` como se a garantia de idempotência
-  // estivesse durável. Quem chama precisa poder decidir, e para isso precisa
-  // saber. `42P01` (infra da migration 59 ausente) também é não-gravado: a
-  // política deste fluxo é falha fechada, nunca aberta.
+  // TODA falha vira VALOR: quem chama precisa saber que o ledger não gravou
+  // para nunca responder sucesso sem garantia de idempotência durável.
+  // `42P01` (infraestrutura ausente) também é não-gravado: falha fechada.
   if (error) {
     registrarFalhaInterna('pedidos.manual.tentativa.concluir', error);
     return { _tag: 'DesfechoNaoGravado', causa: new Error(error.message) };
@@ -280,7 +281,7 @@ async function registrarDesfechoDaTentativa(
 
 /**
  * "Ainda sou dono desta tentativa?" — a pergunta barata que precede cada
- * efeito externo (9ª rodada de revisão, B2).
+ * efeito externo.
  *
  * Falha fechada: não conseguir perguntar é `PosseIndeterminada`, e quem chama
  * trata isso como "não inicie o efeito", nunca como "provavelmente sim".
@@ -306,25 +307,16 @@ async function confirmarPosse(
 }
 
 /**
- * Grava a venda inteira numa transação única — e, desde a 9ª rodada de
- * revisão, **junto com a posse da tentativa e a conclusão do ledger**
- * (`registrar_venda_manual_com_posse`, migration 59, seção 10).
+ * Grava a venda inteira numa transação única do banco, **junto com a posse da
+ * tentativa e a conclusão do ledger** (`registrar_venda_manual_com_posse`,
+ * migration 59, seção 10).
  *
- * Antes, isto chamava `registrar_venda_manual` direto: a venda commitava sem
- * olhar para a posse (um executor cercado gravava por cima de uma
- * reconciliação que já tinha cancelado o pedido no Bling — B1) e a conclusão
- * do ledger era uma segunda chamada, cujo erro genérico era só logado, o que
- * deixava a rota responder `201` sem garantia de idempotência durável (B4).
- * Agora `55P03` significa, literalmente, que NADA foi gravado.
+ * Pedido, itens, baixa de estoque, título financeiro e conclusão do ledger
+ * commitam juntos: ou a venda inteira existe, ou nada existe. A RPC revalida
+ * cliente e produtos contra a organização, recusa estoque negativo e confere a
+ * época — `55P03` significa que a posse foi perdida e NADA foi gravado.
  *
- * Antes eram quatro chamadas separadas — pedido, itens, baixa de estoque e
- * título financeiro. Uma falha no meio deixava estoque baixado sem título, ou
- * pedido sem itens, sem nenhuma compensação. `registrar_venda_manual`
- * (migration 53) faz tudo de uma vez: ou a venda inteira existe, ou nada
- * existe. A RPC revalida cliente e produtos contra a organização e recusa
- * estoque negativo.
- *
- * **A corrida com o webhook (ticket 30, migration 57).** Quando a venda é
+ * **A corrida com o webhook (migration 57).** Quando a venda é
  * sincronizada, o pedido nasce no Bling **antes** desta gravação — a ordem não
  * pode ser invertida, porque o `bling_id` só existe depois da criação remota.
  * O Bling então dispara `order.created`, e o webhook grava a linha em
@@ -334,10 +326,10 @@ async function confirmarPosse(
  * assumir uma linha que **já é** venda manual continua sendo `23505` — que o
  * handler trata como falha definitiva, e dispara a compensação.
  *
- * **Falha definitiva × falha ambígua (ticket 30, fatia 3, endurecida na 3ª
- * rodada de revisão).** A classificação vive em `classificacaoDeFalha.ts`,
- * **por reconhecimento positivo** — só é definitiva uma falha cujo `code`
- * bate um formato conhecido de SQLSTATE/PostgREST, e qualquer coisa não
+ * **Falha definitiva × falha ambígua.** A classificação vive em
+ * `classificacaoDeFalha.ts`, **por reconhecimento positivo** — só é definitiva
+ * uma falha cujo `code` está numa allowlist de SQLSTATE ou tem o prefixo
+ * `PGRST` do PostgREST, e qualquer coisa não
  * reconhecida cai em ambígua por padrão, nunca o contrário. A dependência de
  * versão que sustenta essa fronteira, e a regressão que a prova sem depender
  * só da leitura do código-fonte instalado, estão documentadas em
@@ -376,7 +368,7 @@ async function persistVenda(input: PersistManualOrderInput): Promise<PersistVend
   if (error) {
     // `55P03` é a posse perdida, e a RPC recusa ANTES de qualquer efeito, com
     // a linha da tentativa travada: nada foi gravado, e não há o que compensar
-    // nem o que classificar (9ª rodada de revisão, B1).
+    // nem o que classificar.
     if (error.code === '55P03') return { _tag: 'PersistVendaSemPosse' };
 
     const causa = new Error(error.message);

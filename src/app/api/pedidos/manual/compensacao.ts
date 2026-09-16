@@ -1,10 +1,11 @@
 /**
- * O que fazer quando `persistVenda` não devolve sucesso (ticket 30, fatia 3).
+ * O que fazer quando `persistVenda` não devolve sucesso.
  *
- * Separado de `handler.ts` para manter cada arquivo dentro do limite de
- * tamanho do gate de qualidade, e porque é uma responsabilidade distinta do
- * fluxo principal da venda — decidir SE e COMO reagir a uma falha de
- * persistência não é a mesma coisa que montar o pedido.
+ * O pedido no Bling pode já existir quando a gravação local falha, e não há
+ * transação distribuída entre os dois lados. Este módulo decide, conforme o
+ * tipo da falha, entre **compensar** (cancelar o pedido no Bling),
+ * **confirmar** (procurar a venda que talvez tenha commitado) ou **bloquear**
+ * a referência como `indeterminada` até uma reconciliação.
  */
 import { NextResponse } from 'next/server';
 
@@ -17,7 +18,7 @@ import { falhaDaVendaManual as fail, jsonDaVendaManual as json } from './respost
 /**
  * Resposta HTTP e desfecho da tentativa, juntos — o chamador (`handler.ts`)
  * precisa dos dois: a resposta vai para o cliente, o desfecho vai para
- * `registrarDesfechoDaTentativa` (ticket 30, fatia 3, 3ª rodada), para que a
+ * `registrarDesfechoDaTentativa`, para que a
  * PRÓXIMA reivindicação com a mesma `referenciaLocal` encontre um estado
  * terminal em vez de reexecutar o Bling. Devolver os dois juntos evita
  * reconstruir o desfecho reabrindo o corpo da resposta.
@@ -30,15 +31,15 @@ export interface DesfechoDaFalha {
 /**
  * A resposta comum a todo caso em que a venda já existia: cancelar
  * (definitiva), confirmar (ambígua) e reivindicar uma referência já
- * concluída (ticket 30, fatia 3, 3ª rodada) chegam aqui pelo mesmo motivo —
+ * concluída chegam aqui pelo mesmo motivo —
  * a gravação aconteceu, só a certeza sobre ela é que demorou a chegar.
  */
 export function respostaVendaJaRegistrada(
   pedidoId: string,
   blingPedidoId: string | null,
   /**
-   * Avisos de efeitos que ainda pertenciam a esta requisição (10ª rodada de
-   * revisão): quando a confirmação prova que o commit aconteceu, o lançamento
+   * Avisos de efeitos que ainda pertenciam a esta requisição: quando a
+   * confirmação prova que o commit aconteceu, o lançamento
    * de estoque no ERP é feito aqui, e a falha dele precisa aparecer.
    */
   avisosExtras: readonly string[] = [],
@@ -75,8 +76,7 @@ export function respostaEstadoIndeterminado(blingPedidoId: string | null): NextR
 }
 
 /**
- * A resposta de quando a PRÓPRIA CRIAÇÃO no Bling ficou indeterminada
- * (ticket 30, fatia 3 — 5ª rodada de revisão).
+ * A resposta de quando a PRÓPRIA CRIAÇÃO no Bling ficou indeterminada.
  *
  * É pior do que a ambiguidade de persistência: aqui o ORBITA não tem sequer o
  * `bling_id`, então não há o que cancelar nem o que citar. O que existe é a
@@ -103,13 +103,11 @@ export function respostaCriacaoNoBlingIndeterminada(): NextResponse {
  * ordem: o `bling_id` do pedido só existe depois da criação remota. A única
  * saída honesta é compensar — cancelar lá o que não existe aqui.
  *
- * Sem isto, cada tentativa deixava um pedido órfão na conta real do lojista.
- * Aconteceu em 2026-08-30: o pedido 26735607230 nasceu no Bling, a gravação
- * local foi recusada pelo banco, e ele ficou sem par no ORBITA. Não havia
- * retentativa segura — tentar de novo criava mais um.
+ * Sem isto, uma gravação local recusada deixaria um pedido órfão na conta real
+ * do lojista, e tentar de novo criaria mais um.
  *
- * **Só é chamada para `PersistVendaFalhouDefinitivamente`** (ticket 30, fatia
- * 3) — um erro estruturado que o servidor devolveu depois de terminar de
+ * **Só é chamada para `PersistVendaFalhouDefinitivamente`** — um erro
+ * estruturado que o servidor devolveu depois de terminar de
  * processar a requisição. Uma resposta assim só existe depois que a
  * transação já foi revertida: não há ambiguidade para resolver aqui, e por
  * isso é seguro compensar direto. `PersistVendaAmbigua` (a chamada falhou
@@ -122,9 +120,8 @@ export function respostaCriacaoNoBlingIndeterminada(): NextResponse {
  *
  * ---
  *
- * **A máquina de estados completa da fatia 3 (4ª rodada de revisão).** O
- * erro que a revisão apontou: "falha definitiva" na persistência local NÃO
- * significa "nada ficou pendente no Bling" — só significa que a GRAVAÇÃO
+ * **A máquina de estados completa.** "Falha definitiva" na persistência local
+ * NÃO significa "nada ficou pendente no Bling" — só significa que a GRAVAÇÃO
  * LOCAL não vai acontecer. O Bling é uma chamada separada, com seu PRÓPRIO
  * resultado, que pode ele mesmo ser confirmado ou ambíguo. A tabela:
  *
@@ -138,10 +135,9 @@ export function respostaCriacaoNoBlingIndeterminada(): NextResponse {
  * | `PersistVendaAmbigua`, confirmação achou a venda | (não se aplica) | `concluida` | reutilizar o resultado |
  * | `PersistVendaAmbigua`, confirmação nunca resolveu | (não tentou compensar) | `indeterminada` | **NÃO** — não se sabe se a venda existe |
  *
- * A linha que a revisão pegou: a versão anterior gravava `'falhou'` também
- * quando a compensação falhava — como se "a persistência falhou" bastasse
- * para saber que "nada ficou pendente no Bling". Só uma compensação
- * CONFIRMADA prova isso. `'indeterminada'` é o estado certo para "não sei",
+ * "A persistência falhou" não basta para saber que "nada ficou pendente no
+ * Bling": só uma compensação CONFIRMADA prova isso. `'indeterminada'` é o
+ * estado certo para "não sei",
  * e é exatamente o estado que a reivindicação de uma retentativa já trata
  * como bloqueante — reaproveitar esse estado, em vez de inventar um quinto,
  * mantém a máquina pequena.
@@ -152,10 +148,8 @@ export async function compensarNoBling(
   error: unknown,
   deps: ManualOrderDependencies,
 ): Promise<DesfechoDaFalha> {
-  // Ticket 22, critério 13 — `causa` é `descreverErro` do erro do banco, e ela
-  // ia inteira para o cliente. Não ajuda a reconciliar nada e é diagnóstico
-  // interno (CWE-209): passa a ficar só no log. O que permite agir — o id do
-  // pedido no Bling e a instrução — continua na resposta.
+  // O erro do banco é diagnóstico interno (CWE-209): fica só no log. O que
+  // permite agir — o id do pedido no Bling e a instrução — vai na resposta.
   registrarFalhaInterna('pedidos.manual.registrar', error);
 
   if (blingPedidoId === null) {
@@ -188,7 +182,7 @@ export async function compensarNoBling(
         500,
         { blingPedidoId, compensado: false },
       ),
-      // MÁQUINA DE ESTADOS (4ª rodada de revisão) — 'falhou' só é seguro
+      // MÁQUINA DE ESTADOS — 'falhou' só é seguro
       // quando o Bling está CONFIRMADAMENTE limpo. Aqui não está: a
       // compensação em si falhou, então o pedido pode continuar existindo lá.
       // 'indeterminada', não 'falhou' — bloqueia a referência exatamente como
@@ -225,8 +219,7 @@ const JANELAS_DE_CONFIRMACAO_MS: readonly number[] = [0, 400, 800, 1600];
 
 /**
  * Tenta confirmar, repetidamente, se a venda foi registrada — para o caso em
- * que a falha original não teve resposta estruturada do servidor (ticket 30,
- * fatia 3).
+ * que a falha original não teve resposta estruturada do servidor.
  *
  * Uma única leitura logo após o erro não prova ausência: se a transação
  * ainda estava em voo no instante do erro, ela pode commitar milissegundos
@@ -268,7 +261,7 @@ async function confirmarVendaComRetentativa(
  * "tentou compensar e falhou", e sim "não dá para saber, não aja sozinho".
  *
  * O `desfecho` devolvido quando a ambiguidade não se resolve é `indeterminada`
- * — é o que fecha o ciclo (ticket 30, fatia 3, 3ª rodada): a PRÓXIMA
+ * — é o que fecha o ciclo: a PRÓXIMA
  * reivindicação com a mesma `referenciaLocal` encontra esse estado e devolve
  * `respostaEstadoIndeterminado` de novo, sem chamar o Bling.
  */

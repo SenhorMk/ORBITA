@@ -1,3 +1,12 @@
+/**
+ * Sincronização financeira Bling → ORBITA (contas a pagar e a receber).
+ *
+ * Para cada entidade: lê páginas do Bling a partir da primeira → valida cada
+ * item contra o contrato → vincula contas a receber ao pedido de origem quando
+ * a origem declarada é uma venda → grava por upsert idempotente → marca o
+ * checkpoint só se todas as páginas foram lidas. A organização vem do escopo
+ * verificado.
+ */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -77,11 +86,10 @@ type ContaValidada = z.infer<typeof contaFinanceiraSchema>;
 /**
  * Identificador do item **sem confiar na forma dele**.
  *
- * O ramo de item inválido lia `raw.id` para nomear a linha do log — e `raw`
- * pode ser `null`, que é justamente uma das formas rejeitadas: acessar `.id`
- * ali lançava `TypeError`, abortava o lote inteiro e nem tentava os itens
- * válidos seguintes. Não se lê campo de um valor cuja forma acabou de ser
- * recusada.
+ * O ramo de item inválido precisa nomear a linha do log, mas `raw` pode ser
+ * `null` — justamente uma das formas rejeitadas. Ler `.id` direto lançaria
+ * `TypeError` e abortaria o lote inteiro. Não se lê campo de um valor cuja
+ * forma acabou de ser recusada.
  */
 function identificadorNaoConfiavel(raw: unknown): string | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
@@ -130,8 +138,8 @@ function registrarFalha(
     organizacaoId: contexto.organizacaoId,
     blingId: contexto.blingId,
     erro: sanitizeErrorForLog(erro).name,
-    // Sem o status, um 403 e um 500 do provedor viravam a mesma linha
-    // `BlingLeituraError` — o log existia e nao distinguia causa nenhuma.
+    // Sem o status, um 403 e um 500 do provedor seriam a mesma linha
+    // `BlingLeituraError` no log.
     status: statusTecnico(erro),
     // Falha de banco não carrega status HTTP, e sem o SQLSTATE a linha do log
     // não diz nada além de "algo falhou".
@@ -189,16 +197,14 @@ function candidatoDeVinculo(conta: ContaValidada): CandidatoDeVinculo | null {
 /**
  * Sincroniza uma entidade financeira inteira, página a página.
  *
- * O que mudou em relação à versão anterior, e por quê:
+ * Invariantes:
  *
- * - **a leitura pode falhar, e a falha para o laço.** Antes o cliente devolvia
- *   `[]` em 401/403/500/timeout, o laço interpretava como fim dos dados e a
- *   etapa terminava "com sucesso" tendo processado zero;
+ * - **a leitura pode falhar, e a falha para o laço.** Falha de leitura nunca é
+ *   tratada como fim dos dados;
  * - **o checkpoint só avança se todas as páginas foram lidas.** Marcar depois
- *   de uma leitura falha registra um progresso que não houve;
- * - **falha de item não é mais só um `console.warn`.** Continua não derrubando
- *   o lote — um dado inválido não pode impedir os outros — mas entra na
- *   contagem que a resposta carrega.
+ *   de uma leitura falha registraria um progresso que não houve;
+ * - **falha de item não derruba o lote** — um dado inválido não pode impedir os
+ *   outros —, mas entra na contagem que a resposta carrega.
  */
 async function sincronizarEntidade(
   scope: VerifiedOrganizationScope,
@@ -322,8 +328,8 @@ async function sincronizarEntidade(
  * Sincroniza contas a pagar e a receber do Bling para a organização verificada.
  *
  * A resposta só diz `success: true` quando nenhuma leitura falhou e nenhum item
- * ficou para trás em definitivo. Um `success` que ignora falhas foi a quarta
- * das cinco camadas que esconderam a quebra do catálogo.
+ * ficou para trás em definitivo: um `success` que ignorasse falhas esconderia
+ * dados que não chegaram.
  */
 export function createFinanceiroSyncHandler(deps: FinanceiroSyncDependencies) {
   const { auth, store, bling } = deps;

@@ -39,6 +39,19 @@ import {
   touchSyncState,
 } from './syncCheckpoint';
 
+/**
+ * Sincronização Bling → ORBITA de clientes, produtos e pedidos de uma organização.
+ *
+ * Fluxo: `enqueueJob` cria o job → `processJob` adquire a lease → etapas
+ * `clientes → produtos → pedidos`, gravando progresso após cada uma →
+ * `completeJob`. Produtos e pedidos usam leitura incremental por
+ * `dataAlteracaoInicial` (checkpoint em `syncCheckpoint.ts`); gravações locais
+ * são upserts, então reexecutar uma etapa atualiza em vez de duplicar.
+ *
+ * A lease reduz execuções concorrentes do mesmo job, mas a conclusão
+ * (`concluir_job_sync`) não confere dono da lease — os comentários abaixo
+ * explicam os casos ambíguos que ficam sem decisão automática.
+ */
 export class SyncService {
   async enqueueSync(scope: VerifiedOrganizationScope): Promise<EnqueueSyncResult> {
     return enqueueJob(scope);
@@ -48,21 +61,21 @@ export class SyncService {
    * Processa o job. Com `completa: true`, ignora o checkpoint de
    * `dataAlteracaoInicial` e relê tudo do Bling.
    *
-   * A opção existe porque o checkpoint podia ser envenenado: uma leitura que
-   * falhava devolvia `[]`, a etapa "concluía" com zero itens e
-   * `touchSyncState` avançava o marcador mesmo assim. Da vez seguinte o Bling
-   * era consultado por "alterados desde o momento da falha" e respondia zero —
-   * corretamente. Sem uma sincronização completa não havia como sair disso.
+   * A opção é a saída para um checkpoint incorreto: se o marcador avançou
+   * sem que os dados daquele intervalo tenham sido lidos, a consulta
+   * incremental nunca mais os devolveria.
+   *
+   * Concorrência: antes das etapas, libera leases vencidas e tenta adquirir a
+   * lease do job. Sem lease, outra execução está com ele (`LeaseHeldElsewhere`).
    */
   async processJob(
     jobId: string,
     scope: VerifiedOrganizationScope,
     opcoes: { completa?: boolean } = {},
   ): Promise<SyncProcessOutcome> {
-    // A preparação ficava fora do `try`. Em `POST /api/sync` este método roda
+    // A preparação fica dentro de `try`. Em `POST /api/sync` este método roda
     // dentro de `after()`, depois da resposta 202 já ter saído: uma rejeição
-    // aqui virava promise não observada, e o job ficava `queued` para sempre,
-    // com a tela consultando um estado que nunca mudava.
+    // aqui seria promise não observada, sem nenhum registro da falha.
     let leaseAcquired: boolean;
     try {
       await releaseExpiredLeases();
@@ -163,13 +176,10 @@ export class SyncService {
       return { _tag: 'JobFinished' };
     }
 
-    // A conclusão como `completed` fica **fora** do bloco das etapas, e isso é o
-    // ponto. Enquanto estava dentro, uma resposta perdida — timeout, queda de
-    // rede — depois de a RPC ter concluído o job no banco caía no `catch`, que
-    // entendia "o processamento falhou" e chamava `completeJob(..., 'failed')`.
-    // Como `concluir_job_sync` atualiza incondicionalmente por id, a segunda
-    // chamada **sobrescrevia `completed` por `failed`**, com todas as etapas
-    // tendo terminado bem.
+    // A conclusão como `completed` fica **fora** do bloco das etapas. Dentro
+    // dele, uma resposta perdida depois de a RPC ter concluído o job cairia no
+    // `catch` e chamaria `completeJob(..., 'failed')`; como `concluir_job_sync`
+    // atualiza incondicionalmente por id, isso sobrescreveria `completed`.
     try {
       await completeJob(scope, jobId, 'completed');
     } catch (erroAoConcluir: unknown) {
@@ -254,10 +264,8 @@ export class SyncService {
       await touchSyncState(scope.organizationId, scope.actorId, 'clientes');
       return total;
     } catch (err: unknown) {
-      // A etapa NAO devolve 0 numa falha. Devolver zero fazia o job
-      // concluir como sucesso, e — pior — o checkpoint ja tinha avancado,
-      // entao as execucoes seguintes filtravam por `dataAlteracaoInicial`
-      // a partir do momento da falha e nunca mais viam nada.
+      // A etapa NÃO devolve 0 numa falha: o job não pode concluir como
+      // sucesso, e o checkpoint (`touchSyncState`) só avança no caminho feliz.
       throw new Error(`Etapa clientes falhou: ${descreverErro(err)}`);
     }
   }
@@ -330,10 +338,8 @@ export class SyncService {
       await touchSyncState(scope.organizationId, scope.actorId, 'produtos');
       return total;
     } catch (err: unknown) {
-      // A etapa NAO devolve 0 numa falha. Devolver zero fazia o job
-      // concluir como sucesso, e — pior — o checkpoint ja tinha avancado,
-      // entao as execucoes seguintes filtravam por `dataAlteracaoInicial`
-      // a partir do momento da falha e nunca mais viam nada.
+      // A etapa NÃO devolve 0 numa falha: o job não pode concluir como
+      // sucesso, e o checkpoint (`touchSyncState`) só avança no caminho feliz.
       throw new Error(`Etapa produtos falhou: ${descreverErro(err)}`);
     }
   }
@@ -413,19 +419,14 @@ export class SyncService {
       await touchSyncState(scope.organizationId, scope.actorId, 'pedidos');
       return total;
     } catch (err: unknown) {
-      // A etapa NAO devolve 0 numa falha. Devolver zero fazia o job
-      // concluir como sucesso, e — pior — o checkpoint ja tinha avancado,
-      // entao as execucoes seguintes filtravam por `dataAlteracaoInicial`
-      // a partir do momento da falha e nunca mais viam nada.
+      // A etapa NÃO devolve 0 numa falha: o job não pode concluir como
+      // sucesso, e o checkpoint (`touchSyncState`) só avança no caminho feliz.
       throw new Error(`Etapa pedidos falhou: ${descreverErro(err)}`);
     }
   }
 }
 
-// `SyncScopeDeniedError` e `SyncAuthorizationStoreUnavailableError` foram
-// removidas no Ticket 22. Elas existiam para o serviço contar à rota uma
-// negação de autorização por exceção; agora a autorização acontece antes, na
-// fronteira HTTP, que responde 403 e 503 direto. Um erro que sai daqui é falha
-// de sincronização, não de permissão — e a rota não precisa mais distinguir.
+// A autorização acontece antes, na fronteira HTTP, que responde 403 e 503.
+// Um erro que sai daqui é falha de sincronização, nunca de permissão.
 
 export const syncService = new SyncService();

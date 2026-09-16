@@ -83,14 +83,13 @@ function useLeituraDeOrganizacoes(fetchWithAuth: AuthenticatedFetch, sessao: str
  *
  * `selectionVersion` sai daqui porque a tela precisa dela: trocar de
  * organização e voltar para a mesma são seleções diferentes, e é a versão que
- * separa uma da outra.
+ * separa uma da outra. A troca envia a versão que a tela está exibindo; o
+ * servidor aplica por CAS e responde 409 se outra aba já trocou antes.
  *
  * ## Tudo que este hook guarda carrega de quem é
  *
- * Enquanto ele vivia dentro do painel de organização, o desmonte do painel
- * levava o estado junto e não havia o que decidir. Desde o Ticket 01 ele vive
- * no topo da aplicação e **atravessa o logout** — e num shell multi-tenant um
- * tenant que sobrevive à sessão que o produziu é o defeito que não se pode ter.
+ * Ele vive no topo da aplicação e **atravessa o logout** — e num shell
+ * multi-tenant um tenant que sobrevive à sessão que o produziu não pode existir.
  *
  * A solução não é limpar o estado quando a sessão cai; é o estado não valer
  * fora dela. Nada é exposto sem o carimbo da leitura bater com a sessão
@@ -136,10 +135,8 @@ export function useOrganizationsList(fetchWithAuth: AuthenticatedFetch, sessao: 
   /**
    * Cria a organização e relê a lista.
    *
-   * Ticket 06 — devolve se criou. Antes não devolvia nada, e o formulário não
-   * tinha como saber se podia fechar: ficava aberto no caso de sucesso, ou
-   * fechava também no de falha. Quem chama decide o que fazer com a resposta;
-   * a mensagem da falha continua em `error`.
+   * Devolve se criou, para o formulário saber se pode fechar. A mensagem da
+   * falha fica em `error`.
    */
   async function handleCreateOrganization(nome: string, slug: string): Promise<boolean> {
     if (sessao === null) return false;

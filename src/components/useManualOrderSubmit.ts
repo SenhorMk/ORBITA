@@ -30,8 +30,7 @@ interface BuildManualOrderPayloadInput {
   observacoes: string;
   itens: ItemPedidoManual[];
   /**
-   * Ticket 30, fatia 3, 3ª rodada — âncora de idempotência entre
-   * retentativas da MESMA submissão. Estável enquanto `handleSubmit` for
+   * Âncora de idempotência entre retentativas da MESMA submissão. Estável enquanto `handleSubmit` for
    * chamado para a mesma tentativa (ver `referenciaLocalRef`); nunca
    * regenerado a cada clique.
    */
@@ -42,8 +41,7 @@ interface BuildManualOrderPayloadInput {
  * Monta o corpo de `POST /api/pedidos/manual` pelo contrato compartilhado com a
  * rota. Nem `total` nem `parcelas` são montados aqui: o valor da venda é
  * derivado no servidor pelos preços do cadastro, e as parcelas são construídas
- * lá com a forma de pagamento real da conta Bling. A versão anterior montava
- * `parcelas` que a rota simplesmente não lia.
+ * lá com a forma de pagamento real da conta Bling: o cliente não dita o preço.
  */
 function buildManualOrderPayload(input: BuildManualOrderPayloadInput): ManualOrderRequest {
   return buildManualOrderRequest({
@@ -71,11 +69,11 @@ export interface UseManualOrderSubmitInput {
   onOpenChange: (open: boolean) => void;
   resetForm: () => void;
   /**
-   * Organização ativa **confirmada pelo servidor** (5ª rodada de revisão).
+   * Organização ativa **confirmada pelo servidor**.
    *
    * É o escopo da memória de tentativas pendentes: o ledger do servidor é
    * chaveado por `(organizacao_id, referencia_local)`, e guardar as
-   * referências fora desse recorte deixava a pendência de uma organização ser
+   * referências fora desse recorte deixaria a pendência de uma organização ser
    * apagada por uma venda feita em outra. `null` enquanto o servidor não
    * confirmou — e aí nada é lembrado entre instâncias, que é a degradação
    * honesta: sem saber a organização, qualquer escolha de chave seria um
@@ -108,9 +106,7 @@ async function enviarPedidoManual(payload: ManualOrderRequest): Promise<EnvioMan
 
   if (!res.ok) {
     // O Bling sinaliza venda idêntica à anterior por código estruturado; a
-    // rota o traduz em `vendaDuplicada`. Antes isso era detectado comparando
-    // a mensagem por substring, com os escapes gravados literalmente no
-    // fonte — comparação que nunca casava.
+    // rota o traduz em `vendaDuplicada`, sem depender do texto da mensagem.
     return {
       _tag: 'Erro',
       mensagem: data.vendaDuplicada
@@ -139,7 +135,7 @@ async function enviarPedidoManual(payload: ManualOrderRequest): Promise<EnvioMan
  * o modal ter sido reaberto.
  *
  * Duas camadas de memória, e a ordem importa: `localStorage` primeiro, porque
- * é a que sobrevive ao reload (o caso que a 4ª rodada abriu); o `Map` em
+ * é a que sobrevive ao reload; o `Map` em
  * memória depois, como rede para quando `localStorage` está indisponível
  * (aba anônima, quota), onde a proteção volta a valer só dentro da instância.
  */
@@ -161,16 +157,14 @@ function resolverReferencia(
  * Envio da venda manual, isolado do componente para caber no limite de
  * tamanho de função do gate de qualidade.
  *
- * Dono da referência local de idempotência (ticket 30, fatia 3). A referência
- * é estável enquanto o usuário retenta a MESMA venda — inclusive depois de um
- * erro, de um reload da página, ou do modal fechando e reabrindo — e é NOVA
- * quando a venda é outra. A 5ª rodada de revisão trocou "a última referência
- * usada" (um slot só, global) por "a referência daquela venda", indexada pelo
- * fingerprint do conteúdo e escopada por organização: ver
- * `tentativaPendente.ts`.
+ * Dono da referência local de idempotência. A referência é estável enquanto o
+ * usuário retenta a MESMA venda — inclusive depois de um erro, de um reload da
+ * página, ou do modal fechando e reabrindo — e é NOVA quando a venda é outra.
+ * Ela é "a referência daquela venda", indexada pelo fingerprint do conteúdo e
+ * escopada por organização: ver `tentativaPendente.ts`.
  *
  * Uma referência só é esquecida quando o desfecho dela é CONHECIDO — sucesso
- * do envio, ou uma reconciliação que a liberou. Esquecer por qualquer outro
+ * sem avisos do envio, ou uma reconciliação que a liberou. Esquecer por qualquer outro
  * motivo removeria a âncora de uma tentativa que ninguém resolveu, que é
  * exatamente o que a proteção existe para impedir.
  */
