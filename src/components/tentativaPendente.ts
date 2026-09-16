@@ -1,6 +1,5 @@
 /**
- * As tentativas de venda manual ainda não resolvidas, lembradas pelo NAVEGADOR
- * (ticket 30, fatia 3 — 4ª e 5ª rodadas de revisão).
+ * As tentativas de venda manual ainda não resolvidas, lembradas pelo NAVEGADOR.
  *
  * ## O que isto é, e o que não é
  *
@@ -10,17 +9,14 @@
  * referência nova faria o ledger tratá-la como uma tentativa genuinamente
  * nova, liberando uma segunda criação no Bling.
  *
- * ## Por que a chave é por organização (5ª rodada)
+ * ## Por que a chave é por organização
  *
- * A versão anterior guardava UMA referência numa chave global
- * (`orbita:pedidos-manual:tentativa-pendente`). O dano concreto: com uma
- * tentativa indeterminada pendente na organização A, trocar para a
- * organização B e vender lá sobrescrevia o slot — e a âncora da tentativa de A
- * se perdia. Voltando para A, uma retentativa geraria referência NOVA, o
- * ledger a veria como tentativa nova, e o pedido de A (que pode existir de
- * verdade no Bling) seria criado de novo. Escopar por organização isola cada
- * ledger do outro, que é exatamente o recorte do servidor
- * `(organizacao_id, referencia_local)`.
+ * Com uma única chave global, uma tentativa indeterminada pendente na
+ * organização A seria sobrescrita por uma venda feita em B. Voltando para A,
+ * uma retentativa geraria referência NOVA, o ledger a veria como tentativa
+ * nova, e o pedido de A (que pode existir de verdade no Bling) seria criado de
+ * novo. Escopar por organização isola cada ledger do outro, que é exatamente o
+ * recorte do servidor `(organizacao_id, referencia_local)`.
  *
  * ## Por que é uma LISTA sem teto
  *
@@ -29,10 +25,9 @@
  * âncora da primeira — sem ela, não há como reconciliar aquela tentativa
  * depois (`POST /api/pedidos/manual/reconciliar` precisa da referência).
  *
- * E **sem descarte por teto** (6ª rodada de revisão): a versão anterior
- * truncava em cinco entradas, o que descartava a pendência mais antiga em
- * silêncio. Uma tentativa ainda não resolvida não pode perder a referência,
- * por mais antiga que seja — é ela que impede a duplicação.
+ * E **sem descarte por teto**: uma tentativa ainda não resolvida não pode
+ * perder a referência, por mais antiga que seja — é ela que impede a
+ * duplicação.
  *
  * ## E se o `localStorage` não estiver disponível?
  *
@@ -113,18 +108,16 @@ export function acharPendentePorFingerprint(
 }
 
 /**
- * Registra (ou atualiza) a pendência, mantendo a mais recente no fim e
- * respeitando o teto.
+ * Registra (ou atualiza) a pendência, mantendo a mais recente no fim. Não há
+ * teto: nenhuma pendência é descartada.
  */
 export function registrarTentativaPendente(organizacaoId: string, tentativa: TentativaPendente): void {
   try {
     const semEsta = lerTentativasPendentes(organizacaoId).filter((t) => t.referencia !== tentativa.referencia);
-    // SEM TETO, e sem descarte (6ª rodada de revisão). A versão anterior
-    // truncava a lista em cinco (`slice(-5)`), o que descartava em silêncio a
+    // SEM TETO, e sem descarte: truncar a lista apagaria em silêncio a
     // pendência mais antiga — justamente a âncora que impede uma retentativa
     // de criar um segundo pedido, e a única forma de reconciliar aquela
-    // tentativa depois. Descartar aqui contradizia a invariância que este
-    // arquivo inteiro existe para sustentar.
+    // tentativa depois.
     //
     // A lista não cresce sem limite na prática: uma entrada só sobrevive
     // enquanto a tentativa está sem desfecho, e sai assim que o envio dá certo

@@ -1,6 +1,9 @@
 /**
- * Classifica uma falha de `persistVenda` como definitiva ou ambígua (ticket
- * 30, fatia 3 — endurecida na 3ª rodada, allowlist na 4ª rodada).
+ * Classifica uma falha de `persistVenda` como definitiva ou ambígua.
+ *
+ * - **Definitiva**: o banco comprovadamente recusou; nada foi gravado.
+ * - **Ambígua**: não se sabe se a transação commitou (a resposta pode ter se
+ *   perdido depois do commit).
  *
  * Separado num módulo puro, sem nenhuma dependência do `supabase-js` em
  * tempo de execução, exatamente para ser testável em isolamento: a fronteira
@@ -15,17 +18,13 @@
 export type ClassificacaoDeFalha = 'Definitiva' | 'Ambigua';
 
 /**
- * **Allowlist, não formato (4ª rodada de revisão).**
+ * **Allowlist, não formato.**
  *
- * A versão anterior reconhecia qualquer `code` de 5 caracteres
- * alfanuméricos maiúsculos (`/^[0-9A-Z]{5}$/`) como definitivo — o formato
- * de um SQLSTATE, mas não PROVA de que aquele valor é um SQLSTATE de
- * verdade vindo do PostgreSQL. A revisão apontou o caso concreto: uma
- * biblioteca poderia devolver `code: 'ERROR'` — 5 letras maiúsculas, bate o
- * regex, mas não é um SQLSTATE registrado em lugar nenhum.
+ * Ter o formato de um SQLSTATE (5 caracteres alfanuméricos maiúsculos) não
+ * PROVA que o valor veio do PostgreSQL: uma biblioteca poderia devolver
+ * `code: 'ERROR'`, que tem o formato e não é SQLSTATE nenhum.
  *
- * Por isso a política deixou de ser "reconheço o FORMATO" e passou a ser
- * "reconheço estes CÓDIGOS específicos" — os SQLSTATE que
+ * Por isso a política é "reconheço estes CÓDIGOS específicos" — os SQLSTATE que
  * `registrar_venda_manual` (migrations 53/56/57), `baixar_estoque_organizacao`
  * (migration 56) e `reivindicar_tentativa_venda_manual` (migration 59)
  * genuinamente levantam, lidos direto do SQL:

@@ -1,3 +1,22 @@
+/**
+ * `POST /api/pedidos/manual` — registra uma venda manual e, opcionalmente, cria
+ * o pedido no Bling. Duas fontes de verdade (ERP e banco local) sem transação
+ * distribuída entre elas: este fluxo existe para que uma retentativa nunca
+ * produza um segundo pedido real.
+ *
+ * Fluxo:
+ * 1. `prepararPedido` — escopo verificado, corpo validado, cliente e itens
+ *    resolvidos no cadastro; **preço e total são calculados no servidor**;
+ * 2. fingerprints do corpo e dos valores resolvidos, calculados aqui;
+ * 3. **claim** da referência estável (`referenciaLocal`) no ledger de tentativas,
+ *    antes de qualquer chamada ao Bling; o claim devolve uma **época** (posse);
+ * 4. criação no Bling, com a posse conferida imediatamente antes;
+ * 5. gravação atômica de venda + ledger, recusada se a época mudou;
+ * 6. só então o lançamento de estoque no Bling.
+ *
+ * Resultado de rede sem resposta é **ambíguo**, não falha: a tentativa fica
+ * `indeterminada` e só sai pela reconciliação (`reconciliacao.ts`).
+ */
 import { NextResponse } from 'next/server';
 
 import { type ManualOrderRequest } from '@/lib/config/manualOrderContract';
@@ -28,9 +47,8 @@ export * from './ports';
 export { compensarNoBling, resolverAmbiguidadeDePersistencia } from './compensacao';
 
 /**
- * Desfecho da sincronização com o Bling. Três casos, não dois (5ª rodada de
- * revisão): `SyncRejected` e `SyncIndeterminado` exigem reações OPOSTAS no
- * ledger de idempotência.
+ * Desfecho da sincronização com o Bling. `SyncRejected` e `SyncIndeterminado`
+ * exigem reações OPOSTAS no ledger de idempotência.
  *
  * - `SyncRejected` — nada foi criado no Bling, e isso é **sabido**: a falha
  *   aconteceu antes do envio (contato, forma de pagamento, payload inválido)
@@ -47,25 +65,19 @@ type SyncResult =
   | { readonly _tag: 'SyncRejected'; readonly response: NextResponse }
   | { readonly _tag: 'SyncIndeterminado'; readonly causa: unknown }
   /**
-   * A posse da tentativa mudou (9ª rodada de revisão, B2). Nenhum efeito
-   * externo NOVO é iniciado a partir daqui, e o ledger não é tocado: quem tomou
-   * a posse é quem decide o desfecho.
+   * A posse da tentativa mudou. Nenhum efeito externo NOVO é iniciado a partir
+   * daqui, e o ledger não é tocado: quem tomou a posse é quem decide o desfecho.
    */
   | { readonly _tag: 'SyncSemPosse' };
 
 /**
  * Cria o pedido no Bling. **Não lança o estoque** — ver `lancarEstoqueDaVenda`.
  *
- * A ordem mudou na 10ª rodada de revisão (B2). Antes era
- * `confirmar posse → lançar estoque → gravar venda`, e o `confirmar posse`
- * não fechava o entrelaçamento: a chamada de estoque já em voo podia aterrissar
- * DEPOIS de a reconciliação ter tomado a posse e cancelado o pedido. Conferir
- * antes de um efeito não impede o efeito de chegar tarde.
- *
- * Agora o commit durável vem no meio: `criar → gravar venda+ledger (atômico
- * com a posse) → lançar estoque`. Isso resolve o entrelaçamento sem máquina de
- * fases nenhuma, porque as duas pontas passam a ser decididas pelo mesmo
- * `55P03`:
+ * A ordem é `criar → gravar venda+ledger (atômico com a posse) → lançar
+ * estoque`. Conferir a posse antes de um efeito não impede o efeito de chegar
+ * tarde: uma chamada de estoque em voo poderia aterrissar DEPOIS de a
+ * reconciliação ter tomado a posse e cancelado o pedido. Com o commit durável
+ * no meio, as duas pontas são decididas pelo mesmo `55P03`:
  *
  * - se a reconciliação tomou a posse ANTES do commit, `registrar_venda_manual_com_posse`
  *   recusa, e o executor nunca chega a lançar estoque;
@@ -92,16 +104,15 @@ async function sincronizarComBling(
     return { _tag: 'SyncRejected', response: payloadResult.response };
   }
 
-  // A PARTIR DAQUI o pedido pode existir no Bling (5ª rodada de revisão).
-  // Uma exceção lançada aqui — timeout, conexão perdida, abort — não prova
-  // que nada foi criado: prova só que a RESPOSTA não chegou. Deixá-la subir
-  // marcaria a tentativa como `falhou` (reabrível) ou a deixaria presa em
-  // `em_andamento` para sempre; as duas coisas estão erradas.
+  // A PARTIR DAQUI o pedido pode existir no Bling. Uma exceção lançada aqui —
+  // timeout, conexão perdida, abort — não prova que nada foi criado: prova só
+  // que a RESPOSTA não chegou. Deixá-la subir marcaria a tentativa como
+  // `falhou` (reabrível) ou a deixaria presa em `em_andamento`; as duas coisas
+  // estariam erradas.
   //
-  // FENCING DO EFEITO COMERCIAL (9ª rodada de revisão, B2). Antes desta
-  // rodada, um executor que já tinha perdido a posse ainda podia criar o
-  // pedido no ERP. A pergunta é feita aqui, o mais tarde possível antes do
-  // envio.
+  // FENCING DO EFEITO COMERCIAL: um executor que já perdeu a posse não pode
+  // criar o pedido no ERP. A pergunta é feita aqui, o mais tarde possível
+  // antes do envio — o que reduz a janela, mas não a elimina.
   if (!await posseAindaVigente(scope, posse, 'criar', deps)) {
     return { _tag: 'SyncSemPosse' };
   }
@@ -134,12 +145,12 @@ async function sincronizarComBling(
 
 /**
  * Lança no ERP o estoque do pedido — DEPOIS de a venda e o ledger estarem
- * commitados (10ª rodada de revisão, B2).
+ * commitados.
  *
- * A falha vira aviso, como sempre foi: ela acontece com o pedido já existindo
- * no ERP e com a venda já gravada aqui, então não pode derrubar nem ser
- * engolida. Chamado exatamente uma vez por tentativa vencedora — o claim da
- * referência é o que garante isso.
+ * A falha vira aviso: ela acontece com o pedido já existindo no ERP e com a
+ * venda já gravada aqui, então não pode derrubar a resposta nem ser engolida.
+ * Só o executor que concluiu a tentativa chega aqui; uma retentativa com a
+ * mesma referência encontra a tentativa `concluida` e não relança.
  */
 async function lancarEstoqueDaVenda(
   blingPedidoId: string | null,
@@ -147,12 +158,10 @@ async function lancarEstoqueDaVenda(
 ): Promise<readonly string[]> {
   if (blingPedidoId === null) return [];
 
-  // A exceção também vira aviso (10ª rodada de revisão). Agora que a baixa
-  // acontece DEPOIS do commit, deixá-la subir trocaria um `201` legítimo por
-  // um `500` sobre uma venda que existe nos dois lados — e a retentativa com a
-  // mesma referência encontraria a tentativa `concluida` e nunca relançaria o
-  // estoque. O contrato desta chamada sempre foi "falha vira aviso, não
-  // derruba a venda"; sem este `catch` ele valia só para a falha TIPADA.
+  // A exceção também vira aviso. Como a baixa acontece DEPOIS do commit,
+  // deixá-la subir trocaria um `201` legítimo por um `500` sobre uma venda que
+  // existe nos dois lados — e a retentativa encontraria a tentativa
+  // `concluida` e nunca relançaria o estoque.
   let estoque: Awaited<ReturnType<ManualOrderDependencies['bling']['lancarEstoquePedido']>>;
   try {
     estoque = await deps.bling.lancarEstoquePedido(blingPedidoId);
@@ -191,7 +200,7 @@ async function recusaDaSincronizacao(
   const { tentativaId, epoca } = posse;
   // Perdeu a posse: NÃO escreve no ledger. Quem tomou a posse é quem decide o
   // desfecho, e gravar daqui seria escrever por cima de uma decisão alheia —
-  // o defeito que o fencing existe para impedir (9ª rodada, B2).
+  // o defeito que o fencing existe para impedir.
   if (sync._tag === 'SyncSemPosse') {
     return respostaPosseTomada();
   }
@@ -216,11 +225,10 @@ async function recusaDaSincronizacao(
 /**
  * Grava a venda e devolve a resposta.
  *
- * A gravação é atômica com a POSSE (9ª rodada, B1): a mesma transação que
- * escreve pedido, itens, estoque e financeiro valida a época e conclui o
- * ledger. Por isso o caminho feliz aqui não tem uma segunda escrita — era
- * exatamente essa segunda escrita, falhando em silêncio, que produzia `201`
- * sem garantia de idempotência durável (B4).
+ * A gravação é atômica com a POSSE: a mesma transação do banco que escreve
+ * pedido, itens, estoque e financeiro valida a época e conclui o ledger. Por
+ * isso o caminho feliz não tem uma segunda escrita que pudesse falhar em
+ * silêncio e produzir `201` sem garantia de idempotência durável.
  */
 async function gravarVenda(
   contexto: {
@@ -238,7 +246,7 @@ async function gravarVenda(
 
   const resultado = await deps.store.persistVenda({
     scope,
-    // A POSSE ENTRA NA MESMA TRANSAÇÃO DA VENDA (9ª rodada, B1). A RPC recusa
+    // A POSSE ENTRA NA MESMA TRANSAÇÃO DA VENDA. A RPC recusa
     // a gravação inteira — pedido, itens, estoque, financeiro — se a época já
     // não for a vigente, com a linha da tentativa travada. Não é "grava e
     // depois confere": é uma coisa só.
@@ -291,7 +299,7 @@ async function gravarVenda(
 
   // NENHUMA ESCRITA DAQUI PODE REBAIXAR UMA TENTATIVA JÁ CONCLUÍDA.
   //
-  // Desde que a venda e o ledger commitam JUNTOS, uma `PersistVendaAmbigua`
+  // Como a venda e o ledger commitam JUNTOS, uma `PersistVendaAmbigua`
   // pode significar que a transação inteira **commitou** e só a resposta se
   // perdeu — ou seja, a tentativa já está `concluida`. Gravar `indeterminada`
   // por cima disso travaria uma venda que existe: a reconciliação não teria o
@@ -309,7 +317,7 @@ async function gravarVenda(
     posse.epoca,
   );
 
-  // NENHUMA RESPOSTA DE SUCESSO SEM ESTADO DURÁVEL (9ª rodada, B4). O único
+  // NENHUMA RESPOSTA DE SUCESSO SEM ESTADO DURÁVEL. O único
   // desfecho deste bloco que responde `2xx` é `concluida` — a checagem achou a
   // venda já registrada. Se o ledger não gravou, essa resposta afirmaria uma
   // garantia de idempotência que não existe.
@@ -317,7 +325,7 @@ async function gravarVenda(
     return respostaLedgerNaoGravado(blingPedidoId);
   }
 
-  // A CONFIRMAÇÃO PROVOU QUE O COMMIT ACONTECEU (10ª rodada, B2). A resposta
+  // A CONFIRMAÇÃO PROVOU QUE O COMMIT ACONTECEU. A resposta
   // se perdeu, mas a venda e o ledger existem — este executor é o vencedor, e
   // o lançamento de estoque que ficou pendente é dele. Uma vez só: a próxima
   // requisição com a mesma referência encontra a tentativa `concluida` e nem
@@ -340,25 +348,24 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     const avisos: string[] = [];
 
     // O fingerprint é calculado AQUI, do corpo já validado — nunca recebido do
-    // cliente (5ª rodada de revisão). Um fingerprint enviado pelo cliente
-    // seria só a afirmação do cliente sobre si mesmo, e a regra que ele
-    // sustenta ("mesma chave + mesmo conteúdo") deixaria de valer contra um
-    // cliente desatualizado, um proxy, ou uma chamada direta à API.
+    // cliente. Um fingerprint enviado pelo cliente seria só a afirmação do
+    // cliente sobre si mesmo, e a regra que ele sustenta ("mesma chave + mesmo
+    // conteúdo") deixaria de valer contra um cliente desatualizado, um proxy,
+    // ou uma chamada direta à API.
     const fingerprint = await fingerprintDaVendaManual(body);
     // Os VALORES resolvidos (preços do cadastro + total derivado) entram
-    // separados (6ª rodada): eles não vêm do cliente, e uma mudança de preço
-    // entre tentativas não pode reabrir uma tentativa em silêncio.
+    // separados: eles não vêm do cliente, e uma mudança de preço entre
+    // tentativas não pode reabrir uma tentativa em silêncio.
     const valoresFingerprint = await fingerprintDosValoresResolvidos(
       itens.map((item) => ({ produtoId: item.produto.id, precoUnitario: item.produto.preco })),
       total,
     );
 
-    // Ticket 30, fatia 3, 3ª rodada — reivindica a referência ANTES de
-    // qualquer chamada ao Bling. Uma retentativa (humana, de proxy, de
-    // navegador) que reenvie a MESMA `referenciaLocal` cai num dos três
-    // ramos de `respostaSeTentativaJaExistir` em vez de criar um segundo
-    // pedido remoto — é isso que torna "não tente de novo" uma garantia do
-    // sistema, não só uma instrução de texto.
+    // CLAIM: reivindica a referência ANTES de qualquer chamada ao Bling. Uma
+    // retentativa (humana, de proxy, de navegador) que reenvie a MESMA
+    // `referenciaLocal` recebe de `decidirSobreTentativa` uma resposta pronta
+    // em vez de criar um segundo pedido remoto — é isso que torna "não tente
+    // de novo" uma garantia do sistema, não só uma instrução de texto.
     const decisao = decidirSobreTentativa(
       await deps.store.reivindicarTentativa(scope, referenciaLocal, fingerprint, valoresFingerprint),
     );

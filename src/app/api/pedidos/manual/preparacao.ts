@@ -3,10 +3,12 @@
  * cliente/itens contra o cadastro — tudo o que precisa acontecer ANTES de
  * decidir se a submissão é uma tentativa nova ou uma retentativa.
  *
- * Separado de `handler.ts` pelo mesmo motivo de `compensacao.ts`: mantém
- * cada arquivo dentro do limite de tamanho do gate de qualidade, e separa
- * uma responsabilidade própria (validar e resolver a entrada) do fluxo
- * principal (decidir e persistir a venda).
+ * **O servidor é a fonte de verdade do valor da venda.** O corpo não traz preço
+ * nem total: o preço unitário vem do cadastro da organização e o total é
+ * calculado aqui, a partir dele, das quantidades, do desconto e do frete. Cliente e produtos são buscados
+ * dentro do escopo verificado, então um id de outra organização não é
+ * encontrado. A disponibilidade de estoque conferida aqui é uma leitura
+ * prévia — a baixa definitiva acontece na transação que grava a venda.
  */
 import { NextResponse } from 'next/server';
 
