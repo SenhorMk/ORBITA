@@ -1,6 +1,6 @@
 /**
  * checkoutService.ts
- * Ticket 14: resolve o preço (allowlist server-side) e a organização (contexto
+ * Resolve o preço (allowlist server-side) e a organização (contexto
  * já verificado) e cria uma Checkout Session real. O cliente nunca envia
  * `priceId`, `customerId`, `organizationId` ou URLs completas.
  */

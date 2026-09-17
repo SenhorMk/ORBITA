@@ -1,6 +1,6 @@
 /**
  * entitlementsService.ts
- * Ticket 37: Criar planos, limites e entitlements.
+ * Planos, limites e entitlements.
  * Gerencia controle server-side de recursos, limites e planos da Organização.
  */
 

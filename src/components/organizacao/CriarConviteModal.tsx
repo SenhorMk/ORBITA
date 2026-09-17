@@ -21,8 +21,8 @@ export interface CriarConviteModalProps {
    * Avisa quando há um código **na tela**, ainda não dispensado.
    *
    * Quem escuta usa isto para impedir a troca de organização: o código é
-   * irrecuperável, e um código de A sob o contexto de B é a confusão de tenant
-   * que esta fatia inteira existe para não ter.
+   * irrecuperável, e um código de A sob o contexto de B seria uma confusão de
+   * tenant.
    */
   onCodigoNaTela: (naTela: boolean) => void;
 }

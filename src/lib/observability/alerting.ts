@@ -1,14 +1,12 @@
 import { logStructured } from './logger';
 
 /**
- * Métricas/alertas de segurança e operação (ticket 19).
+ * Métricas/alertas de segurança e operação.
  *
- * Não existe ambiente de staging/produção implantado neste projeto ainda — a entrega
- * real de alerta em staging fica `needs-owner` (ver
- * `.scratch/orbita-mvp-producao-v2/evidence/19-final-evidence.md`). O que É testável e
- * executável agora: as regras de avaliação (puras, determinísticas) e um sink
- * controlado/local que qualquer implementação futura de sink real (Slack, PagerDuty,
- * e-mail) só precisa satisfazer via a interface `AlertSink`.
+ * O que existe: as regras de avaliação (puras, determinísticas) e dois sinks —
+ * `InMemoryAlertSink` (testes) e `StructuredLogAlertSink` (grava o alerta no log
+ * estruturado). Não há entrega a canal externo (Slack, PagerDuty, e-mail): uma
+ * implementação assim só precisa satisfazer a interface `AlertSink`.
  */
 
 export type AlertRuleName =

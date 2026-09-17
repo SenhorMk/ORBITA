@@ -1,6 +1,6 @@
 /**
  * titularRequestStateMachine.ts
- * Ticket 17: máquina de estados pura da jornada de direitos do titular
+ * Máquina de estados pura da jornada de direitos do titular
  * (LGPD). Independente de Next.js, Supabase e qualquer provider. Estado é
  * modelado como tagged union (nunca booleans soltos como `isVerified`); toda
  * transição passa pela matriz explícita `ALLOWED_TRANSITIONS`, nunca por

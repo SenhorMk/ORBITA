@@ -354,8 +354,7 @@ export function VendasEPedidos({
         onEmitirNfe={onEmitirNfe}
         onCancelar={(pedido) => {
           // O drawer sai de cena e o cancelamento acontece no MESMO diálogo da
-          // tabela. Duas telas para a mesma decisão destrutiva seria a segunda
-          // implementação que este ticket existe para não criar.
+          // tabela: a mesma decisão destrutiva tem uma única implementação.
           setPedidoAberto(null);
           setPedidoParaCancelar(pedido);
         }}

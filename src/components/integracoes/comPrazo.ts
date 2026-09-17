@@ -4,8 +4,7 @@
  * `fetchWithAuth` não tem timeout, e `fetch` também não tem por padrão: uma
  * requisição que trava fica pendurada até o navegador desistir — o que pode
  * não acontecer nunca. No painel isso aparece como "Salvando…" ou
- * "Conectando…" para sempre, que é a versão silenciosa do mesmo defeito que
- * este ticket veio fechar: a tela afirmando um estado que não corresponde a
+ * "Conectando…" para sempre: a tela afirmando um estado que não corresponde a
  * nada.
  *
  * O prazo é aplicado **aqui**, e não dentro de `fetchWithAuth`. Aquele seam é

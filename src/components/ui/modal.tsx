@@ -157,10 +157,9 @@ export function Modal({
  * `esquerda` é o mesmo grupo da destrutiva, para a decisão que **muda o que a
  * ação primária faz** — não uma ação, um interruptor. Ela mora aqui, e não no
  * corpo, porque o corpo rola: a 1366×768 o interruptor de "sincronizar com o
- * Bling" ficava abaixo da dobra do modal de venda manual, e quem não rolasse
- * apertaria "Finalizar" sem nunca ter visto que aquilo escrevia no ERP
- * (Ticket 09). Uma escolha que não está na tela na hora de decidir não é uma
- * escolha. O rodapé não rola nunca.
+ * Bling" ficaria abaixo da dobra do modal de venda manual, e quem não rolasse
+ * apertaria "Finalizar" sem ver que aquilo escreve no ERP. Uma escolha que não
+ * está na tela na hora de decidir não é uma escolha. O rodapé não rola nunca.
  */
 export function RodapeDeModal({
   destrutiva,

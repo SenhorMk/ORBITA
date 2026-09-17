@@ -8,36 +8,26 @@ import { RegisterForm } from './RegisterForm';
 /**
  * A primeira tela do ORBITA, nos tokens do Design System.
  *
- * ---------------------------------------------------------------------------
- * O QUE SAIU, E POR QUÊ
- * ---------------------------------------------------------------------------
- * Esta tela ficou para trás quando o resto do produto migrou no Ticket 01, e
- * continuava anunciando três coisas que não são o produto:
+ * ## O que a tela comunica
  *
- * - **"Ecosistema ERP Bling & Chatwoot"**, logo abaixo do nome. O Bling e o
- *   Chatwoot são executores de onde o ORBITA escreve e lê; dizer isso como
- *   subtítulo da marca lê como "isto é uma integração de terceiros", que é
- *   justamente a leitura errada;
- * - **"Acesso Autenticado"** e **"Entre com sua conta Supabase"**. Quem entra
- *   tem conta no ORBITA. O provedor de identidade é detalhe de implementação, e
- *   nomeá-lo na porta de entrada faz o produto parecer o painel de outra pessoa;
- * - **"E-mail / Usuário Dev"**, **"Senha Credencial"** e os placeholders
- *   `dev: admin` / `dev: admin0`. Um atalho interno impresso no campo de uma
- *   tela pública.
+ * A tela fala do ORBITA, não dos fornecedores por trás dele:
  *
- * ---------------------------------------------------------------------------
- * O QUE **NÃO** MUDOU
- * ---------------------------------------------------------------------------
- * O mecanismo de autenticação, inteiro. Esta tela não sabe autenticar: ela
- * recebe `onSubmit` e o chama. Quem decide continua sendo `handleLogin`, com o
- * mesmo `signInWithPassword` e o mesmo atalho de desenvolvimento — que segue
- * funcionando exatamente como antes, só que sem estar escrito na porta. Deixar
- * de anunciar não é deixar de suportar.
+ * - Bling e Chatwoot não aparecem como subtítulo da marca — são sistemas com
+ *   que o ORBITA se integra, não o produto;
+ * - o provedor de identidade (Supabase) não é nomeado: quem entra tem conta no
+ *   ORBITA, e o provedor é detalhe de implementação;
+ * - nenhum atalho interno de desenvolvimento é impresso em rótulos ou
+ *   placeholders de uma tela pública.
  *
- * Os `id` dos três controles (`email-input`, `password-input`,
- * `btn-login-submit`, `btn-auth-mode-toggle`) são preservados: eles são o
- * contrato que a suíte E2E usa para entrar, e trocá-los aqui cegaria a suíte
- * inteira do mesmo jeito que os rótulos antigos do rail cegaram (Ticket 09).
+ * ## O que ela não faz
+ *
+ * Esta tela não sabe autenticar: ela recebe `onSubmit` e o chama. Quem decide é
+ * `handleLogin`, com `signInWithPassword` e o atalho de desenvolvimento que
+ * `handleLogin` suporta — não anunciar o atalho não o remove.
+ *
+ * Os `id` dos controles (`email-input`, `password-input`, `btn-login-submit`,
+ * `btn-auth-mode-toggle`) são contrato da suíte E2E, que os usa para entrar;
+ * trocá-los quebraria a suíte inteira.
  */
 export interface TelaDeEntradaProps {
   readonly modo: 'signin' | 'signup';

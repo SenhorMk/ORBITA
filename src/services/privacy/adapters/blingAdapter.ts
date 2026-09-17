@@ -1,7 +1,7 @@
 /**
  * blingAdapter.ts
- * Ticket 17: adapter do sistema "bling" — instancia `OutboxProviderAdapter`
- * ligado ao `OutboxService` real (ticket 12). Ver
+ * Adapter do sistema "bling" — instancia `OutboxProviderAdapter` ligado ao
+ * `OutboxService` real (enfileiramento; a entrega depende do worker). Ver
  * `outboxProviderAdapter.ts` para o mecanismo e as limitações documentadas.
  */
 

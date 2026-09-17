@@ -1,9 +1,9 @@
 /**
  * types.ts (adapters)
- * Ticket 17: contrato comum de todo adapter de sistema alcançado pela
- * jornada de direitos do titular. Cada adapter retorna exatamente um destes
- * resultados — nunca esconde um sistema que falhou ao processar a
- * solicitação (proibido pelo ticket) e nunca finge sucesso.
+ * Contrato comum de todo adapter de sistema alcançado pela jornada de
+ * direitos do titular. Cada adapter retorna exatamente um destes resultados:
+ * um sistema que falhou ao processar a solicitação aparece como falha, e
+ * nenhum adapter declara sucesso sem o efeito ter ocorrido.
  */
 
 export type TarefaSistema = 'banco' | 'bling' | 'chatwoot' | 'stripe' | 'logs';

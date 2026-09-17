@@ -14,10 +14,8 @@ import { TabelaDeClientes } from './TabelaDeClientes';
 /**
  * Clientes & Contatos, na linguagem do produto novo.
  *
- * Isto é reskin. A tela não ganhou filtro nenhum porque **não tinha nenhum**: a
- * tabela antiga listava tudo, sem busca e sem recorte, e inventar uma busca
- * agora seria feature nova numa fatia que é migração visual. O que ela tinha e
- * continua tendo: listar, abrir o detalhe, cadastrar e editar.
+ * A tela lista todos os clientes, sem busca nem recorte. O que ela oferece:
+ * listar, abrir o detalhe, cadastrar e editar.
  *
  * Carregando, vazio e erro são três coisas diferentes, pela mesma razão de
  * sempre — uma leitura que falhou não pode virar "nenhum cliente".

@@ -11,9 +11,8 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(request: Request) {
   try {
-    // Ticket 22 — a autorização acontece aqui, uma vez. Antes o portão legado
-    // perguntava por `app_metadata` e o serviço perguntava de novo, por outra
-    // fonte, devolvendo a negação como exceção para a rota traduzir em status.
+    // A autorização acontece aqui, uma vez, pelo escopo verificado; o serviço
+    // de sincronização recebe o escopo pronto e não repete a pergunta.
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;

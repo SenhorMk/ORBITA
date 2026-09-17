@@ -14,7 +14,7 @@ function authorizationFailureResponse(status: 401 | 403 | 503) {
 }
 
 /**
- * Expõe o plano/limites reais da organização (Ticket 13) para a UI de
+ * Expõe o plano/limites reais da organização para a UI de
  * billing. Nenhum estado de assinatura é inventado aqui: os dados vêm de
  * `getOrganizationEntitlements`, que já é a única fonte de verdade usada
  * pelo servidor para aplicar limites.
@@ -25,8 +25,7 @@ export async function GET(
 ) {
   const { id: orgId } = await params;
 
-  // Ticket 20 — o atalho de sessão negava com 401 até quem era dono da
-  // organização. Ler o plano exige vínculo, e nada além dele.
+  // Ler o plano exige vínculo com a organização da URL, e nada além dele.
   const authorization = await authorizeRequestOrganizationCapability(req, orgId, 'organization:access');
   if (authorization._tag !== 'OrganizationCapabilityAuthorized') {
     return authorizationFailureResponse(authorization.status);

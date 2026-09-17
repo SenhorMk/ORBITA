@@ -132,7 +132,7 @@ export class PedidoRepository {
    * Marca como `Cancelado` o pedido correspondente a um `bling_id`, dentro do
    * limite organizacional já verificado.
    *
-   * Decisão do proprietário (31/08, ticket 11): uma exclusão feita **no Bling**
+   * Decisão de produto: uma exclusão feita **no Bling**
    * cancela o pedido no ORBITA, nunca o apaga. Preserva histórico, estoque e
    * financeiro auditáveis, e sobrevive a um evento espúrio ou reentregue —
    * `deleteByBlingId` não teria volta.

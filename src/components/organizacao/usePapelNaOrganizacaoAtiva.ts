@@ -17,25 +17,18 @@ export interface SelecaoDeOrganizacao {
 /**
  * Papel do usuário **na organização ativa**, vindo do servidor.
  *
- * Ticket 22, fatia C — a tela decidia quem era dono por conta própria, com
- * quatro fontes que não são autoridade nenhuma:
+ * Nada do lado do cliente é autoridade sobre o papel: nem metadados do provedor
+ * de identidade, nem o e-mail, nem um valor em `localStorage`. A autoridade é
+ * uma só, e é a mesma dos dois lados: o vínculo persistido, exposto por
+ * `GET /api/organizacoes` em `activeOrg.papel`.
  *
- * - `app_metadata.role`, o metadado do modelo por usuário, já removido;
- * - o e-mail conter a substring `dono`;
- * - o e-mail ser exatamente `admin@haux.com.br`;
- * - um papel gravado antes em `localStorage`.
- *
- * A autoridade é uma só, e é a mesma dos dois lados: o vínculo persistido,
- * exposto por `GET /api/organizacoes` em `activeOrg.papel`.
- *
- * **Revisão do #66 — o papel é do par (sessão, organização), não da sessão.**
- * A primeira versão chaveava só pela identidade da sessão, e isso bastava para
- * a troca de *usuário*. Não bastava para a troca de *organização*: quem é
- * `owner` em A e `member` em B continuava vendo controles de gestão em B até a
- * resposta chegar — e o inverso, `member` em A e `admin` em B, ficava sem os
- * controles que tem. O servidor negava as operações indevidas, então não havia
- * elevação; a tela é que mentia. É a mesma classe de erro do `localStorage`
- * que este seam veio substituir, só que num eixo a mais.
+ * **O papel é do par (sessão, organização), não só da sessão.** Chavear só
+ * pela identidade bastaria para a troca de *usuário*, mas não para a troca de
+ * *organização*: quem é `owner` em A e `member` em B continuaria vendo
+ * controles de gestão em B até a resposta chegar (e o inverso ficaria sem os
+ * controles que tem). O servidor negaria as operações indevidas, então não
+ * haveria elevação de privilégio — mas a tela mostraria algo falso.
+ * Este hook controla apenas o que a interface exibe.
  *
  * **Falha fechada.** Sem sessão, sem organização ativa, ou com resposta que não
  * dá para ler, o papel é `null` e nenhum controle de gestão aparece. A tela

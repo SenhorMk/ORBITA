@@ -1,6 +1,6 @@
 /**
  * POST /api/stripe/webhook
- * Ticket 14: Recebe e valida webhooks reais da Stripe. Composition root:
+ * Recebe e valida webhooks reais da Stripe. Composition root:
  * constrói o `StripeSdkAdapter` real a partir da configuração do servidor.
  * Assinatura verificada via SDK oficial (`constructEvent`), nunca HMAC
  * caseira.

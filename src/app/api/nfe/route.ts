@@ -39,9 +39,9 @@ async function emitNfeWithLock(
     .maybeSingle();
 
   if (nfeError) {
-    // Ticket 22, critério 13 — `nfeError` é um `PostgrestError`, e `message`
-    // carrega texto do Postgres: nome de constraint, e num conflito de
-    // unicidade o próprio valor da linha. Ia inteiro para o cliente.
+    // `nfeError` é um `PostgrestError`, e `message` carrega texto do Postgres:
+    // nome de constraint e, num conflito de unicidade, o próprio valor da
+    // linha. Por isso fica só no log (CWE-209).
     registrarFalhaInterna('nfe.consultar_documento', nfeError, { organizacaoId: scope.organizationId });
     return NextResponse.json({ success: false, error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
@@ -64,18 +64,16 @@ async function emitNfeWithLock(
   const nfeStatus = nfeData.status ?? nfeData.situacao ?? 'Emitida';
 
   if (!nfeBlingId || !nfeNumero) {
-    // Ticket 22, critério 13 — aqui saíam **duas** cópias do documento fiscal:
-    // `JSON.stringify(nfeResult)` no log e `raw: nfeResult` na resposta. É o
-    // corpo de uma NF-e: destinatário, itens, valores. Nada disso é
-    // diagnóstico, e nada disso pode sair — nem ao cliente, nem ao log.
+    // O corpo da resposta é uma NF-e: destinatário, itens, valores. Nada disso
+    // é diagnóstico, e nada disso sai — nem ao cliente, nem ao log.
     //
     // O que ajuda a diagnosticar é **qual campo faltou**, e é a única coisa que
     // fica: os nomes das chaves que vieram, sem um único valor.
     // Indicadores **fechados**, dos campos que este código espera — e nada
     // derivado da resposta.
     //
-    // A primeira correção registrava `Object.keys(...)` da resposta, o que
-    // parecia seguro por não ter valores. Não é: nome de propriedade também é
+    // Registrar `Object.keys(...)` da resposta parece seguro por não ter
+    // valores, mas não é: nome de propriedade também é
     // dado que vem de fora, e um provedor que devolva um objeto com chaves
     // dinâmicas colocaria conteúdo arbitrário no log por essa porta. O que sai
     // é uma lista de booleanos escrita aqui.
@@ -125,9 +123,8 @@ async function emitNfeWithLock(
     // ação humana, e por isso ele continua dizendo **o quê e onde** — número,
     // chave e id da nota são o que permite reconciliar.
     //
-    // Ticket 22, critério 13 — o que sai é `db_error`: a mensagem do banco não
-    // ajuda a reconciliar nada e é diagnóstico interno (CWE-209). Ela passa a
-    // ficar só no log.
+    // A mensagem do banco não ajuda a reconciliar nada e é diagnóstico interno
+    // (CWE-209): fica só no log.
     registrarFalhaInterna('nfe.persistir', dbError, { organizacaoId: scope.organizationId });
     return NextResponse.json({
       success: false,
@@ -142,10 +139,9 @@ async function emitNfeWithLock(
 
 export async function POST(request: Request) {
   try {
-    // Ticket 22 — o portão de sessão legado saiu, e o `session.role !== 'dono'`
-    // com ele: aquele papel vinha de `app_metadata`, do modelo de tenancy por
-    // usuário, e não dizia nada sobre o papel da pessoa *nesta organização*. A
-    // pergunta certa é a capacidade, e a fonte é o vínculo persistido.
+    // A autorização vem do escopo verificado: identidade + vínculo persistido
+    // nesta organização. A permissão é decidida pela capacidade do papel, nunca
+    // por metadados do provedor de identidade.
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
@@ -179,7 +175,7 @@ export async function POST(request: Request) {
         const blingClient = bling.forVerifiedOrganization(scope);
         return await emitNfeWithLock(scope, pedidoId, blingPedidoId, blingClient);
       } catch (error: unknown) {
-        // Ticket 22, critério 13 — CWE-209 inerte atrás do 401 legado.
+        // A mensagem do erro fica só no log (CWE-209); o cliente recebe frase fixa.
         registrarFalhaInterna('nfe.emitir', error, { organizacaoId: scope.organizationId });
         return NextResponse.json(
           { success: false, error: 'Falha ao emitir nota fiscal no ERP' },

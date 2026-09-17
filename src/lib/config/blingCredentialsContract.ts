@@ -3,11 +3,11 @@ import { z } from 'zod';
 /**
  * Contrato único do corpo de `POST /api/bling/connect` para credenciais do Bling.
  *
- * Existe porque cliente e servidor divergiram silenciosamente: o `SetupWizard`
- * (removido no Ticket 28) enviava `{ bling: { clientId, clientSecret } }` enquanto a rota lia
- * `body.clientId` da raiz, resultando em `400 "Client ID e Client Secret são
- * obrigatórios"` em toda tentativa de conectar o Bling. Nenhum teste pegou
- * porque os dois lados eram construídos e verificados isoladamente.
+ * Existe para que cliente e servidor não divirjam em silêncio sobre a forma das
+ * credenciais: se um lado enviasse `{ bling: { clientId, clientSecret } }` e o
+ * outro lesse `body.clientId` da raiz, toda tentativa de conectar o Bling
+ * falharia com `400`, e testes que constroem cada lado isoladamente não
+ * perceberiam.
  *
  * Ambos os lados agora dependem deste módulo: o cliente monta o corpo com
  * `buildBlingCredentialsPayload` e o servidor o valida com

@@ -38,8 +38,8 @@ function textoOuNulo(valor: unknown): string | null {
 /**
  * A leitura de Integrações, **por organização**.
  *
- * Reusa `useLeituraPorOrganizacao` — o mesmo mecanismo de membros e convites do
- * Ticket 06 — e não uma segunda cópia dele. O carimbo (organização, versão) é
+ * Reusa `useLeituraPorOrganizacao` — o mesmo mecanismo de membros e convites —
+ * e não uma segunda cópia dele. O carimbo (organização, versão) é
  * o que garante as duas metades: a leitura de A não é *exibida* sob B, e a
  * resposta atrasada de A não é *gravada* depois da troca.
  *

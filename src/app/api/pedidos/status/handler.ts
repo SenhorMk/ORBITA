@@ -78,10 +78,8 @@ const statusRequestSchema = z.object({
 /**
  * Alinha o saldo local dos produtos do pedido com o do Bling.
  *
- * O comportamento aqui é o mesmo de antes da extração, ramo a ramo — este
- * ticket muda a forma, não o que a rota faz. Dois desses ramos engolem a falha
- * e estão marcados: são dívida conhecida, não descuido, e mexer neles mudaria
- * a resposta da rota.
+ * Dois ramos desta função engolem a falha e estão marcados como **dívida
+ * conhecida**: tratá-los mudaria a resposta da rota.
  */
 async function alinharEstoqueComBling(
   scope: VerifiedOrganizationScope,
@@ -102,9 +100,9 @@ async function alinharEstoqueComBling(
   try {
     produtos = await store.findProdutosByIds(scope, produtoIds);
   } catch {
-    // DÍVIDA (preservada): falha ao ler os produtos vira silêncio, e o chamador
-    // recebe sucesso limpo com o estoque desalinhado. Corrigir muda a resposta
-    // da rota, então fica para um ticket próprio.
+    // DÍVIDA CONHECIDA: falha ao ler os produtos vira silêncio, e o chamador
+    // recebe sucesso limpo com o estoque desalinhado. Corrigir mudaria a
+    // resposta da rota.
     return undefined;
   }
 

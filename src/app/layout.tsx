@@ -40,7 +40,7 @@ export default function RootLayout({
       lang="pt-BR"
       // O tema vive num atributo do `html`, e nenhum componente lê cor fora dos
       // tokens. Hoje só existe `dark`: os valores do tema claro já estão
-      // declarados em `tokens.css`, mas o interruptor é de outra fatia.
+      // declarados em `tokens.css`, mas ainda não há interruptor de tema.
       data-theme="dark"
       className={`${spaceGrotesk.variable} ${archivo.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >

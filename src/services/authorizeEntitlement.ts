@@ -1,6 +1,6 @@
 /**
  * authorizeEntitlement.ts
- * Ticket 13: Application service único de autorização de entitlement/ciclo de vida.
+ * Application service único de autorização de entitlement/ciclo de vida.
  *
  * Toda operação mutável do MVP relacionada a planos/entitlements/ciclo de vida deve
  * chamar `authorizeEntitlement(scope, operation)` antes de qualquer efeito. Nenhuma

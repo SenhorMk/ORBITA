@@ -34,8 +34,8 @@ const PADRAO: Fundo = 'armazem';
  * A escolha vale para a sessão e não é guardada. Guardá-la exigiria ler o
  * armazenamento antes do primeiro desenho, e o servidor não tem esse
  * armazenamento: o HTML entregue divergiria do primeiro render no cliente por
- * causa de uma preferência de exibição. Não vale o preço, e o enunciado desta
- * fatia deixou a persistência como opcional.
+ * causa de uma preferência de exibição. Para uma preferência opcional, não
+ * vale o preço.
  */
 export function useFundo(): [Fundo, (fundo: Fundo) => void] {
   const [fundo, setFundo] = useState<Fundo>(PADRAO);

@@ -1,6 +1,6 @@
 /**
  * portalService.ts
- * Ticket 14: cria uma Billing Portal Session real para o Customer já
+ * Cria uma Billing Portal Session real para o Customer já
  * vinculado à organização. Nunca aceita `customerId` do cliente.
  */
 

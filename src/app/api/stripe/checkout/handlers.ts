@@ -1,6 +1,6 @@
 /**
  * handlers.ts
- * Ticket 14: HTTP adapter para POST /api/stripe/checkout, com dependências
+ * HTTP adapter para POST /api/stripe/checkout, com dependências
  * injetáveis (mesmo padrão de `src/app/api/bling/pedidos/[id]/handlers.ts`).
  * O cliente nunca envia `priceId`, `customerId`, `organizationId` ou uma URL
  * completa de retorno — apenas `plano_slug`/`intervalo` e, opcionalmente, um

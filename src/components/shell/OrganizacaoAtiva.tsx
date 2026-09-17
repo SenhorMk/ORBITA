@@ -23,9 +23,9 @@ interface OrganizacaoAtivaProps {
 /**
  * A organização ativa, visível em qualquer aba.
  *
- * Antes do Ticket 01 o tenant só aparecia entrando na aba "Organização". Num
- * produto multi-tenant, não saber a que empresa os números na tela pertencem é
- * um defeito, não uma economia de espaço.
+ * Num produto multi-tenant, não saber a que empresa os números na tela
+ * pertencem é um defeito, não uma economia de espaço — por isso a organização
+ * aparece no topo, e não só dentro da aba "Organização".
  *
  * Com uma única organização não há seletor: mostrar um menu de um item só é
  * ruído. O seletor aparece quando existe de fato para onde trocar.

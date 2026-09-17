@@ -4,9 +4,7 @@ import type { SyncJob } from '../repositories/syncJobRepository';
  * Contrato observável da sincronização durável.
  *
  * Vive fora de `sync.ts` porque quem consome estes tipos — as rotas — não deve
- * precisar importar o serviço inteiro, e porque `sync.ts` passou do teto de
- * tamanho do portão de slop quando ganhou a distinção de resultado da tentativa
- * de processamento (Ticket 22).
+ * precisar importar o serviço inteiro.
  */
 
 export interface EnqueueSyncResult {
@@ -75,12 +73,7 @@ export const FALHA_PUBLICA_DE_SINCRONIZACAO = 'SYNC_FAILED';
 /**
  * Sincronização durável, escopada por uma organização **já verificada**.
  *
- * Ticket 22 — o serviço resolvia o escopo sozinho, a partir de um `ActorContext`
- * cujo `tenant` vinha de `app_metadata`, e traduzia a negação em exceção
- * (`SyncScopeDeniedError`) para a rota transformar em status. Eram duas
- * autorizações para a mesma pergunta, e a de baixo lia a fonte errada.
- *
- * Agora a autorização acontece uma vez só, na fronteira HTTP, que já sabe
- * responder 401/403/503. O serviço recebe o escopo pronto e não decide mais
- * quem pode o quê.
+ * A autorização acontece uma vez só, na fronteira HTTP, que sabe responder
+ * 401/403/503. O serviço recebe o escopo pronto e não decide quem pode o quê —
+ * assim não existem duas autorizações para a mesma pergunta.
  */

@@ -163,7 +163,7 @@ export type BlingCallResult<T> =
 
 /**
  * Resultado de procurar um pedido de venda pela referência local
- * (`numeroLoja`) — ticket 30, 6ª rodada de revisão.
+ * (`numeroLoja`).
  *
  * A **cardinalidade é explícita** porque cada caso exige uma reação diferente,
  * e "pegar o primeiro" seria escolher em silêncio: com mais de um pedido

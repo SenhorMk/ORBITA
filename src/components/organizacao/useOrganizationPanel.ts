@@ -16,28 +16,23 @@ export type ListaDeOrganizacoes = ReturnType<typeof useOrganizationsList>;
  * de API. Nenhuma decisão de autorização é tomada aqui; cada hook apenas
  * chama a rota já verificada no servidor e reflete o resultado.
  *
- * A lista **entra por parâmetro** desde o Ticket 01. Antes ela era criada aqui
- * dentro, e o shell passou a precisar da mesma informação para mostrar e trocar
- * a organização ativa. Duas instâncias do mesmo estado divergiriam na primeira
- * troca feita pelo topo: o painel continuaria anunciando a organização
- * anterior. Uma organização ativa só pode ter uma fonte.
+ * A lista **entra por parâmetro**: o shell também precisa dela para mostrar e
+ * trocar a organização ativa, e duas instâncias do mesmo estado divergiriam na
+ * primeira troca feita pelo topo. Uma organização ativa só pode ter uma fonte.
  *
- * ## Ticket 06 — a seleção desce inteira, e os erros não se misturam
+ * ## A seleção desce inteira, e os erros não se misturam
  *
- * **A seleção desce inteira.** Antes só o `orgId` era repassado aos dois hooks
- * de leitura, e a versão ficava aqui, usada apenas para avisar o shell. Com o
- * id sozinho, A → B → A não é distinguível de continuar em A: a resposta
- * atrasada da primeira visita chega durante a segunda e é aceita. Agora
- * `selecao` — o par (organização, versão) — é o que os hooks recebem, e é por
- * ele que eles carimbam o que leem.
+ * **A seleção desce inteira.** Os hooks de leitura recebem `selecao` — o par
+ * (organização, versão) —, e não só o id: com o id sozinho, A → B → A não é
+ * distinguível de continuar em A, e a resposta atrasada da primeira visita
+ * seria aceita durante a segunda. É pelo par que eles carimbam o que leem.
  *
- * **Os erros não se misturam.** `error = list.error ?? invites.error ??
- * members.error` colapsava três leituras independentes num campo só: a falha
- * de convites aparecia como se fosse da tela inteira, e a de membros
- * desaparecia atrás dela. Cada leitura agora carrega o seu próprio estado, e a
- * tela mostra cada falha junto da lista a que ela pertence.
+ * **Os erros não se misturam.** Convites, membros e organizações são leituras
+ * independentes: cada uma carrega o próprio estado de erro, e a tela mostra
+ * cada falha junto da lista a que ela pertence, em vez de um erro único que
+ * esconderia os outros.
  *
- * **A sessão desce junto da seleção** (revisão externa da PR #84). Quase tudo
+ * **A sessão desce junto da seleção.** Quase tudo
  * nesta tela é escopado por organização, mas o aceite de convite não é: quem
  * aceita pode não ter organização nenhuma, e é o caso principal. O erro dele
  * pertence à identidade, e é por ela que é carimbado.

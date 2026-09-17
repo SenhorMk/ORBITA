@@ -1,20 +1,18 @@
 /**
- * retentionOutboxAdapter.ts
- * Ticket 18: propagação de eliminação/anonimização a providers externos
- * (Bling/Chatwoot) reusando o outbox durável já existente (ticket 12,
- * `outbox_eventos`/`registrar_evento_outbox`) — o MESMO mecanismo já usado
- * pelo ticket 17 (`OutboxProviderAdapter`/`OutboxTitularPort`). Não recria
- * cliente HTTP nem lógica de retry: só enfileira um evento idempotente e
- * reflete o status real do outbox (nunca declara `done` sem o outbox ter
- * reportado `sent`).
+ * Propagação de eliminação/anonimização (retenção de dados) a providers
+ * externos (Bling/Chatwoot) pelo outbox durável (`outbox_eventos` /
+ * `registrar_evento_outbox`) — o mesmo mecanismo de `OutboxProviderAdapter`.
+ * Não recria cliente HTTP nem lógica de retry: só enfileira um evento
+ * idempotente e reflete o status desse evento (não declara `done` sem o outbox
+ * ter registrado `sent`).
  *
- * Mesma lacuna de infraestrutura documentada em `docs/adr/ticket-17-direitos-titular.md`
- * seção 4: nenhuma rota de produção ainda registra adapters reais de
- * provider em `runOutboxWorkerOnce` — enquanto isso, uma tarefa endereçada a
- * este adapter permanece honestamente `retryable` até ser efetivamente
- * entregue. A "task de reconciliação" pedida pelo ticket 18 é a mesma
- * reconciliação já existente do outbox (retry exponencial + dead letter,
- * `database/31_outbox_retries_saude_integracoes.sql`) — não duplicada aqui.
+ * **Limite real** (ver também `docs/adr/ticket-17-direitos-titular.md`, seção
+ * 4): a entrega depende do outbox worker (`runOutboxWorkerOnce`) ser executado
+ * com adapters de provider, e no código atual nenhuma rota, cron ou processo
+ * faz isso. O retry exponencial e o dead letter do outbox
+ * (`database/31_outbox_retries_saude_integracoes.sql`) só avançam quando o
+ * worker roda; até lá, uma tarefa endereçada a este adapter permanece
+ * `retryable`.
  */
 
 import type { RetentionAction, RetentionEffectAdapter, RetentionEffectContext, RetentionItemOutcome } from './retentionTypes';
@@ -27,7 +25,7 @@ export type RetentionOutboxEventoStatusRow =
   | { readonly eventoId: string; readonly status: 'pending' | 'processing' | 'failed_transient' };
 
 /** Porta mínima sobre o outbox — deliberadamente idêntica em forma a
- * `OutboxTitularPort` (ticket 17) para reforçar que é o MESMO mecanismo, só
+ * `OutboxTitularPort` para reforçar que é o MESMO mecanismo, só
  * testável isoladamente com um fake escrito à mão. */
 export interface RetentionOutboxPort {
   ensureEnqueued(params: {

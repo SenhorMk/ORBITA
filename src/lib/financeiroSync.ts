@@ -2,10 +2,10 @@
  * Ponte entre a rota de sincronização financeira e a tela.
  *
  * Mora fora do componente para poder ser exercitada contra a **resposta real**
- * que o handler produz, e não contra uma forma remontada no teste. A ligação
- * entre as duas pontas é exatamente o que faltava: a rota passou a reportar
- * falha e parcialidade no ticket 05, e a tela continuou tratando tudo como
- * sucesso — porque `fetchWithAuth` devolve a `Response` sem lançar em não-2xx.
+ * que o handler produz, e não contra uma forma remontada no teste. A rota
+ * reporta falha e parcialidade no corpo, e `fetchWithAuth` devolve a
+ * `Response` sem lançar em não-2xx: sem esta ponte, a tela trataria tudo como
+ * sucesso.
  */
 
 /** Corpo que a rota devolve; só o que a tela precisa olhar. */
@@ -25,8 +25,7 @@ function envelopeDeObjeto(corpo: unknown): corpo is RespostaSync {
  * Mensagem do servidor, só quando ela é texto de verdade.
  *
  * O `error` vem de fora do componente e vai direto para a tela; exibi-lo sem
- * conferir o tipo colocaria `[object Object]` na cara do lojista — a mesma
- * família de defeito que o ticket 03 perseguiu.
+ * conferir o tipo poderia colocar `[object Object]` na tela do lojista.
  */
 function mensagemDoServidor(corpo: RespostaSync): string {
   return typeof corpo.error === 'string' && corpo.error.trim().length > 0

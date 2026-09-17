@@ -11,11 +11,10 @@ export const dynamic = 'force-dynamic';
 /**
  * Traduz o resultado da sincronização inicial em resposta HTTP.
  *
- * A rota anunciava `success: true` sem olhar para `syncResult.success`.
- * Enquanto o serviço rejeitava em qualquer falha isso era quase inofensivo —
- * mas desde que ele passou a encerrar o job em vez de rejeitar, "falhou" e
- * "concluiu" chegavam aqui iguais, e a tela dizia que a sincronização inicial
- * tinha dado certo, com zero registros (Ticket 22).
+ * A resposta depende de `resultado.success`, e não só de a chamada ter
+ * voltado: o serviço encerra o job como `failed` em vez de rejeitar, então
+ * "falhou" e "concluiu" retornam normalmente, e sem esta distinção a tela
+ * diria que a sincronização inicial deu certo com zero registros.
  */
 function respostaDaSincronizacao(resultado: SyncAllResult): NextResponse {
   if (resultado.success) {
@@ -79,8 +78,7 @@ function respostaDaSincronizacao(resultado: SyncAllResult): NextResponse {
 
 export async function POST(request: Request) {
   try {
-    // Ticket 22 — o portão legado saiu; a resolução de escopo logo abaixo já
-    // fazia a mesma pergunta pela fonte certa.
+    // Identidade e vínculo com a organização vêm do escopo verificado.
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;

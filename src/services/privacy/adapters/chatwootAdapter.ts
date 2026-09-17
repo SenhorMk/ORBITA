@@ -1,7 +1,8 @@
 /**
  * chatwootAdapter.ts
- * Ticket 17: adapter do sistema "chatwoot" — mesmo mecanismo do
- * `blingAdapter.ts` (outbox durável real), destino `chatwoot`. Ver
+ * Adapter do sistema "chatwoot" — mesmo mecanismo do `blingAdapter.ts`
+ * (enfileiramento no outbox durável; a entrega depende do worker), destino
+ * `chatwoot`. Ver
  * `outboxProviderAdapter.ts`.
  */
 

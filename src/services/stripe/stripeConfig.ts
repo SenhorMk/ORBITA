@@ -1,6 +1,6 @@
 /**
  * stripeConfig.ts
- * Ticket 14: config parser do provider Stripe. Fronteira de configuração:
+ * Config parser do provider Stripe. Fronteira de configuração:
  * nenhum caller obtém secret key / webhook secret / Price IDs sem passar por
  * este parser. Nada aqui é exposto em `NEXT_PUBLIC_*`.
  */

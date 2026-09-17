@@ -32,10 +32,8 @@ interface FornecedorRequestBody {
 
 export async function GET(request: Request) {
   try {
-    // Ticket 22 — o portão de sessão legado saiu daqui. Ele lia o papel de
-    // `app_metadata`, que só os usuários históricos têm, e era redundante: o
-    // escopo de organização abaixo já resolve identidade e vínculo, e já
-    // distingue 401 (sem sessão), 403 (sem vínculo) e 503 (indisponível).
+    // O escopo de organização resolve identidade e vínculo, e distingue 401
+    // (sem sessão), 403 (sem vínculo) e 503 (indisponível).
 
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
@@ -61,7 +59,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ success: true, data: fornecedores });
   } catch (error: unknown) {
-    // Ticket 22, critério 13 — CWE-209 que o 401 legado mantinha inerte.
+    // A mensagem do erro fica só no log (CWE-209); o cliente recebe frase fixa.
     registrarFalhaInterna('financeiro.fornecedores.listar', error);
     return NextResponse.json({ success: false, error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }
@@ -70,10 +68,8 @@ export async function GET(request: Request) {
 // POST: Cria um novo fornecedor real no Bling com dados da BrasilAPI
 export async function POST(request: Request) {
   try {
-    // Ticket 22 — o portão de sessão legado saiu daqui. Ele lia o papel de
-    // `app_metadata`, que só os usuários históricos têm, e era redundante: o
-    // escopo de organização abaixo já resolve identidade e vínculo, e já
-    // distingue 401 (sem sessão), 403 (sem vínculo) e 503 (indisponível).
+    // O escopo de organização resolve identidade e vínculo, e distingue 401
+    // (sem sessão), 403 (sem vínculo) e 503 (indisponível).
 
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
@@ -103,8 +99,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, data: fornecedorCriado });
   } catch (error: unknown) {
-    // Ticket 22, critério 13 — o POST tem o próprio `catch`, e a decisão dele é
-    // própria: a mesma frase pública, sem a mensagem do erro.
+    // O POST tem o próprio `catch`, com a mesma política: frase pública fixa,
+    // sem a mensagem do erro (CWE-209).
     registrarFalhaInterna('financeiro.fornecedores.criar', error);
     return NextResponse.json({ success: false, error: MENSAGEM_PUBLICA_DE_FALHA }, { status: 500 });
   }

@@ -1,6 +1,6 @@
 /**
  * stripeBillingPort.ts
- * Ticket 14: porta application-owned para o provider Stripe. Nenhuma outra
+ * Porta application-owned para o provider Stripe. Nenhuma outra
  * camada da aplicação importa o SDK `stripe` diretamente — apenas o adapter
  * server-only (`stripeSdkAdapter.ts`) implementa esta interface.
  */

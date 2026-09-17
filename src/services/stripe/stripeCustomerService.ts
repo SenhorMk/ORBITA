@@ -1,6 +1,6 @@
 /**
  * stripeCustomerService.ts
- * Ticket 14: garante um Stripe Customer real vinculado a uma organização.
+ * Garante um Stripe Customer real vinculado a uma organização.
  * Nunca aceita `customerId` do cliente; o vínculo é sempre lido/gravado em
  * `assinaturas_organizacao` por `organizacao_id` verificado.
  */

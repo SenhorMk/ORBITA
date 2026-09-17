@@ -468,9 +468,8 @@ export function ClienteEditModal({
         errorMessage={errorLogData.errorMessage}
         details={errorLogData.details}
         logs={errorLogData.logs}
-        // Sem `onRetry`, o `ErrorLogModal` não desenha o botão — e é essa a
-        // decisão local que o ticket pediu, em vez de redesenhar um diálogo
-        // usado por outras telas.
+        // Sem `onRetry`, o `ErrorLogModal` não desenha o botão — a decisão é
+        // local a esta tela, sem redesenhar um diálogo usado por outras.
         //
         // A condição é **positiva**: só oferece repetir quem tem prova de que
         // repetir é seguro. `permiteRepetir` fecha por omissão, então qualquer

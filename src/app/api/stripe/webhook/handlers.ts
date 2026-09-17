@@ -1,11 +1,11 @@
 /**
  * handlers.ts
- * Ticket 14: HTTP adapter para POST /api/stripe/webhook, com dependências
- * injetáveis (mesmo padrão de `src/app/api/bling/pedidos/[id]/handlers.ts`).
+ * HTTP adapter para POST /api/stripe/webhook, com dependências injetáveis
+ * (mesmo padrão de `src/app/api/bling/pedidos/[id]/handlers.ts`).
  * A assinatura é verificada sobre o raw body pelo `StripeBillingPort`
  * (`constructWebhookEvent`, SDK oficial via `StripeSdkAdapter`) antes de
  * qualquer efeito. O evento verificado é processado pela máquina de estados
- * idempotente do ticket 13 (`processStripeWebhookEvent`), sem alterações.
+ * idempotente de assinatura (`processStripeWebhookEvent`).
  */
 
 import { NextResponse } from 'next/server';
@@ -41,7 +41,7 @@ export function createWebhookHandlers(dependencies: WebhookHandlerDependencies) 
 
       const event = verified.data;
 
-      // 2. Processamento idempotente via inbox (máquina de estados do ticket 13, sem alterações).
+      // 2. Processamento idempotente via inbox (máquina de estados de assinatura).
       const result = await processStripeWebhookEvent(dependencies.supabase, event);
 
       if (result.status === 'failed') {

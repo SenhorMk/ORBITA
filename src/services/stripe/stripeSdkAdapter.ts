@@ -1,6 +1,6 @@
 /**
  * stripeSdkAdapter.ts
- * Ticket 14: adapter server-only que implementa `StripeBillingPort` usando o
+ * Adapter server-only que implementa `StripeBillingPort` usando o
  * SDK oficial `stripe` (versão fixada em package.json). Nenhuma outra camada
  * do runtime de produção gera IDs/URLs Stripe — apenas este arquivo importa
  * o SDK e chama `customers`, `checkout.sessions`, `billingPortal.sessions` e

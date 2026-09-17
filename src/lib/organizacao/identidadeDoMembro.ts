@@ -2,25 +2,19 @@
  * Como um membro é **chamado** na interface, e de onde esse nome veio.
  *
  * ---------------------------------------------------------------------------
- * A LACUNA
+ * POR QUE O NOME
  * ---------------------------------------------------------------------------
- * `GET /api/organizacoes/[id]/membros` devolvia `user_id`, `papel` e
- * `created_at`, e a tela imprimia o `user_id` como identidade principal. Uma
- * lista de autoridade — quem participa, e com qual poder — identificada por
- * UUID não é apenas feia: ninguém consegue conferir se está removendo a pessoa
- * certa. O nome existe desde o cadastro ("Como devemos te chamar" grava
- * `user_metadata.full_name`, ver `src/app/api/auth/register/route.ts`); só não
- * chegava até aqui.
+ * A lista de membros é uma lista de autoridade — quem participa, e com qual
+ * poder. Identificada só por UUID, ninguém consegue conferir se está removendo
+ * a pessoa certa. O nome vem do cadastro ("Como devemos te chamar" grava
+ * `user_metadata.full_name`, ver `src/app/api/auth/register/route.ts`).
  *
  * ---------------------------------------------------------------------------
  * O E-MAIL NÃO ENTRA NESTA TELA
  * ---------------------------------------------------------------------------
- * A primeira versão desta fatia usava o e-mail como recurso para quem
- * administra — a lista de convites já expõe e-mails a esse papel, então o dado
- * não era novo para ele. A revisão externa recusou, e com razão: "já é visível
- * em outro lugar" não é motivo para publicar PII em mais um. Um hotfix de
- * apresentação não é a hora de aumentar a superfície de dado pessoal, e a
- * ausência de nome é perfeitamente dizível sem e-mail nenhum.
+ * Mesmo que outro lugar já exponha e-mails a quem administra (a lista de
+ * convites), "já é visível em outro lugar" não é motivo para publicar dado
+ * pessoal em mais um. A ausência de nome é dizível sem e-mail nenhum.
  *
  * Então a regra é uma só, igual para owner, admin e member: **nome do cadastro,
  * ou a ausência dele dita em voz alta**. Nenhum papel recebe e-mail por aqui, e

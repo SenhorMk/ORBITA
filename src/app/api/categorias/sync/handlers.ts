@@ -8,9 +8,8 @@ import type {
 /**
  * Category operations required by the HTTP adapter.
  *
- * Ticket 22 — o port recebia `VerifiedTenant`, o tenant do modelo por usuário,
- * resolvido de `app_metadata`. Passou a receber a organização verificada, que é
- * a mesma autoridade que o resto do aplicativo usa.
+ * O port recebe a organização verificada, a mesma autoridade que o resto do
+ * aplicativo usa.
  */
 export interface CategoryCatalogPort {
   /** List categories visible to one verified organization. */

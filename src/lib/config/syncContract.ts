@@ -3,16 +3,11 @@ import { z } from 'zod';
 /**
  * Contrato único das respostas de `POST /api/sync` e `GET /api/sync/status`.
  *
- * Existe porque as duas pontas divergiram em silêncio, de novo. O Ticket 12
- * trocou a sincronização inline por **job durável**: a rota passou a responder
- * `202 { success, jobId, status }`. O cliente nunca foi atualizado e continuou
- * lendo `result.stats.pedidos` — que não existe nessa resposta. O acesso
- * estourava um `TypeError`, o `catch` genérico da tela o transformava em
- * *"Erro ao comunicar com o servidor"*, e a sincronização parecia quebrada
- * quando na verdade tinha sido **enfileirada com sucesso**.
- *
- * `GET /api/sync/status` existia desde o mesmo ticket e **não tinha nenhum
- * chamador**: a infraestrutura de progresso estava pronta e desligada.
+ * A sincronização é um **job durável**: `POST /api/sync` responde
+ * `202 { success, jobId, status }` — enfileira, não conclui — e o progresso é
+ * lido em `GET /api/sync/status`. A tela valida as respostas por estes schemas
+ * em vez de supor a forma: um cliente que esperasse estatísticas na resposta
+ * do `POST` trataria uma sincronização enfileirada com sucesso como erro.
  */
 
 export const syncJobStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']);

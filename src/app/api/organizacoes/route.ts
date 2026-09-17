@@ -42,8 +42,8 @@ export async function GET(req: Request) {
     );
   }
 
-  // Ticket 06 — `listUserOrganizations` deixou de engolir a falha de leitura e
-  // devolver `[]`. Aqui ela vira 500 com a frase publica fixa: "nao foi
+  // `listUserOrganizations` lança na falha de leitura em vez de devolver
+  // `[]`. Aqui ela vira 500 com a frase publica fixa: "nao foi
   // possivel ler" e "voce nao tem organizacao" sao respostas diferentes, e a
   // tela precisa saber qual das duas recebeu para nao oferecer "crie sua
   // primeira organizacao" a quem e owner de duas.
@@ -85,7 +85,7 @@ export async function POST(req: Request) {
 
   // `criar_organizacao_atomica` é `security definer` e resolve o dono por
   // `auth.uid()`. A service_role key não carrega sujeito de usuário, então
-  // `auth.uid()` seria NULL e a função abortaria (defeito do Ticket 26). A RPC
+  // `auth.uid()` seria NULL e a função abortaria. A RPC
   // precisa viajar com o JWT já verificado do próprio usuário.
   const actorClientResult = createActorScopedSupabaseClient(bearerResult.token);
   if (actorClientResult._tag !== 'ActorScopedClientCreated') {

@@ -14,8 +14,8 @@ interface ManualOrderModalProps {
   onOpenChange: (open: boolean) => void;
   onSuccess?: () => void;
   /**
-   * Organização ativa confirmada pelo servidor (ticket 30, 5ª rodada de
-   * revisão). Escopa a memória de tentativas pendentes — ver
+   * Organização ativa confirmada pelo servidor. Escopa a memória de
+   * tentativas pendentes — ver
    * `tentativaPendente.ts` — e sem ela nada é lembrado entre instâncias.
    */
   organizacaoId: string | null;
@@ -267,12 +267,11 @@ function ManualOrderFormFields(props: ManualOrderFormFieldsProps) {
 /**
  * O interruptor que decide se esta venda **também** vira pedido no Bling.
  *
- * Vive no rodapé, ao lado da ação que ele modifica. Estava no fim da coluna
- * esquerda do formulário, dentro do corpo que rola — e a 1366×768, a resolução
- * mínima da apresentação, ficava abaixo da dobra: dava para apertar "Finalizar
- * e baixar estoque" sem nunca ter visto que aquele clique escrevia no ERP.
- * Ligado continua sendo o padrão certo para uma loja; o que mudou é que agora
- * a escolha está na tela na hora de decidir (Ticket 09).
+ * Vive no rodapé, ao lado da ação que ele modifica, e não dentro do corpo que
+ * rola: em telas menores (1366×768) ele ficaria abaixo da dobra, e daria para
+ * apertar "Finalizar e baixar estoque" sem ver que aquele clique escreve no
+ * ERP. Ligado é o padrão para uma loja; a escolha fica visível na hora de
+ * decidir.
  */
 function SincronizarComOBling({
   syncBling,
@@ -416,16 +415,13 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess, organizacaoId 
 
   useEffect(() => {
     if (!open) return;
-    // Ticket 30, fatia 3, 4ª rodada de revisão — a abertura do modal NÃO
-    // zera a referência de idempotência. Um envio anterior pode ter ficado
-    // indeterminado (nem sucesso nem falha confirmados), e reabrir o modal
-    // — ou um reload da página inteira, que é exatamente o cenário que a
-    // 4ª rodada pediu para fechar — precisa continuar apontando para a
-    // MESMA tentativa até ela se resolver. `useManualOrderSubmit` já cuida
-    // de retomar de `localStorage` na inicialização; zerar aqui destruiria
-    // justamente a persistência que fecha esse gap. Só um sucesso real
-    // limpa a referência (`resetReferenciaLocal`, chamado de dentro do
-    // próprio envio).
+    // A abertura do modal só recarrega clientes e produtos; ela NÃO mexe na
+    // referência de idempotência. Um envio anterior pode ter ficado
+    // indeterminado, e reabrir o modal — ou recarregar a página — precisa
+    // continuar apontando para a MESMA tentativa. `useManualOrderSubmit`
+    // resolve a referência no envio, pelo fingerprint da venda, a partir das
+    // pendências guardadas em `localStorage`, e só a esquece quando o
+    // desfecho é conhecido.
     let isMounted = true;
     loadManualOrderFormData(
       (v) => { if (isMounted) setClientes(v); },

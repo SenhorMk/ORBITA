@@ -14,7 +14,7 @@
  * intenção, e só o cliente sabe qual era.
  *
  * A tela já invalida leitura, formulário e segredos na troca (o padrão de
- * seleção carimbada do Ticket 06). Isto é a outra metade: a resposta atrasada
+ * seleção carimbada por organização e versão). Isto é a outra metade: a resposta atrasada
  * não aparece em B, e a escrita atrasada não acontece em B.
  */
 

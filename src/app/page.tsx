@@ -52,12 +52,10 @@ import { mensagemDeFalhaDeLogin } from '@/lib/auth/mensagemDeFalhaDeLogin';
 /**
  * Identidade do usuário logado — **e nada além disso**.
  *
- * Ticket 22, fatia C: este tipo carregava um `role` que a própria tela inventava,
- * a partir de `app_metadata.role`, da substring `dono` no e-mail, do e-mail fixo
- * `admin@haux.com.br` e do que estivesse no `localStorage`. Nenhuma dessas
- * fontes é autoridade, e as três primeiras davam aparência de proprietário a
- * quem não é. O papel agora vem do vínculo persistido, por
- * `usePapelNaOrganizacaoAtiva`.
+ * O tipo não carrega papel de propósito: nada do lado do cliente — metadados do
+ * provedor de identidade, e-mail, `localStorage` — é autoridade sobre o que a
+ * pessoa pode fazer. O papel vem do vínculo persistido na organização ativa,
+ * por `usePapelNaOrganizacaoAtiva`.
  */
 interface UserSession {
   email: string;
@@ -163,7 +161,7 @@ export default function Home() {
   const [fundo, escolherFundo] = useFundo();
 
   /**
-   * O estado de organizações, **uma vez só** (Ticket 01).
+   * O estado de organizações, **uma vez só**.
    *
    * O indicador do topo e a aba de organização olham para o mesmo objeto: se
    * cada um tivesse o seu, trocar de organização pelo topo deixaria a aba
@@ -456,10 +454,9 @@ export default function Home() {
         localStorage.setItem('haux_session', JSON.stringify(userDetails));
       }
     } catch (error: unknown) {
-      // A mensagem do provedor chegava crua aqui — em inglês, e no vocabulário
-      // dele. `mensagemDeFalhaDeLogin` traduz os casos conhecidos sem juntar
-      // causas que pedem ações diferentes, e deixa passar inteiro o que não
-      // reconhece. Ticket 09: a primeira tela da apresentação é esta.
+      // A mensagem do provedor vem em inglês e no vocabulário dele.
+      // `mensagemDeFalhaDeLogin` traduz os casos conhecidos sem juntar causas
+      // que pedem ações diferentes, e deixa passar inteiro o que não reconhece.
       setAuthError(mensagemDeFalhaDeLogin(error));
     } finally {
       setAuthLoading(false);
@@ -475,12 +472,9 @@ export default function Home() {
   /**
    * Dispara a sincronização e acompanha o job durável até o fim.
    *
-   * `POST /api/sync` responde `202` com `{ jobId, status }` desde o Ticket 12 —
-   * ele **enfileira**, não conclui. A versão anterior lia `result.stats.pedidos`
-   * dessa resposta; o acesso estourava `TypeError`, o `catch` genérico exibia
-   * "Erro ao comunicar com o servidor", e a sincronização parecia quebrada
-   * quando na verdade tinha sido aceita. `GET /api/sync/status`, que existe
-   * desde o mesmo ticket, não tinha nenhum chamador.
+   * `POST /api/sync` responde `202` com `{ jobId, status }` — ele **enfileira**,
+   * não conclui. Por isso a resposta não traz estatísticas: o progresso e o
+   * resultado final são lidos em `GET /api/sync/status`.
    */
   const handleSync = async (completa = false) => {
     if (!podeGerir) {
@@ -702,12 +696,12 @@ export default function Home() {
           <FinanceiroTab fetchWithAuth={fetchWithAuth} ativo={activeTab === 'finance'} pedidos={data?.pedidos ?? null} />
         </div>
 
-        {/* TAB ORGANIZAÇÃO & MEMBROS (Ticket 06) */}
+        {/* TAB ORGANIZAÇÃO & MEMBROS */}
         <div className={activeTab === 'organization' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
           <OrganizationPanel fetchWithAuth={fetchWithAuth} lista={listaDeOrganizacoes} />
         </div>
 
-        {/* TAB INTEGRAÇÕES: Bling / Chatwoot (Ticket 07) */}
+        {/* TAB INTEGRAÇÕES: Bling / Chatwoot */}
         <div className={activeTab === 'integrations' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
           <IntegrationsPanel
             fetchWithAuth={fetchWithAuth}
@@ -717,7 +711,7 @@ export default function Home() {
           />
         </div>
 
-        {/* TAB PLANO & FATURAMENTO (Ticket 24b) */}
+        {/* TAB PLANO & FATURAMENTO */}
         <div className={activeTab === 'billing' ? 'block' : 'hidden'}>
           {activeOrganizacaoId ? (
             <BillingPanel fetchWithAuth={fetchWithAuth} organizacaoId={activeOrganizacaoId} />
@@ -789,7 +783,7 @@ export default function Home() {
           />
         )}
 
-        {/* TAB MENSAGERIA (Ticket 08) */}
+        {/* TAB MENSAGERIA */}
         {activeTab === 'sac' && (
           <MensageriaDesktop
             fetchWithAuth={fetchWithAuth}

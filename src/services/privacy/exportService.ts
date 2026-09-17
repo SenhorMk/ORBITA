@@ -1,6 +1,6 @@
 /**
  * exportService.ts
- * Ticket 17: exportação de dados do titular — arquivo temporário cifrado,
+ * Exportação de dados do titular — arquivo temporário cifrado,
  * com expiração, manifest versionado, e filtro de segredos/metadados
  * internos. Nunca grava o dado em texto plano em disco; nunca inclui
  * `access_token`/`refresh_token`/`webhook_secret`/`api_key`/senha/dado de

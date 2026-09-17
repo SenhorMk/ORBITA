@@ -5,7 +5,7 @@ import type { BlingCallResult } from '@/lib/integrations/bling/pedidoVendaContra
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { descreverErro } from '@/lib/erroLegivel';
 
-/** Produto como o Bling o descreve, reduzido ao que esta fatia precisa. */
+/** Produto como o Bling o descreve, reduzido ao que esta rota precisa. */
 export interface BlingProdutoResumo {
   readonly id: string;
   readonly codigo: string | null;
@@ -37,7 +37,7 @@ export interface ProdutoBlingPayload {
    * `ProdutosCategoriaDTO` do OpenAPI oficial: um objeto cujo único campo
    * obrigatório é `id`, e `id` é **integer** — o id da categoria no Bling, não
    * o UUID local. Ausente quando ninguém escolheu categoria; omitir não é o
-   * mesmo que remover a categoria no ERP, e esta fatia não remove nada.
+   * mesmo que remover a categoria no ERP, e esta rota não remove nada.
    */
   readonly categoria?: { readonly id: number };
 }

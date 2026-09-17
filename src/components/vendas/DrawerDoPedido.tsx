@@ -400,8 +400,8 @@ export function DrawerDoPedido({
         )}
       </Modal>
 
-      {/* Edição continua no modal legado: a lógica dele não faz parte desta
-          fatia e reescrevê-la agora só por estética ampliaria o ticket. */}
+      {/* A edição do pedido é feita pelo `EditOrderModal`, reaproveitado aqui
+          com a lógica dele intacta. */}
       <EditOrderModal
         open={edicaoAberta && !somenteLeitura}
         onOpenChange={setEdicaoAberta}
