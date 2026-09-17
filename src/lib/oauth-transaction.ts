@@ -1,16 +1,22 @@
 /**
- * Transação OAuth de uso único (proteção CSRF do fluxo authorization_code).
+ * Transação OAuth: liga a volta do Bling ao pedido de conexão que a originou.
  *
- * Fluxo:
- * 1. `authorize` cria a transação no banco, vinculada a ator e organização, e
- *    guarda apenas o hash SHA-256 do `state`;
- * 2. o `state` viaja pelo redirect do provedor; o id da transação vai num
- *    cookie `httpOnly` restrito a `/api/bling/callback`;
- * 3. o `callback` consome a transação com cookie + `state`. O consumo é um
- *    `UPDATE` condicional no banco: só vale uma vez e só antes de expirar.
+ * Problema: no OAuth, a pessoa sai do ORBITA, autoriza no Bling e volta por um
+ * link (o callback). Sem proteção, alguém poderia forjar esse retorno (ataque
+ * CSRF) ou repetir o mesmo link para gravar tokens outra vez, e o servidor não
+ * saberia a qual organização os tokens pertencem.
  *
- * A organização que recebe os tokens vem da transação persistida, nunca de um
- * parâmetro do retorno do provedor.
+ * Solução, em três passos:
+ * 1. `authorize` cria uma transação no banco ligada à pessoa e à organização e
+ *    gera um `state` aleatório. O banco guarda só o hash (SHA-256) do `state`;
+ * 2. o `state` vai junto no redirect para o Bling; o id da transação fica num
+ *    cookie `httpOnly` que só é enviado para `/api/bling/callback`;
+ * 3. na volta, o callback precisa apresentar cookie + `state`. O banco marca a
+ *    transação como consumida num único `UPDATE` condicional: ela vale uma
+ *    vez só, e só antes de expirar.
+ *
+ * A organização que recebe os tokens sai da transação gravada, nunca de um
+ * parâmetro que chega na URL de retorno.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
@@ -53,7 +59,7 @@ export type OAuthTransactionCreationResult =
       readonly cause: string;
     };
 
-/** Result of validating and atomically consuming a pending Bling OAuth transaction. */
+/** Result of validating and consuming (in a single database `UPDATE`) a pending Bling OAuth transaction. */
 export type OAuthTransactionConsumeResult =
   | {
       readonly _tag: 'ValidOAuthTransaction';

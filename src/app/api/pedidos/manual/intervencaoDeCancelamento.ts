@@ -9,11 +9,15 @@ import type { TentativaRegistrada } from './ports';
  * A intervenção que escreve no ERP: cancelar o pedido órfão ("existe no Bling,
  * não existe no ORBITA") e encerrar a tentativa.
  *
- * Separada de `reconciliacao.ts` porque é a reconciliação que MUTA algo fora
- * do ORBITA. Sequência: claim da intervenção no banco → `PATCH` de cancelamento
- * no Bling → finalização da intervenção e da tentativa numa única RPC do banco.
- * O `PATCH` e a finalização local não são atômicos entre si; por isso existem
- * os desfechos `ambigua` e "executado no Bling, mas não registrado".
+ * Separada de `reconciliacao.ts` porque é a parte da reconciliação que MUDA
+ * algo fora do ORBITA. Sequência: claim da intervenção no banco (reserva, para
+ * que dois cancelamentos da mesma tentativa não rodem juntos) → `PATCH` de
+ * cancelamento no Bling → finalização da intervenção e da tentativa numa única
+ * transação do Postgres.
+ *
+ * O `PATCH` no Bling e a finalização local são dois passos separados, sem
+ * transação comum. Por isso existem os desfechos `ambigua` (a resposta do
+ * Bling não chegou) e "executado no Bling, mas não registrado no ORBITA".
  */
 
 /**

@@ -4,19 +4,20 @@ import { z } from 'zod';
 import { readBearerToken } from './bearer-token';
 
 /**
- * Identidade e autorização de serviço — o primeiro degrau da autorização.
+ * Primeiro passo de toda requisição autenticada: descobrir **quem** está chamando.
  *
- * Este módulo responde "quem é o chamador", nunca "o que ele pode fazer".
- * Identidade não é autorização: papel e capacidade vêm do vínculo persistido
- * em `membros_organizacao`, resolvido por `organizationAuthorization` e
- * `requestOrganizationContext`. `app_metadata` do provedor não concede papel.
+ * Estar logado diz quem é a pessoa, mas não diz o que ela pode fazer. Isso vem
+ * depois: o vínculo em `membros_organizacao` (membership) diz de qual
+ * organização ela faz parte, e o papel nesse vínculo diz o que ela pode fazer
+ * (ver `organizationAuthorization` e `requestOrganizationContext`). Metadados
+ * da conta no provedor de identidade (`app_metadata`) não concedem papel.
  *
- * Duas responsabilidades:
- *
- * - **identidade** — `resolveAuthenticatedIdentity` verifica o bearer junto ao
- *   Supabase Auth e distingue sessão ausente, inválida e provedor indisponível;
- * - **autorização de serviço** — `authorizeSignedServiceTenant` prova a origem
- *   de um webhook por HMAC contra segredos do servidor.
+ * O módulo tem duas funções:
+ * - `resolveAuthenticatedIdentity` confere o token (bearer) no Supabase Auth e
+ *   separa três situações: sem sessão, sessão inválida e provedor fora do ar;
+ * - `authorizeSignedServiceTenant` serve a chamadas sem usuário (webhooks): a
+ *   prova de origem é uma assinatura HMAC feita com um segredo que só o servidor
+ *   conhece.
  */
 
 const tenantIdSchema = z.uuid().brand<'TenantId'>();

@@ -1,12 +1,17 @@
 /**
- * Escopo verificado: o par organização/ator que os adaptadores privilegiados aceitam.
+ * `VerifiedOrganizationScope`: organização e pessoa **já conferidas**, prontas
+ * para as camadas de dados.
  *
- * Repositórios que usam a chave `service_role` ignoram RLS, então não podem
- * confiar num `organizacao_id` qualquer. Eles recebem um
- * `VerifiedOrganizationScope`, que só é construído aqui — a partir de um
- * contexto canônico já resolvido ou de uma consulta ao vínculo persistido.
- * O símbolo privado impede, no sistema de tipos, que outro módulo monte esse
- * objeto à mão sem um cast explícito.
+ * Por que isso importa: os repositórios usam a chave `service_role` do Supabase,
+ * que ignora RLS (as regras de acesso por linha do banco). Com essa chave, o
+ * banco não impede uma consulta de ler dados de outra empresa — quem impede é o
+ * filtro por `organizacao_id` que o código aplica. Por isso esse id precisa vir
+ * de um escopo verificado, e não de um valor qualquer.
+ *
+ * O escopo só é criado aqui: a partir de um contexto já autorizado ou de uma
+ * consulta ao vínculo no banco. O símbolo privado faz o TypeScript recusar um
+ * escopo montado à mão em outro módulo — ajuda do compilador, não segurança de
+ * runtime (um cast explícito contorna).
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';

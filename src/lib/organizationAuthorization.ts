@@ -1,18 +1,23 @@
 /**
- * Autoriza operações dentro de uma organização do ORBITA (núcleo puro).
+ * A regra de autorização do ORBITA: esta pessoa pode agir nesta organização?
  *
- * Fluxo: identidade → membership persistida → papel → capabilities → contexto.
+ * O ORBITA é multi-tenant: várias empresas (organizações) usam o mesmo sistema,
+ * e os dados de uma não podem vazar para outra. O navegador pode mandar
+ * qualquer `organizationId`, então esse id sozinho não prova nada — ele só diz
+ * qual vínculo consultar.
  *
- * O identificador de organização enviado pelo navegador não concede autoridade:
- * ele só escolhe qual vínculo consultar. O contexto resultante carrega um
- * símbolo privado: no sistema de tipos, só este módulo o constrói (sem um cast
- * explícito). É uma proteção de compilação, não de runtime — quem recebe um
- * `OrganizationContext` construído normalmente sabe que ator e organização
- * já foram comprovados.
+ * A decisão segue sempre a mesma ordem:
+ * identidade confirmada → membership (vínculo persistido com a organização) →
+ * papel (`owner`, `admin`, `member`) → capabilities (o que o papel permite) →
+ * `OrganizationContext`.
  *
- * Não conhece Supabase: identidade e memberships entram por portas
- * (`OrganizationAuthorizationDependencies`), o que permite testar a regra sem
- * banco. O adaptador de produção está em `requestOrganizationContext`.
+ * Este arquivo não conhece o Supabase: identidade e memberships chegam por
+ * ports (interfaces), o que permite testar a regra sem banco. A ligação com o
+ * Supabase fica em `requestOrganizationContext`.
+ *
+ * O `OrganizationContext` usa um símbolo privado ("brand") para que o
+ * TypeScript só aceite contextos criados aqui. Isso ajuda o compilador a evitar
+ * engano, mas não é segurança em tempo de execução: um cast explícito contorna.
  */
 import { z } from 'zod';
 
@@ -79,7 +84,10 @@ export interface OrganizationMembershipPort {
     actorId: OrganizationActorId,
     selection: OrganizationSelection,
   ) => Promise<MembershipLookupResult>;
-  /** Atomically persist an authorized active organization using compare-and-swap. */
+  /**
+   * Grava a organização ativa só se a versão esperada ainda for a atual (CAS),
+   * numa única chamada ao banco que também confere o vínculo.
+   */
   readonly switchActiveOrganization: (
     actorId: OrganizationActorId,
     organizationId: OrganizationId,
@@ -116,14 +124,14 @@ export interface OrganizationAuthorizationDependencies {
 }
 
 /**
- * Capabilities concedidas por um papel persistido — a tabela papel → permissão
- * das fronteiras do servidor.
+ * O que cada papel pode fazer: a tabela papel → capability usada pelo servidor.
  *
- * `member` só acessa; `owner` e `admin` também gerenciam. Rotas que autorizam
- * uma organização nomeada na URL usam esta mesma função, para que nenhuma
- * fronteira do servidor redecida por conta própria o que um papel pode fazer.
- * A interface repete a regra apenas para exibir ou esconder ações; isso não
- * concede acesso.
+ * `member` só acessa os dados (`organization:access`); `owner` e `admin`
+ * também gerenciam (`organization:manage`). Todas as rotas perguntam por aqui,
+ * para que nenhuma decida sozinha o que um papel permite.
+ *
+ * A interface usa a mesma regra só para mostrar ou esconder botões. Esconder um
+ * botão não é autorização: quem decide é o servidor, na rota.
  */
 export function organizationCapabilitiesForRole(role: PapelMembro): ReadonlySet<OrganizationCapability> {
   return role === 'member'
@@ -149,12 +157,12 @@ export function activeOrganizationSelection(): OrganizationSelection {
 }
 
 /**
- * Transforma identidade verificada + membership persistida em contexto canônico.
+ * Junta identidade confirmada e vínculo persistido num `OrganizationContext`.
  *
- * A ordem importa: sem identidade não se consulta vínculo, e sem vínculo não se
- * derivam capabilities. Ausência de vínculo vira `OrganizationAccessDenied`
- * (403); falha do banco vira `OrganizationStoreUnavailable` (503) — uma
- * indisponibilidade nunca é confundida com "você não pertence a esta organização".
+ * A ordem importa: sem identidade não se consulta vínculo, e sem vínculo não há
+ * capabilities. Não ter vínculo vira `OrganizationAccessDenied` (403); o banco
+ * não responder vira `OrganizationStoreUnavailable` (503). Assim uma queda do
+ * banco nunca aparece para a pessoa como "você não pertence a esta organização".
  */
 export async function resolveOrganizationContext(
   request: Request,

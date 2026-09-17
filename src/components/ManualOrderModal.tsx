@@ -38,11 +38,14 @@ interface ProdutoOption {
 }
 
 /**
- * Carrega os clientes e produtos visíveis para a organização ativa.
+ * Carrega os clientes e produtos que a pessoa pode ver, para montar o formulário.
  *
- * Não filtra por `user_id`: as políticas RLS de `clientes` e `produtos`
- * (`*_org_select`) já restringem as linhas à organização do usuário, e o filtro
- * antigo escondia de cada membro tudo o que outro membro tivesse cadastrado.
+ * A leitura roda no navegador, com o token da pessoa, então quem filtra é o RLS
+ * do banco (`*_org_select`): aparecem as linhas das organizações de que ela é
+ * membro — não só da ativa — e de qualquer membro, não só as que ela cadastrou.
+ * Esta lista serve para escolher itens; ela não autoriza nada. No envio, o
+ * servidor busca cliente, produtos e preços de novo dentro da organização
+ * ativa verificada.
  */
 async function loadManualOrderFormData(
   setClientes: (clientes: ClienteOption[]) => void,
@@ -57,7 +60,11 @@ async function loadManualOrderFormData(
   if (produtosRes.data) setProdutos(produtosRes.data as ProdutoOption[]);
 }
 
-/** Gerencia a lista de itens do pedido manual: adicionar, ajustar quantidade, remover e calcular o total. */
+/**
+ * Gerencia a lista de itens do pedido manual: adicionar, ajustar quantidade,
+ * remover e calcular o total exibido. Esse total é só uma prévia na tela — o
+ * valor gravado é recalculado no servidor com os preços do cadastro.
+ */
 function useManualOrderItems(
   produtos: ProdutoOption[],
   setError: (message: string | null) => void,

@@ -40,9 +40,9 @@ import { respostaDaReconciliacao } from '../respostaDaReconciliacao';
  * Ela é um override humano: "conferi direto no Bling, aceito que a API não
  * provou a ausência, e confirmo que este pedido não existe; libere esta
  * tentativa". Isso é decisão da proprietária — envolve aceitar que uma pessoa
- * assuma uma afirmação que o provedor não sustenta, já que o contrato do Bling
- * não garante visibilidade imediata de um pedido recém-criado — e ela ainda
- * não foi tomada.
+ * assuma uma afirmação que a consulta ao Bling não comprovou (uma consulta que
+ * não encontrou o pedido não prova que ele nunca foi criado) — e ela ainda não
+ * foi tomada.
  *
  * Enquanto não for, a rota **reconhece** a ação, para que o caminho fique
  * testável de ponta a ponta, e **recusa executá-la**. Virar `true` é uma

@@ -55,7 +55,8 @@ export class SupabaseOrganizationMemberships implements OrganizationMembershipPo
    * Encontra o vínculo pedido e o devolve junto com a versão da seleção ativa.
    *
    * A seleção ativa é lida primeiro porque sua versão acompanha qualquer
-   * resultado: é ela que a tela devolve na próxima troca, para o CAS. Com
+   * resultado: é essa versão que a tela devolve na próxima troca, para o banco
+   * conferir se nada mudou no meio (CAS). Com
    * `FirstMembership`, a organização ativa persistida tem precedência; sem ela,
    * vale o vínculo mais antigo. Linha que não passa no schema é tratada como
    * falha do banco (`MembershipStoreUnavailable`), não como ausência de vínculo.
@@ -106,10 +107,17 @@ export class SupabaseOrganizationMemberships implements OrganizationMembershipPo
   /**
    * Troca a organização ativa pela RPC `alternar_organizacao_ativa_cas`.
    *
-   * A RPC confere o vínculo e compara a versão na mesma transação do banco:
-   * com versão esperada `0` só insere se ainda não houver seleção; com versão
-   * `n` só atualiza se a atual ainda for `n`. `42501` (sem vínculo) vira
-   * `Denied`; resposta sem `aplicado = true` e versão válida vira `Stale`.
+   * Duas abas podem pedir a troca ao mesmo tempo. Por isso a troca leva a
+   * versão que a tela leu, e a RPC só grava se essa versão ainda for a atual
+   * (CAS). A conferência do vínculo e a comparação de versão acontecem dentro
+   * da mesma chamada ao banco:
+   * - versão esperada `0`: só cria a seleção se ainda não existir nenhuma;
+   * - versão esperada `n`: só troca se a versão atual ainda for `n`, e então a
+   *   versão passa a `n + 1`.
+   *
+   * Resultados: sem vínculo com a organização (`42501`) → `Denied`; versão que
+   * já não é a atual → `Stale` (outra aba trocou antes); sucesso → `Applied`,
+   * com a nova versão.
    */
   async switchActiveOrganization(
     actorId: OrganizationActorId,

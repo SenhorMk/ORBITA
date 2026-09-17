@@ -1,16 +1,21 @@
 /**
  * A POSSE da tentativa, e o que ela autoriza.
  *
- * Toda tentativa de venda manual tem uma **época**. Reivindicar a referência
- * devolve a época vigente; a reconciliação, ao assumir uma tentativa antiga,
- * avança a época. Quem carrega uma época velha perdeu a posse (fencing):
+ * Problema: uma requisição pode travar no meio da venda, e a reconciliação
+ * pode assumir a mesma tentativa enquanto a primeira execução ainda está viva.
+ * As duas não podem concluir a venda.
  *
- * - antes de um efeito externo, `posseAindaVigente` confere a época no banco;
- * - na gravação local, a própria transação recusa uma época velha (`55P03`).
+ * Solução: toda tentativa tem uma **época**, que funciona como uma senha de
+ * posse. Quem reivindica a tentativa recebe a época atual; quando a
+ * reconciliação assume a tentativa, a época muda, e a execução antiga perde o
+ * direito de gravar. Esse número é o que se chama de fencing token.
+ * - antes de um efeito no Bling, `posseAindaVigente` confere a época no banco;
+ * - na gravação local, a própria transação do Postgres recusa uma época velha
+ *   (`55P03`).
  *
- * A conferência antes do efeito externo reduz a janela, mas não a fecha — uma
- * chamada ao Bling já iniciada não é desfeita. Por isso a gravação local, que é
- * atômica com a época, é a decisão final.
+ * Limite: a conferência antes do Bling reduz a janela, mas não a fecha — uma
+ * chamada ao Bling já iniciada não é desfeita. A decisão final é a gravação
+ * local, que confere a época na mesma transação.
  */
 import type { NextResponse } from 'next/server';
 

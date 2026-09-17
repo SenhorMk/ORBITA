@@ -1,3 +1,31 @@
+/**
+ * Estado persistido dos jobs de sincronização Bling → ORBITA (`sync_jobs`).
+ *
+ * Problema: sincronizar uma conta leva tempo, e a requisição HTTP não pode
+ * ficar aberta esperando. Também não pode haver duas sincronizações da mesma
+ * organização rodando juntas.
+ *
+ * Como funciona:
+ * - `POST /api/sync` registra o job (`enqueueJob`). Se já existe um job
+ *   `queued`/`running` na organização, a RPC devolve esse mesmo job em vez de
+ *   criar outro. A rota responde `202` — "aceito", não "concluído" — e dispara
+ *   o processamento com `after()`, depois de a resposta sair;
+ * - antes de trabalhar, o processo pede o lease do job (`acquireLease`): uma
+ *   posse temporária (10 min, renovada a cada avanço). Com lease válido nas mãos
+ *   de outro processo, este desiste;
+ * - a cada etapa concluída (clientes, produtos, pedidos) o progresso é gravado
+ *   (`advanceCheckpoint`) — é ele que a tela acompanha;
+ * - `GET /api/sync/status` lê o estado depois.
+ *
+ * Limites: não há agendador externo — o job só é processado pelo `after()` de
+ * uma requisição. Um lease vencido faz o job voltar a `queued`
+ * (`releaseExpiredLeases`), mas ele só roda de novo quando alguém chama o
+ * processamento, e aí recomeça da primeira etapa: o progresso gravado não é
+ * usado para pular etapas nem páginas (produtos e pedidos só evitam reler tudo
+ * pelo checkpoint incremental de `syncCheckpoint.ts`). As funções que recebem
+ * escopo operam só em jobs da organização verificada; `releaseExpiredLeases` é
+ * uma limpeza global de leases vencidos.
+ */
 import { supabaseServer } from '../lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 

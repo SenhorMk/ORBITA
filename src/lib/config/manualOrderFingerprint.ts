@@ -1,19 +1,19 @@
 import type { ManualOrderRequest } from './manualOrderContract';
 
 /**
- * Impressão digital da INTENÇÃO COMERCIAL de uma venda manual.
+ * Fingerprint da venda manual: um resumo (hash SHA-256) do que a venda É.
  *
  * ## Por que existe
  *
- * `referenciaLocal` sozinha responde "já vi este UUID antes?". Não responde
- * "isto é a MESMA operação que eu já vi?" — e é essa a pergunta que uma chave
- * de idempotência precisa responder para ser segura. Sem o fingerprint, esta
- * sequência registraria a venda errada em silêncio:
+ * Idempotência é poder repetir a mesma tentativa sem repetir o efeito externo.
+ * Para isso não basta a referência (`referenciaLocal`): ela responde "já vi
+ * este UUID antes?", mas não "isto é a MESMA venda que eu já vi?". Sem o
+ * fingerprint, esta sequência registraria a venda errada em silêncio
+ * (por exemplo, com um cliente desatualizado ou uma chamada direta à API):
  *
  * 1. tentativa A: cliente X, produto Y, quantidade 1 → resultado indeterminado;
- * 2. a referência fica pendente no `localStorage`;
- * 3. o usuário recarrega a página e MUDA quantidade/produto/cliente;
- * 4. envia de novo, com a MESMA referência.
+ * 2. a mesma referência é reenviada;
+ * 3. mas agora com outra quantidade, outro produto ou outro cliente.
  *
  * O servidor devolveria o desfecho da tentativa A — "sua venda já foi
  * registrada" — para uma venda que ninguém registrou. Ou, no estado

@@ -32,8 +32,8 @@ export interface ManualOrderBlingPort {
    *
    * `NenhumPedido` significa "o Bling respondeu, e esta consulta não viu pedido
    * com essa referência". É diferente de uma falha de consulta (`BlingFailed`),
-   * mas **não prova** que o pedido não foi criado: o contrato do Bling não
-   * garante visibilidade imediata. `UmPedido` e `VariosPedidos` são conferidos
+   * mas o ORBITA **não** a trata como prova de que o pedido nunca foi criado.
+   * `UmPedido` e `VariosPedidos` são conferidos
    * por igualdade exata de `numeroLoja` no adapter.
    */
   buscarPedidoPorNumeroLoja(numeroLoja: string): Promise<BlingCallResult<BuscaDePedidoPorNumeroLoja>>;

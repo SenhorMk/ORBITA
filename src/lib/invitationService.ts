@@ -3,16 +3,17 @@
  * listar convites.
  *
  * **Dois clientes Supabase, com papéis diferentes:**
- * - o **cliente do ator** carrega o JWT do usuário verificado. As RPCs de
+ * - o **cliente do ator** leva o token (JWT) da própria pessoa. As RPCs de
  *   convite e de revogação (`criar_convite_organizacao`,
- *   `aceitar_convite_organizacao`, `revogar_membro_organizacao`) decidem
- *   dentro do banco com base em `auth.uid()`: quem convida ou revoga precisa
- *   ter papel de gestão, e quem aceita precisa ser o destinatário. Com a chave
- *   `service_role` não há sujeito, `auth.uid()` é nulo e a RPC recusa;
+ *   `aceitar_convite_organizacao`, `revogar_membro_organizacao`) decidem dentro
+ *   do banco usando `auth.uid()` — "quem está chamando": quem convida ou revoga
+ *   precisa ser `owner`/`admin`, e quem aceita precisa ser o destinatário. Com
+ *   a chave `service_role` não há pessoa por trás, `auth.uid()` é nulo e a RPC
+ *   recusa;
  * - o **cliente privilegiado** (`service_role`, ignora RLS) é usado no snapshot
- *   de entitlement, cujas contagens não podem depender da visibilidade por
- *   linha, e pela rota na listagem de convites — que, por ignorar RLS, depende
- *   do filtro pelo `organizacao_id` já verificado.
+ *   de entitlement, que precisa contar todos os membros sem depender do que a
+ *   pessoa enxerga, e pela rota na listagem de convites — que, por ignorar RLS,
+ *   depende do filtro pelo `organizacao_id` já verificado.
  *
  * **Entitlement:** antes de criar um convite, `authorizeEntitlement` confere se
  * o ciclo de vida da organização permite a mutação e se o plano ainda tem vaga

@@ -44,9 +44,11 @@ export const manualOrderRequestSchema = z.object({
    * por venda e reenvia o MESMO valor se retentar depois de uma resposta
    * ambígua — não um novo a cada clique.
    *
-   * Opcional: um cliente que não o envie continua funcionando, só sem a
-   * proteção contra retentativa, porque o servidor gera uma referência nova a
-   * cada chamada.
+   * Opcional. Sem ele, o servidor gera uma referência nova a cada chamada e
+   * perde a identificação exata da MESMA tentativa (não consegue devolver o
+   * desfecho dela). A proteção por conteúdo continua: enquanto uma venda
+   * idêntica estiver `em_andamento` ou `indeterminada`, o banco recusa outra
+   * pendência com o mesmo fingerprint (índice único parcial da migration 59).
    */
   referenciaLocal: z.string().uuid('referenciaLocal precisa ser um UUID').optional(),
 });

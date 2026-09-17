@@ -7,29 +7,30 @@ import {
 } from './blingCredenciaisContrato';
 
 /**
- * Obtenção e renovação do token OAuth do Bling.
+ * Obtenção e renovação do access token do Bling para uma organização.
  *
- * Só **orquestração**: o que fazer, em que ordem, e o que conferir entre um
- * passo e outro. Quem fala com o banco, com o cofre e com o OAuth do Bling
- * entra por porta — inclusive na produção, montada em
- * `blingCredenciaisSupabase.ts`.
+ * Este arquivo só decide a ordem dos passos e o que conferir entre eles. Banco,
+ * cofre e chamada OAuth ao Bling entram por ports (interfaces); a montagem de
+ * produção fica em `blingCredenciaisSupabase.ts`.
  *
- * Obter e renovar moram no mesmo tipo porque são a mesma capacidade: obter
- * **já renova** quando o token venceu, e renovar precisa de tudo o que obter
- * precisa.
+ * `obter` já renova quando o token venceu; `renovar` força a renovação (por
+ * exemplo, quando o Bling recusa um token ainda dentro da validade).
  *
- * **Renovação concorrente.** Vários processos podem encontrar o token vencido
- * ao mesmo tempo. Antes de renovar, cada um disputa um lease no banco
- * (`acquire_conexao_token_lock`, 30 s, marcado em `conexoes_integracao`):
- * quem obtém troca o refresh token e grava o par novo no cofre; quem encontra o
- * lease ocupado relê o cofre em intervalos até ver um token válido. O lease
- * reduz renovações duplicadas, mas não é exclusão perfeita — uma renovação que
- * passe de 30 s deixa o lease ser tomado por outro processo, e a liberação é
- * feita só por `conexao_id`.
+ * **Dois processos renovando ao mesmo tempo.** Problema: várias requisições
+ * podem achar o token vencido juntas. O Bling troca o refresh token a cada
+ * renovação, então renovações simultâneas podem se atrapalhar.
+ * Solução: antes de renovar, o processo pede um lease no banco
+ * (`acquire_conexao_token_lock`). Lease é uma posse temporária — durante 30 s,
+ * um processo fica responsável por renovar aquela conexão. Quem consegue troca
+ * o token e grava o par novo no cofre; quem encontra o lease ocupado espera e
+ * relê o cofre até aparecer um token válido.
+ * Limite: o lease reduz renovações duplicadas, mas não é exclusão perfeita. Se
+ * uma renovação passar de 30 s, outro processo pode assumir o lease; e a
+ * liberação é feita só pela conexão, sem saber quem era o dono.
  *
- * **A falha é valor, não exceção.** Toda rejeição de porta (banco, cofre, rede,
- * `dormir`) é convertida em `ResultadoDoToken`; com união, o compilador cobra
- * o tratamento de cada motivo.
+ * **Falha como valor.** Toda falha de banco, cofre ou rede vira um
+ * `ResultadoDoToken` com motivo, em vez de exceção; o TypeScript obriga quem
+ * chama a tratar cada caso.
  */
 export interface TokenDoBling {
   /**

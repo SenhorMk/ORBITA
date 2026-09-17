@@ -1,11 +1,16 @@
 /**
  * Portas e tipos da venda manual (`POST /api/pedidos/manual`) e da reconciliação.
  *
- * O handler depende destas interfaces, não do Supabase nem do Bling: os
- * adapters de produção ficam em `dependencias.ts` e
+ * O handler depende destas interfaces (ports), não do Supabase nem do Bling:
+ * os adapters de produção ficam em `dependencias.ts` e
  * `dependenciasDeReconciliacao.ts`, e os testes montam dublês completos.
- * As regras de concorrência (claim, época, CAS, imutabilidade das
- * intervenções) são impostas pelas RPCs e constraints do banco.
+ *
+ * As regras que evitam venda duplicada ficam no banco, dentro das RPCs:
+ * - claim: reserva a tentativa pela referência antes de chamar o Bling;
+ * - época: número de posse — quando muda, a execução antiga perde o direito de
+ *   gravar;
+ * - CAS: a escrita só acontece se o estado/época ainda for o esperado;
+ * - intervenções (cancelamentos) registradas de forma imutável por trigger.
  */
 import type { NextResponse } from 'next/server';
 
@@ -371,8 +376,9 @@ export interface ManualOrderDependencies {
    * Monta `ORBITA-<uuid>`. Recebe o UUID que o cliente enviou em
    * `referenciaLocal`, quando presente — para que uma retentativa da mesma
    * submissão gere a MESMA referência, e `reivindicarTentativa` a reconheça.
-   * Sem UUID do cliente, gera um novo — e essa submissão fica sem proteção
-   * entre retentativas.
+   * Sem UUID do cliente, gera um novo: a retentativa deixa de ser reconhecida
+   * como a MESMA tentativa, mas uma segunda pendência com o mesmo fingerprint
+   * ainda é recusada pelo banco enquanto a anterior estiver sem desfecho.
    */
   readonly newLocalReference: (referenciaClienteFornecida?: string) => string;
   /** Espera entre tentativas de confirmar uma `PersistVendaAmbigua`. Ver `Dormir`. */

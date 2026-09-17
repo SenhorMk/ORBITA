@@ -1,16 +1,18 @@
 /**
- * Fronteira HTTP da autorização por organização (adaptador de produção).
+ * O ponto de entrada da autorização nas rotas HTTP.
  *
- * Liga o núcleo puro de `organizationAuthorization` ao Supabase Auth e ao
- * repositório de memberships, e entrega às rotas um `VerifiedOrganizationScope`
- * ou uma resposta de negação pronta (401/403/503).
+ * Cada rota chama uma função daqui e recebe de volta ou um
+ * `VerifiedOrganizationScope` (organização + pessoa, já conferidos) ou uma
+ * resposta de recusa pronta: 401 sem sessão válida, 403 sem permissão, 503 se
+ * o provedor de identidade ou o banco não responderam.
  *
- * Dois caminhos:
- * - organização ativa do ator → `resolveVerifiedOrganizationScope`;
- * - organização nomeada na URL → `authorizeRequestOrganizationCapability`.
+ * Há dois jeitos de escolher a organização:
+ * - a organização ativa da pessoa → `resolveVerifiedOrganizationScope`;
+ * - a organização que vem na URL (`/organizacoes/[id]`) →
+ *   `authorizeRequestOrganizationCapability`.
  *
- * Em ambos o `organizacao_id` usado pelas camadas seguintes vem do vínculo
- * persistido, nunca de corpo, query ou cookie enviados pelo cliente.
+ * Nos dois casos, o `organizacao_id` que as camadas seguintes usam sai do
+ * vínculo gravado no banco, nunca do corpo, da query ou do cookie da requisição.
  */
 import { NextResponse } from 'next/server';
 import { supabaseServer } from './supabaseServer';

@@ -13,10 +13,12 @@ import { z } from 'zod';
  * `200 application/json` sem autenticação — ver
  * `docs/integrations/bling-v3-contract.md`).
  *
- * Existe porque o payload era montado à mão dentro da rota, conferido apenas
- * contra a suposição do próprio código, e divergia do schema oficial em quatro
- * campos obrigatórios. Nenhum teste pegou porque nada comparava o payload com
- * a fonte externa. Agora o adapter só envia o que este schema aceita.
+ * Os schemas Zod daqui funcionam nos dois sentidos da fronteira com o Bling:
+ * - **saída**: o payload do pedido é validado antes do envio, então o adapter
+ *   só manda ao ERP o que o contrato oficial aceita, e um campo faltando vira
+ *   mensagem clara em vez de um `400` opaco do provedor;
+ * - **entrada**: a resposta de criação e o corpo de erro do Bling também são
+ *   validados, em vez de confiar na forma que o fornecedor deveria mandar.
  */
 
 /** `data`, `dataPrevista`, `dataSaida` e `parcelas[].dataVencimento` usam `format: date`. */

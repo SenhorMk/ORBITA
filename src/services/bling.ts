@@ -36,15 +36,17 @@ import { tokenDoBlingReal } from './blingCredenciaisSupabase';
  *   descoberta no cofre dessa organização (`TokenDoBling`), nunca por usuário;
  * - **transporte**: `fetchWithAuth` injeta o bearer, espaça as requisições
  *   (`FilaDeRequisicoes`), faz backoff em 429 e renova o token uma vez em 401/403;
- * - **contrato**: operações de escrita validam a resposta com schemas e devolvem
- *   falha tipada (`BlingCallResult`); leituras de sincronização lançam
- *   `BlingLeituraError` em vez de devolver lista vazia;
+ * - **contrato**: as operações de escrita tipadas conferem a resposta (por
+ *   schema Zod ou checagem explícita do id) e devolvem falha tipada
+ *   (`BlingCallResult`); leituras de sincronização lançam `BlingLeituraError`
+ *   em vez de devolver lista vazia;
  * - **privacidade**: mensagens públicas derivam do status HTTP, não do corpo
  *   devolvido pelo provedor.
  *
- * Uma requisição de rede não é atômica: se a resposta se perde, o Bling pode ter
- * aplicado a escrita. Quem cria pedidos trata esse caso como resultado ambíguo
- * (ver `app/api/pedidos/manual`).
+ * Limite importante: uma chamada ao Bling não participa de nenhuma transação do
+ * banco do ORBITA. Se a resposta se perde, o Bling pode ter aplicado a escrita
+ * sem que o ORBITA saiba. Quem cria pedidos trata esse caso como resultado
+ * ambíguo (ver `app/api/pedidos/manual`).
  */
 
 /**

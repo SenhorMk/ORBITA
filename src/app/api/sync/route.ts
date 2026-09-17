@@ -7,8 +7,11 @@ export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/sync
- * Agenda um job de sincronização durável e retorna imediatamente (202 Accepted).
- * O processamento ocorre em background via `after()`, fora do ciclo HTTP.
+ * Registra um job de sincronização persistido e responde logo com `202`
+ * ("aceito", não "concluído"). O processamento roda com `after()`, depois de a
+ * resposta sair; o resultado é lido em `GET /api/sync/status`. Não há
+ * agendador externo: se já existe job ativo, a rota devolve esse mesmo job e
+ * só dispara processamento quando ele ainda está `queued`.
  *
  * ## Semântica temporal da autorização — política escolhida, não acidente
  *
@@ -45,10 +48,9 @@ export async function POST(request: Request) {
     }
 
     // `?completa=1` ignora o checkpoint de `dataAlteracaoInicial` e relê tudo.
-    // Necessário porque o checkpoint podia ficar envenenado: uma leitura que
-    // falhava devolvia lista vazia, a etapa "concluía" com zero itens e o
-    // marcador avançava assim mesmo — e daí em diante o Bling respondia zero
-    // corretamente, para sempre.
+    // É a saída para um checkpoint adiantado: se o marcador avançou sem que os
+    // dados daquele intervalo tenham sido lidos, a leitura incremental nunca
+    // mais os traria.
     const completa = new URL(request.url).searchParams.get('completa') === '1';
 
     // 1. Registra job ou retorna job ativo existente (idempotente)

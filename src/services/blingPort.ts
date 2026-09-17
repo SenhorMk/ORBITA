@@ -3,11 +3,17 @@ import type { BlingCallResult, BuscaDePedidoPorNumeroLoja, PedidoVendaPayload } 
 import type { Situacao } from '../lib/integrations/bling/situacoesContract';
 
 /**
- * Porta de aplicação para o Bling ERP.
+ * A fronteira entre o ORBITA e o Bling: o que o ORBITA precisa que o ERP faça.
  *
- * Os consumidores (rotas, serviços de sync, webhook) dependem **deste tipo**,
- * e não da classe concreta `BlingClient`. Isso permite que os testes desses
- * módulos usem um fake completo da porta em vez de mock de módulo.
+ * Um port é uma interface definida pelo lado de dentro (o ORBITA), descrevendo
+ * uma capacidade externa; o adapter (`BlingClient`, em `bling.ts`) é quem faz a
+ * chamada HTTP concreta. Rotas, sincronização e webhook dependem **deste tipo**,
+ * não da classe — por isso os testes usam um fake completo do port.
+ *
+ * O Bling é um fornecedor, não o dono das regras. Tenant, autorização,
+ * tentativas de venda, idempotência, estoque, financeiro e reconciliação são
+ * regras do ORBITA, com estado próprio no banco. Este port só expõe o que o
+ * ERP oferece, e uma falha do ERP não é tratada como "não há dados".
  *
  * ## Dois estilos de método convivendo
  *
