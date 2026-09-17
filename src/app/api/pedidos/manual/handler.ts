@@ -30,8 +30,13 @@
  *    `registrar_venda_manual_com_posse`), recusada se a época mudou;
  * 6. EFEITO EXTERNO — só então o lançamento de estoque no Bling.
  *
- * RESULTADO: conhecido → resposta final. Falha local depois de o Bling aceitar
- * → `compensacao.ts`. Resposta do Bling que não chegou é resultado **ambíguo**,
+ * RESULTADO: conhecido → resposta final. Se a gravação local falha depois de o
+ * Bling aceitar, há dois caminhos em `compensacao.ts`:
+ * - falha local definitiva → `compensarNoBling` (cancela no Bling);
+ * - resultado local ambíguo → `resolverAmbiguidadeDePersistencia` (nunca
+ *   compensa; sem confirmação, a tentativa fica `indeterminada`).
+ * Nos dois, se a checagem provar que a venda já foi gravada, não há compensação.
+ * Resposta do Bling que não chegou é resultado **ambíguo**,
  * não falha: a tentativa fica `indeterminada` e só sai pela reconciliação
  * (`reconciliar/route.ts` → `reconciliacao.ts`).
  */
