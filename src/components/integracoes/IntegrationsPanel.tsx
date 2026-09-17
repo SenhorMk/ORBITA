@@ -482,8 +482,8 @@ export interface IntegrationsPanelProps {
   readonly fetchWithAuth: AuthenticatedFetch;
   /**
    * A organizacao ativa e a versao que a selecionou, ou `null` sem selecao
-   * (inclusive sem sessao). E a mesma fonte unica do shell e do Ticket 06 —
-   * esta tela nao cria uma segunda.
+   * (inclusive sem sessao). E a mesma fonte unica usada pelo shell — esta tela
+   * nao cria uma segunda.
    */
   readonly selecao: SelecaoDeOrganizacao | null;
   /** O nome da organizacao ativa, so para a faixa de contexto. */
@@ -521,7 +521,7 @@ export interface IntegrationsPanelProps {
  * sincronizacoes longas do Bling.
  *
  * **Uma operacao pertence a organizacao que a comecou.** A leitura e carimbada
- * pelo par (organizacao, versao) do Ticket 06, entao a resposta atrasada de A
+ * pelo par (organizacao, versao) da selecao ativa, entao a resposta atrasada de A
  * nunca aparece em B. As escritas levam a organizacao esperada junto, e o
  * servidor as recusa se ela ja tiver mudado — a resposta atrasada tambem nao
  * *grava* em B.

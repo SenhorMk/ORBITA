@@ -1,20 +1,19 @@
 import type { ManualOrderRequest } from './manualOrderContract';
 
 /**
- * Impressão digital da INTENÇÃO COMERCIAL de uma venda manual (ticket 30,
- * fatia 3 — 5ª rodada de revisão).
+ * Fingerprint da venda manual: um resumo (hash SHA-256) do que a venda É.
  *
  * ## Por que existe
  *
- * `referenciaLocal` sozinha responde "já vi este UUID antes?". Não responde
- * "isto é a MESMA operação que eu já vi?" — e é essa a pergunta que uma chave
- * de idempotência precisa responder para ser segura. Sem o fingerprint, esta
- * sequência silenciosamente registra a venda errada:
+ * Idempotência é poder repetir a mesma tentativa sem repetir o efeito externo.
+ * Para isso não basta a referência (`referenciaLocal`): ela responde "já vi
+ * este UUID antes?", mas não "isto é a MESMA venda que eu já vi?". Sem o
+ * fingerprint, esta sequência registraria a venda errada em silêncio
+ * (por exemplo, com um cliente desatualizado ou uma chamada direta à API):
  *
  * 1. tentativa A: cliente X, produto Y, quantidade 1 → resultado indeterminado;
- * 2. a referência fica pendente no `localStorage`;
- * 3. o usuário recarrega a página e MUDA quantidade/produto/cliente;
- * 4. envia de novo, com a MESMA referência.
+ * 2. a mesma referência é reenviada;
+ * 3. mas agora com outra quantidade, outro produto ou outro cliente.
  *
  * O servidor devolveria o desfecho da tentativa A — "sua venda já foi
  * registrada" — para uma venda que ninguém registrou. Ou, no estado
@@ -24,8 +23,8 @@ import type { ManualOrderRequest } from './manualOrderContract';
  * A regra que este módulo torna verificável:
  *
  * - mesma referência + **mesmo** fingerprint → retentativa da MESMA operação;
- * - mesma referência + **outro** fingerprint → conflito. Nunca executa, nunca
- *   devolve o resultado anterior em silêncio.
+ * - mesma referência + **outro** fingerprint → conflito. A RPC recusa antes de
+ *   executar qualquer coisa e não devolve o resultado anterior.
  *
  * ## O que entra, e por quê
  *
@@ -49,7 +48,8 @@ import type { ManualOrderRequest } from './manualOrderContract';
  * derivados no servidor a partir do cadastro (ver `manualOrderContract.ts`).
  * Duas submissões com os mesmos itens só divergem em preço se o cadastro
  * mudou entre elas, e nesse caso a intenção comercial ("vender estes itens a
- * este cliente") continua a mesma.
+ * este cliente") continua a mesma. A mudança de valor é tratada à parte, por
+ * `fingerprintDosValoresResolvidos`.
  *
  * ## Quem calcula
  *
@@ -61,26 +61,25 @@ import type { ManualOrderRequest } from './manualOrderContract';
  */
 
 /**
- * Serialização canônica **estruturalmente inequívoca** (injetiva).
+ * Transforma a venda num texto único, antes do hash.
  *
- * ## Por que a versão anterior não servia (6ª rodada de revisão)
+ * A serialização precisa ser sem ambiguidade: duas vendas diferentes não podem
+ * gerar o mesmo texto antes do hash. Em termos matemáticos, essa propriedade é
+ * chamada de injetividade.
  *
- * A `v1` concatenava campos com separadores literais:
+ * ## Por que não concatenar com separadores
  *
- * ```
- * v1|cliente:<uuid>|...|obs:<texto>|itens:<produtoId>x<qtd>,<produtoId>x<qtd>
- * ```
+ * Num formato como `cliente:<uuid>|obs:<texto>|itens:<id>x<qtd>`, duas vendas
+ * diferentes poderiam virar a mesma string: `observacoes` e
+ * `formaPagamentoRotulo` são texto livre, e se a pessoa escrever `|`, `:`, `,`
+ * ou `x` nesses campos, o texto de uma venda pode ficar idêntico ao de outra.
+ * O SHA-256 não resolve isso: se as duas strings já são iguais, o hash também
+ * será.
  *
- * `observacoes` e `formaPagamentoRotulo` são texto livre e entram inteiros na
- * string — então o próprio usuário podia escrever `|`, `:`, `,` ou `x` e
- * produzir uma string idêntica à de outra venda estruturalmente diferente. O
- * SHA-256 não salva disso: ele só evita colisão DEPOIS da serialização, e duas
- * estruturas distintas que geram a mesma string já colidiram antes do hash.
+ * ## O formato `v2`
  *
- * ## O que a `v2` faz
- *
- * `JSON.stringify` sobre um array de posições fixas. A injetividade vem da
- * própria gramática do JSON: toda string é delimitada por aspas e todo `"` ou
+ * `JSON.stringify` sobre um array de posições fixas. A falta de ambiguidade vem
+ * da própria gramática do JSON: toda string é delimitada por aspas e todo `"` ou
  * `\` interno é escapado, então o conteúdo nunca pode ser confundido com a
  * estrutura que o cerca. Dois valores diferentes em qualquer posição produzem
  * documentos JSON diferentes, quaisquer que sejam os caracteres dentro deles.
@@ -89,8 +88,9 @@ import type { ManualOrderRequest } from './manualOrderContract';
  * objeto), e `JSON.stringify` de números segue `Number::toString` do ECMA-262 —
  * totalmente especificado, mesma saída em qualquer engine.
  *
- * Ausente é `null`, distinto de `''`. Itens continuam ordenados por
- * `produtoId`, porque a ordem na tela não é intenção comercial.
+ * Ausente é `null`, distinto de `''`. Itens são ordenados por `produtoId`,
+ * porque a ordem na tela não é intenção comercial. O primeiro elemento (`'v2'`)
+ * versiona o formato: mudar a serialização exige mudar esse marcador.
  */
 export function serializacaoCanonicaDaVendaManual(body: ManualOrderRequest): string {
   const itens = [...body.itens]
@@ -113,8 +113,8 @@ export function serializacaoCanonicaDaVendaManual(body: ManualOrderRequest): str
 /**
  * SHA-256 hexadecimal da serialização canônica.
  *
- * `crypto.subtle` é o único digest disponível **dos dois lados** sem
- * dependência nova (navegador e Node 18+), e por isso a função é assíncrona —
+ * `crypto.subtle` está disponível **dos dois lados** sem dependência nova
+ * (navegador e Node 18+), e por isso a função é assíncrona —
  * o custo é irrelevante nos dois chamadores, que já estão em contexto async.
  *
  * Guardar o hash, e não a serialização inteira, mantém a coluna do ledger com
@@ -140,14 +140,13 @@ export interface ValorResolvidoDeItem {
 
 /**
  * Impressão digital dos **valores efetivos** da venda — preços unitários
- * resolvidos no servidor e total derivado (ticket 30, fatia 3 — 6ª rodada de
- * revisão).
+ * resolvidos no servidor e total derivado.
  *
  * ## A decisão de domínio que isto implementa
  *
  * O fingerprint do pedido (acima) cobre o que o cliente PEDIU. Ele não cobre o
  * que a venda VALE, porque preço e total não vêm do cliente: são derivados do
- * cadastro no servidor. A revisão apontou o caso que ficava aberto:
+ * cadastro no servidor. O caso que ele sozinho deixaria aberto:
  *
  * 1. tentativa com referência R e produto P;
  * 2. a tentativa falha definitivamente e fica reabrível;
@@ -170,7 +169,8 @@ export interface ValorResolvidoDeItem {
  *
  * ## Onde a comparação acontece
  *
- * Só na REABERTURA de uma tentativa `falhou`. Nos outros estados a divergência
+ * Só na REABERTURA de uma tentativa `falhou`, dentro de
+ * `reivindicar_tentativa_venda_manual` (migration 59). Nos outros estados a divergência
  * não muda nada: `concluida` devolve o resultado que já existe (a venda
  * aconteceu pelo valor da época, e é esse que vale), e `em_andamento` /
  * `indeterminada` já bloqueiam por conta própria.

@@ -93,11 +93,9 @@ function resolvePedidoBlingId(eventData: Record<string, unknown>): string {
 /**
  * Reconhece um evento de exclusão pelo nome (`recurso.acao`, ex. `order.deleted`).
  *
- * Antes do ticket 11 não havia este ramo: `order.deleted` casava com
- * `entity.includes('order')` e caía no caminho de criação/atualização, que
- * pedia ao Bling um pedido recém-apagado, não o encontrava e **retornava em
- * silêncio**. O pedido excluído no Bling ficava para sempre no ORBITA sem que
- * nada indicasse a divergência.
+ * Precisa ser conferido antes do caminho de criação/atualização: `order.deleted`
+ * também contém `order`, e aquele caminho pediria ao Bling um pedido já apagado,
+ * não o encontraria e deixaria o pedido local sem nenhum sinal da divergência.
  */
 function isDeletionEvent(entity: string): boolean {
   return entity.includes('delet') || entity.includes('exclu') || entity.includes('remov');
@@ -105,7 +103,7 @@ function isDeletionEvent(entity: string): boolean {
 
 /**
  * Aplica no ORBITA uma exclusão de pedido feita no Bling: o pedido local é
- * marcado `Cancelado`, nunca apagado (decisão do proprietário, ticket 11).
+ * marcado `Cancelado`, não apagado (decisão de produto: preservar o histórico).
  *
  * @returns O `bling_id` do pedido tratado, ou string vazia se o evento não o traz.
  */
@@ -126,9 +124,9 @@ async function processPedidoExclusaoEvent(
 /**
  * Sincroniza um evento de pedido de venda recebido do webhook.
  *
- * **A outra ponta da corrida do ticket 30.** Quando o pedido nasceu de uma
- * venda manual do próprio ORBITA, este evento chega em menos de um segundo e a
- * linha gravada aqui é a **primeira** — a venda manual chega depois e
+ * **A outra ponta da corrida com a venda manual.** Quando o pedido nasceu de uma
+ * venda manual do próprio ORBITA, este evento costuma chegar em menos de um
+ * segundo e a linha gravada aqui pode ser a **primeira** — a venda manual chega depois e
  * **assume** esta linha (`registrar_venda_manual`, migration 57), em vez de
  * bater em `uq_pedidos_org_bling`.
  *
@@ -139,8 +137,8 @@ async function processPedidoExclusaoEvent(
  *    de apagar a identidade de uma venda manual já registrada. Acrescentar
  *    qualquer um desses campos aqui reabre isso.
  * 2. `buildPedidoItemsParaSalvar` pula o item cujo produto não existe
- *    localmente, então esta rota grava no máximo os itens que a venda tem —
- *    nunca mais. A tomada do lado da venda manual conta com isso.
+ *    localmente, então esta rota grava apenas itens de produtos já
+ *    cadastrados no ORBITA. A tomada do lado da venda manual conta com isso.
  */
 async function processPedidoEvent(
   eventData: Record<string, unknown>,
@@ -245,9 +243,9 @@ async function processProdutoEvent(
 }
 
 /**
- * Desfecho de um evento. `Falhou` existe porque o número sozinho mentia: um
- * evento que estourava devolvia `0`, indistinguível de um evento que não
- * atualizou produto nenhum, e a rota somava zero e respondia sucesso.
+ * Desfecho de um evento. `Falhou` existe porque o número sozinho não bastaria:
+ * um evento que estourasse devolvendo `0` seria indistinguível de um evento que
+ * não atualizou produto nenhum, e a rota responderia sucesso.
  */
 type ResultadoEvento =
   | { readonly _tag: 'Concluido'; readonly produtosAtualizados: number }
@@ -351,12 +349,12 @@ export async function POST(req: NextRequest) {
     }
 
     if (falhas.length > 0) {
-      // Responder 2xx aqui encerrava o assunto: o evento ficava `failed` no
-      // inbox, o Bling considerava entregue e ninguém reprocessava — não há
-      // consumidor automático de replay. A documentação do Bling prevê nova
-      // tentativa para resposta diferente de 2xx, e é essa nova tentativa que
-      // reprocessa o evento `failed`. Os eventos que deram certo no mesmo lote
-      // voltam como duplicados já processados e não repetem efeito.
+      // Não responde 2xx: o evento ficaria `failed` no inbox, o Bling o
+      // consideraria entregue e ninguém o reprocessaria — não há consumidor
+      // automático de replay. A documentação do Bling prevê nova tentativa
+      // para resposta diferente de 2xx, e é essa nova tentativa que reprocessa
+      // o evento `failed`. Os eventos que deram certo no mesmo lote voltam como
+      // duplicados já `processed` e são ignorados pelo inbox.
       console.error(`❌ Webhook Bling: ${falhas.length} evento(s) falharam e serão reentregues.`);
       return NextResponse.json(
         {

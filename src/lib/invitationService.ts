@@ -1,3 +1,27 @@
+/**
+ * Convites e membros de organização: criar convite, aceitar, revogar membro e
+ * listar convites.
+ *
+ * **Dois clientes Supabase, com papéis diferentes:**
+ * - o **cliente do ator** leva o token (JWT) da própria pessoa. As RPCs de
+ *   convite e de revogação (`criar_convite_organizacao`,
+ *   `aceitar_convite_organizacao`, `revogar_membro_organizacao`) decidem dentro
+ *   do banco usando `auth.uid()` — "quem está chamando": quem convida ou revoga
+ *   precisa ser `owner`/`admin`, e quem aceita precisa ser o destinatário. Com
+ *   a chave `service_role` não há pessoa por trás, `auth.uid()` é nulo e a RPC
+ *   recusa;
+ * - o **cliente privilegiado** (`service_role`, ignora RLS) é usado no snapshot
+ *   de entitlement, que precisa contar todos os membros sem depender do que a
+ *   pessoa enxerga, e pela rota na listagem de convites — que, por ignorar RLS,
+ *   depende do filtro pelo `organizacao_id` já verificado.
+ *
+ * **Entitlement:** antes de criar um convite, `authorizeEntitlement` confere se
+ * o ciclo de vida da organização permite a mutação e se o plano ainda tem vaga
+ * de membro. As regras de plano não são reimplementadas aqui.
+ *
+ * **Falha de leitura não vira lista vazia:** `listOrgInvites` lança, para que a
+ * tela não conclua que um convite pendente não existe.
+ */
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -42,11 +66,12 @@ export function generateInviteToken(): string {
 /**
  * The two Supabase identities an invite creation needs, kept explicit.
  *
- * Ticket 26: `criar_convite_organizacao` is `security definer` and authorizes
- * the caller through `auth.uid()`, so it only works on a client carrying the
- * user's JWT. The entitlement snapshot, in contrast, is an authorization read
- * whose counts must not depend on row-level visibility, so it stays privileged.
- * Requiring both makes the distinction impossible to collapse by accident.
+ * `criar_convite_organizacao` is `security definer` and authorizes the caller
+ * through `auth.uid()`, so it only works on a client carrying the user's JWT.
+ * The entitlement snapshot, in contrast, is an authorization read whose counts
+ * must not depend on row-level visibility, so it stays privileged. Requiring
+ * both as separate named fields keeps the distinction explicit at every call
+ * site.
  */
 export interface OrganizationInviteClients {
   /** Service-role client used for the privileged entitlement/lifecycle snapshot. */
@@ -59,10 +84,11 @@ export interface OrganizationInviteClients {
 /**
  * Create an organization invite for a collaborator.
  *
- * Ticket 13: a única porta de entrada para autorização é `authorizeEntitlement`
- * — decide, a partir do escopo já verificado (nunca do `orgId` cru), se a
+ * A checagem de plano e de ciclo de vida é delegada a `authorizeEntitlement`,
+ * que decide a partir do escopo já verificado (não de um `orgId` cru) se a
  * organização está num estado que permite a mutação e se há capacidade no
- * plano. Nenhuma checagem de plano/status é reimplementada aqui.
+ * plano; uma negação lança antes de qualquer escrita. A permissão de quem
+ * convida é conferida pela própria RPC, via `auth.uid()`.
  *
  * @param clients - Privileged and actor-scoped Supabase clients.
  * @param scope - Organization scope already verified against persisted membership.
@@ -106,7 +132,9 @@ export async function createOrgInvite(
  *
  * `aceitar_convite_organizacao` binds the new membership to `auth.uid()`, so
  * `actorSupabase` must carry the verified user's access token — a service-role
- * client has no subject and the RPC fails closed (Ticket 26).
+ * client has no subject and the RPC fails closed. The RPC also checks that the
+ * invite is still `pending` and addressed to the caller's own **confirmed**
+ * e-mail, read from `auth.users` — never an e-mail sent by the client.
  *
  * @param actorSupabase - Supabase client carrying the acting user's access token.
  * @param token - The single-use invite token.
@@ -136,7 +164,7 @@ export async function acceptOrgInvite(
  *
  * `revogar_membro_organizacao` checks the caller's own owner/admin role through
  * `auth.uid()`, so `actorSupabase` must carry the verified user's access token;
- * a service-role client has no subject and the RPC fails closed (Ticket 26).
+ * a service-role client has no subject and the RPC fails closed.
  *
  * @param actorSupabase - Supabase client carrying the acting user's access token.
  * @param orgId - The organization whose membership is being revoked.
@@ -163,18 +191,15 @@ export async function revokeOrgMember(
 /**
  * List pending and historical invites for an organization.
  *
- * **Ticket 06 — uma leitura que falhou nao devolve lista vazia.** As duas
- * saidas silenciosas de antes diziam a mesma mentira, uma no plural e outra no
- * singular: `if (error || !data) return []` transformava "nao foi possivel
- * saber" em "nao ha convite nenhum", e o `safeParse` por item descartava em
- * silencio a linha que nao casava com o schema. Nas duas, a tela concluia que
- * o convite **nao existe** — e um convite pendente que desaparece da lista e
- * um convite que ninguem revoga e ninguem acompanha.
+ * **Uma leitura que falhou não devolve lista vazia.** Transformar "não foi
+ * possível saber" em "não há convite nenhum" faria a tela concluir que um
+ * convite pendente não existe — e um convite que some da lista é um convite
+ * que ninguém revoga nem acompanha. Pelo mesmo motivo o parse é estrito: uma
+ * linha que não casa com o schema é falha do servidor, não um item a descartar.
  *
- * E o mesmo julgamento que a rota de membros ja aplica desde o Ticket 20: um
- * convite persistido que o servidor nao sabe ler e falha do servidor. Quem
- * chama traduz a excecao em 500 com a frase publica fixa; o diagnostico fica
- * no log.
+ * Quem chama traduz a exceção em 500 com a frase pública fixa; o diagnóstico
+ * fica no log. O `orgId` deve vir do escopo verificado, porque o cliente
+ * usado pela rota é privilegiado e só este filtro separa as organizações.
  *
  * @throws Se a leitura falhar ou se alguma linha nao corresponder ao contrato.
  */

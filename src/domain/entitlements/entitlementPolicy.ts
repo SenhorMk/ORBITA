@@ -1,6 +1,6 @@
 /**
  * entitlementPolicy.ts
- * Ticket 13: Política única de autorização por estado de ciclo de vida + limites de plano.
+ * Política única de autorização por estado de ciclo de vida + limites de plano.
  *
  * Módulo de domínio puro. Nenhuma rota deve reimplementar `if plan === ...` ou
  * `if status === ...`; toda decisão de bloqueio passa por `evaluateEntitlementPolicy`.

@@ -13,12 +13,13 @@ import type {
 } from './ports';
 
 /**
- * Adapters Supabase da RECONCILIAÇÃO: tomada de posse, claim de intervenção e
- * finalização atômica (ticket 30, fatia 3 — 7ª e 8ª rodadas de revisão).
+ * Adapters Supabase da RECONCILIAÇÃO: tomada de posse, claim de intervenção,
+ * finalização e resolução de ambiguidade.
  *
- * Separados de `dependencias.ts` quando aquele arquivo passou do limite de
- * tamanho do gate de qualidade. A fronteira é natural: aqui vive só o que a
- * reconciliação usa, e nada do caminho normal da venda.
+ * Cada função chama uma RPC do banco com o `organizacao_id` do escopo
+ * verificado e traduz os códigos SQLSTATE esperados em valores tipados. A
+ * atomicidade descrita aqui é a de cada RPC dentro do Postgres; nenhuma delas
+ * abrange a chamada ao Bling.
  */
 
 /**
@@ -50,8 +51,9 @@ export async function assumirTentativaParaReconciliacao(
 }
 
 /**
- * Reivindica o direito de intervir — o claim que impede duas intervenções
- * externas simultâneas sobre a mesma tentativa.
+ * Reivindica o direito de intervir — o claim que recusa uma segunda
+ * intervenção externa sobre a mesma tentativa enquanto a primeira não tiver
+ * desfecho.
  *
  * `55006` é o índice único parcial recusando uma segunda intervenção em voo
  * (ou uma anterior que ficou AMBÍGUA, que também bloqueia).
@@ -80,7 +82,11 @@ export async function reivindicarIntervencao(
   return { _tag: 'IntervencaoReivindicada', intervencaoId: data };
 }
 
-/** Fecha o rastro de auditoria da intervenção. Depois disto ele é imutável. */
+/**
+ * Fecha o rastro de auditoria da intervenção; depois disso um trigger do banco
+ * impede alterá-lo. Só registra a falha, sem devolvê-la. Os fluxos atuais usam
+ * `finalizarIntervencaoETentativa`, e esta função não tem chamador.
+ */
 export async function encerrarIntervencao(
   scope: VerifiedOrganizationScope,
   intervencaoId: string,
@@ -98,9 +104,9 @@ export async function encerrarIntervencao(
 }
 
 /**
- * Grava tentativa e intervenção juntas, numa transação só.
+ * Grava tentativa e intervenção juntas, numa única RPC (uma transação do banco).
  *
- * **Nunca lança.** A falha vira valor porque o chamador tem de reagir a ela: o
+ * **Erro da RPC vira valor**, não exceção, porque o chamador tem de reagir a ele: o
  * efeito externo já aconteceu, e responder sucesso aqui seria mentir sobre o
  * que ficou registrado.
  */
@@ -126,8 +132,7 @@ export async function finalizarIntervencaoETentativa(
 }
 
 /**
- * Encerra uma intervenção que ficou `ambigua`, com a decisão humana registrada
- * (9ª rodada de revisão, B3).
+ * Encerra uma intervenção que ficou `ambigua`, com a decisão humana registrada.
  *
  * `55006` é outro operador tendo resolvido primeiro; `P0002` é não haver
  * ambiguidade pendente; `55P03` é a tentativa ter mudado de dono entre a

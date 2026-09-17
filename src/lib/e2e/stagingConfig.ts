@@ -1,6 +1,6 @@
 /**
  * Fail-closed configuration resolver for real-browser E2E runs against a
- * staging environment (ticket 24).
+ * staging environment.
  *
  * `playwright.config.ts` imports `resolveStagingConfig` and calls it at
  * module load time: if the environment is not an explicit, verifiably

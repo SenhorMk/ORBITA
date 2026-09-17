@@ -1,6 +1,6 @@
 /**
  * stripeWebhookHandler.ts
- * Ticket 38: Processador de webhooks Stripe com inbox idempotente e isolamento multi-tenant.
+ * Processador de webhooks Stripe com inbox idempotente e isolamento multi-tenant.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';

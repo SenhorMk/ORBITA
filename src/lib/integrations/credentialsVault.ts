@@ -1,15 +1,24 @@
 /**
  * Cofre de credenciais de integração (Bling e demais provedores).
  *
- * As credenciais de uma conexão — Client Secret, access token, refresh token —
- * são serializadas em JSON e cifradas no servidor com AES-256-GCM (`../crypto`,
- * chave em `ENCRYPTION_KEY`) antes de chegar ao banco. A tabela
- * `credenciais_integracao` só guarda o texto cifrado e não tem grant para
- * `anon`/`authenticated`: apenas adaptadores de servidor com `service_role`
- * a leem.
+ * Problema: Client Secret, access token e refresh token dão acesso à conta da
+ * empresa no fornecedor. Eles não podem ficar legíveis no banco nem chegar ao
+ * navegador.
  *
- * Leitura e remoção filtram pelo par organização + conexão. O GCM
- * autentica o conteúdo: texto adulterado não decifra e a leitura devolve `null`.
+ * Solução: as credenciais de uma conexão são transformadas em JSON e cifradas
+ * no servidor com AES-256-GCM (`../crypto`, chave em `ENCRYPTION_KEY`) antes de
+ * serem gravadas. A tabela `credenciais_integracao` não tem permissão para
+ * `anon`/`authenticated`: só código de servidor, com `service_role`, a lê.
+ * Leitura e remoção filtram pelo par organização + conexão.
+ *
+ * Integridade: valores gravados por este cofre ficam no formato
+ * `iv:tag:dados`. Nesse formato o GCM detecta alteração — um valor adulterado
+ * não decifra e a leitura devolve `null`.
+ *
+ * Limite: por compatibilidade com registros antigos, `decrypt` devolve como
+ * texto puro qualquer valor **sem** o separador `:`. Esses valores legados não
+ * têm cifra nem verificação de integridade; a garantia acima vale para o que
+ * está no formato `iv:tag:dados`, não para todo o histórico do banco.
  */
 import { z } from 'zod';
 import type { SupabaseClient } from '@supabase/supabase-js';

@@ -32,10 +32,9 @@ export async function GET(
 ) {
   const { id: orgId } = await params;
 
-  // A listagem privilegiada rodava sem nenhuma verificação de escopo: bastava
-  // uma sessão para ler os convites de qualquer organização. Ninguém alcançou
-  // essa brecha porque o atalho de sessão já negava o chamador antes de chegar
-  // aqui (Ticket 20).
+  // A listagem usa o cliente privilegiado (ignora RLS), então a capacidade de
+  // gestão nesta organização é conferida antes: sem isso, bastaria uma sessão
+  // para ler os convites de qualquer organização.
   const authorization = await authorizeRequestOrganizationCapability(req, orgId, 'organization:manage');
   if (authorization._tag !== 'OrganizationCapabilityAuthorized') {
     return authorizationFailureResponse(authorization.status);
@@ -72,7 +71,7 @@ export async function POST(
 
   // `criar_convite_organizacao` autoriza o autor por `auth.uid()`, então a RPC
   // viaja no cliente do usuário. O snapshot de entitlement continua privilegiado
-  // para que a contagem de uso não dependa da visibilidade por RLS (Ticket 26).
+  // para que a contagem de uso não dependa da visibilidade por RLS.
   const actorClientResult = createActorScopedSupabaseClient(bearerResult.token);
   if (actorClientResult._tag !== 'ActorScopedClientCreated') {
     logger.error('organizacoes.convites.actor_client_unavailable', {

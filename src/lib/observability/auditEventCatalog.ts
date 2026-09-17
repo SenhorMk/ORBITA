@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /**
- * Catálogo versionado de eventos de auditoria (ticket 19).
+ * Catálogo versionado de eventos de auditoria.
  *
  * Cada linha declara: quem produz o evento, com qual severidade, qual tipo de ator é
  * esperado (humano autenticado vs. sistema/service-role), quais campos de metadata são

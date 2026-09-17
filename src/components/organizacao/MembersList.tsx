@@ -18,7 +18,7 @@ import type { MembroOrganizacao } from './types';
  * cadastrado" e "identidade indisponível" chegam aqui já separados — a tela não
  * reinventa a distinção nem a perde.
  *
- * Uma resposta antiga, de um servidor ainda sem esta fatia, não traz campo
+ * Uma resposta de um servidor que ainda não devolva esses campos não traz campo
  * nenhum: aí `origem_do_nome` é `undefined` e o recurso cai em "sem nome
  * cadastrado", que continua sendo verdade e continua sendo legível.
  */

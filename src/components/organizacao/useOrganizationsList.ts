@@ -27,12 +27,10 @@ function daSessao(sessao: string | null, t: TransitorioDaSessao | null): string 
 /**
  * A leitura de `/api/organizacoes`, carimbada pela sessão que a pediu.
  *
- * O carimbo é o mecanismo inteiro. Ele aparece duas vezes, e é preciso as duas:
- * gravado no estado, impede que a leitura de uma sessão seja **exibida** em
- * outra; comparado com `sessaoAtualRef` dentro da resposta, impede que uma
- * resposta atrasada seja **gravada** — inclusive por cima da leitura boa de
- * quem entrou depois, que sumiria da tela sem nunca ter sido substituída por
- * nada visível.
+ * O carimbo é usado em dois lugares. Guardado junto do estado, impede que a
+ * leitura de uma sessão seja **exibida** em outra. Comparado com
+ * `sessaoAtualRef` quando a resposta chega, impede que uma resposta atrasada
+ * seja **gravada** por cima da leitura de quem entrou depois.
  */
 function useLeituraDeOrganizacoes(fetchWithAuth: AuthenticatedFetch, sessao: string | null) {
   const [leitura, setLeitura] = useState<LeituraDeOrganizacoes | null>(null);
@@ -81,35 +79,32 @@ function useLeituraDeOrganizacoes(fetchWithAuth: AuthenticatedFetch, sessao: str
  * Carrega, cria e troca organizações (`/api/organizacoes`,
  * `/api/organizacoes/switch`).
  *
- * `selectionVersion` sai daqui porque a tela precisa dela: trocar de
- * organização e voltar para a mesma são seleções diferentes, e é a versão que
- * separa uma da outra. A troca envia a versão que a tela está exibindo; o
- * servidor aplica por CAS e responde 409 se outra aba já trocou antes.
+ * ## Duas abas trocando de organização ao mesmo tempo
  *
- * ## Tudo que este hook guarda carrega de quem é
+ * Problema: a pessoa abre duas abas; numa escolhe a organização A, na outra a
+ * B. Sem cuidado, a última a chegar ao servidor venceria em silêncio, e uma das
+ * abas continuaria mostrando uma organização que já não é a ativa.
  *
- * Ele vive no topo da aplicação e **atravessa o logout** — e num shell
- * multi-tenant um tenant que sobrevive à sessão que o produziu não pode existir.
+ * Solução: o servidor guarda a organização ativa junto com um número de versão.
+ * A tela lê essa versão (`selectionVersion`) e a envia ao pedir a troca. O banco
+ * só troca se a versão ainda for a mesma; se outra aba já trocou antes, a
+ * versão mudou, a troca é recusada (409) e a tela mostra o erro em vez de
+ * sobrescrever. Esse "só grava se ainda estiver como eu li" chama-se CAS
+ * (compare-and-swap).
  *
- * A solução não é limpar o estado quando a sessão cai; é o estado não valer
- * fora dela. Nada é exposto sem o carimbo da leitura bater com a sessão
- * corrente. Disso decorre, sem nenhum passo extra:
+ * ## Respostas atrasadas e troca de sessão
  *
- * - perder a sessão não deixa organização, organização ativa, versão, erro ou
- *   troca em curso visíveis — nem enquanto a leitura seguinte não chega, nem se
- *   ela falhar;
- * - a resposta de uma requisição do usuário A que só volta depois do login de B
- *   não é gravada nem exibida, e não apaga a leitura boa de B;
- * - a sessão nova começa sem tenant herdado, e só a resposta dela passa a valer.
+ * Este hook vive no topo da aplicação e continua existindo depois do logout.
+ * Por isso cada leitura é carimbada com a sessão que a pediu, e nada é exibido
+ * se o carimbo não bater com a sessão atual. Na prática:
+ * - depois do logout, nenhuma organização, versão ou erro da sessão anterior
+ *   aparece;
+ * - uma resposta da pessoa A que chega depois do login da pessoa B é
+ *   descartada, e não apaga a leitura de B.
  *
- * É o mesmo desenho de `usePapelNaOrganizacaoAtiva`, pela mesma razão: um dado
- * de sessão que não diz de quem é não tem como ser invalidado na hora certa.
- *
- * A sessão também **sai** daqui, de volta. O painel precisa dela para escopar o
- * que é da IDENTIDADE e não da organização — o erro de aceitar um convite, por
- * exemplo, que acontece justamente quando ainda não há organização e que um
- * carimbo por seleção deixaria invisível. Ela já entrou por parâmetro; devolvê-la
- * não cria uma segunda fonte.
+ * A sessão também é devolvida pelo hook: o painel a usa para erros que são da
+ * pessoa e não da organização, como o aceite de convite (feito, muitas vezes,
+ * por quem ainda não tem organização nenhuma).
  *
  * @param sessao - Quem está logado (o e-mail serve), ou `null` sem sessão. Sem
  *   sessão não se pergunta nada ao servidor — `fetchWithAuth` lança sem token —

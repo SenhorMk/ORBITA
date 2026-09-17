@@ -1,7 +1,7 @@
 /**
  * retentionDbAdapter.ts
- * Ticket 18: adapter do sistema "banco" para o mecanismo de retenção —
- * mesmo padrão de `dbAdapter.ts` (ticket 17): a decisão de tradução
+ * Adapter do sistema "banco" para o mecanismo de retenção —
+ * mesmo padrão de `dbAdapter.ts`: a decisão de tradução
  * `RetentionEffectAdapter` é uma classe fina sobre uma porta explícita
  * (`RetentionDatabasePort`); a implementação real (`SupabaseRetentionDatabasePort`)
  * só traduz porta -> RPC do Supabase (`database/51_retencao_anonimizacao_eliminacao.sql`)

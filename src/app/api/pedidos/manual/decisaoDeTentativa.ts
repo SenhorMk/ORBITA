@@ -7,20 +7,19 @@ import { falhaDaVendaManual } from './resposta';
 import type { ReivindicacaoDeTentativa } from './ports';
 
 /**
- * O que fazer com o resultado de reivindicar a referência de idempotência
- * (ticket 30, fatia 3).
+ * O que fazer com o resultado de reivindicar a referência de idempotência.
  *
- * Separado de `handler.ts` porque virou uma responsabilidade própria: cada
- * rodada de revisão acrescentou um desfecho que **não** pode chamar o Bling, e
- * hoje são seis — só `TentativaNova` segue o fluxo normal.
+ * A reivindicação tem oito desfechos, e só `TentativaNova` segue o fluxo normal
+ * até o Bling. Os demais — já concluída, indeterminada, conflito de conteúdo,
+ * valores divergentes, pendência idêntica, em andamento, infraestrutura
+ * indisponível — devolvem uma resposta pronta sem chamar o Bling.
  */
 
 /**
  * Os desfechos que se resolvem só com uma mensagem e um status.
  *
- * Numa tabela, e não em seis `if`s quase idênticos: o que muda de um caso para
- * o outro é o texto, não a lógica, e o gate de qualidade sinalizou a
- * repetição. Cada mensagem diz **o que aconteceu** e **o que não aconteceu**
+ * Numa tabela, e não em `if`s quase idênticos: o que muda de um caso para o
+ * outro é o texto, não a lógica. Cada mensagem diz **o que aconteceu** e **o que não aconteceu**
  * (nada foi enviado ao Bling), porque essa é a informação que evita a próxima
  * ação errada de quem está na tela.
  */
@@ -74,13 +73,11 @@ export function decidirSobreTentativa(
     return { response: respostaEstadoIndeterminado(reivindicacao.blingPedidoId) };
   }
   if (reivindicacao._tag === 'TentativaIndisponivel') {
-    // FAIL CLOSED (4ª rodada de revisão): a infraestrutura de idempotência não
-    // respondeu — pode ser a migration 59 ainda não aplicada, pode ser uma
-    // falha de transporte. Não importa qual: sem conseguir reivindicar a
-    // referência, não há como garantir que uma retentativa não vai duplicar no
-    // Bling, então a venda NÃO PROSSEGUE. A versão anterior tratava
-    // "infraestrutura ausente" como "pode prosseguir sem a proteção" — essa
-    // troca é exatamente o que a revisão apontou como perigosa.
+    // FAIL CLOSED: a infraestrutura de idempotência não respondeu — pode ser
+    // a migration 59 ainda não aplicada, pode ser uma falha de transporte. Sem
+    // conseguir reivindicar a referência, nada impede uma retentativa de
+    // duplicar no Bling, então a venda NÃO PROSSEGUE. Prosseguir "sem a
+    // proteção" desligaria a proteção em silêncio.
     registrarFalhaInterna('pedidos.manual.tentativa.reivindicar', reivindicacao.causa);
     return {
       response: falhaDaVendaManual(

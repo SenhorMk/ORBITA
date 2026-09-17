@@ -1,8 +1,8 @@
 /**
  * stripeAdapter.ts
- * Ticket 17: adapter do sistema "stripe". Stripe aqui é o provedor de
- * cobrança da própria ORBITA para a organização (ticket 14,
- * `assinaturas_organizacao.stripe_customer_id`) — não guarda dado de
+ * Adapter do sistema "stripe". Stripe aqui é o provedor de
+ * cobrança da própria ORBITA para a organização
+ * (`assinaturas_organizacao.stripe_customer_id`) — não guarda dado de
  * clientes finais da loja. Só é relevante para titular `lojista_user`.
  *
  * Acesso/exportação: leitura real do identificador vinculado (não é

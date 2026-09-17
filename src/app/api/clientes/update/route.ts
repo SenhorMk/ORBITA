@@ -23,8 +23,8 @@ export type {
 /**
  * Autorização por capacidade organizacional.
  *
- * Substitui `session.role !== 'dono'`, papel derivado da sessão e não da
- * associação à organização — mesma correção feita no catálogo (Ticket 31).
+ * O papel vem da associação persistida à organização ativa, nunca da sessão
+ * sozinha — a mesma regra usada no catálogo de produtos.
  */
 const auth: ClienteAuthPort = {
   async authorize(request: Request) {

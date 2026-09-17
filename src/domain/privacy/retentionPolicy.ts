@@ -1,9 +1,9 @@
 /**
  * retentionPolicy.ts
- * Ticket 18: núcleo puro de decisão de retenção/anonimização/eliminação.
+ * Núcleo puro de decisão de retenção/anonimização/eliminação.
  * Independente de Next.js/Supabase — nunca chama `Date.now()`/`new Date()`
  * internamente; todo relógio é injetado pelo chamador (`now`/`entityClockValue`
- * já resolvidos), mesmo padrão de `titularVerificationService.ts` (ticket 17).
+ * já resolvidos), mesmo padrão de `titularVerificationService.ts`.
  *
  * Decisão documentada sobre fuso horário: o prazo de retenção é uma duração
  * fixa em milissegundos por época UTC (`prazoDias * 86_400_000`), nunca um
@@ -16,8 +16,9 @@
  * (`needs-owner`), não uma correção silenciosa aqui.
  */
 
-/** Nenhum prazo real foi aprovado ainda (ver Ticket 15 — needs-legal-review /
- * needs-owner). Este status trava qualquer elegibilidade até a aprovação. */
+/** Nenhum prazo real foi aprovado ainda: a definição depende de revisão
+ * jurídica e da proprietária. Este status trava qualquer elegibilidade até a
+ * aprovação. */
 export const PLACEHOLDER_POLICY_STATUS = 'pending_approval' as const;
 
 export type RetentionPolicyStatus = 'pending_approval' | 'approved' | 'disabled';

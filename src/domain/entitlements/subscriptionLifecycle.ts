@@ -1,6 +1,6 @@
 /**
  * subscriptionLifecycle.ts
- * Ticket 13: Máquina de estados pura de assinatura/ciclo de vida da organização.
+ * Máquina de estados pura de assinatura/ciclo de vida da organização.
  *
  * Independente de Next.js, Supabase e Stripe. Estado é modelado como tagged union
  * (nunca booleans soltos como `isSuspended`/`isCancelled`). Entrada externa é sempre
@@ -122,7 +122,7 @@ function buildState(kind: SubscriptionLifecycleKind, event: LifecycleEvent): Sub
 /**
  * Aplica um evento externo já parseado ao estado versionado atual.
  *
- * Invariante central do ticket: um evento com versão/timestamp mais antigo que o
+ * Invariante central: um evento com versão/timestamp mais antigo que o
  * estado já aplicado nunca regride o estado — é rejeitado como `rejected_stale`,
  * mesmo que a transição em si fosse válida. Reentrega do mesmo evento (mesma versão)
  * é idempotente (`noop_duplicate`). Transições fora da matriz são `rejected_invalid_transition`.

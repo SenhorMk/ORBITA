@@ -1,3 +1,25 @@
+/**
+ * Worker do outbox: executa uma passada de entrega dos eventos pendentes.
+ *
+ * Divisão de responsabilidades:
+ * - `OutboxService` mantém o estado durável no Postgres: enfileiramento
+ *   idempotente, claim com lease, tentativas, `next_retry_at` e dead letter;
+ * - este worker orquestra uma passada (liberar leases vencidas → reivindicar
+ *   lote → chamar o adapter do destino → registrar o resultado) e executa
+ *   **apenas os adapters que o chamador fornecer**.
+ *
+ * Limite real do sistema atual: o worker não agenda a própria execução e não
+ * registra adapters de produção. Não há, no código atual, rota, cron ou
+ * processo que monte adapters reais e chame `runOutboxWorkerOnce` ou
+ * `drainOutboxWorker` — eles só são exercitados por testes. Eventos
+ * enfileirados para destinos sem esse wiring ficam pendentes. (A rota
+ * `POST /api/chatwoot/send` não depende do worker: ela envia de forma
+ * síncrona e marca o próprio evento.)
+ *
+ * Semântica de entrega: pelo menos uma vez. Se o adapter tiver sucesso e o
+ * registro falhar, ou a lease expirar durante a chamada, o evento pode ser
+ * entregue de novo; destinos precisam tolerar repetição.
+ */
 import crypto from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { outboxService } from '@/services/outboxService';
@@ -11,10 +33,10 @@ export type OutboxDispatchResult =
   | { readonly success: true; readonly responseBody?: Record<string, unknown> | null }
   | { readonly success: false; readonly error: unknown };
 
-/** One provider adapter per outbox destination. The worker never talks to a
- * provider SDK directly — it stays a pure orchestrator (claim -> dispatch ->
- * complete) and delegates the actual external effect to the caller-supplied
- * adapter, which is production-real outside tests. */
+/** One provider adapter per outbox destination. The worker does not talk to a
+ * provider SDK directly — it stays an orchestrator (claim -> dispatch ->
+ * complete) and delegates the external effect to the caller-supplied adapter.
+ * No production code currently registers adapters for this worker. */
 export type OutboxProviderAdapter = (event: ClaimedOutboxEvent) => Promise<OutboxDispatchResult>;
 
 export interface OutboxWorkerDeps {
@@ -44,9 +66,11 @@ export interface OutboxWorkerRunSummary {
  * adapter, and marks the result. This is a plain invocable async function —
  * no `setInterval`/timer is part of the durable queue. A caller that wants
  * continuous processing (a cron route, a long-running process invoking this
- * in a loop) owns that scheduling decision; the durable state lives entirely
- * in Postgres via lease/attempts/next_retry_at, so a caller that stops
- * calling this function simply pauses — it never loses or duplicates work.
+ * in a loop) owns that scheduling decision; no such caller exists in the
+ * current codebase. The durable state lives in Postgres via
+ * lease/attempts/next_retry_at, so when nobody calls this function pending
+ * events simply wait. Delivery is at-least-once: an event can be dispatched
+ * again if recording the result fails or its lease expires mid-dispatch.
  */
 export async function runOutboxWorkerOnce(deps: OutboxWorkerDeps): Promise<OutboxWorkerRunSummary> {
   const outbox = deps.outbox ?? outboxService;
@@ -68,7 +92,7 @@ export async function runOutboxWorkerOnce(deps: OutboxWorkerDeps): Promise<Outbo
       // No adapter registered for this destination: this is a configuration
       // gap, not a transient provider error. Fail permanently (dead_letter)
       // rather than retry forever against a destination nothing will ever
-      // handle — proibido retry infinito.
+      // handle.
       const ok = await outbox.completeClaimedFailed(
         deps.supabase,
         deps.workerId,
@@ -127,7 +151,8 @@ export function generateWorkerId(prefix = 'outbox-worker'): string {
  * `maxIterations` is reached, honoring an external abort signal for graceful
  * shutdown. Still no in-memory timer: this is a single invocable call a
  * caller makes once (e.g. from a cron trigger or a drain command), not a
- * background scheduler living in process memory.
+ * background scheduler living in process memory. Like `runOutboxWorkerOnce`,
+ * it currently has no production caller.
  */
 export async function drainOutboxWorker(
   deps: OutboxWorkerDeps,

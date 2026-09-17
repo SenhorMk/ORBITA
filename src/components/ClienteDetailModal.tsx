@@ -7,35 +7,28 @@ import { Pilula } from '@/components/ui/StatusPill';
 import type { Cliente } from '@/types';
 
 /**
- * O detalhe de um cliente, agora no `Modal` do Design System.
+ * O detalhe de um cliente, no `Modal` do Design System.
  *
- * A casca mudou; a lógica não. Continuam iguais os campos exibidos (os do
- * contrato de cliente, endereço e CEP inclusive, persistidos desde a migration
- * 54), o copiar-para-a-área-de-transferência de telefone, e-mail e documento e a
- * ida para o Chatwoot.
+ * Exibe os campos do contrato de cliente (endereço e CEP inclusive, persistidos
+ * pela migration 54), copia telefone, e-mail e documento para a área de
+ * transferência e abre a conversa no Chatwoot.
  *
  * A ação primária é **editar**, no canto inferior direito; excluir fica sozinha
- * à esquerda, longe dela, e continua pedindo confirmação com o mesmo texto.
+ * à esquerda, longe dela, e pede confirmação.
  *
  * ## O que a tela de Clientes de fato oferece hoje
  *
- * - **criar** um contato: continua disponível, pelo botão da tela;
- * - **editar** um contato existente: agora tem caminho, pela ação primária
- *   daqui. `onEdit` já existia nesta interface e `selectedClienteToEdit` já
- *   existia em `page.tsx`, mas nada nunca preenchia o segundo — a edição não
- *   tinha por onde ser aberta. O ticket 04 ligou os dois, e é a única mudança
- *   de comportamento observável da fatia. Guardada em
- *   `clientes/ligacao-detalhe-edicao.test.tsx`;
- * - **excluir** um contato: `onDelete` continua **sem chamador**, exatamente
- *   como estava antes da migração. A composição anterior também não passava
- *   essa prop, então a exclusão nunca esteve exposta na interface. O texto do
- *   ticket diz que "criar, editar e excluir continuam funcionando", mas ligar a
- *   exclusão agora seria **adicionar um fluxo destrutivo novo**, não preservar
- *   um existente — e o botão que este componente sabe desenhar é uma
- *   possibilidade, não uma promessa que a tela cumpre hoje.
+ * - **criar** um contato: pelo botão da tela;
+ * - **editar** um contato existente: pela ação primária daqui, que preenche
+ *   `selectedClienteToEdit` em `page.tsx` (coberto por
+ *   `clientes/ligacao-detalhe-edicao.test.tsx`);
+ * - **excluir** um contato: `onDelete` **não tem chamador** — a tela não passa
+ *   essa prop, então a exclusão não está exposta na interface. O botão que este
+ *   componente sabe desenhar é uma possibilidade, não algo que a tela oferece;
+ *   ligá-lo seria adicionar um fluxo destrutivo.
  *
- * A mesma regra vale para produto: `POST /api/produtos/delete` existe no
- * servidor e nenhuma tela o chamava antes desta fatia. Continua assim.
+ * O mesmo vale para produto: `POST /api/produtos/delete` existe no servidor, e
+ * nenhuma tela o chama.
  */
 
 interface ClienteDetailModalProps {

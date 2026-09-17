@@ -1,6 +1,6 @@
 /**
  * titularRequestService.ts
- * Ticket 17: application service que orquestra a jornada de direitos do
+ * Application service que orquestra a jornada de direitos do
  * titular. Recebe sempre ator/escopo já verificados (nunca aceita
  * `organizacao_id`/capability enviados pelo cliente como autoridade) e
  * delega a decisão de transição à máquina de estados pura

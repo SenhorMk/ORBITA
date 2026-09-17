@@ -1,6 +1,6 @@
 /**
  * POST /api/stripe/portal
- * Ticket 14: Inicia uma Billing Portal Session real da Stripe para a
+ * Inicia uma Billing Portal Session real da Stripe para a
  * organização ativa. Composition root: constrói o `StripeSdkAdapter` real a
  * partir da configuração do servidor e delega ao `portalService`. Nenhuma
  * geração local de URL.

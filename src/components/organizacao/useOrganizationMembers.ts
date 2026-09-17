@@ -10,23 +10,18 @@ const FALHA_AO_LER = 'Não foi possível carregar os membros';
 /**
  * Lista e remove membros de uma organização (`/api/organizacoes/[id]/membros`).
  *
- * ## Ticket 06 — duas correções, e as duas são sobre dizer a verdade
+ * ## Duas regras, e as duas são sobre dizer a verdade
  *
- * **A lista pertencia a ninguém.** O estado era um `MembroOrganizacao[]` solto,
- * chaveado por nada: trocar de A para B mantinha os membros de A na tela até a
- * resposta de B chegar, e uma resposta atrasada de A que chegasse *depois* da
- * de B sobrescrevia B com A. Num shell multi-tenant é o defeito que não se pode
- * ter — os nomes de uma organização sob o contexto visual de outra. Agora a
- * leitura é carimbada pela seleção (organização **e** versão) em
- * `useLeituraPorOrganizacao`, e o carimbo resolve as duas direções de uma vez.
+ * **A lista pertence a uma seleção.** A leitura é carimbada pela seleção
+ * (organização **e** versão) em `useLeituraPorOrganizacao`. Sem o carimbo,
+ * trocar de A para B manteria os membros de A na tela até a resposta de B
+ * chegar, e uma resposta atrasada de A poderia sobrescrever B — os nomes de uma
+ * organização sob o contexto visual de outra. O carimbo resolve as duas
+ * direções de uma vez.
  *
- * **A falha virava "nenhum membro".** O `catch {}` engolia a exceção e o
- * `if (response.ok)` descartava o erro sem registrá-lo — em ambos os casos a
- * tela ficava com a lista anterior ou com a vazia, dizendo que a organização
- * não tem membros quando o que houve foi uma leitura que não deu certo. Numa
- * tela de autoridade isso é pior que um erro: sugere que uma revogação já
- * aconteceu. Agora a leitura lança, e a tela distingue carregando, vazio
- * verdadeiro e falha.
+ * **Falha não é "nenhum membro".** A leitura lança, e a tela distingue
+ * carregando, vazio verdadeiro e falha. Numa tela de autoridade, mostrar lista
+ * vazia por uma leitura que falhou sugeriria que uma revogação já aconteceu.
  *
  * @param selecao - A organização ativa confirmada e a versão que a selecionou,
  *   ou `null` sem seleção (inclusive sem sessão).

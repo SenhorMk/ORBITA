@@ -1,6 +1,6 @@
 /**
  * POST /api/stripe/checkout
- * Ticket 14: Inicia uma Checkout Session real da Stripe para a organização
+ * Inicia uma Checkout Session real da Stripe para a organização
  * ativa. Composition root: constrói o `StripeSdkAdapter` real a partir da
  * configuração do servidor e delega ao `checkoutService`. Nenhuma geração
  * local de URL/session ID.

@@ -28,22 +28,25 @@ import type { TokenDoBling } from './blingToken';
 import { tokenDoBlingReal } from './blingCredenciaisSupabase';
 
 /**
- * Adapter HTTP da API v3 do Bling — a única camada que fala com o ERP.
+ * Adapter HTTP da API REST v3 do Bling. A troca OAuth (código ou refresh token
+ * por access token) fica à parte, em `blingOAuth.ts`.
  *
  * Responsabilidades:
  * - **escopo**: um `BlingClient` pertence a uma organização; a credencial é
  *   descoberta no cofre dessa organização (`TokenDoBling`), nunca por usuário;
  * - **transporte**: `fetchWithAuth` injeta o bearer, espaça as requisições
  *   (`FilaDeRequisicoes`), faz backoff em 429 e renova o token uma vez em 401/403;
- * - **contrato**: operações de escrita validam a resposta com schemas e devolvem
- *   falha tipada (`BlingCallResult`); leituras de sincronização lançam
- *   `BlingLeituraError` em vez de devolver lista vazia;
+ * - **contrato**: as operações de escrita tipadas conferem a resposta (por
+ *   schema Zod ou checagem explícita do id) e devolvem falha tipada
+ *   (`BlingCallResult`); leituras de sincronização lançam `BlingLeituraError`
+ *   em vez de devolver lista vazia;
  * - **privacidade**: mensagens públicas derivam do status HTTP, não do corpo
  *   devolvido pelo provedor.
  *
- * Uma requisição de rede não é atômica: se a resposta se perde, o Bling pode ter
- * aplicado a escrita. Quem cria pedidos trata esse caso como resultado ambíguo
- * (ver `app/api/pedidos/manual`).
+ * Limite importante: uma chamada ao Bling não participa de nenhuma transação do
+ * banco do ORBITA. Se a resposta se perde, o Bling pode ter aplicado a escrita
+ * sem que o ORBITA saiba. Quem cria pedidos trata esse caso como resultado
+ * ambíguo (ver `app/api/pedidos/manual`).
  */
 
 /**
@@ -479,11 +482,11 @@ export class BlingClient implements BlingPort {
   /**
    * Busca um produto pelo SKU exato, conferindo o `codigo` do resultado.
    *
-   * A conferencia existe porque um filtro ignorado pelo provedor devolve uma
-   * lista qualquer, e confiar nela ja causou o pior tipo de bug: cadastrar um
-   * produto novo disparava um PUT sobrescrevendo nome, codigo e preco de um
-   * produto nao relacionado, seguido de um lancamento de saldo absoluto nele.
-   * Um filtro que nao filtra nunca mais pode virar escrita destrutiva.
+   * A conferência existe porque um filtro ignorado pelo provedor devolve uma
+   * lista qualquer. Confiar nela faria o cadastro de um produto novo disparar
+   * um PUT sobrescrevendo nome, código e preço de um produto não relacionado,
+   * seguido de um lançamento de saldo absoluto nele. Só um resultado com o
+   * `codigo` idêntico ao pedido é devolvido.
    */
   async buscarProdutoPorCodigo(codigo: string): Promise<BlingProduto | null> {
     const alvo = codigo.trim();
@@ -839,8 +842,9 @@ export class BlingClient implements BlingPort {
    * Marca um pedido de venda como cancelado, com falha tipada.
    *
    * Serve de compensação: quando o Bling aceita a venda e o ORBITA não
-   * consegue gravá-la, é isto que impede o pedido de ficar órfão na conta do
-   * lojista. Cancelar em vez de apagar preserva o rastro de que a venda chegou
+   * consegue gravá-la, é isto que tenta evitar que o pedido fique órfão na conta
+   * do lojista. Se o cancelamento falhar ou ficar sem resposta, a tentativa fica
+   * `indeterminada` e segue para reconciliação. Cancelar em vez de apagar preserva o rastro de que a venda chegou
    * a existir no ERP, e a sincronização traz o pedido cancelado para cá — os
    * dois lados convergem.
    *

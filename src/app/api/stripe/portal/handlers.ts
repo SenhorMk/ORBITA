@@ -1,6 +1,6 @@
 /**
  * handlers.ts
- * Ticket 14: HTTP adapter para POST /api/stripe/portal, com dependências
+ * HTTP adapter para POST /api/stripe/portal, com dependências
  * injetáveis (mesmo padrão de `src/app/api/bling/pedidos/[id]/handlers.ts`).
  * O cliente nunca envia `customerId` nem uma URL completa de retorno —
  * apenas, opcionalmente, um path relativo dentro da origem allowlisted.

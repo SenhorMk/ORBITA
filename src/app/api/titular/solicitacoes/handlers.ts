@@ -6,7 +6,7 @@ import {
 
 /**
  * handlers.ts (intake de direitos do titular)
- * Ticket 17: seam HTTP testável por injeção de dependência (mesmo padrão de
+ * Seam HTTP testável por injeção de dependência (mesmo padrão de
  * `src/app/api/categorias/sync/handlers.ts`). A resposta é sempre a mesma
  * confirmação genérica, verificado ou não — nunca revela se um dado existe
  * antes da identidade ser confirmada (ver ADR seção 1: needs-owner para o

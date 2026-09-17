@@ -1,9 +1,9 @@
 /**
- * Pure generation logic for the E2E staging seed (ticket 24). Everything
- * here is deterministic given its inputs and has no I/O — the executable
- * seed/cleanup scripts under `e2e/seed/` import these builders and layer
- * real Supabase calls on top, which is why this module can be exercised by
- * Vitest even though no staging environment exists yet.
+ * Pure generation logic for the E2E staging seed. Everything here is
+ * deterministic given its inputs and has no I/O — the executable seed/cleanup
+ * scripts under `e2e/seed/` import these builders and layer real Supabase
+ * calls on top, which is why this module can be exercised by Vitest without a
+ * staging environment.
  *
  * Every synthetic identifier (org slug, persona email) carries
  * `SYNTHETIC_DATA_PREFIX` plus a per-run id, so cleanup can always find and
@@ -43,7 +43,7 @@ export interface SyntheticPersona {
   readonly role: SyntheticPersonaRole;
   /**
    * The organization this persona belongs to, or `null` for the `external`
-   * persona: per the ticket's matrix ("owner de B e externo"), the external
+   * persona: per the E2E persona matrix ("owner de B e externo"), the external
    * persona is a real Supabase user who is a member of *no* organization,
    * used specifically to prove that a fully outside account never sees
    * either tenant's data.
@@ -91,19 +91,17 @@ function buildSyntheticPassword(runId: string, personaKey: string): string {
 /**
  * A organização em que a spec de convite convida — e o convidado que ela convida.
  *
- * Ticket 23. A spec convidava para `org-a`, que o seed enche com exatamente três
- * membros (`owner-a`, `admin-a`, `member-a`) contra um limite de plano de três.
- * O convite era recusado com `403 LIMIT_EXCEEDED`, **corretamente**, e a spec
- * falhava antes do aceite — que é o que ela existe para exercitar.
+ * O convite tem uma **organização própria** porque `org-a` já está cheia: o
+ * seed a enche com exatamente três membros (`owner-a`, `admin-a`, `member-a`)
+ * contra um limite de plano de três, e um convite ali é recusado com
+ * `403 LIMIT_EXCEEDED` — corretamente — antes do aceite que a spec exercita.
  *
- * Três saídas eram possíveis, e a escolhida foi dar ao convite a **própria
- * organização**:
+ * As alternativas custariam mais:
  *
  * - encolher `org-a` para dois membros custaria o `admin-a`, e com ele a matriz
- *   de papéis owner/admin/member que o seed existe para dar. Trocar uma lacuna
- *   por outra;
+ *   de papéis owner/admin/member que o seed existe para dar;
  * - aumentar o limite do plano faria a suíte exercitar um plano que talvez
- *   nenhum cliente use, e apagaria a garantia que o entitlement dá;
+ *   nenhum cliente use, e deixaria de testar o limite de entitlement;
  * - uma organização própria custa duas personas e uma linha de manifesto, e o
  *   executor do seed já é genérico o bastante para não mudar.
  *
@@ -121,8 +119,8 @@ export const PERSONA_CONVIDADA = 'convidado';
 /**
  * Builds the full manifest of synthetic organizations and personas for one
  * E2E staging run: organizations A and B — with the owner/admin/member/
- * external-owner personas the ticket's minimum matrix requires for cross-tenant
- * and role-based denial specs — plus the invite organization of ticket 23, whose
+ * external-owner personas the minimum persona matrix requires for cross-tenant
+ * and role-based denial specs — plus the invite organization, whose
  * only member is its owner so the invited guest has a seat.
  */
 export function buildSeedManifest(options: BuildSeedManifestOptions = {}): SeedManifest {
@@ -147,7 +145,7 @@ export function buildSeedManifest(options: BuildSeedManifestOptions = {}): SeedM
     { key: 'member-a', role: 'member', organizationKey: 'org-a' },
     { key: 'owner-b', role: 'owner', organizationKey: 'org-b' },
     { key: 'external', role: 'external', organizationKey: null },
-    // Ticket 23 — a organização do convite, com **um** membro só: o limite do
+    // A organização do convite, com **um** membro só: o limite do
     // Starter é 3, e é preciso sobrar vaga para quem aceitar o convite.
     { key: 'owner-convite', role: 'owner', organizationKey: ORGANIZACAO_DO_CONVITE },
     { key: PERSONA_CONVIDADA, role: 'external', organizationKey: null },

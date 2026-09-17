@@ -1,6 +1,6 @@
 /**
  * stripeRuntime.ts
- * Ticket 14: composition root compartilhado pelas rotas `checkout`, `portal`
+ * Composition root compartilhado pelas rotas `checkout`, `portal`
  * e `webhook`. Resolve a config do servidor uma única vez e constrói o
  * `StripeSdkAdapter` real (ou um port "não configurado" seguro quando a
  * config é inválida/ausente — nunca constrói o cliente SDK com segredo

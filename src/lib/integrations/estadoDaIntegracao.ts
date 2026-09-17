@@ -1,22 +1,19 @@
 /**
  * O estado de uma integração, **derivado só do que há evidência**.
  *
- * A tela mostrava `health_status` cru. Essa coluna nasce `'healthy'` por
- * default (`31_outbox_retries_saude_integracoes.sql`), então uma conexão que
- * nunca foi checada aparecia verde, com a palavra "healthy", só por existir a
- * linha. Salvar credenciais também marcava `status = 'conectado'` no Chatwoot,
- * e trocar as chaves do Bling deixava o `conectado` anterior de pé. Nos três
- * casos a tela afirmava saúde a partir de algo que não é prova de saúde.
+ * `health_status` sozinho não é prova: a coluna nasce `'healthy'` por default
+ * (`31_outbox_retries_saude_integracoes.sql`), então uma conexão nunca checada
+ * pareceria saudável só por existir a linha. `status = 'conectado'` também não
+ * prova saúde — diz que credenciais foram salvas ou autorizadas.
  *
  * A prova é uma só: `last_health_check_at`. Sem ela, nada foi verificado, e o
  * estado honesto é dizer exatamente isso — e não pintar de verde.
  *
- * ## Revisão externa da PR #85 — evidência antiga não é estado atual
+ * ## Evidência antiga não é estado atual
  *
- * A primeira versão aceitava qualquer `last_health_check_at` não nulo como
- * saúde de agora, e escrevia "Conectado" a partir de uma checagem de meses
- * atrás. É o mesmo defeito de origem num eixo diferente: dado velho
- * apresentado como fato presente.
+ * Um `last_health_check_at` não nulo diz que houve uma verificação, não que a
+ * integração está saudável agora: tratá-lo como "Conectado" apresentaria dado
+ * velho como fato presente.
  *
  * O caminho óbvio seria um TTL — "verificação vale por N minutos". **Não
  * existe cadência de health neste projeto**: `last_health_check_at` só é

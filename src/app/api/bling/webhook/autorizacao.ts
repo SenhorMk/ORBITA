@@ -10,9 +10,14 @@ import { createSupabaseBlingWebhookTenantStore, resolveSignedBlingConnection } f
 /**
  * Autorização do webhook do Bling: quem assinou, e em nome de qual organização.
  *
- * Separado de `route.ts` para manter o arquivo dentro do limite do portão de
- * qualidade e porque é uma responsabilidade distinta do processamento dos
- * eventos — quem autoriza não precisa saber o que o evento faz.
+ * Separado de `route.ts` porque é uma responsabilidade distinta do
+ * processamento dos eventos — quem autoriza não precisa saber o que o evento
+ * faz.
+ *
+ * Fluxo: assinatura presente → conexão cujo `client_secret` (lido do cofre)
+ * confere o HMAC → dono da organização dessa conexão → escopo verificado.
+ * Falhas de infraestrutura respondem 503, não 403: o Bling reentrega eventos
+ * que não recebem 2xx.
  */
 /** Resultado da resolução de tenant/organização a partir da assinatura HMAC do webhook. */
 type WebhookAuthorizationResult =
@@ -23,17 +28,15 @@ type WebhookAuthorizationResult =
  * Valida a assinatura HMAC do evento contra o secret de cada conexão Bling
  * guardado no cofre e resolve a organização dona da conexão que assinou.
  *
- * A organização vem da própria linha de `conexoes_integracao` — não há mais
- * resolução por `user_id` legado (`metadata->>'migrado_de_user_id'`), por
- * varredura de `membros_organizacao`, nem ramo de ambiguidade: uma conexão
- * pertence a exatamente uma organização, por construção. Ver `tenants.ts`
- * para por que a leitura tinha de sair de `integracoes_bling`.
+ * A organização vem da própria linha de `conexoes_integracao`, que tem um
+ * único `organizacao_id` — não há resolução por usuário nem ramo de
+ * ambiguidade entre organizações.
  *
  * O evento não tem ator humano. O escopo é verificado contra o **dono** da
  * organização, que é uma linha de membership real, e não um ator inventado.
- * Um `VerifiedOrganizationScope` sem ator exigiria tornar `actorId` opcional
- * em todos os repositórios; ficou registrado como dívida no ticket 11 em vez
- * de ser feito de passagem aqui.
+ * Limitação conhecida: os eventos ficam atribuídos a esse dono. Um
+ * `VerifiedOrganizationScope` sem ator exigiria tornar `actorId` opcional em
+ * todos os repositórios.
  */
 export async function authorizeWebhookTenant(
   rawBody: string,
@@ -49,10 +52,9 @@ export async function authorizeWebhookTenant(
 
   if (connectionResult._tag === 'ConnectionStoreUnavailable') {
     // 503, e não 403. A documentação do Bling prevê nova tentativa para
-    // qualquer resposta diferente de 2xx, então o que está em jogo não é "ele
-    // reentrega ou não", e sim dizer a verdade: o problema é nosso, não da
-    // assinatura. Responder "assinatura inválida" para uma falha de banco
-    // manda a investigação para o lado errado.
+    // qualquer resposta diferente de 2xx; o status serve para dizer onde está
+    // o problema: é nosso, não da assinatura. Responder "assinatura inválida"
+    // para uma falha de banco mandaria a investigação para o lado errado.
     console.error('❌ Webhook Bling: conexões indisponíveis:', connectionResult.cause);
     return {
       _tag: 'Denied',

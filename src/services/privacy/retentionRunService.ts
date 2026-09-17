@@ -1,8 +1,8 @@
 /**
  * retentionRunService.ts
- * Ticket 18: orquestra um run de retenção (dry-run ou execução) contra um
+ * Orquestra um run de retenção (dry-run ou execução) contra um
  * lote de candidatos já selecionado. Mesmo padrão de
- * `titularRequestService.ts` (ticket 17): porta de repositório explícita,
+ * `titularRequestService.ts`: porta de repositório explícita,
  * testável com fake escrito à mão; decisão de elegibilidade delegada à
  * função pura `evaluateRetentionEligibility` (`retentionPolicy.ts`) — a
  * MESMA função para dry-run e execução, só o adapter de efeito muda.

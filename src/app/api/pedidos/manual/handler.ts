@@ -1,21 +1,30 @@
 /**
  * `POST /api/pedidos/manual` — registra uma venda manual e, opcionalmente, cria
- * o pedido no Bling. Duas fontes de verdade (ERP e banco local) sem transação
- * distribuída entre elas: este fluxo existe para que uma retentativa nunca
- * produza um segundo pedido real.
+ * o pedido no Bling.
  *
- * Fluxo:
- * 1. `prepararPedido` — escopo verificado, corpo validado, cliente e itens
- *    resolvidos no cadastro; **preço e total são calculados no servidor**;
- * 2. fingerprints do corpo e dos valores resolvidos, calculados aqui;
- * 3. **claim** da referência estável (`referenciaLocal`) no ledger de tentativas,
- *    antes de qualquer chamada ao Bling; o claim devolve uma **época** (posse);
- * 4. criação no Bling, com a posse conferida imediatamente antes;
- * 5. gravação atômica de venda + ledger, recusada se a época mudou;
+ * O problema central: o ORBITA pode mandar criar um pedido no Bling e perder a
+ * resposta. Nesse caso ele não pode assumir nem que criou nem que não criou —
+ * tentar de novo às cegas pode gerar um segundo pedido real. Por isso cada
+ * tentativa fica registrada no banco e, se o resultado ficar desconhecido,
+ * bloqueada até ser esclarecido. Banco local e Bling não formam uma única
+ * transação; este fluxo existe para lidar com isso.
+ *
+ * Passo a passo:
+ * 1. `prepararPedido` confere o escopo, valida o corpo e busca cliente e
+ *    produtos no cadastro — **preço e total são calculados no servidor**;
+ * 2. fingerprint: um resumo (hash) do conteúdo da venda. A mesma referência
+ *    usada para outra venda vira conflito;
+ * 3. claim: antes de chamar o Bling, a tentativa é reservada no ledger (o
+ *    registro persistente das tentativas) pela referência da venda. O claim
+ *    devolve uma época — o "número de posse" da tentativa;
+ * 4. criação no Bling, com a posse conferida logo antes;
+ * 5. no banco local, pedido, itens, estoque, título financeiro e conclusão da
+ *    tentativa são gravados numa única transação do Postgres, recusada se a
+ *    época mudou (outra execução assumiu a tentativa);
  * 6. só então o lançamento de estoque no Bling.
  *
- * Resultado de rede sem resposta é **ambíguo**, não falha: a tentativa fica
- * `indeterminada` e só sai pela reconciliação (`reconciliacao.ts`).
+ * Resposta do Bling que não chegou é resultado **ambíguo**, não falha: a
+ * tentativa fica `indeterminada` e só sai pela reconciliação (`reconciliacao.ts`).
  */
 import { NextResponse } from 'next/server';
 
@@ -73,20 +82,20 @@ type SyncResult =
 /**
  * Cria o pedido no Bling. **Não lança o estoque** — ver `lancarEstoqueDaVenda`.
  *
- * A ordem é `criar → gravar venda+ledger (atômico com a posse) → lançar
- * estoque`. Conferir a posse antes de um efeito não impede o efeito de chegar
- * tarde: uma chamada de estoque em voo poderia aterrissar DEPOIS de a
- * reconciliação ter tomado a posse e cancelado o pedido. Com o commit durável
- * no meio, as duas pontas são decididas pelo mesmo `55P03`:
+ * A ordem é `criar no Bling → gravar venda + tentativa no banco local →
+ * lançar estoque no Bling`. Por quê: conferir a posse antes de um efeito não
+ * impede que o efeito chegue tarde. Se o estoque fosse lançado antes da
+ * gravação local, essa chamada poderia chegar ao Bling DEPOIS de a
+ * reconciliação ter assumido a tentativa e cancelado o pedido.
  *
- * - se a reconciliação tomou a posse ANTES do commit, `registrar_venda_manual_com_posse`
- *   recusa, e o executor nunca chega a lançar estoque;
- * - se o commit venceu, a tentativa já está `concluida` — e uma tentativa
- *   `concluida` não pode mais ser assumida nem cancelada como se não houvesse
- *   venda (`tentativaPodeSerReconciliada`).
+ * Com a gravação local no meio, quem decide é o banco (erro `55P03` quando a
+ * época mudou):
+ * - se a reconciliação assumiu a tentativa antes da gravação,
+ *   `registrar_venda_manual_com_posse` recusa, e este executor não lança estoque;
+ * - se a gravação aconteceu primeiro, a tentativa já está `concluida` e não
+ *   pode mais ser assumida nem cancelada (`tentativaPodeSerReconciliada`).
  *
- * O estoque remoto vira, então, efeito PÓS-confirmação do executor vencedor —
- * e não uma aposta feita antes de saber quem venceu.
+ * Assim o estoque no Bling só é lançado por quem de fato concluiu a venda.
  */
 async function sincronizarComBling(
   scope: VerifiedOrganizationScope,
@@ -223,12 +232,13 @@ async function recusaDaSincronizacao(
 }
 
 /**
- * Grava a venda e devolve a resposta.
+ * Grava a venda no banco local e devolve a resposta.
  *
- * A gravação é atômica com a POSSE: a mesma transação do banco que escreve
- * pedido, itens, estoque e financeiro valida a época e conclui o ledger. Por
- * isso o caminho feliz não tem uma segunda escrita que pudesse falhar em
- * silêncio e produzir `201` sem garantia de idempotência durável.
+ * Numa única transação do Postgres, a RPC confere a época (a posse), grava
+ * pedido, itens, baixa de estoque e título financeiro, e marca a tentativa como
+ * `concluida`. Se algo falhar lá dentro, a transação local volta inteira. Isso
+ * **não** inclui o Bling: o pedido no ERP, se foi criado, continua lá, e é por
+ * isso que existem a compensação e a reconciliação abaixo.
  */
 async function gravarVenda(
   contexto: {
@@ -246,10 +256,10 @@ async function gravarVenda(
 
   const resultado = await deps.store.persistVenda({
     scope,
-    // A POSSE ENTRA NA MESMA TRANSAÇÃO DA VENDA. A RPC recusa
-    // a gravação inteira — pedido, itens, estoque, financeiro — se a época já
-    // não for a vigente, com a linha da tentativa travada. Não é "grava e
-    // depois confere": é uma coisa só.
+    // A POSSE ENTRA NA MESMA TRANSAÇÃO LOCAL DA VENDA. A RPC trava a linha da
+    // tentativa e recusa a gravação inteira — pedido, itens, estoque,
+    // financeiro — se a época já não for a vigente. Não é "grava e depois
+    // confere": é uma coisa só.
     tentativaId: posse.tentativaId,
     epoca: posse.epoca,
     clienteId: cliente.id,
@@ -364,8 +374,8 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     // CLAIM: reivindica a referência ANTES de qualquer chamada ao Bling. Uma
     // retentativa (humana, de proxy, de navegador) que reenvie a MESMA
     // `referenciaLocal` recebe de `decidirSobreTentativa` uma resposta pronta
-    // em vez de criar um segundo pedido remoto — é isso que torna "não tente
-    // de novo" uma garantia do sistema, não só uma instrução de texto.
+    // em vez de repetir a criação remota — a proteção contra duplicação fica
+    // no servidor, e não depende de o usuário seguir a instrução da tela.
     const decisao = decidirSobreTentativa(
       await deps.store.reivindicarTentativa(scope, referenciaLocal, fingerprint, valoresFingerprint),
     );

@@ -1,6 +1,6 @@
 /**
  * logsAdapter.ts
- * Ticket 17: adapter do sistema "logs" — a trilha de auditoria imutável
+ * Adapter do sistema "logs" — a trilha de auditoria imutável
  * (`public.eventos_auditoria_sistema`, migration 36).
  *
  * Acesso/exportação: leitura real, filtrada por organização e correlação com

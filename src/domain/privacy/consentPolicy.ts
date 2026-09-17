@@ -1,6 +1,6 @@
 /**
  * consentPolicy.ts
- * Ticket 16: ConsentPolicy pura, independente de framework, test-first.
+ * ConsentPolicy pura, independente de framework.
  *
  * Não há hoje nenhuma categoria opcional real no produto (ver
  * docs/privacy/cookie-registry.md — nenhum cookie/SDK preferences/analytics/marketing

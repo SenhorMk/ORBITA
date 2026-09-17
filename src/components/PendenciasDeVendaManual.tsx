@@ -13,19 +13,18 @@ import {
 } from './tentativaPendente';
 
 /**
- * O caminho de saída, na tela, de uma venda manual que ficou sem desfecho
- * (ticket 30, fatia 3 — 5ª rodada de revisão).
+ * O caminho de saída, na tela, de uma venda manual que ficou sem desfecho.
  *
  * Bloquear uma tentativa cujo resultado ninguém confirmou é o comportamento
- * seguro. A revisão apontou o que faltava: sem uma saída, "seguro" vira "esta
- * venda está bloqueada para sempre, limpe o `localStorage`" — e apagar a chave
- * de idempotência é exatamente furar a proteção contra duplicação.
+ * seguro; sem uma saída, a única "solução" seria apagar a chave de
+ * idempotência do `localStorage` — o que fura a proteção contra duplicação.
  *
- * Este componente não decide nada sozinho: ele só oferece **conferir**, que
- * chama `POST /api/pedidos/manual/reconciliar`. Quem decide é o Bling,
- * respondendo se o pedido daquela referência existe ou não. A referência só é
- * esquecida aqui quando o servidor devolve `referenciaLiberada: true` — ou
- * seja, quando o desfecho passou a ser CONHECIDO.
+ * Este componente não decide nada sozinho: ele pede ações a
+ * `POST /api/pedidos/manual/reconciliar`, e é o servidor quem consulta o Bling
+ * e decide o que pode ser concluído (uma consulta sem pedido visível não libera
+ * nada). A referência só é esquecida aqui quando o servidor devolve
+ * `referenciaLiberada: true` — ou seja, quando o desfecho passou a ser
+ * CONHECIDO.
  */
 
 interface RespostaDeReconciliacao {
@@ -36,19 +35,21 @@ interface RespostaDeReconciliacao {
 }
 
 /**
- * As três coisas que se pode pedir sobre uma pendência.
+ * O que se pode pedir sobre uma pendência.
  *
- * `conferir` é só leitura e é o único caminho automático. As outras duas são
- * DECISÕES: uma afirma que o pedido nunca existiu (o sistema não deduz isso de
- * uma listagem vazia — ver `evidence/30-visibilidade-do-bling-*.md`), e a
- * outra escreve no ERP. Nenhuma acontece sem ser pedida nomeadamente.
+ * `conferir` nunca escreve no ERP (com permissão de gestão, pode registrar no
+ * ledger local o que descobriu) e é a ação padrão. As demais são DECISÕES: uma
+ * afirma que o pedido nunca existiu (o sistema não deduz isso de uma consulta
+ * que não encontrou o pedido), outra cancela no ERP, e a última registra o que
+ * a pessoa observou sobre um cancelamento ambíguo. Nenhuma acontece sem ser
+ * pedida nomeadamente.
  */
 type AcaoDePendencia =
   | 'conferir'
   | 'encerrar-como-nao-criada'
   | 'cancelar-no-bling'
   /**
-   * A saída do cancelamento que ficou ambíguo (9ª rodada de revisão). Não
+   * A saída do cancelamento que ficou ambíguo. Não
    * repete o cancelamento: registra o que a pessoa observou no Bling.
    */
   | 'resolver-ambiguidade';
@@ -82,9 +83,9 @@ export function PendenciasDeVendaManual({
   /**
    * Avisa que o armazenamento de pendências mudou.
    *
-   * Existe desde o Ticket 02, quando este bloco passou a aparecer também na
-   * tela de Vendas: lá o chip "Conflito Bling" conta as mesmas pendências, e
-   * sem este aviso ele continuaria mostrando uma que já foi resolvida aqui.
+   * Este bloco também aparece na tela de Vendas, onde o chip "Conflito Bling"
+   * conta as mesmas pendências; sem este aviso ele continuaria mostrando uma
+   * que já foi resolvida aqui.
    */
   readonly onMudanca?: () => void;
 }) {
@@ -198,7 +199,7 @@ export function PendenciasDeVendaManual({
                 </div>
                 </div>
 
-                {/* O CANCELAMENTO FICOU AMBÍGUO (9ª rodada de revisão). O
+                {/* O CANCELAMENTO FICOU AMBÍGUO. O
                     ORBITA não repete o cancelamento — repetir uma mutação que
                     pode ter acontecido é o que se está evitando. Quem confere
                     no Bling afirma o que viu, e é essa afirmação que destrava

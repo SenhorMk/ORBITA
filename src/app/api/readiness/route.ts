@@ -16,7 +16,7 @@ export interface ReadinessCheckResult {
 /**
  * Build the readiness response from an injected list of indispensable dependencies.
  * Exported for testing so unit tests can inject fake dependencies instead of mocking
- * `@/lib/supabaseServer` (forbidden by the ticket 21 execution contract).
+ * `@/lib/supabaseServer`, which would require the real server environment to load.
  *
  * The response body never includes a URL, key, stack trace, or raw provider payload —
  * only the stable dependency name and a coarse status tag.

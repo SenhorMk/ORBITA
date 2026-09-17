@@ -61,37 +61,33 @@ async function authorizeBlingConnect(request: Request): Promise<AuthorizationOut
  * O `client_id` vai para `metadata` porque `GET /api/bling/authorize` o lê de
  * lá.
  *
- * **Gravar credenciais novas derruba a conexão anterior.** A versão anterior
- * preservava o `status` — a intenção era boa (só o callback OAuth declara
- * `conectado`), mas o efeito era o oposto: os tokens guardados no cofre foram
- * emitidos para o Client ID *antigo* e deixam de valer no instante em que
- * outro par de chaves é gravado, enquanto a linha continuava dizendo
- * `conectado`. A tela então afirmava uma autorização que já não existia, sem
- * nenhuma evidência.
+ * **Gravar credenciais novas derruba a conexão anterior** (`status = 'pendente'`).
+ * Os tokens guardados no cofre foram emitidos para o Client ID *antigo* e
+ * deixam de valer quando outro par de chaves é gravado; manter `conectado`
+ * faria a tela afirmar uma autorização que já não existe. Só o callback OAuth
+ * volta a declarar `conectado`.
  *
  * Junto do `status`, a evidência de saúde também é apagada: `last_health_*`
- * descreve uma checagem feita contra as chaves anteriores, e mantê-la seria a
- * mesma mentira num campo diferente. Sem `last_health_check_at`, a tela diz
- * "não verificado" — que é a verdade.
+ * descreve uma checagem feita contra as chaves anteriores. Sem
+ * `last_health_check_at`, a tela diz "não verificado".
  *
- * ## Revisão externa da PR #85 — o `client_id` sai antes, e volta depois
+ * ## O `client_id` sai antes, e volta depois
  *
- * Esta função **abre** a gravação: ela tira o `client_id` de `metadata` em vez
- * de já colocar o novo. Sem isso havia escrita parcial. Duas linhas do tempo:
+ * São três escritas separadas, sem transação entre elas: abrir (esta função)
+ * → gravar o par no cofre → `confirmarClientIdDoBling`. Esta função **abre** a
+ * gravação tirando o `client_id` de `metadata` em vez de já colocar o novo,
+ * porque, se o cofre falhasse no meio:
  *
- * - conexão nova: a linha nascia com `client_id` gravado; se o cofre falhasse
- *   logo depois, o reload mostrava "Configurado" para uma organização sem
- *   Client Secret nenhum;
- * - substituição: `metadata` já apontava para o Client ID **novo** enquanto o
- *   cofre ainda guardava o par **antigo** — exatamente a metade-com-metade que
- *   a revisão apontou, e o `authorize` levaria o id novo com o segredo velho.
+ * - numa conexão nova, a tela mostraria "Configurado" para uma organização
+ *   sem Client Secret;
+ * - numa substituição, `metadata` apontaria para o Client ID **novo** enquanto
+ *   o cofre ainda guarda o par **antigo**, e o `authorize` levaria o id novo
+ *   com o segredo velho.
  *
  * Com o `client_id` ausente durante a janela, uma falha do cofre deixa a
- * conexão em "Não configurado": entendido de menos, nunca entendido errado. O
- * `client_id` só é gravado por `confirmarClientIdDoBling`, depois de o cofre
- * ter aceitado o par inteiro — e o cofre grava as duas chaves numa linha só
- * (`credenciais_integracao`, upsert por `conexao_id`), então lá dentro nunca
- * existe metade.
+ * conexão em "Não configurado": o estado afirma menos do que existe, não algo
+ * errado. O cofre grava as duas chaves num único upsert por `conexao_id`,
+ * então lá dentro o par não fica pela metade.
  */
 async function abrirGravacaoDaConexaoBling(
   scope: VerifiedOrganizationScope,
@@ -216,7 +212,7 @@ async function parseBlingCredentialsBody(
 /**
  * Registra ou atualiza as credenciais do aplicativo Bling de uma organização.
  *
- * Espelha `POST /api/chatwoot/connect` (Ticket 11): mesma autorização por
+ * Espelha `POST /api/chatwoot/connect`: mesma autorização por
  * capacidade, mesma persistência em `conexoes_integracao` + cofre cifrado
  * `credenciais_integracao`. O `client_secret` só existe cifrado no cofre e
  * nunca volta em resposta nem em log.
@@ -233,7 +229,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: ORGANIZACAO_ESPERADA_DIVERGENTE }, { status: 409 });
     }
 
-    // A ordem e a garantia: abrir (sem `client_id`) -> cofre -> confirmar.
+    // A ordem importa: abrir (sem `client_id`) -> cofre -> confirmar.
     const { conexaoId, status } = await abrirGravacaoDaConexaoBling(authorization.scope);
 
     await credentialsVault.saveEncryptedCredentials(

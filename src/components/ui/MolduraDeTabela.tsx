@@ -8,9 +8,9 @@ import type { ReactNode } from 'react';
  * **Não é um `DataTable`.** Não recebe colunas, nem dados, nem renderizadores —
  * só a moldura. As colunas de Estoque e as de Clientes são fixas e conhecidas, e
  * cada tela escreve as suas; o que as duas repetiriam é este contorno, e só ele
- * foi extraído. Vendas tem a mesma casca escrita à mão e continua como está: a
- * fatia que a migrou já estava fechada, e reabri-la por estética custaria mais
- * risco do que as vinte linhas que ela repete.
+ * foi extraído. Vendas tem a mesma casca escrita à mão: são cerca de vinte
+ * linhas repetidas, mantidas assim para não mexer numa tela já estável só por
+ * estética.
  */
 export function MolduraDeTabela({
   /** A soma das colunas na geometria mais estreita — abaixo disso, rola dentro da moldura. */

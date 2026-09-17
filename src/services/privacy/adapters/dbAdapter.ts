@@ -1,6 +1,6 @@
 /**
  * dbAdapter.ts
- * Ticket 17: adapter do sistema "banco" — a fonte de dados que a própria
+ * Adapter do sistema "banco" — a fonte de dados que a própria
  * ORBITA controla diretamente (`clientes`, `pedidos`, `itens_pedido`,
  * `financeiro`, `produtos`, `membros_organizacao`).
  *

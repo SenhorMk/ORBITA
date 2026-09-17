@@ -1,6 +1,6 @@
 /**
  * titularVerificationService.ts
- * Ticket 17: verificação técnica de identidade/autoridade do solicitante.
+ * Verificação técnica de identidade/autoridade do solicitante de direitos do titular.
  *
  * Duas provas de identidade, nenhuma delas o campo de e-mail/documento
  * informado no formulário sozinho:

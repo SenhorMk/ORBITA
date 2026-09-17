@@ -7,8 +7,11 @@ export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/sync
- * Agenda um job de sincronização durável e retorna imediatamente (202 Accepted).
- * O processamento ocorre em background via `after()`, fora do ciclo HTTP.
+ * Registra um job de sincronização persistido e responde logo com `202`
+ * ("aceito", não "concluído"). O processamento roda com `after()`, depois de a
+ * resposta sair; o resultado é lido em `GET /api/sync/status`. Não há
+ * agendador externo: se já existe job ativo, a rota devolve esse mesmo job e
+ * só dispara processamento quando ele ainda está `queued`.
  *
  * ## Semântica temporal da autorização — política escolhida, não acidente
  *
@@ -32,9 +35,8 @@ export const dynamic = 'force-dynamic';
  */
 export async function POST(request: Request) {
   try {
-    // Ticket 22 — a autorização acontece aqui, uma vez. Antes o portão legado
-    // perguntava por `app_metadata` e o serviço perguntava de novo, por outra
-    // fonte, devolvendo a negação como exceção para a rota traduzir em status.
+    // A autorização acontece aqui, uma vez, pelo escopo verificado; o serviço
+    // de sincronização recebe o escopo pronto e não repete a pergunta.
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
@@ -46,10 +48,9 @@ export async function POST(request: Request) {
     }
 
     // `?completa=1` ignora o checkpoint de `dataAlteracaoInicial` e relê tudo.
-    // Necessário porque o checkpoint podia ficar envenenado: uma leitura que
-    // falhava devolvia lista vazia, a etapa "concluía" com zero itens e o
-    // marcador avançava assim mesmo — e daí em diante o Bling respondia zero
-    // corretamente, para sempre.
+    // É a saída para um checkpoint adiantado: se o marcador avançou sem que os
+    // dados daquele intervalo tenham sido lidos, a leitura incremental nunca
+    // mais os traria.
     const completa = new URL(request.url).searchParams.get('completa') === '1';
 
     // 1. Registra job ou retorna job ativo existente (idempotente)
@@ -68,8 +69,8 @@ export async function POST(request: Request) {
       { status: 202 },
     );
   } catch (error: unknown) {
-    // A mensagem pública fica como estava; o diagnóstico, que antes se perdia
-    // num `console.error` sem o erro, passa pelo registrador do Ticket 20.
+    // O cliente recebe a frase pública fixa; o diagnóstico vai para o log por
+    // `registrarFalhaInterna`.
     registrarFalhaInterna('sync.enfileirar', error);
     return NextResponse.json({ success: false, error: 'Erro interno na sincronização' }, { status: 500 });
   }

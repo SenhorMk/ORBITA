@@ -50,7 +50,7 @@ async function upsertChatwootConnection(
 
 /**
  * Grava as credenciais no cofre e devolve o id da conexão, desfazendo a linha
- * se o cofre recusar (revisão externa da PR #85).
+ * se o cofre recusar.
  *
  * Para o Chatwoot, a existência da linha **é** a evidência de configuração —
  * não há `client_id` em `metadata` para servir de marca, como no Bling. Uma

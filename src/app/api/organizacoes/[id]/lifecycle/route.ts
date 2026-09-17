@@ -45,7 +45,7 @@ export async function GET(
   try {
     const { id: orgId } = await params;
 
-    // Ticket 20 — o vínculo é a exigência de entrada; as ações abaixo mantêm
+    // O vínculo é a exigência de entrada; as ações abaixo mantêm
     // cada uma a sua própria exigência de papel, mais estreita que esta.
     const authorization = await authorizeRequestOrganizationCapability(req, orgId, 'organization:access');
     if (authorization._tag !== 'OrganizationCapabilityAuthorized') {

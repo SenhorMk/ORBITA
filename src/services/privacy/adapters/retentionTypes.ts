@@ -1,9 +1,9 @@
 /**
  * retentionTypes.ts
- * Ticket 18: contrato comum de todo adapter de efeito de retenção — mesmo
- * padrão de `src/services/privacy/adapters/types.ts` (ticket 17,
- * `TitularSystemAdapter`): um adapter por sistema alcançado, nunca esconde
- * falha, nunca finge sucesso.
+ * Contrato comum de todo adapter de efeito de retenção — mesmo padrão de
+ * `src/services/privacy/adapters/types.ts` (`TitularSystemAdapter`): um adapter
+ * por sistema alcançado, que reporta falha como falha e não declara sucesso
+ * sem efeito.
  */
 
 export type RetentionAction = 'anonymize' | 'delete';

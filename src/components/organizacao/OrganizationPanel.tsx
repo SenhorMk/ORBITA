@@ -27,7 +27,7 @@ export interface OrganizationPanelProps {
   /**
    * O estado de organizações, criado uma única vez pelo topo da aplicação.
    *
-   * Desde o Ticket 01 o shell mostra e troca a organização ativa; se o painel
+   * O shell mostra e troca a organização ativa; se o painel
    * criasse o seu próprio estado, uma troca feita pelo topo deixaria esta aba
    * anunciando a organização anterior.
    */
@@ -119,9 +119,10 @@ function Cabecalho({
 /**
  * A faixa que diz de quem é tudo o que vem abaixo.
  *
- * Ela é a primeira linha de defesa contra o defeito que este ticket existe para
- * fechar: nenhuma lista desta tela pode ser lida sem saber a que organização
- * pertence, e com qual autoridade quem olha está olhando.
+ * Nenhuma lista desta tela deve ser lida sem saber a que organização pertence,
+ * e com qual papel quem olha está olhando. Esta faixa é o que torna isso
+ * visível. É informação de interface, não autorização: o acesso é decidido
+ * pelas rotas.
  */
 function FaixaDeContexto({
   nome,

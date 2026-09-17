@@ -1,6 +1,6 @@
 /**
  * entitlementLifecycleRepository.ts
- * Ticket 13: Repository escopado por organização que carrega plano, assinatura,
+ * Repository escopado por organização que carrega plano, assinatura,
  * status de ciclo de vida e uso atual de recursos limitados.
  *
  * Toda query aqui repete o predicado `organizacao_id = orgId` mesmo usando o
@@ -31,8 +31,8 @@ type DbAssinaturaStatus = 'trial' | 'active' | 'past_due' | 'canceled' | 'incomp
  * Regra: o status operacional da organização (suspenso/pending_deletion/deleted)
  * tem prioridade sobre o status de cobrança — uma organização suspensa por
  * violação de termos continua bloqueada mesmo que a fatura esteja em dia.
- * `deleted` (estado terminal pós-anonimização, fora do escopo de 6 estados do
- * ticket) é tratado como `pending_deletion` para nunca liberar mutação por
+ * `deleted` (estado terminal pós-anonimização, fora dos 6 estados da máquina de
+ * ciclo de vida) é tratado como `pending_deletion` para nunca liberar mutação por
  * fallback. `incomplete` (checkout iniciado e não confirmado) é tratado como
  * `past_due`: mesma política de bloqueio de mutação por prudência de cobrança.
  */

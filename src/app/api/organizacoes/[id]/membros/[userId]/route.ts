@@ -21,10 +21,9 @@ export async function DELETE(
 ) {
   const { id: orgId, userId: targetUserId } = await params;
 
-  // Revogar membro é ação de gestão. Antes do Ticket 20 a rota só perguntava
-  // "há sessão?" pelo atalho de compatibilidade, que responde `null` tanto para
-  // "sem sessão" quanto para "sem vínculo" — e as duas viravam 401, inclusive
-  // para o dono da organização.
+  // Revogar membro é ação de gestão: exige `organization:manage` na organização
+  // da URL. A resposta distingue sem sessão (401), sem permissão (403) e
+  // indisponibilidade (503).
   const authorization = await authorizeRequestOrganizationCapability(req, orgId, 'organization:manage');
   if (authorization._tag !== 'OrganizationCapabilityAuthorized') {
     return authorizationFailureResponse(authorization.status);
@@ -36,7 +35,8 @@ export async function DELETE(
   }
 
   // `revogar_membro_organizacao` verifica o papel do próprio chamador por
-  // `auth.uid()`; a service_role key não carrega sujeito (Ticket 26).
+  // `auth.uid()`; a service_role key não carrega sujeito, então a RPC viaja no
+  // cliente do próprio ator.
   const actorClientResult = createActorScopedSupabaseClient(bearerResult.token);
   if (actorClientResult._tag !== 'ActorScopedClientCreated') {
     logger.error('organizacoes.membros.actor_client_unavailable', {

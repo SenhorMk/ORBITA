@@ -35,9 +35,9 @@ export interface MembroOrganizacao {
    * podia vê-lo. `null` quando não há nome a mostrar — e aí `origem_do_nome`
    * diz se é por não existir ou por não ter sido possível ler.
    *
-   * Opcionais porque uma resposta antiga, de um servidor ainda sem esta fatia,
-   * não os traz — e a tela precisa continuar legível nesse intervalo em vez de
-   * imprimir `undefined`.
+   * Opcionais porque um servidor que ainda não os devolva (por exemplo, durante
+   * um deploy) não os traz — e a tela precisa continuar legível nesse
+   * intervalo em vez de imprimir `undefined`.
    */
   nome_exibicao?: string | null;
   origem_do_nome?: OrigemDoNome;
@@ -46,7 +46,7 @@ export interface MembroOrganizacao {
 /**
  * O convite recém-criado, **com o código**, como a tela precisa dele.
  *
- * Ticket 06: a entrega é manual, então o token é o produto da criação — quem
+ * A entrega é manual, então o token é o produto da criação — quem
  * criou o convite precisa dele para enviar por WhatsApp, e-mail ou outro
  * canal. Ele vive no estado de React da tela e em nenhum outro lugar: não vai
  * para `localStorage`, não vai para log, e desaparece quando o modal fecha.

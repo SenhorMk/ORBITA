@@ -12,7 +12,7 @@ type RegisterFeedback =
 /**
  * Message shown when the server accepted the attempt.
  *
- * Ticket 07 makes `/api/auth/register` answer identically for a new address and
+ * `/api/auth/register` answers identically for a new address and
  * an address that already has an account. This copy preserves that property on
  * the client: it never says whether an account was created, so the screen can
  * not be used to enumerate registered e-mails. Never replace it with anything
@@ -34,8 +34,7 @@ export interface RegisterFormProps {
  *
  * The route is the authority on every outcome; this component only renders what
  * the route returned. It deliberately has no "e-mail already in use" branch,
- * because distinguishing that case would reintroduce the account enumeration
- * that Ticket 07 removed.
+ * because distinguishing that case would allow account enumeration.
  *
  * @param props - Optional callback fired once a submission is accepted.
  * @returns The rendered sign-up form.

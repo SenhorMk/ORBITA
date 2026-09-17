@@ -12,7 +12,7 @@ import {
   Users,
 } from 'lucide-react';
 
-/** Os nove destinos do produto. São exatamente os mesmos de antes do Ticket 01. */
+/** Os nove destinos do produto. */
 export type TabType =
   | 'dashboard'
   | 'sales'
@@ -67,10 +67,8 @@ const DESTINOS_VISIVEIS = DESTINOS.filter((destino) => !DESTINOS_NAO_APRESENTADO
 /**
  * A navegação do Orbita — e a **única** que existe.
  *
- * Antes do Ticket 01 havia duas: um dock vertical de nove ícones e, logo abaixo
- * do topo, uma segunda barra horizontal com os mesmos nove destinos. Dois
- * controles para o mesmo lugar não é estilo, é a interface não sabendo dizer
- * onde a pessoa está.
+ * Dois controles para o mesmo destino não seriam estilo: seriam a interface
+ * sem saber dizer onde a pessoa está.
  *
  * O item ativo é a única cápsula lime da tela. Ênfase só existe se for escassa.
  *

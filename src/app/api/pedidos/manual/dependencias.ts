@@ -48,8 +48,10 @@ import type {
  * sistema de origem, que é o campo que o Bling reserva para isso.
  *
  * É a **referência estável** da tentativa quando o cliente envia o UUID que
- * gerou (e o reenvia nas retentativas); sem ele, cada chamada recebe um UUID
- * novo e fica sem proteção entre retentativas. Ela **não** é gravada em
+ * gerou (e o reenvia nas retentativas). Sem ele, cada chamada recebe um UUID
+ * novo e o servidor não reconhece a retentativa como a mesma tentativa; ainda
+ * assim, uma segunda pendência idêntica é barrada pelo índice único parcial por
+ * `(organizacao_id, fingerprint)`. Ela **não** é gravada em
  * `pedidos.bling_id` — sem
  * sincronização não existe id do Bling, e a coluna aceita NULL.
  */
@@ -188,9 +190,10 @@ async function lerTentativaPorReferencia(
  * existente e devolve: nova (com época), conflito de conteúdo, valores
  * divergentes, pendência idêntica, ou o estado da tentativa repetida.
  *
- * **Nunca lança.** Toda falha vira `TentativaIndisponivel` — inclusive
- * `42P01` (tabela/RPC ausente). Tratar infraestrutura ausente como "segue sem
- * a proteção" desligaria em silêncio a garantia contra duplicação. Falha
+ * **Erro da RPC vira valor.** Toda falha devolvida pela RPC vira
+ * `TentativaIndisponivel` — inclusive `42P01` (tabela/RPC ausente). Tratar
+ * infraestrutura ausente como "segue sem a proteção" desligaria em silêncio a
+ * proteção contra duplicação. Falha
  * fechada: sem conseguir reivindicar, o handler não chama o Bling.
  */
 async function reivindicarTentativa(
@@ -307,14 +310,18 @@ async function confirmarPosse(
 }
 
 /**
- * Grava a venda inteira numa transação única do banco, **junto com a posse da
+ * Grava a venda numa única transação do Postgres, **junto com a posse da
  * tentativa e a conclusão do ledger** (`registrar_venda_manual_com_posse`,
- * migration 59, seção 10).
+ * migration 59, que chama `registrar_venda_manual`, na versão da migration 61).
  *
- * Pedido, itens, baixa de estoque, título financeiro e conclusão do ledger
- * commitam juntos: ou a venda inteira existe, ou nada existe. A RPC revalida
- * cliente e produtos contra a organização, recusa estoque negativo e confere a
- * época — `55P03` significa que a posse foi perdida e NADA foi gravado.
+ * Dentro dessa transação local: pedido, itens, baixa de estoque (que recusa
+ * estoque negativo), título financeiro a receber vinculado ao pedido e
+ * conclusão da tentativa. Ou tudo isso existe, ou nada existe. A RPC também
+ * revalida cliente e produtos contra a organização e confere a época —
+ * `55P03` significa que a posse foi perdida e NADA foi gravado.
+ *
+ * Essa atomicidade é só do banco do ORBITA. O pedido no Bling foi criado antes,
+ * por outra chamada, e não volta atrás se esta transação falhar.
  *
  * **A corrida com o webhook (migration 57).** Quando a venda é
  * sincronizada, o pedido nasce no Bling **antes** desta gravação — a ordem não

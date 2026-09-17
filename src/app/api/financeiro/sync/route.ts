@@ -92,10 +92,8 @@ function authFor(actorId: string, scope: VerifiedOrganizationScope): FinanceiroS
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
-  // Ticket 22 — o portão de sessão legado saiu. Ele usava o id do *tenant* como
-  // id do *ator*, e os dois só coincidiam porque um `dono` sem `tenant_id` caía
-  // em `tenantId = actorId`. O ator verdadeiro vem do vínculo persistido, em
-  // `scope.actorId`.
+  // O ator vem do vínculo persistido (`scope.actorId`), nunca do id da
+  // organização.
   const scopeResult = await resolveVerifiedOrganizationScope(request);
   if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
   const { scope } = scopeResult;

@@ -71,10 +71,9 @@ export interface ContextoDaFalha {
  * `error.name` — o nome é gravável, e quem controla o objeto lançado
  * controlaria o que entra no log.
  *
- * Esta é a convenção que o ticket 04 estabeleceu em
- * `src/app/api/pedidos/status/handler.ts` contra CWE-209. O ticket 20 a
- * generalizou porque, ao tornar as rotas de organização alcançáveis, cinco
- * `catch` que devolviam `error.message` ao cliente deixaram de ser inertes.
+ * É a convenção do sistema contra CWE-209 (exposição de detalhe interno em
+ * mensagem de erro), usada por todas as rotas: o cliente recebe uma frase
+ * pública fixa, e o diagnóstico passa por aqui.
  *
  * @param operacao - Nome estável da operação, para busca no log.
  * @param erro - O erro capturado, de qualquer forma.

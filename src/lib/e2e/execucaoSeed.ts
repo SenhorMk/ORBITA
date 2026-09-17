@@ -163,7 +163,7 @@ function vinculosCriadosPelasSpecs(manifest: SeedManifest): OperacaoPlanejada[] 
 
   return [
     {
-      // Ticket 23 — o aceite do convite cria este vínculo, e é o que a spec
+      // O aceite do convite cria este vínculo, e é o que a spec
       // existe para provar.
       tipo: 'membership',
       chave: `spec:membership:${PERSONA_CONVIDADA}`,
@@ -172,8 +172,8 @@ function vinculosCriadosPelasSpecs(manifest: SeedManifest): OperacaoPlanejada[] 
     },
     {
       // Criar uma organização torna quem criou o dono dela. Este vínculo nasce
-      // com a `spec-created-org` e era o "órfão informativo" que o ticket 07
-      // registrou como limite conhecido: some por cascade, não por limpeza.
+      // com a `spec-created-org` e é um limite conhecido da limpeza: some por
+      // cascade, não por remoção explícita.
       tipo: 'membership',
       chave: 'spec:membership:owner-a@spec-created-org',
       identificador: `${ownerA.email}@${slugDaOrganizacaoDaSpec(manifest.prefix)}`,

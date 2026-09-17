@@ -106,7 +106,7 @@ export async function GET(
   // alcançável, é pior que uma falha: a tela conclui que o membro *não existe*
   // — some da lista, some da contagem, e a revogação parece já ter acontecido.
   // Um membro persistido que o servidor não sabe ler é falha do servidor, e é
-  // assim que ela é dita (Ticket 20).
+  // assim que ela é dita.
   const lista = membroRowSchema.array().safeParse(data ?? []);
   if (!lista.success) {
     registrarFalhaInterna('organizacoes.membros.listar', lista.error, {

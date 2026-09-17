@@ -29,10 +29,9 @@ const UPGRADE_TARGETS: ReadonlyArray<{ slug: 'pro' | 'enterprise'; label: string
 ];
 
 /**
- * Plano/limites e billing (Ticket 24b): reflete só o que
- * `/api/organizacoes/[id]/entitlements` confirmou (Ticket 13) e delega
- * checkout/portal para as rotas Stripe reais (Ticket 14). Nenhum estado de
- * assinatura é calculado no cliente.
+ * Plano/limites e billing: reflete só o que
+ * `/api/organizacoes/[id]/entitlements` confirmou e delega checkout/portal
+ * para as rotas Stripe. Nenhum estado de assinatura é calculado no cliente.
  */
 export function BillingPanel({ fetchWithAuth, organizacaoId, onRedirect }: BillingPanelProps) {
   const redirect = onRedirect ?? ((url: string) => { window.location.href = url; });

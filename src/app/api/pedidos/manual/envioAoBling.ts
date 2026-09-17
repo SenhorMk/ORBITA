@@ -2,11 +2,13 @@
  * O que se faz ANTES de o pedido existir no Bling: converter a data, resolver
  * o contato e montar um payload que o schema oficial aceita.
  *
- * Separado de `handler.ts` porque `handler.ts` passou do limite de tamanho do
- * gate de qualidade. A fase é quase toda inofensiva — mas NÃO inteiramente:
- * quando o cliente ainda não tem `bling_id`, `resolveBlingContato` cadastra um
- * contato na conta do lojista. É por isso que a posse é conferida ali dentro
- * (10ª rodada de revisão, B2).
+ * A fase é quase toda sem efeito externo — mas NÃO inteiramente: quando o
+ * cliente ainda não tem `bling_id`, `resolveBlingContato` cadastra um contato
+ * na conta do lojista. É por isso que a posse é conferida ali dentro.
+ *
+ * O payload leva `numeroLoja = referenciaLocal`: é essa referência, decidida
+ * antes do envio, que permite à reconciliação procurar o pedido se a resposta
+ * da criação se perder.
  */
 import type { NextResponse } from 'next/server';
 
@@ -67,12 +69,9 @@ async function resolveBlingContato(
     return { _tag: 'ContatoResolved', blingContatoId: existente };
   }
 
-  // CADASTRAR O CONTATO É EFEITO NO ERP (10ª rodada de revisão, B2).
-  //
-  // A 9ª rodada conferia a posse logo antes de `createPedidoVenda`, e tratava
-  // toda a preparação como inofensiva. Não é: quando o cliente ainda não tem
-  // `bling_id`, esta função CRIA um contato na conta do lojista e grava o
-  // vínculo local. Um executor que já perdeu a posse chegava até aqui.
+  // CADASTRAR O CONTATO É EFEITO NO ERP: esta função CRIA um contato na conta
+  // do lojista e grava o vínculo local. Um executor que já perdeu a posse não
+  // deve chegar a esse efeito.
   //
   // A conferência fica DENTRO do ramo que muta, e não antes da preparação
   // inteira: um cliente já vinculado não paga round-trip nenhum a mais.
@@ -171,8 +170,9 @@ function buildPedidoVendaPayload(
  *
  * Uma recusa desta fase é `SyncRejected` — nada de PEDIDO existe no ERP. O
  * único efeito externo possível aqui é o cadastro do contato, e ele acontece
- * atrás da conferência de posse; cadastrar um contato não cria venda nenhuma,
- * então não há ambiguidade a resolver.
+ * atrás da conferência de posse. Cadastrar um contato não cria venda, então
+ * não há pedido ambíguo a reconciliar; no pior caso fica um contato cadastrado
+ * no Bling sem pedido associado.
  */
 export async function prepararEnvioAoBling(
   scope: VerifiedOrganizationScope,

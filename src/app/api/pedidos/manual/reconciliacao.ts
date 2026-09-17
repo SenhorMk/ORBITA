@@ -1,10 +1,15 @@
 /**
- * Reconciliação de uma tentativa de venda manual cujo desfecho no Bling não
- * foi confirmado (`indeterminada`, ou `em_andamento` antiga).
+ * Reconciliação: descobrir o que realmente aconteceu com uma venda antes de
+ * permitir outra ação.
  *
- * Bloquear essa tentativa é o comportamento seguro contra duplicação, mas sem
- * um caminho de saída a venda ficaria bloqueada para sempre — e apagar a chave
- * de idempotência no navegador furaria a proteção. Esta é a saída, no servidor.
+ * Problema: uma tentativa ficou sem desfecho (`indeterminada`, ou
+ * `em_andamento` há tempo demais) porque a resposta do Bling se perdeu. Ela
+ * fica bloqueada para não duplicar o pedido — mas sem uma saída ficaria
+ * bloqueada para sempre, e apagar a referência no navegador furaria a proteção.
+ *
+ * Solução: esta função consulta o Bling pela referência da venda e só conclui
+ * quando a resposta é suficiente. O que não dá para concluir continua
+ * bloqueado, esperando uma decisão explícita.
  *
  * ## Como se pergunta ao Bling sem ter o `bling_id`
  *
@@ -23,9 +28,10 @@
  * | um pedido | sim | `VendaConfirmada` — só a confirmação se perdeu | sim, com gestão e ledger gravado |
  * | um pedido | não | `PendenteNoBling`, com o `bling_id` descoberto | não |
  *
- * **Ausência não é prova.** O contrato do Bling não garante que um pedido
- * recém-criado já apareça na consulta, então "não encontrei" não significa
- * "não foi criado". `NenhumPedidoVisivel` mantém a tentativa bloqueada.
+ * **Ausência não é prova.** Uma consulta que não encontrou o pedido não é
+ * tratada pelo ORBITA como prova de que ele nunca foi criado: uma leitura
+ * negativa isolada não basta para liberar uma nova criação no ERP.
+ * `NenhumPedidoVisivel` mantém a tentativa bloqueada.
  *
  * ## Ações
  *
@@ -80,10 +86,9 @@ const IDADE_MINIMA_PARA_RECONCILIAR_EM_ANDAMENTO_MS = 2 * 60 * 1000;
  *   **Escreve no ERP** e por isso nunca é o padrão.
  * - `'encerrar-como-nao-criada'`: a decisão HUMANA de que o pedido nunca foi
  *   criado, para o caso em que a consulta não encontra nada. Ela existe
- *   porque **a ausência não é prova**: o contrato do Bling não promete
- *   visibilidade imediata depois de um `POST`, então "o GET não achou agora"
- *   não pode, sozinho, liberar a chave. Quem confere no ERP e conclui que não
- *   existe pedido assume essa conclusão nomeadamente.
+ *   porque **a ausência não é prova**: "a consulta não achou agora" não pode,
+ *   sozinha, liberar a chave para uma nova criação. Quem confere no ERP e
+ *   conclui que não existe pedido assume essa conclusão nomeadamente.
  */
 export type AcaoDeReconciliacao =
   | 'conferir'
@@ -284,13 +289,10 @@ export async function reconciliarTentativa(
   if (encontrado._tag === 'NenhumPedido') {
     // AUSÊNCIA NÃO É PROVA.
     //
-    // Tratar "o GET não achou" como "o POST nunca criou" exigiria uma garantia
-    // de read-after-write que **o contrato do Bling não dá**: o OpenAPI oficial
-    // não menciona consistência, propagação ou visibilidade.
-    //
-    // Sem essa garantia, liberar aqui reabriria a chave numa janela em que o
-    // pedido pode existir e ainda não estar visível — e a retentativa criaria o
-    // segundo. Então a conferência **não conclui nada** neste caso: relata a
+    // "A consulta não achou o pedido" não é tratado como "o pedido nunca foi
+    // criado". Se o pedido existir e só não tiver aparecido nesta leitura,
+    // liberar a chave aqui deixaria uma retentativa criar um segundo pedido
+    // real. Então a conferência **não conclui nada** neste caso: relata a
     // ausência e mantém o bloqueio.
     if (acao !== 'encerrar-como-nao-criada') {
       return { _tag: 'NenhumPedidoVisivel', tentativaId: tentativa.id };

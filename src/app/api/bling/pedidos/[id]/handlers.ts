@@ -10,9 +10,8 @@ const orderChangesSchema = z.record(z.string(), z.unknown());
 /**
  * Order operations consumed by the HTTP adapter.
  *
- * Ticket 22 — o port recebia o `tenant` do `ActorContext`, resolvido de
- * `app_metadata`, e cada adaptador o convertia em organização por conta
- * própria. Passou a receber a organização já verificada.
+ * O port recebe a organização já verificada; nenhum adaptador converte
+ * identidade em organização por conta própria.
  */
 export interface OrderAccessPort {
   readonly read: (

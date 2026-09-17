@@ -50,21 +50,14 @@ const categoryStore: CategoryStore = {
   },
 
   async upsertAll(scope, categories) {
-    // Ticket 22 — era `user_id: tenant.id` com `onConflict: 'user_id, bling_id'`:
-    // o modelo de tenancy por usuário, vivo num caminho de **escrita**. A chave
-    // passa a ser a organização, que é o que `uq_categorias_org_bling` indexa —
-    // e a guarda `upsert-conflito-inferivel` confere os dois lados.
+    // A chave de conflito é a organização — `(organizacao_id, bling_id)`, o que
+    // `uq_categorias_org_bling` indexa, conferido pela guarda
+    // `upsert-conflito-inferivel`.
     //
-    // O `user_id` voltou ao PAYLOAD, e só a ele. A coluna continua
-    // `NOT NULL` sem default em `public.categorias`, então omiti-la fazia todo
-    // upsert morrer com `23502` — e a importação de categorias estava quebrada
-    // para **qualquer** organização desde então: `categorias` com zero linhas no
-    // staging, seletor de categoria do produto permanentemente vazio, e a causa
-    // engolida por um `catch {}` sem parâmetro. Aqui ele é "quem gravou", o
-    // mesmo papel que tem em `ClienteRepository.upsert`; a tenancy segue sendo
-    // `organizacao_id`, e o conflito segue sendo `(organizacao_id, bling_id)`.
-    //
-    // Preenchê-lo não exige migration, e é por isso que não há uma nesta PR.
+    // `user_id` entra só no PAYLOAD, como "quem gravou" (o mesmo papel que tem
+    // em `ClienteRepository.upsert`): a coluna é `NOT NULL` sem default em
+    // `public.categorias`, e omiti-la faria todo upsert falhar com `23502`. A
+    // tenancy é `organizacao_id`, não `user_id`.
     const payload = categories.map((category) => ({
       organizacao_id: scope.organizationId,
       user_id: scope.actorId,

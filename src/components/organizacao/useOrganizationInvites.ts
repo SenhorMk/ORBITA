@@ -11,28 +11,25 @@ const FALHA_AO_LER = 'Não foi possível carregar os convites';
  * Cria, lista e aceita convites de organização
  * (`/api/organizacoes/[id]/convites`, `/api/convites/aceitar`).
  *
- * ## Ticket 06 — o mesmo carimbo dos membros, e o código do convite
+ * ## O mesmo carimbo dos membros, e o código do convite
  *
- * A lista de convites tinha os dois defeitos de `useOrganizationMembers`, pela
- * mesma razão e com a mesma consequência: estado sem dono, então convites de A
- * apareciam sob B; e falha engolida, então uma leitura que não deu certo dizia
- * "nenhum convite" — e um convite pendente que desaparece da lista é um
- * convite que ninguém revoga e ninguém acompanha. A correção é a mesma:
- * `useLeituraPorOrganizacao` e uma leitura que lança.
+ * A lista de convites segue a regra de `useOrganizationMembers`: a leitura é
+ * carimbada pela organização (`useLeituraPorOrganizacao`), para que convites
+ * de A nunca apareçam sob B, e uma leitura que falha lança em vez de dizer
+ * "nenhum convite" — um convite pendente que some da lista é um convite que
+ * ninguém revoga nem acompanha.
  *
- * **O convite é nominal e a entrega é manual, então o código tem de voltar
- * para a tela.** `POST .../convites` sempre devolveu `{ id, token }`, e este
- * hook descartava a resposta inteira para só recarregar a lista. Sem o token
- * não existe jornada: o servidor cria o convite, e a pessoa que o criou não
- * tem o que enviar por WhatsApp. `handleInvite` agora devolve o convite criado
- * — e ele fica onde nasceu, no estado de React de quem pediu: nunca em
- * `localStorage`, nunca em log.
+ * **O convite é nominal e a entrega é manual, então o código volta para a
+ * tela.** `POST .../convites` devolve `{ id, token }`, e sem o token a pessoa
+ * que criou o convite não tem o que enviar (por WhatsApp, por exemplo).
+ * `handleInvite` devolve o convite criado — e ele fica onde nasceu, no estado
+ * de React de quem pediu: nunca em `localStorage`, nunca em log.
  *
- * ## Revisão externa da PR #84 — as ações também carregam de quem são
+ * ## As ações também carregam de quem são
  *
- * As leituras já eram carimbadas; os estados de ação não. Um convite criado em
- * A cuja resposta só chegasse depois da troca publicaria, sob B, um token que
- * pertence a A. As três correções, cada uma com o escopo que lhe cabe:
+ * Não basta carimbar as leituras: um convite criado em A cuja resposta só
+ * chegasse depois da troca publicaria, sob B, um token que pertence a A. Cada
+ * estado de ação tem o escopo que lhe cabe:
  *
  * - **criação** — carimbada pela seleção (organização e versão). O erro só vale
  *   na seleção que o produziu, e a resposta que chega fora dela é descartada;

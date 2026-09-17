@@ -1,7 +1,7 @@
 /**
  * Dependency-injected health check evaluator used by readiness/startup probes.
  *
- * Design invariants (Ticket 21):
+ * Design invariants:
  * - Fails closed: any thrown error, `ok:false` result, or timeout is reported as unhealthy.
  * - Never exposes provider detail (URL, key, stack, payload) to the caller of `evaluateDependencies`.
  *   Callers may pass `onError` to log a redacted diagnostic on the server side only.

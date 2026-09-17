@@ -28,10 +28,8 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
-    // Ticket 22 — o portão de sessão legado saiu daqui. Ele lia o papel de
-    // `app_metadata`, que só os usuários históricos têm, e era redundante: o
-    // escopo de organização abaixo já resolve identidade e vínculo, e já
-    // distingue 401 (sem sessão), 403 (sem vínculo) e 503 (indisponível).
+    // O escopo de organização resolve identidade e vínculo, e distingue 401
+    // (sem sessão), 403 (sem vínculo) e 503 (indisponível).
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
@@ -57,9 +55,8 @@ export async function GET(request: Request) {
     });
 
   } catch (error: unknown) {
-    // Ticket 22, critério 13 — inerte atrás do 401 legado, devolvia a mensagem
-    // do erro ao cliente (CWE-209). Diagnóstico no log, frase pública fixa na
-    // resposta.
+    // A mensagem do erro não vai ao cliente (CWE-209): diagnóstico no log,
+    // frase pública fixa na resposta.
     registrarFalhaInterna('financeiro.listar', error);
     return NextResponse.json(
       { success: false, error: MENSAGEM_PUBLICA_DE_FALHA },

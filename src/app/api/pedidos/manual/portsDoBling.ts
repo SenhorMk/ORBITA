@@ -2,9 +2,9 @@
  * A porta do BLING na venda manual: as seis chamadas ao ERP que este fluxo
  * faz, e o que cada resposta significa.
  *
- * Separada de `ports.ts` porque é a única superfície do fluxo que fala com um
- * sistema externo — e porque `ports.ts` passou do limite de tamanho do gate de
- * qualidade. `ports.ts` reexporta, então quem consome importa de um lugar só.
+ * Separada de `ports.ts` porque é a superfície do fluxo que fala com o ERP;
+ * as demais portas falam com o banco. `ports.ts` reexporta, então quem
+ * consome importa de um lugar só.
  */
 import type { BlingCallResult, BuscaDePedidoPorNumeroLoja, PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
 
@@ -26,15 +26,15 @@ export interface ManualOrderBlingPort {
    * `GET /pedidos/vendas?numerosLojas[]=<referencia>` — procura o pedido pela
    * referência local que o ORBITA enviou em `numeroLoja` na criação.
    *
-   * É a peça que torna a reconciliação possível SEM `bling_id` (5ª rodada de
-   * revisão): quando `createPedidoVenda` não devolve resposta, o ORBITA não
-   * sabe o id do pedido — mas sabe a referência, porque ela foi decidida antes
-   * do envio. Perguntar por ela responde a única pergunta que importa: o
-   * pedido existe lá, ou não?
+   * É a peça que torna a reconciliação possível SEM `bling_id`: quando
+   * `createPedidoVenda` não devolve resposta, o ORBITA não sabe o id do pedido
+   * — mas sabe a referência, porque ela foi decidida antes do envio.
    *
-   * `null` significa "o Bling respondeu, e não existe pedido com essa
-   * referência" — uma resposta NEGATIVA confirmada, diferente de uma falha de
-   * consulta, que vem como `BlingFailed`.
+   * `NenhumPedido` significa "o Bling respondeu, e esta consulta não viu pedido
+   * com essa referência". É diferente de uma falha de consulta (`BlingFailed`),
+   * mas o ORBITA **não** a trata como prova de que o pedido nunca foi criado.
+   * `UmPedido` e `VariosPedidos` são conferidos
+   * por igualdade exata de `numeroLoja` no adapter.
    */
   buscarPedidoPorNumeroLoja(numeroLoja: string): Promise<BlingCallResult<BuscaDePedidoPorNumeroLoja>>;
   /**

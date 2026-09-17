@@ -30,9 +30,9 @@ interface BuildManualOrderPayloadInput {
   observacoes: string;
   itens: ItemPedidoManual[];
   /**
-   * Âncora de idempotência entre retentativas da MESMA submissão. Estável enquanto `handleSubmit` for
-   * chamado para a mesma tentativa (ver `referenciaLocalRef`); nunca
-   * regenerado a cada clique.
+   * Âncora de idempotência entre retentativas da MESMA venda: o mesmo valor é
+   * reenviado enquanto a venda for a mesma (ver `resolverReferencia`), em vez
+   * de um novo a cada clique.
    */
   referenciaLocal: string;
 }
@@ -88,7 +88,7 @@ type EnvioManualResult =
   | { readonly _tag: 'SucessoComAvisos'; readonly mensagem: string }
   | { readonly _tag: 'Sucesso' };
 
-/** A chamada de rede em si, separada de `handleSubmit` só pelo limite de tamanho de função do gate de qualidade. */
+/** A chamada de rede em si, e a tradução da resposta nos três desfechos que o modal entende. */
 async function enviarPedidoManual(payload: ManualOrderRequest): Promise<EnvioManualResult> {
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token;
@@ -154,14 +154,18 @@ function resolverReferencia(
 }
 
 /**
- * Envio da venda manual, isolado do componente para caber no limite de
- * tamanho de função do gate de qualidade.
+ * Envio da venda manual — o lado do navegador da proteção contra duplicação.
  *
- * Dono da referência local de idempotência. A referência é estável enquanto o
- * usuário retenta a MESMA venda — inclusive depois de um erro, de um reload da
- * página, ou do modal fechando e reabrindo — e é NOVA quando a venda é outra.
- * Ela é "a referência daquela venda", indexada pelo fingerprint do conteúdo e
- * escopada por organização: ver `tentativaPendente.ts`.
+ * Problema: se a resposta do servidor não chega (rede caiu, aba recarregou), a
+ * pessoa tende a clicar de novo. Se cada clique gerasse uma referência nova, o
+ * servidor não saberia que é a mesma venda.
+ *
+ * Solução: este hook guarda a referência da venda. Ela continua a mesma
+ * enquanto a pessoa retenta a MESMA venda — depois de um erro, de um reload ou
+ * do modal fechar e reabrir — e muda quando a venda é outra. A referência é
+ * indexada pelo fingerprint do conteúdo e separada por organização (ver
+ * `tentativaPendente.ts`). Quem decide de verdade é o servidor; esta memória só
+ * permite reenviar a mesma referência.
  *
  * Uma referência só é esquecida quando o desfecho dela é CONHECIDO — sucesso
  * sem avisos do envio, ou uma reconciliação que a liberou. Esquecer por qualquer outro

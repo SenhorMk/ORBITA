@@ -8,9 +8,8 @@ import { z } from 'zod';
  *
  *   https://developer.bling.com.br/build/assets/openapi-BvBfsn8J.json
  *
- * Existe porque a descoberta da situação "Cancelado" usava a rota errada e
- * devolvia lista vazia em **qualquer** conta (Ticket 31). São dois recursos
- * distintos, e o código antigo tratava como se fosse um só:
+ * A descoberta da situação "Cancelado" depende de dois recursos distintos da
+ * API, que não podem ser tratados como um só:
  *
  * | Rota | Devolve |
  * |---|---|
@@ -18,14 +17,14 @@ import { z } from 'zod';
  * | `GET /situacoes/modulos/{idModuloSistema}` | as **situações** daquele módulo: `{ id, nome, idHerdado?, cor? }` |
  *
  * A lista de módulos **não** carrega as situações dentro de si. Procurar um
- * campo `situacoes` na resposta da primeira rota não acha nada — nunca achou.
+ * campo `situacoes` na resposta da primeira rota não acha nada.
  *
  * ## Os ids são por conta
  *
  * `idModuloSistema` é `integer` com exemplo `12345678` no spec: é identificador
- * da conta, não constante da API. O `9` que estava fixo no código é o exemplo
- * de **`SituacoesDTO.id`** — id de *situação*, de outro schema. Fixar qualquer
- * um dos dois inventa um valor, então o módulo é descoberto pelo nome.
+ * da conta, não constante da API — e o `9` que aparece no spec é exemplo de
+ * **`SituacoesDTO.id`**, id de *situação*, de outro schema. Fixar qualquer um
+ * dos dois inventaria um valor, então o módulo é descoberto pelo nome.
  */
 
 /** Um módulo do sistema, como `GET /situacoes/modulos` o descreve. */
@@ -58,8 +57,8 @@ const envelopeSchema = z.object({ data: z.array(z.unknown()) });
  *
  * **Lista inteira descartada não é lista vazia.** Se o Bling devolveu itens e
  * nenhum deles casou com o schema, o formato mudou — e tratar isso como
- * "vazio" repetiria exatamente o defeito do ticket 31: uma lista vazia por
- * engano vira "a conta não tem a situação". Nesse caso a leitura falha.
+ * "vazio" transformaria uma leitura quebrada em "a conta não tem a situação".
+ * Nesse caso a leitura falha.
  *
  * @returns a lista lida, ou `null` quando o corpo não é o envelope da v3 ou
  *   quando havia itens e nenhum foi reconhecido.

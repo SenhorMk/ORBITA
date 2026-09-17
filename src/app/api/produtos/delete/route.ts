@@ -40,10 +40,8 @@ export async function POST(request: Request) {
   const timestamp = new Date().toISOString();
 
   try {
-    // Ticket 22 — o portão de sessão legado saiu, e o `session.role !== 'dono'`
-    // com ele: aquele papel vinha de `app_metadata`, do modelo de tenancy por
-    // usuário, e não dizia nada sobre o papel da pessoa *nesta organização*. A
-    // pergunta certa é a capacidade, e a fonte é o vínculo persistido.
+    // A autorização vem do escopo verificado (identidade + vínculo persistido
+    // nesta organização), nunca de metadados do provedor de identidade.
     const scopeResult = await resolveVerifiedOrganizationScope(request);
     if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
     const scope = scopeResult.scope;
@@ -71,8 +69,8 @@ export async function POST(request: Request) {
       logEntries.push(`[${new Date().toISOString()}] ✅ Registro excluído do Supabase!`);
     } catch (dbErr: unknown) {
       logEntries.push(`[${new Date().toISOString()}] ❌ Falha ao excluir o registro no Supabase.`);
-      // Ticket 22, critério 13 — `details` e `logs` levavam o diagnóstico do
-      // banco ao cliente (CWE-209), e eram inertes atrás do 401 legado.
+      // O diagnóstico do banco não vai ao cliente (CWE-209): fica no log do
+      // servidor, e a resposta diz só que falhou.
       registrarFalhaInterna('produtos.delete.supabase', dbErr, { organizacaoId: scope.organizationId });
       return NextResponse.json(
         { success: false, error: 'Falha ao deletar no banco de dados Supabase.' },
