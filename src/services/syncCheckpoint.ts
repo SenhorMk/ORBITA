@@ -11,6 +11,11 @@ import { supabaseServer } from '../lib/supabaseServer';
  * Um checkpoint incremental só avança depois que a etapa inteira termina,
  * para não ocultar dados de um intervalo que falhou (a saída, se isso
  * acontecer, é a sincronização `completa`).
+ *
+ * Não confundir com `sync_jobs.progress` (`syncJobRepository.ts`): o progresso
+ * descreve o andamento de UM job e é o que a tela mostra; o checkpoint daqui
+ * (tabela `sync_state`, por organização e entidade) sobrevive entre jobs e
+ * decide o `dataAlteracaoInicial` da próxima leitura.
  */
 
 export async function getLastSyncedAt(orgId: string, entidade: string): Promise<string | null> {

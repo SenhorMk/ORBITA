@@ -13,6 +13,12 @@
  *
  * Nos dois casos, o `organizacao_id` que as camadas seguintes usam sai do
  * vínculo gravado no banco, nunca do corpo, da query ou do cookie da requisição.
+ *
+ * ENTRA AQUI POR: o início das rotas em `src/app/api/**`.
+ * PASSA POR: `auth.ts` (identidade) → `organizationAuthorization.ts` (vínculo,
+ * papel, capabilities) → `organizationMembershipRepository.ts` (leitura no banco).
+ * SAI DAQUI: um `VerifiedOrganizationScope`. Da linha seguinte da rota em
+ * diante, a organização é confiável e pode ir para repositories e services.
  */
 import { NextResponse } from 'next/server';
 import { supabaseServer } from './supabaseServer';

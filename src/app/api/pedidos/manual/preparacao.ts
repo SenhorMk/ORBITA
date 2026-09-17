@@ -9,6 +9,10 @@
  * dentro do escopo verificado, então um id de outra organização não é
  * encontrado. A disponibilidade de estoque conferida aqui é uma leitura
  * prévia — a baixa definitiva acontece na transação que grava a venda.
+ *
+ * VEIO DE: `handler.ts` (primeiro passo de `handleManualOrder`).
+ * PRÓXIMO PASSO: de volta a `handler.ts`, que calcula os fingerprints e faz o
+ * claim da tentativa. Até aqui não houve nenhuma escrita, local ou no Bling.
  */
 import { NextResponse } from 'next/server';
 

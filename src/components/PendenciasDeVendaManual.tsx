@@ -25,6 +25,11 @@ import {
  * nada). A referência só é esquecida aqui quando o servidor devolve
  * `referenciaLiberada: true` — ou seja, quando o desfecho passou a ser
  * CONHECIDO.
+ *
+ * ONDE APARECE: dentro de `ManualOrderModal` e na tela de Vendas.
+ * DE ONDE VÊM AS PENDÊNCIAS: referências guardadas no navegador por
+ * `tentativaPendente.ts`.
+ * PRÓXIMO PASSO: `POST /api/pedidos/manual/reconciliar` (`reconciliar/route.ts`).
  */
 
 interface RespostaDeReconciliacao {

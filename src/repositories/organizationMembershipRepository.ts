@@ -118,6 +118,10 @@ export class SupabaseOrganizationMemberships implements OrganizationMembershipPo
    * Resultados: sem vínculo com a organização (`42501`) → `Denied`; versão que
    * já não é a atual → `Stale` (outra aba trocou antes); sucesso → `Applied`,
    * com a nova versão.
+   *
+   * A GARANTIA REAL ESTÁ NO BANCO: a RPC (uma função executada dentro do
+   * Postgres, definida na migration 38) confere e grava. Este adapter só a chama
+   * e traduz a resposta.
    */
   async switchActiveOrganization(
     actorId: OrganizationActorId,

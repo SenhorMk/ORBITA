@@ -2,6 +2,12 @@
  * `VerifiedOrganizationScope`: organização e pessoa **já conferidas**, prontas
  * para as camadas de dados.
  *
+ * ONDE ESTAMOS: **depois** da autorização. Uma função que recebe este escopo
+ * pode confiar em `scope.organizationId` e `scope.actorId` — eles foram
+ * confirmados pelo servidor, não vieram do navegador. É assim que services e
+ * repositories recebem a organização (por exemplo, `clienteRepository`,
+ * `financeiroRepository`, o adapter da venda manual).
+ *
  * Por que isso importa: os repositórios e adapters privilegiados que usam a
  * chave `service_role` do Supabase ignoram RLS (as regras de acesso por linha
  * do banco). Com essa chave, o

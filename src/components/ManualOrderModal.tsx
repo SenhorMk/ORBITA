@@ -384,6 +384,15 @@ function ManualOrderItemsPanel({ itens, desconto, frete, updateItemQty, removeIt
   );
 }
 
+/**
+ * Modal de venda manual — o INÍCIO do fluxo de venda, no FRONTEND.
+ *
+ * Aqui a pessoa escolhe cliente, itens, desconto e frete. O total mostrado é só
+ * uma prévia; nada daqui é autoridade.
+ * PRÓXIMO PASSO: ao finalizar, `useManualOrderSubmit` monta o corpo pelo
+ * contrato (`manualOrderContract.ts`) e chama `POST /api/pedidos/manual`.
+ * Pendências de vendas sem desfecho aparecem em `PendenciasDeVendaManual`.
+ */
 export function ManualOrderModal({ open, onOpenChange, onSuccess, organizacaoId }: ManualOrderModalProps) {
   const [error, setError] = useState<string | null>(null);
 

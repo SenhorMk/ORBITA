@@ -24,6 +24,15 @@ function authFor(actorId: string, scope: VerifiedOrganizationScope): ManualOrder
   };
 }
 
+/**
+ * `POST /api/pedidos/manual` — a FRONTEIRA HTTP da venda manual.
+ *
+ * VEIO DE: `useManualOrderSubmit` (navegador).
+ * O QUE ACONTECE AQUI: resolve o escopo verificado e monta as dependências de
+ * produção (`dependencias.ts`: Supabase e Bling).
+ * PRÓXIMO PASSO: `createManualOrderHandler` em `handler.ts`, que coordena a
+ * venda a partir de `prepararPedido` (`preparacao.ts`).
+ */
 export async function POST(request: Request): Promise<NextResponse> {
   // O escopo é resolvido aqui, uma vez: o cliente do Bling exige a organização
   // verificada, e o ator vem do vínculo persistido (`scope.actorId`), nunca do

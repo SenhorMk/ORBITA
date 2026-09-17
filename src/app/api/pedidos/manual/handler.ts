@@ -9,22 +9,31 @@
  * bloqueada até ser esclarecido. Banco local e Bling não formam uma única
  * transação; este fluxo existe para lidar com isso.
  *
- * Passo a passo:
- * 1. `prepararPedido` confere o escopo, valida o corpo e busca cliente e
- *    produtos no cadastro — **preço e total são calculados no servidor**;
- * 2. fingerprint: um resumo (hash) do conteúdo da venda. A mesma referência
- *    usada para outra venda vira conflito;
- * 3. claim: antes de chamar o Bling, a tentativa é reservada no ledger (o
- *    registro persistente das tentativas) pela referência da venda. O claim
- *    devolve uma época — o "número de posse" da tentativa;
- * 4. criação no Bling, com a posse conferida logo antes;
- * 5. no banco local, pedido, itens, estoque, título financeiro e conclusão da
- *    tentativa são gravados numa única transação do Postgres, recusada se a
- *    época mudou (outra execução assumiu a tentativa);
- * 6. só então o lançamento de estoque no Bling.
+ * VEIO DE: `route.ts` (fronteira HTTP), com o escopo já verificado.
  *
- * Resposta do Bling que não chegou é resultado **ambíguo**, não falha: a
- * tentativa fica `indeterminada` e só sai pela reconciliação (`reconciliacao.ts`).
+ * Passo a passo (e onde cada um acontece):
+ * 1. REGRA — `prepararPedido` (`preparacao.ts`) confere o escopo, valida o
+ *    corpo e busca cliente e produtos no cadastro — **preço e total são
+ *    calculados no servidor**;
+ * 2. REGRA — fingerprint (`manualOrderFingerprint.ts`): um resumo (hash) do
+ *    conteúdo da venda. A mesma referência usada para outra venda vira conflito;
+ * 3. EFEITO LOCAL — claim: antes de chamar o Bling, a tentativa é reservada no
+ *    ledger (o registro persistente das tentativas) pela referência da venda
+ *    (RPC `reivindicar_tentativa_venda_manual`, via `dependencias.ts`). O claim
+ *    devolve uma época — o "número de posse" da tentativa. Os desfechos que
+ *    param aqui estão em `decisaoDeTentativa.ts`;
+ * 4. EFEITO EXTERNO — criação no Bling (`envioAoBling.ts` monta o payload;
+ *    `BlingClient.criarPedidoVenda` chama a API), com a posse conferida logo
+ *    antes (`posseDaVenda.ts`);
+ * 5. EFEITO LOCAL — pedido, itens, estoque, título financeiro e conclusão da
+ *    tentativa são gravados numa única transação do Postgres (RPC
+ *    `registrar_venda_manual_com_posse`), recusada se a época mudou;
+ * 6. EFEITO EXTERNO — só então o lançamento de estoque no Bling.
+ *
+ * RESULTADO: conhecido → resposta final. Falha local depois de o Bling aceitar
+ * → `compensacao.ts`. Resposta do Bling que não chegou é resultado **ambíguo**,
+ * não falha: a tentativa fica `indeterminada` e só sai pela reconciliação
+ * (`reconciliar/route.ts` → `reconciliacao.ts`).
  */
 import { NextResponse } from 'next/server';
 
@@ -234,6 +243,9 @@ async function recusaDaSincronizacao(
 /**
  * Grava a venda no banco local e devolve a resposta.
  *
+ * EFEITO LOCAL: a garantia de tudo-ou-nada começa no Postgres, não no Bling.
+ * Este código chama `store.persistVenda` (`dependencias.ts`), que só executa a
+ * RPC `registrar_venda_manual_com_posse` (migration 59 → migration 61).
  * Numa única transação do Postgres, a RPC confere a época (a posse), grava
  * pedido, itens, baixa de estoque e título financeiro, e marca a tentativa como
  * `concluida`. Se algo falhar lá dentro, a transação local volta inteira. Isso

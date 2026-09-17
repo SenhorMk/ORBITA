@@ -1,16 +1,23 @@
 /**
  * Retorno do OAuth do Bling (`GET /api/bling/callback`), sem dependências de produção.
  *
+ * ONDE O NAVEGADOR VOLTA AO ORBITA: o Bling redireciona a pessoa para esta
+ * rota depois da autorização, com `code` e `state` na URL.
+ *
  * Ordem das etapas, e por que ela importa:
  * 1. rate limit por IP;
- * 2. consumo da transação de uso único — antes de olhar `code` ou `error`,
- *    para que um retorno repetido nunca produza efeito;
+ * 2. consumo da transação de uso único (`oauth-transaction.ts`) — antes de
+ *    olhar `code` ou `error`, para que um retorno repetido nunca produza efeito.
+ *    **É aqui que a organização é recuperada**: ela vem da transação gravada;
  * 3. rate limit por ator, agora conhecido;
  * 4. recusa do provedor ou ausência de `code`;
  * 5. credenciais do aplicativo da organização vinculada à transação;
- * 6. troca do código por tokens e persistência — só então a página de sucesso.
+ * 6. troca do código por tokens — **é aqui que os tokens passam a existir** —
+ *    e persistência (`persistOrganizationTokens` em `route.ts`, que grava no
+ *    `credentialsVault`); só então a página de sucesso.
  *
- * Toda resposta limpa o cookie da transação.
+ * Toda resposta limpa o cookie da transação. Daí em diante, quem lê e renova o
+ * token é `TokenDoBling` (`services/blingToken.ts`).
  */
 import { NextResponse } from 'next/server';
 import { consumeOAuthTransaction } from '../../../../lib/oauth-transaction';

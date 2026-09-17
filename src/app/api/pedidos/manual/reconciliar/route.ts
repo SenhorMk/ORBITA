@@ -23,8 +23,10 @@ import { respostaDaReconciliacao } from '../respostaDaReconciliacao';
  * proteção contra duplicação. Ver `reconciliacao.ts` para a máquina de estados
  * e para como se pergunta ao Bling sem ter o `bling_id`.
  *
+ * VEIO DE: `PendenciasDeVendaManual` (navegador).
  * Fluxo: escopo verificado → corpo → autorização da ação → leitura da
- * tentativa nesta organização → elegibilidade → `reconciliarTentativa`.
+ * tentativa nesta organização → elegibilidade → `reconciliarTentativa`
+ * (`reconciliacao.ts`) → resposta montada por `respostaDaReconciliacao.ts`.
  *
  * **Autorização pelo EFEITO, não pelo nome da ação.** Tomar a posse (avançar a
  * época), escrever no ledger ou tocar no ERP exige `organization:manage`; sem

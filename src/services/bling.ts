@@ -31,6 +31,12 @@ import { tokenDoBlingReal } from './blingCredenciaisSupabase';
  * Adapter HTTP da API REST v3 do Bling. A troca OAuth (código ou refresh token
  * por access token) fica à parte, em `blingOAuth.ts`.
  *
+ * ONDE ESTAMOS: na última camada antes do fornecedor. As regras (autorização,
+ * tentativa, estoque, financeiro, reconciliação) já foram decididas antes; quem
+ * chama é o ORBITA pelo `BlingPort` (`blingPort.ts`) ou por ports específicos,
+ * como o da venda manual (`pedidos/manual/portsDoBling.ts`). EFEITO EXTERNO:
+ * daqui sai a requisição para a API do Bling.
+ *
  * Responsabilidades:
  * - **escopo**: um `BlingClient` pertence a uma organização; a credencial é
  *   descoberta no cofre dessa organização (`TokenDoBling`), nunca por usuário;

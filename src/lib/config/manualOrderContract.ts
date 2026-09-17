@@ -3,8 +3,9 @@ import { z } from 'zod';
 /**
  * Contrato único do corpo de `POST /api/pedidos/manual`.
  *
- * O cliente monta o corpo com `buildManualOrderRequest` e o servidor o valida
- * com `manualOrderRequestSchema` — o mesmo schema nos dois lados da fronteira,
+ * O cliente monta o corpo com `buildManualOrderRequest` (em
+ * `useManualOrderSubmit.ts`) e o servidor o valida com `manualOrderRequestSchema`
+ * (em `preparacao.ts`) — o mesmo schema nos dois lados da fronteira HTTP,
  * então os dois concordam sobre quais campos existem. Campos fora do schema são
  * descartados na validação (comportamento padrão de `z.object`), não gravados.
  * O schema valida o formato; não substitui o servidor conferir cliente,

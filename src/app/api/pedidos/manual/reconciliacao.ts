@@ -11,6 +11,11 @@
  * quando a resposta é suficiente. O que não dá para concluir continua
  * bloqueado, esperando uma decisão explícita.
  *
+ * ENTRA AQUI POR: `reconciliar/route.ts`, depois da autorização e da
+ * elegibilidade. SAÍDAS POSSÍVEIS: só inspeção (nada gravado), gravação local
+ * no ledger, cancelamento no Bling (`intervencaoDeCancelamento.ts`, EFEITO
+ * EXTERNO) ou registro de decisão humana (`resolucaoDeAmbiguidade.ts`).
+ *
  * ## Como se pergunta ao Bling sem ter o `bling_id`
  *
  * Quando a resposta da criação se perde, o ORBITA não sabe o id do pedido. Mas

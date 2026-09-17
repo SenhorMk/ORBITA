@@ -167,6 +167,10 @@ function resolverReferencia(
  * `tentativaPendente.ts`). Quem decide de verdade é o servidor; esta memória só
  * permite reenviar a mesma referência.
  *
+ * VEIO DE: `ManualOrderModal`.
+ * PRÓXIMO PASSO (FRONTEIRA HTTP): `POST /api/pedidos/manual`
+ * (`app/api/pedidos/manual/route.ts`). A partir daí tudo acontece no servidor.
+ *
  * Uma referência só é esquecida quando o desfecho dela é CONHECIDO — sucesso
  * sem avisos do envio, ou uma reconciliação que a liberou. Esquecer por qualquer outro
  * motivo removeria a âncora de uma tentativa que ninguém resolveu, que é

@@ -42,6 +42,11 @@ import {
 /**
  * Sincronização Bling → ORBITA de clientes, produtos e pedidos de uma organização.
  *
+ * ENTRA AQUI POR: `after()` em `app/api/sync/route.ts`, depois de a resposta
+ * `202` já ter saído (`POST /api/startup` usa `syncAll`, dentro da requisição). O estado
+ * do job fica em `syncJobRepository.ts`; o marcador incremental por entidade,
+ * em `syncCheckpoint.ts`.
+ *
  * Fluxo: `enqueueJob` cria o job → `processJob` adquire a lease → etapas
  * `clientes → produtos → pedidos`, gravando progresso após cada uma →
  * `completeJob`. Produtos e pedidos usam leitura incremental por
