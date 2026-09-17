@@ -127,8 +127,9 @@ export interface OrganizationAuthorizationDependencies {
  * O que cada papel pode fazer: a tabela papel → capability usada pelo servidor.
  *
  * `member` só acessa os dados (`organization:access`); `owner` e `admin`
- * também gerenciam (`organization:manage`). Todas as rotas perguntam por aqui,
- * para que nenhuma decida sozinha o que um papel permite.
+ * também gerenciam (`organization:manage`). É daqui que o contexto de
+ * autorização do servidor deriva as capabilities do papel, para que a regra
+ * papel → permissão exista num único lugar.
  *
  * A interface usa a mesma regra só para mostrar ou esconder botões. Esconder um
  * botão não é autorização: quem decide é o servidor, na rota.

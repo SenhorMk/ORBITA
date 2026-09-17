@@ -2,8 +2,9 @@
  * `VerifiedOrganizationScope`: organização e pessoa **já conferidas**, prontas
  * para as camadas de dados.
  *
- * Por que isso importa: os repositórios usam a chave `service_role` do Supabase,
- * que ignora RLS (as regras de acesso por linha do banco). Com essa chave, o
+ * Por que isso importa: os repositórios e adapters privilegiados que usam a
+ * chave `service_role` do Supabase ignoram RLS (as regras de acesso por linha
+ * do banco). Com essa chave, o
  * banco não impede uma consulta de ler dados de outra empresa — quem impede é o
  * filtro por `organizacao_id` que o código aplica. Por isso esse id precisa vir
  * de um escopo verificado, e não de um valor qualquer.

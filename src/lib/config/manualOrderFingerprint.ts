@@ -61,20 +61,25 @@ import type { ManualOrderRequest } from './manualOrderContract';
  */
 
 /**
- * Serialização canônica **estruturalmente inequívoca** (injetiva).
+ * Transforma a venda num texto único, antes do hash.
+ *
+ * A serialização precisa ser sem ambiguidade: duas vendas diferentes não podem
+ * gerar o mesmo texto antes do hash. Em termos matemáticos, essa propriedade é
+ * chamada de injetividade.
  *
  * ## Por que não concatenar com separadores
  *
- * Um formato como `cliente:<uuid>|obs:<texto>|itens:<id>x<qtd>` não é
- * injetivo: `observacoes` e `formaPagamentoRotulo` são texto livre, e o
- * usuário poderia escrever `|`, `:`, `,` ou `x` e produzir a mesma string de
- * outra venda estruturalmente diferente. O SHA-256 não resolve isso: duas
- * estruturas que geram a mesma string já colidiram antes do hash.
+ * Num formato como `cliente:<uuid>|obs:<texto>|itens:<id>x<qtd>`, duas vendas
+ * diferentes poderiam virar a mesma string: `observacoes` e
+ * `formaPagamentoRotulo` são texto livre, e se a pessoa escrever `|`, `:`, `,`
+ * ou `x` nesses campos, o texto de uma venda pode ficar idêntico ao de outra.
+ * O SHA-256 não resolve isso: se as duas strings já são iguais, o hash também
+ * será.
  *
  * ## O formato `v2`
  *
- * `JSON.stringify` sobre um array de posições fixas. A injetividade vem da
- * própria gramática do JSON: toda string é delimitada por aspas e todo `"` ou
+ * `JSON.stringify` sobre um array de posições fixas. A falta de ambiguidade vem
+ * da própria gramática do JSON: toda string é delimitada por aspas e todo `"` ou
  * `\` interno é escapado, então o conteúdo nunca pode ser confundido com a
  * estrutura que o cerca. Dois valores diferentes em qualquer posição produzem
  * documentos JSON diferentes, quaisquer que sejam os caracteres dentro deles.

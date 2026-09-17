@@ -76,7 +76,7 @@ export interface PersistManualOrderInput {
    * reivindicada.
    *
    * Não são metadados: a RPC recusa a gravação inteira se a posse já tiver
-   * mudado. É o que impede um executor cercado de commitar a venda depois de
+   * mudado. É o que impede um executor cercado de gravar a venda depois de
    * a reconciliação já ter cancelado o pedido no Bling.
    */
   readonly tentativaId: string;
@@ -99,14 +99,15 @@ export interface PersistManualOrderInput {
  *
  * - `PersistVendaOk` — a venda foi gravada, com o id do pedido local.
  * - `PersistVendaFalhouDefinitivamente` — o servidor **respondeu** com um erro
- *   estruturado cujo código está na allowlist de `classificacaoDeFalha.ts`.
+ *   estruturado cujo código está na lista explícita de códigos tratados como
+ *   definitivos, em `classificacaoDeFalha.ts`.
  *   Uma resposta assim só existe
  *   depois que o servidor terminou de processar a requisição — a transação já
  *   foi revertida. É seguro compensar.
  * - `PersistVendaAmbigua` — a chamada falhou **sem** resposta reconhecida do
- *   servidor (timeout, conexão perdida, abort, código fora da allowlist).
+ *   servidor (timeout, conexão perdida, abort, código fora dessa lista).
  *   Não há como saber, só por
- *   isso, se a transação chegou a commitar antes da falha aparecer do lado do
+ *   isso, se a transação chegou a ser confirmada antes da falha aparecer do lado do
  *   cliente. Compensar aqui pode cancelar no Bling uma venda que está, neste
  *   exato momento, sendo gravada com sucesso do outro lado.
  */
@@ -243,7 +244,8 @@ export interface ManualOrderStorePort {
    * Finaliza tentativa e intervenção numa única RPC, isto é, numa transação só
    * do banco.
    *
-   * Depois de um efeito externo, a gravação local não pode ser fire-and-forget:
+   * Depois de um efeito externo, não dá para disparar a gravação local sem
+   * conferir se ela terminou:
    * se falhar, a resposta não pode dizer que a referência foi liberada. As duas
    * linhas locais valem juntas ou nenhuma vale, e o chamador sabe. O efeito no
    * Bling fica fora dessa transação.
