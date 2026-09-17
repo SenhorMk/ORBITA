@@ -14,7 +14,11 @@
  *   posse temporária (10 min, renovada a cada avanço). Com lease válido nas mãos
  *   de outro processo, este desiste;
  * - a cada etapa concluída (clientes, produtos, pedidos) o progresso é gravado
- *   (`advanceCheckpoint`) — é ele que a tela acompanha;
+ *   em `sync_jobs.progress` (`advanceCheckpoint`) — é ele que a tela acompanha.
+ *   Apesar do nome da função, isso **não** é o checkpoint incremental: aquele
+ *   fica em `sync_state` (`syncCheckpoint.ts`) e diz a partir de quando pedir
+ *   dados ao Bling. Um registra o andamento DESTE job; o outro evita reler
+ *   dados antigos do fornecedor na próxima sincronização;
  * - `GET /api/sync/status` lê o estado depois.
  *
  * Limites: não há agendador externo — o job só é processado pelo `after()` de

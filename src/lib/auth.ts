@@ -12,6 +12,12 @@ import { readBearerToken } from './bearer-token';
  * (ver `organizationAuthorization` e `requestOrganizationContext`). Metadados
  * da conta no provedor de identidade (`app_metadata`) não concedem papel.
  *
+ * ONDE ESTAMOS: **antes** da autorização. Aqui só se sabe quem chamou; nenhum
+ * `organizationId` foi conferido ainda.
+ * VEIO DE: `requestOrganizationContext` (rotas HTTP) e rotas que só precisam de
+ * identidade, como o aceite de convite.
+ * PRÓXIMO PASSO: `organizationAuthorization` procura o vínculo com a organização.
+ *
  * O módulo tem duas funções:
  * - `resolveAuthenticatedIdentity` confere o token (bearer) no Supabase Auth e
  *   separa três situações: sem sessão, sessão inválida e provedor fora do ar;

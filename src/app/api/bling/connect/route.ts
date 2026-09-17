@@ -58,6 +58,11 @@ async function authorizeBlingConnect(request: Request): Promise<AuthorizationOut
  * Cria ou atualiza a conexão Bling da organização, idempotente por
  * `(organizacao_id, provedor)`.
  *
+ * ONDE ESTAMOS NO OAUTH: passo 1. `IntegrationsPanel` (Passo 1 da tela) envia
+ * Client ID e Client Secret do aplicativo; eles vão para o cofre. Ainda não
+ * existe token de acesso. PRÓXIMO PASSO: o botão de autorizar chama
+ * `GET /api/bling/authorize`.
+ *
  * O `client_id` vai para `metadata` porque `GET /api/bling/authorize` o lê de
  * lá.
  *

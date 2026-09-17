@@ -92,6 +92,11 @@ function useLeituraDeOrganizacoes(fetchWithAuth: AuthenticatedFetch, sessao: str
  * sobrescrever. Esse "só grava se ainda estiver como eu li" chama-se CAS
  * (compare-and-swap).
  *
+ * Aqui termina o React: a tela só manda uma expectativa. O caminho segue por
+ * `POST /api/organizacoes/switch` (`switch/route.ts`) →
+ * `organizationMembershipRepository.ts` → RPC `alternar_organizacao_ativa_cas`
+ * (migration 38), que é quem decide se a expectativa ainda vale.
+ *
  * ## Respostas atrasadas e troca de sessão
  *
  * Este hook vive no topo da aplicação e continua existindo depois do logout.

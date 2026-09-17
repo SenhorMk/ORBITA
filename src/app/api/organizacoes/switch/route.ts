@@ -36,6 +36,14 @@ interface OrganizationSwitchDependencies {
  * O `organizacao_id` do corpo apenas escolhe qual vínculo conferir; quem é
  * gravado vem do contexto resolvido. Se a versão enviada já estiver velha
  * (outra aba trocou antes), a resposta é 409 e nada é sobrescrito.
+ *
+ * VEIO DE: `handleSwitchOrganization` em `useOrganizationsList.ts`, que manda a
+ * organização desejada e a `expected_version` que a tela leu.
+ * PRÓXIMO PASSO: `SupabaseOrganizationMemberships.switchActiveOrganization` →
+ * RPC `alternar_organizacao_ativa_cas` (migration 38). Esta rota não decide se
+ * a versão ainda vale: quem decide é o banco.
+ * VOLTA PARA A TELA: `activeOrg` e a nova `selectionVersion`, que a tela usa na
+ * próxima troca.
  */
 export function createOrganizationSwitchHandler(dependencies: OrganizationSwitchDependencies) {
   return async function organizationSwitchHandler(req: Request) {

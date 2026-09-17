@@ -86,6 +86,11 @@ async function autorizarInicioDoOAuth(
  * Não grava credenciais nem tokens: só prepara a transação que o callback
  * consumirá. O cookie é `httpOnly`, restrito ao caminho do callback e expira
  * junto com a transação.
+ *
+ * VEIO DE: `autorizar()` em `IntegrationsPanel.tsx`.
+ * ONDE O NAVEGADOR SAI DO ORBITA: esta rota só devolve `authorizeUrl`; é o
+ * painel que redireciona a aba para o Bling. A pessoa autoriza lá e o Bling a
+ * devolve para `GET /api/bling/callback` (ver `callback/handler.ts`).
  */
 export function createBlingAuthorizeHandler(dependencies: BlingAuthorizeDependencies) {
   return async function blingAuthorizeHandler(request: Request): Promise<NextResponse> {

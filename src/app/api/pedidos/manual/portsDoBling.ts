@@ -5,6 +5,12 @@
  * Separada de `ports.ts` porque é a superfície do fluxo que fala com o ERP;
  * as demais portas falam com o banco. `ports.ts` reexporta, então quem
  * consome importa de um lugar só.
+ *
+ * O caminho até o fornecedor, em camadas:
+ * regra do ORBITA (`handler.ts`, `reconciliacao.ts`) → este port (o que a
+ * venda precisa do ERP) → adapter `blingManualOrderAdapter` (`dependencias.ts`,
+ * só repassa) → `BlingClient` (`services/bling.ts`, faz o HTTP) → contratos
+ * Zod (`lib/integrations/bling/pedidoVendaContract.ts`) → API do Bling.
  */
 import type { BlingCallResult, BuscaDePedidoPorNumeroLoja, PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
 

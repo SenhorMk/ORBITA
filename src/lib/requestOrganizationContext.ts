@@ -1,7 +1,8 @@
 /**
  * O ponto de entrada da autorização nas rotas HTTP.
  *
- * Cada rota chama uma função daqui e recebe de volta ou um
+ * As rotas que exigem autorização por organização chamam uma função daqui e
+ * recebem de volta ou um
  * `VerifiedOrganizationScope` (organização + pessoa, já conferidos) ou uma
  * resposta de recusa pronta: 401 sem sessão válida, 403 sem permissão, 503 se
  * o provedor de identidade ou o banco não responderam.
@@ -13,6 +14,12 @@
  *
  * Nos dois casos, o `organizacao_id` que as camadas seguintes usam sai do
  * vínculo gravado no banco, nunca do corpo, da query ou do cookie da requisição.
+ *
+ * ENTRA AQUI POR: rotas HTTP que precisam resolver ou autorizar uma organização.
+ * PASSA POR: `auth.ts` (identidade) → `organizationAuthorization.ts` (vínculo,
+ * papel, capabilities) → `organizationMembershipRepository.ts` (leitura no banco).
+ * SAI DAQUI: um `VerifiedOrganizationScope`. Da linha seguinte da rota em
+ * diante, a organização é confiável e pode ir para repositories e services.
  */
 import { NextResponse } from 'next/server';
 import { supabaseServer } from './supabaseServer';

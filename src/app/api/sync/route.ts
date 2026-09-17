@@ -13,6 +13,12 @@ export const dynamic = 'force-dynamic';
  * agendador externo: se já existe job ativo, a rota devolve esse mesmo job e
  * só dispara processamento quando ele ainda está `queued`.
  *
+ * VEIO DE: `handleSync` em `app/page.tsx` (botão de sincronizar), que depois
+ * consulta `GET /api/sync/status` até o job terminar.
+ * CAMINHO: `syncService.enqueueSync` → `syncJobRepository.enqueueJob` (cria ou
+ * reutiliza o job) → resposta `202` → `after()` → `syncService.processJob`
+ * (`services/sync.ts`: lease, etapas, conclusão).
+ *
  * ## Semântica temporal da autorização — política escolhida, não acidente
  *
  * A autorização acontece **uma vez**, antes da resposta 202. O `after()` recebe

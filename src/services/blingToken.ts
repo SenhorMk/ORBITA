@@ -16,6 +16,11 @@ import {
  * `obter` já renova quando o token venceu; `renovar` força a renovação (por
  * exemplo, quando o Bling recusa um token ainda dentro da validade).
  *
+ * ONDE ESTAMOS NO OAUTH: depois do callback. Os tokens já estão no cofre.
+ * QUEM USA: `BlingClient` (`bling.ts`) pede o token antes de cada chamada, pela
+ * composição de produção `tokenDoBlingReal` (`blingCredenciaisSupabase.ts`).
+ * É aqui que a renovação acontece.
+ *
  * **Dois processos renovando ao mesmo tempo.** Problema: várias requisições
  * podem achar o token vencido juntas. O Bling troca o refresh token a cada
  * renovação, então renovações simultâneas podem se atrapalhar.

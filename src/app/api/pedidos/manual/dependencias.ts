@@ -310,9 +310,9 @@ async function confirmarPosse(
 }
 
 /**
- * Grava a venda numa única transação do Postgres, **junto com a posse da
- * tentativa e a conclusão do ledger** (`registrar_venda_manual_com_posse`,
- * migration 59, que chama `registrar_venda_manual`, na versão da migration 61).
+ * A GARANTIA REAL ESTÁ NO BANCO: este adapter só chama a RPC
+ * `registrar_venda_manual_com_posse` (migration 59, que chama
+ * `registrar_venda_manual`, na versão da migration 61), uma transação do Postgres.
  *
  * Dentro dessa transação local: pedido, itens, baixa de estoque (que recusa
  * estoque negativo), título financeiro a receber vinculado ao pedido e
