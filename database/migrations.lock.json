@@ -350,6 +350,16 @@
       "order": 70,
       "path": "../database/67_validacao_de_estoque_trava_o_produto_primeiro.sql",
       "sha256": "d37fef3bcc46cea21b577254d72d8d6e527987ee1cc7d01fa4317f02b047b69b"
+    },
+    {
+      "order": 71,
+      "path": "../database/68_situacao_bling_e_titulo_terminal_monotonico.sql",
+      "sha256": "43aa410c35ef64107f72461b847ee9447a93d7160cde5c582f9a90383452ce4c"
+    },
+    {
+      "order": 72,
+      "path": "../database/69_eventos_de_auditoria_da_correcao_operacional.sql",
+      "sha256": "6a481fb3bb1a062cc0658007810b91ed5f0446d6d21d6eea95d13482b7546ab2"
     }
   ],
   "references": [

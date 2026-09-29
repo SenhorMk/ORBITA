@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 
 import { type Periodo } from '@/components/vendas/filtrosDeVendas';
+import { cancelarDespesa, excluirLancamento } from '@/lib/correcaoOperacionalCliente';
 import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 
 import { AcoesFinanceiras, AvisoSincronizacao } from './AcoesFinanceiras';
@@ -137,6 +138,12 @@ export function FinanceiroTab({ fetchWithAuth, ativo = true, pedidos = null }: F
         pedidoLocal={pedidoLocal}
         onFechar={() => setDetalhe(null)}
         formatarDinheiro={formatarDinheiro}
+        onCorrigir={(acao, tituloId) =>
+          acao === 'excluir' ? excluirLancamento(fetchWithAuth, tituloId) : cancelarDespesa(fetchWithAuth, tituloId)}
+        onCorrigido={() => {
+          setDetalhe(null);
+          void fetchFinanceiro();
+        }}
       />
 
       <LancamentoDeDespesa

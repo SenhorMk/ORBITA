@@ -43,8 +43,11 @@ const falharCom = new Error('duplicate key value violates unique constraint "pro
 const obterSituacoesMock = vi.fn();
 const getClientesMock = vi.fn();
 const createContatoMock = vi.fn();
-const deleteContatoMock = vi.fn();
-const deleteClienteMock = vi.fn();
+const excluirContatoMock = vi.fn();
+const consultarContatoMock = vi.fn();
+const carregarParaExclusaoMock = vi.fn();
+const excluirClienteMock = vi.fn();
+const CLIENTE_ID = '22000000-0000-4000-8000-0000000000c1';
 const deleteProdutoMock = vi.fn();
 const deletePedidoMock = vi.fn();
 const getResumoMock = vi.fn();
@@ -61,7 +64,8 @@ vi.mock('@/services/bling', () => ({
       obterSituacoesDePedidoDeVenda: obterSituacoesMock,
       getClientes: getClientesMock,
       createContato: createContatoMock,
-      deleteContato: deleteContatoMock,
+      excluirContato: excluirContatoMock,
+      consultarContato: consultarContatoMock,
       deleteProduto: deleteProdutoMock,
       deletePedido: deletePedidoMock,
       createNfe: createNfeMock,
@@ -69,7 +73,7 @@ vi.mock('@/services/bling', () => ({
   },
 }));
 vi.mock('@/repositories/clienteRepository', () => ({
-  clienteRepository: { delete: deleteClienteMock },
+  clienteRepository: { carregarParaExclusao: carregarParaExclusaoMock, excluir: excluirClienteMock },
 }));
 vi.mock('@/repositories/produtoRepository', () => ({
   produtoRepository: { delete: vi.fn().mockRejectedValue(falharCom) },
@@ -139,8 +143,10 @@ async function cenarioLimpo(): Promise<void> {
     obterSituacoesMock,
     getClientesMock,
     createContatoMock,
-    deleteContatoMock,
-    deleteClienteMock,
+    excluirContatoMock,
+    consultarContatoMock,
+    carregarParaExclusaoMock,
+    excluirClienteMock,
     deleteProdutoMock,
     deletePedidoMock,
     getResumoMock,
@@ -213,14 +219,13 @@ describe('critério 13 — nenhuma rota migrada devolve diagnóstico interno', (
   });
 
   it('POST /api/clientes/delete', async () => {
-    deleteContatoMock.mockResolvedValue(undefined);
-    deleteClienteMock.mockRejectedValue(falharCom);
+    carregarParaExclusaoMock.mockRejectedValue(falharCom);
     const { POST } = await import('./clientes/delete/route');
 
     const resposta = await POST(
       requisicao('https://orbita.test/api/clientes/delete', {
         metodo: 'POST',
-        corpo: { id: 'c1', bling_id: '123' },
+        corpo: { id: CLIENTE_ID },
       }),
     );
 
@@ -322,21 +327,24 @@ describe('critério 13 — os ramos que a primeira auditoria não olhou', () => 
     expect(impresso).not.toContain('produtos_bling_id_key');
   });
 
-  // Resposta **200**: a exclusão local funcionou, a remota não. O `logs` que
-  // acompanha a resposta levava a causa da falha remota dentro.
-  it('POST /api/clientes/delete não vaza a causa da falha do Bling no 200', async () => {
-    deleteContatoMock.mockRejectedValue(falharCom);
-    deleteClienteMock.mockResolvedValue(undefined);
+  // Antes, a falha do Bling seguia para a exclusão local e voltava **200** com
+  // a causa dentro de `logs`. Agora a exclusão local nem acontece: sem prova do
+  // estado remoto a resposta é `ReconcileRequired`, com vocabulário fechado.
+  it('POST /api/clientes/delete não vaza a causa da falha do Bling e não exclui local', async () => {
+    carregarParaExclusaoMock.mockResolvedValue({ id: CLIENTE_ID, blingId: '123', possuiHistorico: false });
+    excluirContatoMock.mockResolvedValue({ _tag: 'RemotoIndeterminado', causa: 'erro_do_servidor' });
+    consultarContatoMock.mockResolvedValue({ _tag: 'RemotoIndeterminado', causa: 'falha_de_rede' });
     const { POST } = await import('./clientes/delete/route');
 
     const resposta = await POST(
       requisicao('https://orbita.test/api/clientes/delete', {
         metodo: 'POST',
-        corpo: { id: 'c1', bling_id: '123' },
+        corpo: { id: CLIENTE_ID, bling_id: '123' },
       }),
     );
 
-    expect(resposta.status).toBe(200);
+    expect(resposta.status).toBe(503);
+    expect(excluirClienteMock).not.toHaveBeenCalled();
     await naoVazaDiagnostico(resposta);
   });
 

@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
 
+import { logger } from '@/lib/observability/logger';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { supabaseServer } from '@/lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { financeiroRepository } from '@/repositories/financeiroRepository';
 import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
+import type { TituloFinanceiro } from '@/types';
 
 import {
   createFinanceiroSyncHandler,
@@ -32,7 +34,22 @@ export const dynamic = 'force-dynamic';
 function supabaseFinanceiroSyncStore(): FinanceiroSyncStorePort {
   return {
     async upsertTitulo(scope, titulo) {
-      await financeiroRepository.upsertTitulo(scope, titulo);
+      try {
+        await financeiroRepository.upsertTitulo(scope, titulo);
+      } catch (erro: unknown) {
+        // `PGRST204`: este banco ainda não tem `situacao_bling` (migration 68).
+        // A projeção corrigida continua valendo; só o código bruto fica de
+        // fora, e isso é dito no log em vez de derrubar a sincronização.
+        if (!colunaAusente(erro)) throw erro;
+        logger.warn('financeiro.sync.situacao_bling_ausente', {
+          subsystem: 'provider',
+          operacao: 'financeiro.sync.gravar-titulo',
+          organizacaoId: scope.organizationId,
+        });
+        const semCodigoBruto: TituloFinanceiro = { ...titulo };
+        delete semCodigoBruto.situacao_bling;
+        await financeiroRepository.upsertTitulo(scope, semCodigoBruto);
+      }
     },
 
     async vincularPedidos(scope, candidatos) {
@@ -59,6 +76,12 @@ function supabaseFinanceiroSyncStore(): FinanceiroSyncStorePort {
       if (error) throw error;
     },
   };
+}
+
+/** O PostgREST disse que a coluna não existe neste banco (`PGRST204`)? */
+function colunaAusente(erro: unknown): boolean {
+  const causa = erro instanceof Error ? erro.cause : erro;
+  return typeof causa === 'object' && causa !== null && (causa as { code?: unknown }).code === 'PGRST204';
 }
 
 /**

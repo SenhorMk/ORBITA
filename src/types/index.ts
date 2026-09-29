@@ -333,6 +333,13 @@ export interface TituloFinanceiro {
    * foi revertido junto com o pedido.
    */
   situacao: 'aberto' | 'pago' | 'cancelado' | 'estornado';
+  /**
+   * Código bruto da situação no Bling (1..7), gravado pela sincronização
+   * (migration 68). `situacao` é a projeção local, e perde informação — 3
+   * Parcial, 4 Devolvido, 6 e 7 viram `aberto`; este campo guarda o original.
+   * Nulo em título interno e em título ainda não ressincronizado.
+   */
+  situacao_bling?: number | null;
   valor: number;
   data_vencimento: string;
   data_pagamento?: string;
