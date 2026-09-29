@@ -240,9 +240,11 @@ export class FinanceiroRepository {
   /**
    * Remove um lançamento **puramente interno** e devolve quantas linhas saíram.
    *
-   * As condições estruturais se repetem no `WHERE` de propósito: mesmo que o
-   * título tenha mudado entre a classificação e aqui, nada que não seja uma
-   * despesa interna, sem pedido, desta organização, sai por este caminho.
+   * As condições se repetem no `WHERE` de propósito: mesmo que o título tenha
+   * mudado entre a classificação e aqui, nada que não seja uma despesa interna,
+   * sem pedido, **ativa** (`aberto`/`pago`), desta organização, sai por este
+   * caminho. Um título que virou terminal nesse meio-tempo fica, e o retorno é
+   * zero.
    */
   async excluirLancamentoInterno(scope: VerifiedOrganizationScope, id: string): Promise<number> {
     const { data, error } = await supabaseServer
@@ -253,6 +255,7 @@ export class FinanceiroRepository {
       .eq('tipo', 'pagar')
       .is('bling_id', null)
       .is('pedido_id', null)
+      .in('situacao', [...SITUACOES_ATIVAS])
       .select('id');
     if (error) throw new Error('Falha ao excluir o lançamento.', { cause: error });
     return (data ?? []).length;

@@ -13,12 +13,14 @@ import {
 
 /**
  * Exclusão de contato, contra portas falsas. O que se prova aqui é a ordem:
- * autorização → carga por id + organização → dependências → Bling com
- * confirmação → exclusão local conferida.
+ * autorização → carga por id + organização → dependências → leitura do contato
+ * no Bling → exclusão confirmada → nova classificação → exclusão local
+ * conferida.
  *
- * O "banco" falso guarda clientes por organização, e o repositório falso
- * respeita o escopo como o real (`eq('organizacao_id', …)` em toda consulta):
- * é assim que o caso de outra organização é exercitado de verdade.
+ * O "banco" falso guarda clientes por organização e o repositório falso
+ * respeita o escopo como o real. O Bling falso registra, **em ordem**, cada
+ * leitura e cada exclusão — é assim que "nenhuma repetição começa por outro
+ * DELETE" é provado por contagem e por sequência, não por suposição.
  */
 
 const ORG_A = '11111111-1111-4111-8111-111111111111';
@@ -32,26 +34,45 @@ const escopoDe = (organizationId: string) =>
 
 type LinhaDeCliente = ClienteParaExclusao & { readonly organizacaoId: string };
 
+const PRESENTE: LeituraRemota<ContatoRemoto> = { _tag: 'RemotoPresente', valor: { id: '5550001' } };
+const AUSENTE: LeituraRemota<ContatoRemoto> = { _tag: 'RemotoAusente' };
+const SEM_PROVA: LeituraRemota<ContatoRemoto> = { _tag: 'RemotoIndeterminado', causa: 'falha_de_rede' };
+
 function montar(opcoes: {
   clientes?: LinhaDeCliente[];
-  exclusao?: ExclusaoRemota | (() => Promise<ExclusaoRemota>);
-  leitura?: LeituraRemota<ContatoRemoto>;
+  /** Respostas da leitura, em ordem. Esgotada a fila, a última se repete. */
+  leituras?: LeituraRemota<ContatoRemoto>[];
+  /** Respostas da exclusão, em ordem. Esgotada a fila, a última se repete. */
+  exclusoes?: ExclusaoRemota[];
+  /** Efeito colateral durante o DELETE remoto — ex.: um pedido que nasce. */
+  duranteAExclusaoRemota?: (linhas: Map<string, LinhaDeCliente>) => void;
   escopo?: VerifiedOrganizationScope;
   negar?: number;
-  excluirLocal?: (id: string) => Promise<number>;
+  excluirLocal?: (id: string, linhas: Map<string, LinhaDeCliente>) => Promise<number>;
   auditarFalha?: boolean;
 } = {}) {
   const linhas = new Map((opcoes.clientes ?? []).map((c) => [c.id, c]));
-  const excluirContato = vi.fn(async () => {
-    const e = opcoes.exclusao ?? { _tag: 'ExclusaoAceita' as const };
-    return typeof e === 'function' ? e() : e;
+  const remoto: string[] = [];
+  const leituras = [...(opcoes.leituras ?? [PRESENTE, AUSENTE])];
+  const exclusoes = [...(opcoes.exclusoes ?? [{ _tag: 'ExclusaoAceita' as const }])];
+  const proxima = <T,>(fila: T[]) => (fila.length > 1 ? fila.shift()! : fila[0]!);
+
+  const consultarContato = vi.fn(async (id: string) => {
+    remoto.push(`GET ${id}`);
+    return proxima(leituras);
   });
-  const consultarContato = vi.fn(async () => opcoes.leitura ?? ({ _tag: 'RemotoAusente' } as const));
+  const excluirContato = vi.fn(async (id: string) => {
+    remoto.push(`DELETE ${id}`);
+    opcoes.duranteAExclusaoRemota?.(linhas);
+    return proxima(exclusoes);
+  });
   const eventos: EventoDeAuditoria[] = [];
   const excluir = vi.fn(async (scope: VerifiedOrganizationScope, id: string) => {
-    if (opcoes.excluirLocal) return opcoes.excluirLocal(id);
+    if (opcoes.excluirLocal) return opcoes.excluirLocal(id, linhas);
     const linha = linhas.get(id);
     if (!linha || linha.organizacaoId !== scope.organizationId) return 0;
+    // O banco real recusa por FK/gatilho quem tem pedido.
+    if (linha.possuiHistorico) throw new Error('violates foreign key constraint "fk_pedido_cliente"');
     linhas.delete(id);
     return 1;
   });
@@ -81,11 +102,17 @@ function montar(opcoes: {
   const chamar = (corpo: unknown) =>
     handler(new Request('https://orbita.test/api/clientes/delete', { method: 'POST', body: JSON.stringify(corpo) }));
 
-  return { chamar, linhas, excluirContato, consultarContato, excluir, eventos, deps };
+  return { chamar, linhas, remoto, excluirContato, consultarContato, excluir, eventos, deps };
 }
 
 const semHistorico = (blingId: string | null, organizacaoId = ORG_A, id = CLIENTE): LinhaDeCliente =>
   ({ id, organizacaoId, blingId, possuiHistorico: false });
+
+/** Um pedido nasce para o cliente: agora ele tem histórico. */
+function pedidoNasce(linhas: Map<string, LinhaDeCliente>) {
+  const linha = linhas.get(CLIENTE)!;
+  linhas.set(CLIENTE, { ...linha, possuiHistorico: true });
+}
 
 async function corpo(resposta: Response) {
   return (await resposta.json()) as Record<string, unknown>;
@@ -99,18 +126,17 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
 
     expect(resposta.status).toBe(200);
     expect(await corpo(resposta)).toEqual({ resultado: 'Deleted', removidoDoBling: false });
-    expect(t.excluirContato).not.toHaveBeenCalled();
+    expect(t.remoto).toEqual([]);
     expect(t.linhas.has(CLIENTE)).toBe(false);
   });
 
-  it('contato do Bling é excluído com o bling_id CARREGADO do banco', async () => {
+  it('contato do Bling: lê primeiro, depois exclui, com o bling_id CARREGADO do banco', async () => {
     const t = montar({ clientes: [semHistorico('5550001')] });
 
     const resposta = await t.chamar({ id: CLIENTE });
 
-    expect(resposta.status).toBe(200);
     expect(await corpo(resposta)).toEqual({ resultado: 'Deleted', removidoDoBling: true });
-    expect(t.excluirContato).toHaveBeenCalledWith('5550001');
+    expect(t.remoto).toEqual(['GET 5550001', 'DELETE 5550001']);
   });
 
   it('bling_id adulterado no corpo não tem autoridade nenhuma', async () => {
@@ -118,9 +144,8 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
 
     await t.chamar({ id: CLIENTE, bling_id: '999999', organizacao_id: ORG_B, user_id: ATOR });
 
-    expect(t.excluirContato).toHaveBeenCalledTimes(1);
-    expect(t.excluirContato).toHaveBeenCalledWith('5550001');
-    expect(t.excluirContato).not.toHaveBeenCalledWith('999999');
+    expect(t.remoto).toEqual(['GET 5550001', 'DELETE 5550001']);
+    expect(t.remoto.join(' ')).not.toContain('999999');
   });
 
   it('sem capability a resposta da autorização passa adiante e nada é tocado', async () => {
@@ -128,7 +153,7 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
 
     expect((await t.chamar({ id: CLIENTE })).status).toBe(403);
     expect(t.deps.store.carregarParaExclusao).not.toHaveBeenCalled();
-    expect(t.excluirContato).not.toHaveBeenCalled();
+    expect(t.remoto).toEqual([]);
   });
 
   it('cliente de outra organização: 404, e nada é tocado lá nem no Bling', async () => {
@@ -138,7 +163,7 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
 
     expect(resposta.status).toBe(404);
     expect(await corpo(resposta)).toEqual({ resultado: 'NotFound' });
-    expect(t.excluirContato).not.toHaveBeenCalled();
+    expect(t.remoto).toEqual([]);
     expect(t.excluir).not.toHaveBeenCalled();
     expect(t.linhas.has(CLIENTE_DE_B)).toBe(true);
   });
@@ -157,12 +182,12 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
 
     expect(resposta.status).toBe(409);
     expect(await corpo(resposta)).toEqual({ resultado: 'Blocked', motivo: 'possui_historico' });
-    expect(t.excluirContato).not.toHaveBeenCalled();
+    expect(t.remoto).toEqual([]);
     expect(t.excluir).not.toHaveBeenCalled();
   });
 
   it('recusa definitiva do Bling: o local permanece', async () => {
-    const t = montar({ clientes: [semHistorico('5550001')], exclusao: { _tag: 'RemotoRecusou', status: 400 } });
+    const t = montar({ clientes: [semHistorico('5550001')], exclusoes: [{ _tag: 'RemotoRecusou', status: 400 }] });
 
     const resposta = await t.chamar({ id: CLIENTE });
 
@@ -173,7 +198,7 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
   });
 
   it('429 esgotado: não processado, o local permanece', async () => {
-    const t = montar({ clientes: [semHistorico('5550001')], exclusao: { _tag: 'RemotoLimitado' } });
+    const t = montar({ clientes: [semHistorico('5550001')], exclusoes: [{ _tag: 'RemotoLimitado' }] });
     const resposta = await t.chamar({ id: CLIENTE });
     expect(await corpo(resposta)).toEqual({ resultado: 'ProviderRefused', motivo: 'limite_de_requisicoes' });
     expect(t.excluir).not.toHaveBeenCalled();
@@ -182,21 +207,21 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
   it('ACK perdido + leitura 404: conclui localmente', async () => {
     const t = montar({
       clientes: [semHistorico('5550001')],
-      exclusao: { _tag: 'RemotoIndeterminado', causa: 'prazo_esgotado' },
-      leitura: { _tag: 'RemotoAusente' },
+      leituras: [PRESENTE, AUSENTE],
+      exclusoes: [{ _tag: 'RemotoIndeterminado', causa: 'prazo_esgotado' }],
     });
 
     const resposta = await t.chamar({ id: CLIENTE });
 
     expect(await corpo(resposta)).toEqual({ resultado: 'Deleted', removidoDoBling: true });
-    expect(t.excluirContato).toHaveBeenCalledTimes(1);
+    expect(t.remoto).toEqual(['GET 5550001', 'DELETE 5550001', 'GET 5550001']);
   });
 
   it('timeout + leitura 200: o contato continua no Bling e o local permanece', async () => {
     const t = montar({
       clientes: [semHistorico('5550001')],
-      exclusao: { _tag: 'RemotoIndeterminado', causa: 'prazo_esgotado' },
-      leitura: { _tag: 'RemotoPresente', valor: { id: '5550001' } },
+      leituras: [PRESENTE, PRESENTE],
+      exclusoes: [{ _tag: 'RemotoIndeterminado', causa: 'prazo_esgotado' }],
     });
 
     const resposta = await t.chamar({ id: CLIENTE });
@@ -208,8 +233,8 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
   it('resultado ambíguo: ReconcileRequired, local intacto, auditoria sem PII', async () => {
     const t = montar({
       clientes: [semHistorico('5550001')],
-      exclusao: { _tag: 'RemotoIndeterminado', causa: 'erro_do_servidor' },
-      leitura: { _tag: 'RemotoIndeterminado', causa: 'falha_de_rede' },
+      leituras: [PRESENTE, SEM_PROVA],
+      exclusoes: [{ _tag: 'RemotoIndeterminado', causa: 'erro_do_servidor' }],
     });
 
     const resposta = await t.chamar({ id: CLIENTE });
@@ -223,6 +248,148 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
     ]);
   });
 
+  describe('a leitura vem antes de qualquer DELETE', () => {
+    it('remoto já ausente na leitura: nenhum DELETE sai, e a exclusão local conclui', async () => {
+      const t = montar({ clientes: [semHistorico('5550001')], leituras: [AUSENTE] });
+
+      const resposta = await t.chamar({ id: CLIENTE });
+
+      expect(await corpo(resposta)).toEqual({ resultado: 'Deleted', removidoDoBling: true });
+      expect(t.remoto).toEqual(['GET 5550001']);
+      expect(t.excluirContato).not.toHaveBeenCalled();
+    });
+
+    it('leitura sem prova: ReconcileRequired sem DELETE', async () => {
+      const t = montar({ clientes: [semHistorico('5550001')], leituras: [SEM_PROVA] });
+
+      expect(await corpo(await t.chamar({ id: CLIENTE }))).toEqual({
+        resultado: 'ReconcileRequired', motivo: 'estado_remoto_indeterminado',
+      });
+      expect(t.remoto).toEqual(['GET 5550001']);
+    });
+
+    it.each<[LeituraRemota<ContatoRemoto>, string]>([
+      [{ _tag: 'RemotoRecusou', status: 403 }, 'recusado_pelo_bling'],
+      [{ _tag: 'RemotoLimitado' }, 'limite_de_requisicoes'],
+    ])('leitura %j: ProviderRefused sem inventar ausência e sem DELETE', async (leitura, motivo) => {
+      const t = montar({ clientes: [semHistorico('5550001')], leituras: [leitura] });
+
+      expect(await corpo(await t.chamar({ id: CLIENTE }))).toEqual({ resultado: 'ProviderRefused', motivo });
+      expect(t.remoto).toEqual(['GET 5550001']);
+      expect(t.excluir).not.toHaveBeenCalled();
+    });
+
+    it('retry depois de ReconcileRequired começa pela leitura — nunca por outro DELETE', async () => {
+      // 1ª tentativa: GET 200 → DELETE sem resposta → GET sem prova.
+      // 2ª tentativa: GET 404 (o DELETE da 1ª tinha pegado).
+      const t = montar({
+        clientes: [semHistorico('5550001')],
+        leituras: [PRESENTE, SEM_PROVA, AUSENTE],
+        exclusoes: [{ _tag: 'RemotoIndeterminado', causa: 'prazo_esgotado' }],
+      });
+
+      const primeira = await t.chamar({ id: CLIENTE });
+      const doisPrimeiros = t.remoto.length;
+      const segunda = await t.chamar({ id: CLIENTE });
+
+      expect((await corpo(primeira)).resultado).toBe('ReconcileRequired');
+      expect(await corpo(segunda)).toEqual({ resultado: 'Deleted', removidoDoBling: true });
+      expect(t.remoto).toEqual(['GET 5550001', 'DELETE 5550001', 'GET 5550001', 'GET 5550001']);
+      // A primeira chamada remota da segunda tentativa é uma leitura.
+      expect(t.remoto[doisPrimeiros]).toBe('GET 5550001');
+      expect(t.excluirContato).toHaveBeenCalledTimes(1);
+    });
+
+    it('retry depois de remover no Bling e falhar no banco: lê 404 e conclui sem DELETE', async () => {
+      let tentativasLocais = 0;
+      const t = montar({
+        clientes: [semHistorico('5550001')],
+        leituras: [PRESENTE, AUSENTE],
+        excluirLocal: async (id, linhas) => {
+          tentativasLocais += 1;
+          if (tentativasLocais === 1) throw new Error('connection reset');
+          linhas.delete(id);
+          return 1;
+        },
+      });
+
+      const primeira = await t.chamar({ id: CLIENTE });
+      const segunda = await t.chamar({ id: CLIENTE });
+
+      expect(await corpo(primeira)).toEqual({ resultado: 'ReconcileRequired', motivo: 'conclusao_local_pendente' });
+      expect(await corpo(segunda)).toEqual({ resultado: 'Deleted', removidoDoBling: true });
+      expect(t.remoto).toEqual(['GET 5550001', 'DELETE 5550001', 'GET 5550001']);
+    });
+  });
+
+  describe('histórico que surge depois da exclusão remota', () => {
+    it('pré-checagem limpa → DELETE confirmado → pedido nasce → cliente preservado, resposta honesta', async () => {
+      const t = montar({ clientes: [semHistorico('5550001')], duranteAExclusaoRemota: pedidoNasce });
+
+      const resposta = await t.chamar({ id: CLIENTE });
+
+      expect(resposta.status).toBe(409);
+      expect(await corpo(resposta)).toEqual({
+        resultado: 'Blocked', motivo: 'preservado_por_historico_apos_remocao_no_bling',
+      });
+      // Nada de forçar: a linha local fica, e o DELETE local nem é tentado.
+      expect(t.linhas.has(CLIENTE)).toBe(true);
+      expect(t.excluir).not.toHaveBeenCalled();
+      expect(t.eventos).toEqual([{
+        acao: 'customer.contact_preserved_after_remote_removal',
+        recurso: 'cliente',
+        recursoId: CLIENTE,
+        correlationId: 'corr_teste',
+        metadata: { bling_id: '5550001', estado_remoto: 'ausente', cliente_local: 'preservado_por_historico' },
+      }]);
+    });
+
+    it('nova tentativa: lê 404, reencontra o histórico e dá o mesmo desfecho — sem DELETE remoto', async () => {
+      const t = montar({
+        clientes: [semHistorico('5550001')],
+        leituras: [PRESENTE, AUSENTE],
+        duranteAExclusaoRemota: pedidoNasce,
+      });
+
+      await t.chamar({ id: CLIENTE });
+      const segunda = await t.chamar({ id: CLIENTE });
+
+      expect(await corpo(segunda)).toEqual({
+        resultado: 'Blocked', motivo: 'possui_historico',
+      });
+      expect(t.excluirContato).toHaveBeenCalledTimes(1);
+      expect(t.linhas.has(CLIENTE)).toBe(true);
+    });
+
+    it('pedido que nasce entre a segunda classificação e o DELETE local: o banco recusa e a resposta é a de preservação', async () => {
+      const t = montar({
+        clientes: [semHistorico('5550001')],
+        excluirLocal: async (_id, linhas) => {
+          pedidoNasce(linhas);
+          throw new Error('violates foreign key constraint "fk_pedido_cliente"');
+        },
+      });
+
+      expect(await corpo(await t.chamar({ id: CLIENTE }))).toEqual({
+        resultado: 'Blocked', motivo: 'preservado_por_historico_apos_remocao_no_bling',
+      });
+      expect(t.linhas.has(CLIENTE)).toBe(true);
+    });
+
+    it('contato só do ORBITA que ganha pedido no meio: Blocked comum (nada foi ao Bling)', async () => {
+      const t = montar({
+        clientes: [semHistorico(null)],
+        excluirLocal: async (_id, linhas) => {
+          pedidoNasce(linhas);
+          throw new Error('violates foreign key constraint "fk_pedido_cliente"');
+        },
+      });
+
+      expect(await corpo(await t.chamar({ id: CLIENTE }))).toEqual({ resultado: 'Blocked', motivo: 'possui_historico' });
+      expect(t.remoto).toEqual([]);
+    });
+  });
+
   it('exclusão local de zero linhas não é sucesso', async () => {
     const t = montar({ clientes: [semHistorico(null)], excluirLocal: async () => 0 });
 
@@ -233,25 +400,6 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
     expect(t.eventos).toEqual([]);
   });
 
-  it('pedido criado depois da checagem faz o banco recusar: contato local-only fica Blocked', async () => {
-    const t = montar({
-      clientes: [semHistorico(null)],
-      excluirLocal: async () => { throw new Error('violates foreign key constraint'); },
-    });
-    const resposta = await t.chamar({ id: CLIENTE });
-    expect(await corpo(resposta)).toEqual({ resultado: 'Blocked', motivo: 'possui_historico' });
-  });
-
-  it('removido do Bling mas o banco falhou: pede reconciliação, não "falhou"', async () => {
-    const t = montar({
-      clientes: [semHistorico('5550001')],
-      excluirLocal: async () => { throw new Error('connection reset'); },
-    });
-    const resposta = await t.chamar({ id: CLIENTE });
-    expect(resposta.status).toBe(503);
-    expect(await corpo(resposta)).toEqual({ resultado: 'ReconcileRequired', motivo: 'conclusao_local_pendente' });
-  });
-
   it('repetição depois do sucesso é segura: NotFound, sem segundo DELETE no Bling', async () => {
     const t = montar({ clientes: [semHistorico('5550001')] });
 
@@ -260,28 +408,6 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
 
     expect(await corpo(segunda)).toEqual({ resultado: 'NotFound' });
     expect(t.excluirContato).toHaveBeenCalledTimes(1);
-  });
-
-  it('repetição depois de remover no Bling e falhar no banco conclui pela leitura', async () => {
-    let tentativas = 0;
-    const t = montar({
-      clientes: [semHistorico('5550001')],
-      exclusao: () => Promise.resolve(tentativas === 0 ? { _tag: 'ExclusaoAceita' as const } : { _tag: 'RemotoAusente' as const }),
-      leitura: { _tag: 'RemotoAusente' },
-      excluirLocal: async () => {
-        tentativas += 1;
-        if (tentativas === 1) throw new Error('connection reset');
-        return 1;
-      },
-    });
-
-    const primeira = await t.chamar({ id: CLIENTE });
-    const segunda = await t.chamar({ id: CLIENTE });
-
-    expect((await corpo(primeira)).resultado).toBe('ReconcileRequired');
-    expect(await corpo(segunda)).toEqual({ resultado: 'Deleted', removidoDoBling: true });
-    // O 404 do segundo DELETE foi confirmado por leitura antes de concluir.
-    expect(t.consultarContato).toHaveBeenCalledTimes(1);
   });
 
   it('auditoria que falha depois do efeito não transforma sucesso em falha', async () => {
@@ -298,7 +424,7 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
       recurso: 'cliente',
       recursoId: CLIENTE,
       correlationId: 'corr_teste',
-      metadata: { removido_do_bling: true, bling_id: '5550001' },
+      metadata: { removido_do_bling: true, bling_id: '5550001', evidencia_remota: 'exclusao' },
     }]);
   });
 
@@ -306,6 +432,6 @@ describe('POST /api/clientes/delete — exclusão segura de contato', () => {
     const t = montar({ clientes: [semHistorico('5550001')] });
     const resposta = await t.chamar(entrada);
     expect(resposta.status).toBe(400);
-    expect(t.excluirContato).not.toHaveBeenCalled();
+    expect(t.remoto).toEqual([]);
   });
 });

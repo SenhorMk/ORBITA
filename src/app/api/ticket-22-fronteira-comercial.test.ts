@@ -110,6 +110,7 @@ describe('POST /api/clientes/delete — apagar exige gestão na organização', 
   it('deixa o admin passar — o papel legado o negava, embora ele administre', async () => {
     fronteira.sessaoDe(ADMIN_ID).vinculoDe('admin');
     carregarParaExclusaoMock.mockResolvedValue({ id: CLIENTE_ID, blingId: '123', possuiHistorico: false });
+    consultarContatoMock.mockResolvedValue({ _tag: 'RemotoPresente', valor: { id: '123' } });
     excluirContatoMock.mockResolvedValue({ _tag: 'ExclusaoAceita' });
     excluirClienteMock.mockResolvedValue(1);
 
@@ -121,15 +122,19 @@ describe('POST /api/clientes/delete — apagar exige gestão na organização', 
   it('entrega ao repositório o escopo do vínculo, e o ator é o usuário', async () => {
     fronteira.sessaoDe(OWNER_ID).vinculoDe('owner');
     carregarParaExclusaoMock.mockResolvedValue({ id: CLIENTE_ID, blingId: '123', possuiHistorico: false });
+    consultarContatoMock.mockResolvedValue({ _tag: 'RemotoPresente', valor: { id: '123' } });
     excluirContatoMock.mockResolvedValue({ _tag: 'ExclusaoAceita' });
     excluirClienteMock.mockResolvedValue(1);
 
     await chamar({ id: CLIENTE_ID, bling_id: '123' });
 
-    expect(carregarParaExclusaoMock).toHaveBeenCalledTimes(1);
-    const [escopo, id] = carregarParaExclusaoMock.mock.calls[0]!;
-    expect(escopo).toMatchObject({ organizationId: ORG_ID, actorId: OWNER_ID, role: 'owner' });
-    expect(id).toBe(CLIENTE_ID);
+    // Duas cargas: a pré-checagem e a reclassificação depois do Bling. As duas
+    // com o escopo do vínculo.
+    expect(carregarParaExclusaoMock).toHaveBeenCalledTimes(2);
+    for (const [escopo, id] of carregarParaExclusaoMock.mock.calls) {
+      expect(escopo).toMatchObject({ organizationId: ORG_ID, actorId: OWNER_ID, role: 'owner' });
+      expect(id).toBe(CLIENTE_ID);
+    }
     expect(excluirClienteMock.mock.calls[0]![0]).toMatchObject({ organizationId: ORG_ID });
   });
 
@@ -139,6 +144,7 @@ describe('POST /api/clientes/delete — apagar exige gestão na organização', 
   it('ignora a organização vinda no corpo e usa a do vínculo', async () => {
     fronteira.sessaoDe(OWNER_ID).vinculoDe('owner');
     carregarParaExclusaoMock.mockResolvedValue({ id: CLIENTE_ID, blingId: '123', possuiHistorico: false });
+    consultarContatoMock.mockResolvedValue({ _tag: 'RemotoPresente', valor: { id: '123' } });
     excluirContatoMock.mockResolvedValue({ _tag: 'ExclusaoAceita' });
     excluirClienteMock.mockResolvedValue(1);
 

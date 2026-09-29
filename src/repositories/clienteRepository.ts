@@ -3,6 +3,9 @@ import { normalizarUf } from '../lib/normalizacao/ufDoCliente';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { Cliente } from '../types';
 
+/** Categoria de retenção dos dados pessoais de cliente final — `retention_policy_registry`, migration 51. */
+export const CATEGORIA_DE_RETENCAO_DO_CLIENTE = 'cliente_final_pii';
+
 export class ClienteRepository {
   async getAll(scope: VerifiedOrganizationScope): Promise<Cliente[]> {
     const { data, error } = await supabaseServer
@@ -72,7 +75,11 @@ export class ClienteRepository {
    * Dependências, conforme o catálogo real (auditoria de 2026-09-29):
    * - `pedidos.cliente_id` — FK `RESTRICT` e o gatilho `tg_prevenir_exclusao_cliente`;
    * - `titular_solicitacoes.titular_ref_cliente_id` — FK `RESTRICT` (LGPD);
-   * - `retention_legal_holds` ativo sobre este cliente — impedimento de retenção;
+   * - `retention_legal_holds` ativo sobre este cliente — impedimento de
+   *   retenção. A identidade de um hold é (organização, **categoria**,
+   *   entidade): só conta o da categoria de cliente, `cliente_final_pii`
+   *   (migration 51). Um hold de outra categoria com o mesmo `entidade_id` não
+   *   é sobre este cliente;
    * - o mesmo contato do Bling como fornecedor de títulos
    *   (`titulos_financeiros.fornecedor_bling_id`) — vínculo lógico, sem FK:
    *   contatos e fornecedores são o mesmo cadastro no Bling, e apagá-lo lá
@@ -99,7 +106,8 @@ export class ClienteRepository {
       contar(supabaseServer.from('titular_solicitacoes').select('id', { count: 'exact', head: true })
         .eq('organizacao_id', scope.organizationId).eq('titular_ref_cliente_id', id)),
       contar(supabaseServer.from('retention_legal_holds').select('id', { count: 'exact', head: true })
-        .eq('organizacao_id', scope.organizationId).eq('entidade_id', id).is('liberado_em', null)),
+        .eq('organizacao_id', scope.organizationId).eq('categoria', CATEGORIA_DE_RETENCAO_DO_CLIENTE)
+        .eq('entidade_id', id).is('liberado_em', null)),
       blingId === null
         ? Promise.resolve(0)
         : contar(supabaseServer.from('titulos_financeiros').select('id', { count: 'exact', head: true })

@@ -359,7 +359,7 @@
     {
       "order": 72,
       "path": "../database/69_eventos_de_auditoria_da_correcao_operacional.sql",
-      "sha256": "6a481fb3bb1a062cc0658007810b91ed5f0446d6d21d6eea95d13482b7546ab2"
+      "sha256": "78484a3b8e110a7e2acd413fb6e93e8a368407b0e5213f35f887f533016bd801"
     }
   ],
   "references": [

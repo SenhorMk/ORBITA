@@ -14,16 +14,24 @@ import { z } from 'zod';
  * | `Deleted`           | 200  | removido definitivamente                                            |
  * | `Cancelled`         | 200  | removido do Bling e mantido no histórico como `cancelado`           |
  * | `AlreadyTerminal`   | 200  | já estava `cancelado`/`estornado`; nada foi feito                   |
- * | `Blocked`           | 409  | a regra impede a ação; nada foi tocado                              |
+ * | `Blocked`           | 409  | a regra impede a ação; nada foi tocado (exceção: ver abaixo)       |
  * | `NotFound`          | 404  | não existe nesta organização (inexistente e alheio são iguais)      |
  * | `ProviderRefused`   | 502  | o Bling não removeu; nada mudou no ORBITA                           |
  * | `ReconcileRequired` | 503  | o estado no Bling não pôde ser confirmado; nada local foi concluído |
  * | `InvalidRequest`    | 400  | o pedido não tem a forma esperada                                   |
+ *
+ * A única exceção ao "nada foi tocado" de `Blocked` é o motivo
+ * `preservado_por_historico_apos_remocao_no_bling`: o contato **já saiu** do
+ * Bling e só então ganhou histórico no ORBITA, que o preservou. É `Blocked`, e
+ * não `ReconcileRequired`, porque repetir não tem o que concluir — e a frase
+ * diz o que de fato mudou.
  */
 
 export const MOTIVOS_DE_BLOQUEIO = [
   /** Contato com pedidos, solicitação LGPD, retenção ou uso como fornecedor. */
   'possui_historico',
+  /** Já removido do Bling; ganhou histórico no ORBITA depois e foi preservado aqui. */
+  'preservado_por_historico_apos_remocao_no_bling',
   /** O título não é uma despesa (`tipo = pagar`). */
   'nao_e_despesa',
   /** O título pertence a um pedido: quem o encerra é o cancelamento do pedido. */
@@ -101,6 +109,8 @@ export function interpretarRespostaDeCorrecao(status: number, corpo: unknown): D
 
 const MENSAGEM_DE_BLOQUEIO: Record<MotivoDeBloqueio, string> = {
   possui_historico: 'Este contato possui histórico vinculado e não pode ser excluído.',
+  preservado_por_historico_apos_remocao_no_bling:
+    'O contato já foi removido do Bling, mas passou a possuir histórico no ORBITA e foi preservado localmente.',
   nao_e_despesa: 'Esta ação vale apenas para despesas.',
   vinculado_a_pedido: 'Esta movimentação pertence a um pedido. Ela é encerrada pelo cancelamento do pedido.',
   despesa_do_bling: 'Esta despesa também existe no Bling. Use "Cancelar despesa".',

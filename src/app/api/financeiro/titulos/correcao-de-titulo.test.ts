@@ -26,7 +26,8 @@ const ORG_B = '22222222-2222-4222-8222-222222222222';
 const ATOR = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
 const TITULO = '66666666-6666-4666-8666-666666666666';
 
-type Linha = TituloParaCorrecao & { organizacaoId: string };
+/** Uma linha do banco falso: mutável, para simular mudança concorrente. */
+type Linha = { -readonly [K in keyof TituloParaCorrecao]: TituloParaCorrecao[K] } & { organizacaoId: string };
 
 const escopo = { organizationId: ORG_A, actorId: ATOR, role: 'owner' } as unknown as VerifiedOrganizationScope;
 
@@ -36,6 +37,8 @@ function montar(opcoes: {
   exclusao?: ExclusaoRemota;
   negar?: number;
   marcarFalha?: boolean;
+  /** Mudança concorrente aplicada entre a classificação e o DELETE local. */
+  antesDoDelete?: (linha: Linha) => void;
 }) {
   const linhas = new Map(opcoes.titulos.map((t) => [t.id, { ...t }]));
   const leituras = [...(opcoes.leituras ?? [])];
@@ -60,7 +63,10 @@ function montar(opcoes: {
       }),
       excluirLancamentoInterno: vi.fn(async (scope, id) => {
         const l = doEscopo(scope, id);
+        if (l) opcoes.antesDoDelete?.(l);
+        // As mesmas condições do `WHERE` real, inclusive a situação ativa.
         if (!l || l.tipo !== 'pagar' || l.blingId !== null || l.pedidoId !== null) return 0;
+        if (!movimentacaoContaComoAtiva(l.situacao)) return 0;
         linhas.delete(id);
         return 1;
       }),
@@ -143,6 +149,36 @@ describe('POST /api/financeiro/titulos/{id}/exclusao — despesa interna', () =>
     await t.excluir();
     expect(await corpo(await t.excluir())).toEqual({ resultado: 'NotFound' });
     expect(t.eventos).toHaveLength(1);
+  });
+
+  it('corrida: ativo na classificação, terminal antes do DELETE → não removido, AlreadyTerminal', async () => {
+    const t = montar({
+      titulos: [interna('aberto')],
+      antesDoDelete: (linha) => { linha.situacao = 'cancelado'; },
+    });
+
+    const resposta = await t.excluir();
+
+    expect(resposta.status).toBe(200);
+    expect(await corpo(resposta)).toEqual({ resultado: 'AlreadyTerminal' });
+    expect(t.linhas.get(TITULO)?.situacao).toBe('cancelado');
+    expect(t.eventos).toEqual([]);
+  });
+
+  it('corrida: ganhou vínculo com pedido antes do DELETE → Blocked, não NotFound', async () => {
+    const t = montar({
+      titulos: [interna('aberto')],
+      antesDoDelete: (linha) => { linha.pedidoId = '77777777-7777-4777-8777-777777777777'; },
+    });
+
+    expect(await corpo(await t.excluir())).toEqual({ resultado: 'Blocked', motivo: 'vinculado_a_pedido' });
+    expect(t.linhas.has(TITULO)).toBe(true);
+  });
+
+  it('interna já terminal: AlreadyTerminal, sem tentar o DELETE', async () => {
+    const t = montar({ titulos: [interna('cancelado')] });
+    expect(await corpo(await t.excluir())).toEqual({ resultado: 'AlreadyTerminal' });
+    expect(t.deps.store.excluirLancamentoInterno).not.toHaveBeenCalled();
   });
 
   it('sem capability: a negação passa adiante e nada é lido', async () => {

@@ -98,6 +98,24 @@ async function auditarSemInterromper(
   }
 }
 
+/**
+ * As regras estruturais comuns às duas ações, sobre o título **como ele está**.
+ * `null` = o título segue elegível. Usada na preparação e de novo quando a
+ * escrita não pegou linha nenhuma, para dizer o que mudou em vez de supor.
+ */
+function impedimentoComum(titulo: TituloParaCorrecao): RespostaDeCorrecao | null {
+  if (titulo.tipo !== 'pagar') return { resultado: 'Blocked', motivo: 'nao_e_despesa' };
+  if (titulo.pedidoId !== null) return { resultado: 'Blocked', motivo: 'vinculado_a_pedido' };
+  if (!movimentacaoContaComoAtiva(titulo.situacao)) return { resultado: 'AlreadyTerminal' };
+  return null;
+}
+
+/** O que impede excluir como lançamento interno — as comuns, mais não ser do Bling. */
+function impedimentoDaExclusaoInterna(titulo: TituloParaCorrecao): RespostaDeCorrecao | null {
+  return impedimentoComum(titulo)
+    ?? (titulo.blingId !== null ? { resultado: 'Blocked', motivo: 'despesa_do_bling' } : null);
+}
+
 /** Autoriza, valida o id e carrega o título do escopo — comum às duas ações. */
 async function prepararCorrecao(
   deps: CorrecaoDeTituloDependencies,
@@ -116,15 +134,8 @@ async function prepararCorrecao(
 
   const titulo = await deps.store.carregarTituloParaCorrecao(scope, id.data);
   if (!titulo) return { _tag: 'Resposta', response: responder({ resultado: 'NotFound' }) };
-  if (titulo.tipo !== 'pagar') {
-    return { _tag: 'Resposta', response: responder({ resultado: 'Blocked', motivo: 'nao_e_despesa' }) };
-  }
-  if (titulo.pedidoId !== null) {
-    return { _tag: 'Resposta', response: responder({ resultado: 'Blocked', motivo: 'vinculado_a_pedido' }) };
-  }
-  if (!movimentacaoContaComoAtiva(titulo.situacao)) {
-    return { _tag: 'Resposta', response: responder({ resultado: 'AlreadyTerminal' }) };
-  }
+  const impedimento = impedimentoComum(titulo);
+  if (impedimento) return { _tag: 'Resposta', response: responder(impedimento) };
   return { _tag: 'Pronto', scope, titulo };
 }
 
@@ -134,12 +145,22 @@ export function createExclusaoDeLancamentoHandler(deps: CorrecaoDeTituloDependen
     if (preparo._tag === 'Resposta') return preparo.response;
     const { scope, titulo } = preparo;
 
-    if (titulo.blingId !== null) return responder({ resultado: 'Blocked', motivo: 'despesa_do_bling' });
+    const impedimento = impedimentoDaExclusaoInterna(titulo);
+    if (impedimento) return responder(impedimento);
 
     const removidas = await deps.store.excluirLancamentoInterno(scope, titulo.id);
-    // Zero linhas: outra requisição removeu antes, ou o título deixou de ser
-    // interno entre a leitura e aqui. Não é sucesso desta requisição.
-    if (removidas !== 1) return responder({ resultado: 'NotFound' });
+    if (removidas !== 1) {
+      // O `DELETE` repete todas as condições — inclusive a situação ativa —, e
+      // nada saiu: o título mudou desde a leitura. Zero linhas não vira
+      // `NotFound` por conta própria: a resposta é o estado de agora.
+      const atual = await deps.store.carregarTituloParaCorrecao(scope, titulo.id);
+      if (!atual) return responder({ resultado: 'NotFound' });
+      const agora = impedimentoDaExclusaoInterna(atual);
+      if (agora) return responder(agora);
+      // Elegível e mesmo assim intocado: nada explica isso. Falhar alto (500
+      // genérico na rota) em vez de inventar um desfecho.
+      throw new Error('Despesa interna elegível não foi removida pelo DELETE condicional.');
+    }
 
     await auditarSemInterromper(deps, scope, {
       acao: 'finance.entry_deleted',

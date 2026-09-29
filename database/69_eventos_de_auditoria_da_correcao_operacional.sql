@@ -7,7 +7,7 @@
 -- precisam listar os mesmos eventos; `auditEventCatalog.test.ts` confere o
 -- catálogo TypeScript contra o conjunto de nomes inseridos pelas migrations.
 --
--- Metadata dos cinco eventos: ids técnicos (`bling_id`), o desfecho e a
+-- Metadata dos seis eventos: ids técnicos (`bling_id`), o desfecho e a
 -- situação anterior. Nunca nome, CPF/CNPJ, e-mail, telefone ou corpo do Bling.
 --
 -- Nenhum evento de reset: esta alteração não implementa reset.
@@ -19,6 +19,8 @@ values
      'Contato sem histórico excluído no ORBITA e, quando vinculado, no Bling.'),
     ('customer.contact_reconcile_required', 1, 'customers', 'critical', 'user', 1825, null,
      'Exclusão de contato sem confirmação do estado no Bling; nada local foi concluído.'),
+    ('customer.contact_preserved_after_remote_removal', 1, 'customers', 'warning', 'user', 1825, null,
+     'Contato já removido do Bling que ganhou histórico no ORBITA e foi preservado localmente.'),
     ('finance.entry_deleted', 1, 'finance', 'warning', 'user', 1825, null,
      'Lançamento de despesa puramente interno excluído por correção de entrada.'),
     ('finance.expense_cancelled', 1, 'finance', 'warning', 'user', 1825, null,

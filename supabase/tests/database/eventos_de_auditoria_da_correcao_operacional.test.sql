@@ -1,5 +1,5 @@
 -- eventos_de_auditoria_da_correcao_operacional.test.sql
--- Migration 69: os cinco eventos da correção operacional existem no catálogo
+-- Migration 69: os seis eventos da correção operacional existem no catálogo
 -- SQL, e `registrar_evento_auditoria` grava um deles para um ator membro.
 
 begin;
@@ -24,12 +24,13 @@ select is(
     (select count(*)::int from public.catalogo_eventos_auditoria where nome in (
         'customer.contact_deleted',
         'customer.contact_reconcile_required',
+        'customer.contact_preserved_after_remote_removal',
         'finance.entry_deleted',
         'finance.expense_cancelled',
         'finance.remote_reconcile_required'
     )),
-    5,
-    '1. os cinco eventos da correção operacional estão no catálogo SQL'
+    6,
+    '1. os seis eventos da correção operacional estão no catálogo SQL'
 );
 
 select is(

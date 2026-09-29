@@ -131,6 +131,7 @@ describe('catálogo TypeScript × projeção SQL', () => {
     expect(nomes).toEqual(expect.arrayContaining([
       'customer.contact_deleted',
       'customer.contact_reconcile_required',
+      'customer.contact_preserved_after_remote_removal',
       'finance.entry_deleted',
       'finance.expense_cancelled',
       'finance.remote_reconcile_required',

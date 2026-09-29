@@ -106,6 +106,7 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   // desfecho — nunca nome, documento, contato ou corpo do Bling.
   ['customer.contact_deleted', 'customers', 'warning', 'user', 1825, 'Contato sem histórico excluído no ORBITA e, quando vinculado, no Bling.'],
   ['customer.contact_reconcile_required', 'customers', 'critical', 'user', 1825, 'Exclusão de contato sem confirmação do estado no Bling; nada local foi concluído.'],
+  ['customer.contact_preserved_after_remote_removal', 'customers', 'warning', 'user', 1825, 'Contato já removido do Bling que ganhou histórico no ORBITA e foi preservado localmente.'],
   ['finance.entry_deleted', 'finance', 'warning', 'user', 1825, 'Lançamento de despesa puramente interno excluído por correção de entrada.'],
   ['finance.expense_cancelled', 'finance', 'warning', 'user', 1825, 'Despesa do Bling removida lá e mantida no histórico do ORBITA como cancelada.'],
   ['finance.remote_reconcile_required', 'finance', 'critical', 'user', 1825, 'Cancelamento de despesa sem confirmação do estado no Bling; nada local foi concluído.'],
