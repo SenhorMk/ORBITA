@@ -131,7 +131,9 @@ schema_paths = [
   "../database/64_convite_exige_email_confirmado.sql",
   "../database/65_checkpoint_de_sync_por_organizacao.sql",
   "../database/66_replay_de_item_nao_consome_estoque.sql",
-  "../database/67_validacao_de_estoque_trava_o_produto_primeiro.sql"
+  "../database/67_validacao_de_estoque_trava_o_produto_primeiro.sql",
+  "../database/68_situacao_bling_e_titulo_terminal_monotonico.sql",
+  "../database/69_eventos_de_auditoria_da_correcao_operacional.sql"
 ]
 
 [db.seed]

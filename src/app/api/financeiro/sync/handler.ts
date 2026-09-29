@@ -11,6 +11,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { descreverErro } from '@/lib/erroLegivel';
+import {
+  codigoDaSituacaoDaContaSchema,
+  projetarSituacaoDaConta,
+} from '@/lib/integrations/bling/situacaoDaContaBling';
 import { logger, sanitizeErrorForLog } from '@/lib/observability/logger';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import type { TituloFinanceiro } from '@/types';
@@ -66,7 +70,10 @@ const numeroDoProvedor = z.union([
  */
 const contaFinanceiraSchema = z.object({
   id: numeroDoProvedor.pipe(z.number().int().positive()),
-  situacao: numeroDoProvedor.pipe(z.number().finite()),
+  // Só os sete códigos do contrato oficial (1..7). Um código que o contrato
+  // não conhece não é projetado por palpite: o item é recusado e contado em
+  // `itensInvalidos`.
+  situacao: numeroDoProvedor.pipe(codigoDaSituacaoDaContaSchema),
   valor: numeroDoProvedor.pipe(z.number().finite()),
   vencimento: z.string().min(1),
   pagamento: z.object({ data: z.string().optional() }).optional(),
@@ -102,14 +109,6 @@ const MAX_PAGINAS_PADRAO = 50;
 
 function json(body: FinanceiroSyncResponseBody, status: number): NextResponse {
   return NextResponse.json(body, { status });
-}
-
-/** 1 = Aberto, 2 = Pago, 3 = Cancelado (padrão Bling). */
-function mapSituacao(idSituacao: number): 'aberto' | 'pago' | 'cancelado' {
-  if (idSituacao === 1) return 'aberto';
-  if (idSituacao === 2) return 'pago';
-  if (idSituacao === 3) return 'cancelado';
-  return 'aberto';
 }
 
 /**
@@ -168,7 +167,11 @@ function toTitulo(
   return {
     bling_id: conta.id,
     tipo,
-    situacao: mapSituacao(conta.situacao),
+    // A projeção local (ver `situacaoDaContaBling.ts`) e o código original.
+    // Um título local já terminal não volta a ativo por esta gravação: o
+    // gatilho `tg_titulo_terminal_nao_regride` (migration 68) o mantém.
+    situacao: projetarSituacaoDaConta(conta.situacao),
+    situacao_bling: conta.situacao,
     valor: conta.valor,
     data_vencimento: conta.vencimento,
     data_pagamento: conta.pagamento?.data || undefined,

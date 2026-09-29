@@ -38,6 +38,7 @@ import { IntegrationsPanel } from '@/components/integracoes/IntegrationsPanel';
 import { MensageriaDesktop } from '@/components/mensageria/MensageriaDesktop';
 import { BillingPanel } from '@/components/billing/BillingPanel';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
+import { excluirContato } from '@/lib/correcaoOperacionalCliente';
 import {
   usePapelNaOrganizacaoAtiva,
   type SelecaoDeOrganizacao,
@@ -918,13 +919,17 @@ export default function Home() {
           // detalhe é o caminho que faltava; nenhuma rota nova, nenhum campo
           // novo.
           //
-          // `onDelete` continua deliberadamente sem ser passado: a composição
-          // anterior também não o passava, e ligá-lo agora seria estrear um
-          // fluxo destrutivo, não preservar um. Ver o cabeçalho de
-          // `ClienteDetailModal`.
           setIsClienteModalOpen(false);
           setSelectedClienteToEdit(cliente);
           setIsClienteEditOpen(true);
+        }}
+        // A exclusão manda só o id local; quem decide se o contato pode sair é
+        // o servidor. A lista só é relida depois da confirmação dele.
+        onExcluir={(clienteId) => excluirContato(fetchWithAuth, clienteId)}
+        onExcluido={() => {
+          setIsClienteModalOpen(false);
+          setSelectedClienteModal(null);
+          void loadDashboardData();
         }}
       />
 

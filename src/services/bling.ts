@@ -1,9 +1,12 @@
+import { z } from 'zod';
+
 import { BlingPedido, BlingCliente, BlingProduto, BlingCategoria } from '../types';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { descreverErro } from '../lib/erroLegivel';
 import type {
   BlingPort,
   ContaPagarBlingEntrada,
+  ContaPagarRemota,
   ContatoBlingEntrada,
   ProdutoBlingEntrada,
 } from './blingPort';
@@ -22,6 +25,14 @@ import {
   lerSituacoes,
   type Situacao,
 } from '../lib/integrations/bling/situacoesContract';
+import type {
+  CausaIndeterminada,
+  ContatoRemoto,
+  ExclusaoRemota,
+  FalhaDeOperacaoRemota,
+  LeituraRemota,
+} from '../lib/integrations/bling/operacaoRemotaContract';
+import { codigoDaSituacaoDaContaSchema } from '../lib/integrations/bling/situacaoDaContaBling';
 import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 import { FilaDeRequisicoes, esperar, type Dormir } from './filaDeRequisicoes';
 import type { TokenDoBling } from './blingToken';
@@ -134,6 +145,60 @@ function corpoProdutoBling(payload: ProdutoBlingEntrada): Record<string, unknown
 }
 
 /**
+ * O limite de requisições do Bling persistiu depois do retry de `fetchWithAuth`.
+ *
+ * A documentação do Bling diz que requisição acima do limite **não é
+ * processada**: quem recebe este erro sabe que nada mudou do outro lado. É
+ * isso que a classe própria permite distinguir de uma falha de rede, em que o
+ * efeito pode ter acontecido.
+ */
+export class BlingLimiteDeRequisicoesError extends Error {
+  constructor() {
+    super('Número máximo de retries excedido (HTTP 429 Too Many Requests).');
+    this.name = 'BlingLimiteDeRequisicoesError';
+  }
+}
+
+/**
+ * O Bling recusou o acesso (401/403) e a renovação do token não resolveu.
+ *
+ * Também é recusa **antes** do efeito: a requisição não foi autorizada.
+ */
+export class BlingAcessoRecusadoError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BlingAcessoRecusadoError';
+  }
+}
+
+const contatoLidoSchema = z.object({
+  data: z.object({ id: z.union([z.number().int().positive(), z.string().regex(/^\d+$/u)]) }),
+});
+
+const contaPagarLidaSchema = z.object({
+  data: z.object({
+    id: z.union([z.number().int().positive(), z.string().regex(/^\d+$/u)]),
+    situacao: codigoDaSituacaoDaContaSchema,
+  }),
+});
+
+/**
+ * Classifica o status HTTP de uma leitura ou exclusão pelo que ele prova.
+ *
+ * `404` fica de fora: ele significa "ausente", e quem decide o que isso quer
+ * dizer é a operação. `408` e `5xx` não provam nada sobre o efeito; os demais
+ * `4xx` são recusa de validação ou de acesso — antes do efeito.
+ */
+function falhaPorStatus(status: number): FalhaDeOperacaoRemota {
+  if (status === 429) return { _tag: 'RemotoLimitado' };
+  if (status === 408) return { _tag: 'RemotoIndeterminado', causa: 'prazo_esgotado' };
+  if (status >= 500) return { _tag: 'RemotoIndeterminado', causa: 'erro_do_servidor' };
+  if (status >= 400) return { _tag: 'RemotoRecusou', status };
+  // Um 1xx/3xx aqui não é resposta que o contrato descreva.
+  return { _tag: 'RemotoIndeterminado', causa: 'resposta_invalida' };
+}
+
+/**
  * Erro de leitura do Bling.
  *
  * Distingue "o provedor recusou" (401, 403, 500, timeout) de "não há nada".
@@ -170,6 +235,14 @@ export class BlingClient implements BlingPort {
    * pode falhar por pressa.
    */
   static readonly TEMPO_LIMITE_OPERACAO_MS = 20_000;
+
+  /**
+   * Teto de **uma** requisição de correção: a leitura ou a exclusão de um
+   * contato ou de uma conta a pagar. A correção faz no máximo duas em série
+   * (exclusão e a leitura que a confirma), então o pior caso fica dentro do que
+   * uma requisição HTTP do navegador espera sem desistir.
+   */
+  static readonly TEMPO_LIMITE_CORRECAO_MS = 12_000;
 
   private baseUrl = process.env.BLING_API_BASE_URL || 'https://api.bling.com.br/Api/v3';
 
@@ -334,9 +407,9 @@ export class BlingClient implements BlingPort {
           const errMessage = descreverErro(err);
           console.error('❌ BlingClient: Falha na renovação automática do token Bling OAuth v3:', errMessage);
           if (errMessage === 'BLING_INVALID_GRANT') {
-            throw new Error('BLING_INVALID_GRANT');
+            throw new BlingAcessoRecusadoError('BLING_INVALID_GRANT');
           }
-          throw new Error(
+          throw new BlingAcessoRecusadoError(
             `Conexão Bling OAuth v3 (HTTP ${response.status}): ${errMessage || 'Token expirado/sem permissão'}. Se você alterou permissões recentemente no Bling, por favor, clique em 'Conectar APIs' no topo da tela para reautorizar.`
           );
         }
@@ -345,7 +418,7 @@ export class BlingClient implements BlingPort {
       return response;
     }
 
-    throw new Error('Número máximo de retries excedido (HTTP 429 Too Many Requests).');
+    throw new BlingLimiteDeRequisicoesError();
   }
 
   // Ping rápido para verificar se a API está conectada e com token válido
@@ -765,19 +838,18 @@ export class BlingClient implements BlingPort {
     return { _tag: 'BlingOk', value: undefined };
   }
 
-  // Deletar um contato no Bling ERP
-  async deleteContato(id: string): Promise<unknown> {
-    const url = `${this.baseUrl}/contatos/${id}`;
-    const response = await this.fetchWithAuth(url, {
-      method: 'DELETE',
-    });
+  /** `GET /contatos/{id}`: o contato existe nesta conta do Bling? */
+  async consultarContato(id: string): Promise<LeituraRemota<ContatoRemoto>> {
+    const resposta = await this.requisicaoDeCorrecao('bling.contato.consultar', `/contatos/${encodeURIComponent(id)}`, 'GET');
+    if (resposta._tag !== 'Resposta') return resposta;
+    return this.lerRecursoConfirmado(resposta.response, contatoLidoSchema, (data) => ({ id: String(data.id) }));
+  }
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Erro na API Bling ao deletar contato (HTTP ${response.status}): ${errorText}`);
-    }
-
-    return { success: true };
+  /** `DELETE /contatos/{id}` — `204` no OpenAPI oficial. */
+  async excluirContato(id: string): Promise<ExclusaoRemota> {
+    const resposta = await this.requisicaoDeCorrecao('bling.contato.excluir', `/contatos/${encodeURIComponent(id)}`, 'DELETE');
+    if (resposta._tag !== 'Resposta') return resposta;
+    return this.exclusaoConfirmada(resposta.response);
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -1436,6 +1508,103 @@ export class BlingClient implements BlingPort {
     }
 
     return { _tag: 'BlingOk', value: undefined };
+  }
+
+  /** `GET /contas/pagar/{id}`: a conta existe, e em que situação (1..7)? */
+  async consultarContaPagar(id: string): Promise<LeituraRemota<ContaPagarRemota>> {
+    const resposta = await this.requisicaoDeCorrecao('bling.conta-pagar.consultar', `/contas/pagar/${encodeURIComponent(id)}`, 'GET');
+    if (resposta._tag !== 'Resposta') return resposta;
+    return this.lerRecursoConfirmado(resposta.response, contaPagarLidaSchema, (data) => ({
+      id: String(data.id),
+      situacao: data.situacao,
+    }));
+  }
+
+  /**
+   * `DELETE /contas/pagar/{id}` — "Remove uma conta a pagar", `204`.
+   *
+   * O Bling não tem operação de *cancelar* conta a pagar: `situacao` é
+   * `readOnly` no schema, e remover é o único efeito oficial disponível.
+   */
+  async excluirContaPagar(id: string): Promise<ExclusaoRemota> {
+    const resposta = await this.requisicaoDeCorrecao('bling.conta-pagar.excluir', `/contas/pagar/${encodeURIComponent(id)}`, 'DELETE');
+    if (resposta._tag !== 'Resposta') return resposta;
+    return this.exclusaoConfirmada(resposta.response);
+  }
+
+  /**
+   * Uma requisição de correção (leitura ou exclusão por id), sob teto de tempo
+   * próprio e com a falha **classificada pelo que ela prova**.
+   *
+   * O que sai daqui como exceção de `fetchWithAuth` vira valor:
+   * - limite esgotado e acesso recusado são recusas antes do efeito;
+   * - prazo esgotado e qualquer outra exceção (rede, cofre, socket) ficam
+   *   indeterminados — para um `DELETE`, a requisição pode ter chegado.
+   *
+   * Nada do corpo do provedor e nada da credencial chega ao retorno; o motivo
+   * técnico vai para o log do servidor por `registrarFalhaInterna`.
+   */
+  private async requisicaoDeCorrecao(
+    operacao: string,
+    caminho: string,
+    metodo: 'GET' | 'DELETE',
+  ): Promise<{ readonly _tag: 'Resposta'; readonly response: Response } | FalhaDeOperacaoRemota> {
+    const controle = new AbortController();
+    const temporizador = setTimeout(
+      () => controle.abort(new Error(`prazo esgotado em ${operacao}`)),
+      BlingClient.TEMPO_LIMITE_CORRECAO_MS,
+    );
+    let aoAbortar: (() => void) | undefined;
+
+    try {
+      const response = await Promise.race([
+        this.fetchWithAuth(`${this.baseUrl}${caminho}`, { method: metodo, signal: controle.signal }),
+        new Promise<never>((_, rejeitar) => {
+          aoAbortar = () => rejeitar(controle.signal.reason);
+          controle.signal.addEventListener('abort', aoAbortar, { once: true });
+        }),
+      ]);
+      return { _tag: 'Resposta', response };
+    } catch (erro: unknown) {
+      registrarFalhaInterna(operacao, erro);
+      if (erro instanceof BlingLimiteDeRequisicoesError) return { _tag: 'RemotoLimitado' };
+      if (erro instanceof BlingAcessoRecusadoError) return { _tag: 'RemotoRecusou', status: 401 };
+      const causa: CausaIndeterminada = controle.signal.aborted ? 'prazo_esgotado' : 'falha_de_rede';
+      return { _tag: 'RemotoIndeterminado', causa };
+    } finally {
+      clearTimeout(temporizador);
+      if (aoAbortar) controle.signal.removeEventListener('abort', aoAbortar);
+    }
+  }
+
+  /** `2xx` de um `DELETE` é a confirmação; o corpo é descartado sem ser lido. */
+  private exclusaoConfirmada(response: Response): ExclusaoRemota {
+    void response.body?.cancel().catch(() => {});
+    if (response.ok) return { _tag: 'ExclusaoAceita' };
+    if (response.status === 404) return { _tag: 'RemotoAusente' };
+    return falhaPorStatus(response.status);
+  }
+
+  /**
+   * `200` de uma leitura só prova presença quando o corpo tem a forma do
+   * contrato. Corpo ilegível não é "presente" nem "ausente": é indeterminado.
+   */
+  private async lerRecursoConfirmado<S extends z.ZodType<{ data: unknown }>, T>(
+    response: Response,
+    schema: S,
+    projetar: (data: z.infer<S>['data']) => T,
+  ): Promise<LeituraRemota<T>> {
+    if (response.status === 404) {
+      void response.body?.cancel().catch(() => {});
+      return { _tag: 'RemotoAusente' };
+    }
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => {});
+      return falhaPorStatus(response.status);
+    }
+    const lido = schema.safeParse(await this.lerCorpoJson(response));
+    if (!lido.success) return { _tag: 'RemotoIndeterminado', causa: 'resposta_invalida' };
+    return { _tag: 'RemotoPresente', valor: projetar(lido.data.data) };
   }
 
   /**

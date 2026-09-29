@@ -1,6 +1,14 @@
 import type { BlingCategoria, BlingCliente, BlingPedido, BlingProduto } from '../types';
 import type { BlingCallResult, BuscaDePedidoPorNumeroLoja, PedidoVendaPayload } from '../lib/integrations/bling/pedidoVendaContract';
 import type { Situacao } from '../lib/integrations/bling/situacoesContract';
+import type { ContatoRemoto, ExclusaoRemota, LeituraRemota } from '../lib/integrations/bling/operacaoRemotaContract';
+import type { CodigoDaSituacaoDaConta } from '../lib/integrations/bling/situacaoDaContaBling';
+
+/** Conta a pagar lida por id: só o que a correção precisa. */
+export interface ContaPagarRemota {
+  readonly id: string;
+  readonly situacao: CodigoDaSituacaoDaConta;
+}
 
 /**
  * A fronteira entre o ORBITA e o Bling: o que o ORBITA precisa que o ERP faça.
@@ -73,7 +81,14 @@ export interface BlingPort {
   // ── Contatos ───────────────────────────────────────────────────────────
   getClientes(pagina?: number, limite?: number, dataAlteracaoInicial?: string): Promise<BlingCliente[]>;
   getContatosByNome(nome: string): Promise<BlingCliente[]>;
-  deleteContato(id: string): Promise<unknown>;
+  /**
+   * Leitura e exclusão por id com resultado **classificado pelo que prova**
+   * (`operacaoRemotaContract.ts`): `404` na leitura é "ausente", não falha de
+   * transporte, e prazo/rede/5xx ficam indeterminados em vez de virar sucesso
+   * ou falha. Cada chamada tem teto de tempo próprio.
+   */
+  consultarContato(id: string): Promise<LeituraRemota<ContatoRemoto>>;
+  excluirContato(id: string): Promise<ExclusaoRemota>;
   /** Campos conforme o OpenAPI oficial: `telefone` e `indicadorIe`. */
   criarContato(payload: ContatoBlingEntrada): Promise<BlingCallResult<{ id: string }>>;
   atualizarContato(id: string, payload: ContatoBlingEntrada): Promise<BlingCallResult<void>>;
@@ -94,6 +109,10 @@ export interface BlingPort {
   /** Conferidos contra o schema oficial; quitar é uma chamada separada da criação. */
   criarContaPagar(payload: ContaPagarBlingEntrada): Promise<BlingCallResult<{ id: string }>>;
   baixarContaPagar(idConta: string, payload: BaixaContaPagarEntrada): Promise<BlingCallResult<void>>;
+  /** Situação real (1..7) de uma conta a pagar, lida por id. */
+  consultarContaPagar(id: string): Promise<LeituraRemota<ContaPagarRemota>>;
+  /** Remove a conta a pagar — o único efeito oficial equivalente a cancelar. */
+  excluirContaPagar(id: string): Promise<ExclusaoRemota>;
   /** Portador (`GET /contas-contabeis`), necessário para quitar. */
   obterContaFinanceiraPadraoId(): Promise<BlingCallResult<number>>;
 

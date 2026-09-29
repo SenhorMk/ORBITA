@@ -25,8 +25,10 @@ import {
 } from './__testkit__/fronteiraDeAutorizacao';
 
 const fronteira = new FronteiraDeAutorizacao();
-const deleteContatoMock = vi.fn();
-const deleteClienteMock = vi.fn();
+const excluirContatoMock = vi.fn();
+const consultarContatoMock = vi.fn();
+const carregarParaExclusaoMock = vi.fn();
+const excluirClienteMock = vi.fn();
 const criarHandlerVendaManualMock = vi.fn();
 
 vi.mock('@/lib/supabaseServer', () => ({
@@ -35,13 +37,16 @@ vi.mock('@/lib/supabaseServer', () => ({
   },
 }));
 vi.mock('@/services/bling', () => ({
-  bling: { forVerifiedOrganization: () => ({ deleteContato: deleteContatoMock }) },
+  bling: {
+    forVerifiedOrganization: () => ({ excluirContato: excluirContatoMock, consultarContato: consultarContatoMock }),
+  },
 }));
 vi.mock('@/repositories/clienteRepository', () => ({
-  clienteRepository: { delete: deleteClienteMock },
+  clienteRepository: { carregarParaExclusao: carregarParaExclusaoMock, excluir: excluirClienteMock },
 }));
 
 const URL_CLIENTES = 'https://orbita.test/api/clientes/delete';
+const CLIENTE_ID = '22000000-0000-4000-8000-0000000000c1';
 const URL_VENDA = 'https://orbita.test/api/pedidos/manual';
 
 describe('POST /api/clientes/delete — apagar exige gestão na organização', () => {
@@ -56,11 +61,11 @@ describe('POST /api/clientes/delete — apagar exige gestão na organização', 
   }
 
   it('devolve 401 sem sessão, e não toca no cliente', async () => {
-    const resposta = await chamar({ id: 'c1', bling_id: '123' }, false);
+    const resposta = await chamar({ id: CLIENTE_ID, bling_id: '123' }, false);
 
     expect(resposta.status).toBe(401);
-    expect(deleteClienteMock).not.toHaveBeenCalled();
-    expect(deleteContatoMock).not.toHaveBeenCalled();
+    expect(carregarParaExclusaoMock).not.toHaveBeenCalled();
+    expect(excluirContatoMock).not.toHaveBeenCalled();
   });
 
   // 401 por ausência e 401 por recusa são a mesma resposta de propósito: nenhuma
@@ -68,29 +73,29 @@ describe('POST /api/clientes/delete — apagar exige gestão na organização', 
   it('devolve 401 quando o provedor recusa o token', async () => {
     fronteira.sessaoInvalida();
 
-    expect((await chamar({ id: 'c1', bling_id: '123' })).status).toBe(401);
-    expect(deleteClienteMock).not.toHaveBeenCalled();
+    expect((await chamar({ id: CLIENTE_ID, bling_id: '123' })).status).toBe(401);
+    expect(carregarParaExclusaoMock).not.toHaveBeenCalled();
   });
 
   it('devolve 503, e não 401, quando o provedor de identidade está fora do ar', async () => {
     fronteira.provedorDeIdentidadeIndisponivel();
 
-    expect((await chamar({ id: 'c1', bling_id: '123' })).status).toBe(503);
-    expect(deleteClienteMock).not.toHaveBeenCalled();
+    expect((await chamar({ id: CLIENTE_ID, bling_id: '123' })).status).toBe(503);
+    expect(carregarParaExclusaoMock).not.toHaveBeenCalled();
   });
 
   it('devolve 503, e não 403, quando o depósito de vínculos está indisponível', async () => {
     fronteira.sessaoDe(OWNER_ID).depositoDeVinculosIndisponivel();
 
-    expect((await chamar({ id: 'c1', bling_id: '123' })).status).toBe(503);
-    expect(deleteClienteMock).not.toHaveBeenCalled();
+    expect((await chamar({ id: CLIENTE_ID, bling_id: '123' })).status).toBe(503);
+    expect(carregarParaExclusaoMock).not.toHaveBeenCalled();
   });
 
   it('devolve 403 a quem está autenticado e não tem vínculo', async () => {
     fronteira.sessaoDe(OWNER_ID).semVinculo();
 
-    expect((await chamar({ id: 'c1', bling_id: '123' })).status).toBe(403);
-    expect(deleteClienteMock).not.toHaveBeenCalled();
+    expect((await chamar({ id: CLIENTE_ID, bling_id: '123' })).status).toBe(403);
+    expect(carregarParaExclusaoMock).not.toHaveBeenCalled();
   });
 
   // O papel legado só conhecia `dono`. A pergunta certa é a capacidade nesta
@@ -98,31 +103,39 @@ describe('POST /api/clientes/delete — apagar exige gestão na organização', 
   it('nega o membro com 403, por capacidade e não por papel de `app_metadata`', async () => {
     fronteira.sessaoDe(MEMBER_ID).vinculoDe('member');
 
-    expect((await chamar({ id: 'c1', bling_id: '123' })).status).toBe(403);
-    expect(deleteClienteMock).not.toHaveBeenCalled();
+    expect((await chamar({ id: CLIENTE_ID, bling_id: '123' })).status).toBe(403);
+    expect(carregarParaExclusaoMock).not.toHaveBeenCalled();
   });
 
   it('deixa o admin passar — o papel legado o negava, embora ele administre', async () => {
     fronteira.sessaoDe(ADMIN_ID).vinculoDe('admin');
-    deleteContatoMock.mockResolvedValue(undefined);
-    deleteClienteMock.mockResolvedValue(undefined);
+    carregarParaExclusaoMock.mockResolvedValue({ id: CLIENTE_ID, blingId: '123', possuiHistorico: false });
+    consultarContatoMock.mockResolvedValue({ _tag: 'RemotoPresente', valor: { id: '123' } });
+    excluirContatoMock.mockResolvedValue({ _tag: 'ExclusaoAceita' });
+    excluirClienteMock.mockResolvedValue(1);
 
-    expect((await chamar({ id: 'c1', bling_id: '123' })).status).toBe(200);
+    expect((await chamar({ id: CLIENTE_ID, bling_id: '123' })).status).toBe(200);
   });
 
   // Caminho positivo: o serviço recebe a organização e o ator **derivados do
   // vínculo**, não do corpo da requisição.
   it('entrega ao repositório o escopo do vínculo, e o ator é o usuário', async () => {
     fronteira.sessaoDe(OWNER_ID).vinculoDe('owner');
-    deleteContatoMock.mockResolvedValue(undefined);
-    deleteClienteMock.mockResolvedValue(undefined);
+    carregarParaExclusaoMock.mockResolvedValue({ id: CLIENTE_ID, blingId: '123', possuiHistorico: false });
+    consultarContatoMock.mockResolvedValue({ _tag: 'RemotoPresente', valor: { id: '123' } });
+    excluirContatoMock.mockResolvedValue({ _tag: 'ExclusaoAceita' });
+    excluirClienteMock.mockResolvedValue(1);
 
-    await chamar({ id: 'c1', bling_id: '123' });
+    await chamar({ id: CLIENTE_ID, bling_id: '123' });
 
-    expect(deleteClienteMock).toHaveBeenCalledTimes(1);
-    const [escopo, id] = deleteClienteMock.mock.calls[0]!;
-    expect(escopo).toMatchObject({ organizationId: ORG_ID, actorId: OWNER_ID, role: 'owner' });
-    expect(id).toBe('c1');
+    // Duas cargas: a pré-checagem e a reclassificação depois do Bling. As duas
+    // com o escopo do vínculo.
+    expect(carregarParaExclusaoMock).toHaveBeenCalledTimes(2);
+    for (const [escopo, id] of carregarParaExclusaoMock.mock.calls) {
+      expect(escopo).toMatchObject({ organizationId: ORG_ID, actorId: OWNER_ID, role: 'owner' });
+      expect(id).toBe(CLIENTE_ID);
+    }
+    expect(excluirClienteMock.mock.calls[0]![0]).toMatchObject({ organizationId: ORG_ID });
   });
 
   // Isolamento do recurso: o corpo é entrada não confiável. Uma organização
@@ -130,12 +143,14 @@ describe('POST /api/clientes/delete — apagar exige gestão na organização', 
   // do cliente.
   it('ignora a organização vinda no corpo e usa a do vínculo', async () => {
     fronteira.sessaoDe(OWNER_ID).vinculoDe('owner');
-    deleteContatoMock.mockResolvedValue(undefined);
-    deleteClienteMock.mockResolvedValue(undefined);
+    carregarParaExclusaoMock.mockResolvedValue({ id: CLIENTE_ID, blingId: '123', possuiHistorico: false });
+    consultarContatoMock.mockResolvedValue({ _tag: 'RemotoPresente', valor: { id: '123' } });
+    excluirContatoMock.mockResolvedValue({ _tag: 'ExclusaoAceita' });
+    excluirClienteMock.mockResolvedValue(1);
 
-    await chamar({ id: 'c1', bling_id: '123', organizacao_id: OUTRA_ORG_ID, organizationId: OUTRA_ORG_ID });
+    await chamar({ id: CLIENTE_ID, bling_id: '123', organizacao_id: OUTRA_ORG_ID, organizationId: OUTRA_ORG_ID });
 
-    const [escopo] = deleteClienteMock.mock.calls[0]!;
+    const [escopo] = carregarParaExclusaoMock.mock.calls[0]!;
     expect(escopo).toMatchObject({ organizationId: ORG_ID });
   });
 });

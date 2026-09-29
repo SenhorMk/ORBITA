@@ -101,6 +101,15 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   ['security.cross_tenant_attempt', 'security', 'critical', 'system', 1825, 'Tentativa de acesso/gravação em organização diferente do escopo verificado.', 'crossTenantAttempt'],
 
   ['org.privileged_change', 'organization', 'warning', 'user', 1825, 'Alteração de configuração privilegiada da organização.'],
+
+  // Correções operacionais (migration 69). Metadata só com ids técnicos e o
+  // desfecho — nunca nome, documento, contato ou corpo do Bling.
+  ['customer.contact_deleted', 'customers', 'warning', 'user', 1825, 'Contato sem histórico excluído no ORBITA e, quando vinculado, no Bling.'],
+  ['customer.contact_reconcile_required', 'customers', 'critical', 'user', 1825, 'Exclusão de contato sem confirmação do estado no Bling; nada local foi concluído.'],
+  ['customer.contact_preserved_after_remote_removal', 'customers', 'warning', 'user', 1825, 'Contato já removido do Bling que ganhou histórico no ORBITA e foi preservado localmente.'],
+  ['finance.entry_deleted', 'finance', 'warning', 'user', 1825, 'Lançamento de despesa puramente interno excluído por correção de entrada.'],
+  ['finance.expense_cancelled', 'finance', 'warning', 'user', 1825, 'Despesa do Bling removida lá e mantida no histórico do ORBITA como cancelada.'],
+  ['finance.remote_reconcile_required', 'finance', 'critical', 'user', 1825, 'Cancelamento de despesa sem confirmação do estado no Bling; nada local foi concluído.'],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 

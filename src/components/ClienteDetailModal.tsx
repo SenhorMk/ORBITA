@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from "react";
-import { CheckCircle2, Copy, MessageCircle, Pencil, Trash2 } from 'lucide-react';
+import { CheckCircle2, Copy, Loader2, MessageCircle, Pencil, Trash2 } from 'lucide-react';
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import { Pilula } from '@/components/ui/StatusPill';
+import { mensagemDaCorrecao, type DesfechoDaCorrecao } from '@/lib/config/correcaoOperacionalContract';
 import type { Cliente } from '@/types';
 
 /**
@@ -22,13 +23,18 @@ import type { Cliente } from '@/types';
  * - **editar** um contato existente: pela ação primária daqui, que preenche
  *   `selectedClienteToEdit` em `page.tsx` (coberto por
  *   `clientes/ligacao-detalhe-edicao.test.tsx`);
- * - **excluir** um contato: `onDelete` **não tem chamador** — a tela não passa
- *   essa prop, então a exclusão não está exposta na interface. O botão que este
- *   componente sabe desenhar é uma possibilidade, não algo que a tela oferece;
- *   ligá-lo seria adicionar um fluxo destrutivo.
+ * - **excluir** um contato: pela ação destrutiva, sozinha à esquerda do rodapé.
+ *   Ela não exclui direto: troca o corpo do mesmo modal pela confirmação — o
+ *   Design System não empilha diálogo dentro de diálogo. Só depois de o
+ *   servidor responder `Deleted` a tela é avisada (`onExcluido`) e relê a
+ *   lista; até lá o detalhe continua aberto e o contato continua na lista.
  *
- * O mesmo vale para produto: `POST /api/produtos/delete` existe no servidor, e
- * nenhuma tela o chama.
+ * Quem decide se o contato pode sair é o servidor (`POST /api/clientes/delete`):
+ * com histórico ele responde `Blocked`, e esta tela só mostra a frase do
+ * contrato (`mensagemDaCorrecao`), nunca texto do banco ou do Bling.
+ *
+ * Produto continua sem exclusão na interface: `POST /api/produtos/delete`
+ * existe no servidor, e nenhuma tela o chama.
  */
 
 interface ClienteDetailModalProps {
@@ -37,7 +43,13 @@ interface ClienteDetailModalProps {
   cliente: Cliente | null;
   onOpenChatwoot?: (phone?: string, name?: string) => void;
   onEdit?: (cliente: Cliente) => void;
-  onDelete?: (id: string, blingId?: string) => void;
+  /**
+   * Pede ao servidor a exclusão. Recebe só o id local — o `bling_id` usado lá
+   * é o do banco. Sem esta prop a ação destrutiva não aparece.
+   */
+  onExcluir?: (clienteId: string) => Promise<DesfechoDaCorrecao>;
+  /** O servidor confirmou que o contato não existe mais: feche e releia. */
+  onExcluido?: () => void;
 }
 
 function Campo({
@@ -98,9 +110,40 @@ export function ClienteDetailModal({
   cliente,
   onOpenChatwoot,
   onEdit,
-  onDelete
+  onExcluir,
+  onExcluido,
 }: ClienteDetailModalProps) {
   const [campoCopiado, setCampoCopiado] = useState<string | null>(null);
+  /** O contato em confirmação de exclusão — `null` é o detalhe normal. */
+  const [confirmandoId, setConfirmandoId] = useState<string | null>(null);
+  const [excluindo, setExcluindo] = useState(false);
+  const [aviso, setAviso] = useState<string | null>(null);
+
+  // A confirmação pertence a UM contato: abrir outro volta ao detalhe.
+  const confirmando = cliente !== null && confirmandoId !== null && confirmandoId === cliente.id;
+
+  const fechar = () => {
+    if (excluindo) return;
+    setConfirmandoId(null);
+    setAviso(null);
+    onClose();
+  };
+
+  const confirmarExclusao = async () => {
+    if (!cliente?.id || !onExcluir || excluindo) return;
+    setExcluindo(true);
+    setAviso(null);
+    const desfecho = await onExcluir(cliente.id);
+    setExcluindo(false);
+    // `NotFound` também encerra: o contato não existe mais aqui, e a lista
+    // precisa ser relida para parar de mostrá-lo.
+    if (desfecho.resultado === 'Deleted' || desfecho.resultado === 'NotFound') {
+      setConfirmandoId(null);
+      onExcluido?.();
+      return;
+    }
+    setAviso(mensagemDaCorrecao(desfecho));
+  };
 
   const copiar = (texto: string, campo: string) => {
     if (!texto) return;
@@ -119,23 +162,47 @@ export function ClienteDetailModal({
     <Modal
       aberto={isOpen}
       onAbertoChange={(aberto) => {
-        if (!aberto) onClose();
+        if (!aberto) fechar();
       }}
-      tamanho="lg"
-      eyebrow="Contato"
-      titulo={cliente.nome}
-      descricao="Detalhes do contato, como estão no Orbita e no Bling."
-      rodape={
+      tamanho={confirmando ? 'sm' : 'lg'}
+      destrutivo={confirmando}
+      dispensavel={!excluindo}
+      eyebrow={confirmando ? 'Ação irreversível' : 'Contato'}
+      titulo={confirmando ? 'Excluir este contato?' : cliente.nome}
+      descricao={confirmando ? 'Confirmação de exclusão de contato.' : 'Detalhes do contato, como estão no Orbita e no Bling.'}
+      rodape={confirmando ? (
+        <RodapeDeModal
+          secundaria={
+            <button
+              type="button"
+              onClick={() => { setConfirmandoId(null); setAviso(null); }}
+              disabled={excluindo}
+              className="orbita-chip cursor-pointer"
+            >
+              Voltar
+            </button>
+          }
+          primaria={
+            <button
+              type="button"
+              onClick={() => { void confirmarExclusao(); }}
+              disabled={excluindo}
+              aria-busy={excluindo}
+              className="orbita-chip cursor-pointer"
+              style={{ background: 'var(--danger)', borderColor: 'var(--danger)', color: '#fff' }}
+            >
+              {excluindo && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {excluindo ? 'Excluindo…' : 'Excluir contato'}
+            </button>
+          }
+        />
+      ) : (
         <RodapeDeModal
           destrutiva={
-            onDelete && (
+            onExcluir && cliente.id && (
               <button
                 type="button"
-                onClick={() => {
-                  if (confirm('Tem certeza que deseja excluir este contato no Bling e no sistema local? Essa ação não pode ser desfeita.')) {
-                    onDelete(cliente.id!, cliente.bling_id);
-                  }
-                }}
+                onClick={() => { setAviso(null); setConfirmandoId(cliente.id ?? null); }}
                 className="orbita-chip cursor-pointer"
                 style={{ color: 'var(--danger)' }}
               >
@@ -145,7 +212,7 @@ export function ClienteDetailModal({
             )
           }
           secundaria={
-            <button type="button" onClick={onClose} className="orbita-chip cursor-pointer">
+            <button type="button" onClick={fechar} className="orbita-chip cursor-pointer">
               Fechar
             </button>
           }
@@ -163,8 +230,11 @@ export function ClienteDetailModal({
             )
           }
         />
-      }
+      )}
     >
+      {confirmando ? (
+        <ConfirmacaoDeExclusao nome={cliente.nome} noBling={contatoNoBling(cliente)} aviso={aviso} />
+      ) : (
       <div className="flex flex-col gap-6">
         <Pilula
           rotulo={cliente.bling_id ? 'Bling' : 'Só no Orbita'}
@@ -214,6 +284,35 @@ export function ClienteDetailModal({
           </Secao>
         </div>
       </div>
+      )}
     </Modal>
+  );
+}
+
+/** O mesmo critério do servidor: só um `bling_id` numérico é vínculo com o Bling. */
+function contatoNoBling(cliente: Cliente): boolean {
+  return /^\d+$/u.test(String(cliente.bling_id ?? ''));
+}
+
+function ConfirmacaoDeExclusao({ nome, noBling, aviso }: { nome: string; noBling: boolean; aviso: string | null }) {
+  return (
+    <div className="flex flex-col gap-3 text-sm leading-relaxed" style={{ color: 'var(--txt2)' }}>
+      <p className="m-0">
+        O contato <strong style={{ color: 'var(--txt)' }}>{nome}</strong> será excluído definitivamente do ORBITA
+        {noBling ? ' e também do Bling' : ''}. Esta ação não pode ser desfeita.
+      </p>
+      <p className="m-0 text-xs">
+        Contatos com histórico vinculado — pedidos, por exemplo — não são excluídos: o histórico é preservado.
+      </p>
+      {aviso && (
+        <p
+          role="alert"
+          className="m-0 px-4 py-2.5 text-xs"
+          style={{ borderRadius: 'var(--r-chip)', background: 'var(--chip)', border: '1px solid var(--line)', color: 'var(--txt)' }}
+        >
+          {aviso}
+        </p>
+      )}
+    </div>
   );
 }

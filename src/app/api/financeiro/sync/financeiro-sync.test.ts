@@ -657,3 +657,56 @@ describe('vínculo da conta a receber com o pedido de origem', () => {
     expect(stats.contasReceber.processados).toBe(2);
   });
 });
+
+/**
+ * A situação vinda do Bling, pelos sete códigos oficiais de
+ * `ContasDadosBaseDTO.situacao` (1 Aberto … 7 Confirmado).
+ *
+ * O mapeamento antigo tratava `3` como `cancelado` e `5` como `aberto`: uma
+ * conta parcialmente paga sumia dos totais e um cancelamento de verdade seguia
+ * somando. A manutenção do estado terminal diante do upsert é regra do banco
+ * (migration 68) e está provada no pgTAP `titulo_terminal_monotonico.test.sql`.
+ */
+describe('situação da conta: projeção local e código bruto preservado', () => {
+  it.each([
+    [1, 'aberto'],
+    [2, 'pago'],
+    [3, 'aberto'],
+    [4, 'aberto'],
+    [5, 'cancelado'],
+    [6, 'aberto'],
+    [7, 'aberto'],
+  ] as const)('código %i grava `%s` e guarda o código original', async (codigo, situacao) => {
+    const { deps, upsertTitulo } = montarDeps({
+      bling: blingComPaginas({ financeiro_contas_pagar: [[{ ...CONTA, situacao: codigo }]] }),
+    });
+
+    await createFinanceiroSyncHandler(deps)(requisicao());
+
+    expect(upsertTitulo).toHaveBeenCalledWith(
+      escopo,
+      expect.objectContaining({ bling_id: CONTA.id, situacao, situacao_bling: codigo }),
+    );
+  });
+
+  it('3 Parcial nunca mais vira `cancelado`', async () => {
+    const { deps, upsertTitulo } = montarDeps({
+      bling: blingComPaginas({ financeiro_contas_pagar: [[{ ...CONTA, situacao: 3 }]] }),
+    });
+
+    await createFinanceiroSyncHandler(deps)(requisicao());
+
+    expect(upsertTitulo.mock.calls[0]![1].situacao).not.toBe('cancelado');
+  });
+
+  it('código fora do contrato não é projetado por palpite: o item é recusado e contado', async () => {
+    const { deps, upsertTitulo } = montarDeps({
+      bling: blingComPaginas({ financeiro_contas_pagar: [[{ ...CONTA, situacao: 8 }]] }),
+    });
+
+    const { stats } = await (await createFinanceiroSyncHandler(deps)(requisicao())).json();
+
+    expect(upsertTitulo).not.toHaveBeenCalled();
+    expect(stats.contasPagar.itensInvalidos).toBe(1);
+  });
+});

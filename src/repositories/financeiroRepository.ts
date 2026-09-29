@@ -207,6 +207,80 @@ export class FinanceiroRepository {
   }
 
   /**
+   * O título desta organização, com o que a correção precisa para classificá-lo
+   * no servidor. `null` para inexistente **e** para alheio — indistinguíveis.
+   */
+  async carregarTituloParaCorrecao(
+    scope: VerifiedOrganizationScope,
+    id: string,
+  ): Promise<{
+    readonly id: string;
+    readonly tipo: string;
+    readonly situacao: string;
+    readonly blingId: string | null;
+    readonly pedidoId: string | null;
+  } | null> {
+    const { data, error } = await supabaseServer
+      .from('titulos_financeiros')
+      .select('id, tipo, situacao, bling_id, pedido_id')
+      .eq('id', id)
+      .eq('organizacao_id', scope.organizationId)
+      .maybeSingle();
+    if (error) throw new Error('Falha ao carregar o título para correção.', { cause: error });
+    if (!data) return null;
+    return {
+      id: String(data.id),
+      tipo: String(data.tipo),
+      situacao: String(data.situacao),
+      blingId: data.bling_id === null || data.bling_id === undefined ? null : String(data.bling_id),
+      pedidoId: data.pedido_id ? String(data.pedido_id) : null,
+    };
+  }
+
+  /**
+   * Remove um lançamento **puramente interno** e devolve quantas linhas saíram.
+   *
+   * As condições se repetem no `WHERE` de propósito: mesmo que o título tenha
+   * mudado entre a classificação e aqui, nada que não seja uma despesa interna,
+   * sem pedido, **ativa** (`aberto`/`pago`), desta organização, sai por este
+   * caminho. Um título que virou terminal nesse meio-tempo fica, e o retorno é
+   * zero.
+   */
+  async excluirLancamentoInterno(scope: VerifiedOrganizationScope, id: string): Promise<number> {
+    const { data, error } = await supabaseServer
+      .from('titulos_financeiros')
+      .delete()
+      .eq('id', id)
+      .eq('organizacao_id', scope.organizationId)
+      .eq('tipo', 'pagar')
+      .is('bling_id', null)
+      .is('pedido_id', null)
+      .in('situacao', [...SITUACOES_ATIVAS])
+      .select('id');
+    if (error) throw new Error('Falha ao excluir o lançamento.', { cause: error });
+    return (data ?? []).length;
+  }
+
+  /**
+   * Leva uma despesa do Bling a `cancelado` — só a partir de `aberto`/`pago`,
+   * só `pagar`, só desta organização. A linha **fica**: é histórico, e sai dos
+   * totais por ser terminal. Devolve quantas linhas mudaram.
+   */
+  async marcarDespesaCancelada(scope: VerifiedOrganizationScope, id: string): Promise<number> {
+    const { data, error } = await supabaseServer
+      .from('titulos_financeiros')
+      .update({ situacao: 'cancelado' })
+      .eq('id', id)
+      .eq('organizacao_id', scope.organizationId)
+      .eq('tipo', 'pagar')
+      .not('bling_id', 'is', null)
+      .in('situacao', [...SITUACOES_ATIVAS])
+      .select('id');
+    if (error) throw new Error('Falha ao cancelar a despesa.', { cause: error });
+    return (data ?? []).length;
+  }
+
+  /**
    * Upsert de título financeiro. O payload de autoridade (organizacao_id,
    * user_id/actor) é sempre derivado do VerifiedOrganizationScope resolvido
    * no servidor — qualquer organizacao_id/user_id vindo em `titulo` (input
@@ -225,6 +299,7 @@ export class FinanceiroRepository {
       bling_id: titulo.bling_id,
       tipo: titulo.tipo,
       situacao: titulo.situacao,
+      situacao_bling: titulo.situacao_bling,
       valor: titulo.valor,
       data_vencimento: titulo.data_vencimento,
       data_pagamento: titulo.data_pagamento,
