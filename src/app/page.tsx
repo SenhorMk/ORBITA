@@ -28,6 +28,7 @@ import { EstoqueEProdutos } from '@/components/estoque/EstoqueEProdutos';
 import { ClientesEContatos } from '@/components/clientes/ClientesEContatos';
 import { ClienteDetailModal } from '@/components/ClienteDetailModal';
 import { ProductDetailModal } from '@/components/ProductDetailModal';
+import { useProdutoNoModal } from '@/components/produtos/useProdutoNoModal';
 import { ClienteEditModal } from '@/components/ClienteEditModal';
 import { ManualOrderModal } from '@/components/ManualOrderModal';
 import { StartupLoader } from '@/components/StartupLoader';
@@ -215,8 +216,6 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
-  const [selectedProdutoModal, setSelectedProdutoModal] = useState<Produto | null>(null);
-  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [selectedClienteModal, setSelectedClienteModal] = useState<Cliente | null>(null);
   const [isClienteModalOpen, setIsClienteModalOpen] = useState(false);
   // A inicialização é **por organização confirmada**, e só de quem administra.
@@ -227,10 +226,6 @@ export default function Home() {
     useStartupPorOrganizacao(podeGerir, organizacaoConfirmada);
 
 
-  const handleOpenProductModal = (produto: Produto) => {
-    setSelectedProdutoModal(produto);
-    setIsProductModalOpen(true);
-  };
 
   // Navegação do Painel (Abas)
   const [activeTab, setActiveTab] = useState<
@@ -258,6 +253,13 @@ export default function Home() {
   const erroDaLeitura = painel.erro;
   const isLoading = painel.carregando;
   const loadDashboardData = painel.recarregar;
+
+  /**
+   * O produto do modal, carimbado pelo mesmo escopo da leitura. Trocar de
+   * organização ou de sessão o torna inelegível no mesmo render — o modal de A
+   * (e a URL assinada da foto de A) não aparece sob B.
+   */
+  const produtoNoModal = useProdutoNoModal(escopoDaLeitura);
 
   /**
    * Os contatos da tela de Clientes.
@@ -758,11 +760,8 @@ export default function Home() {
             carregando={isLoading}
             erroDeLeitura={erroDaLeitura}
             onRecarregar={() => { void loadDashboardData(); }}
-            onAbrirProduto={handleOpenProductModal}
-            onCadastrarProduto={() => {
-              setSelectedProdutoModal(null);
-              setIsProductModalOpen(true);
-            }}
+            onAbrirProduto={produtoNoModal.abrir}
+            onCadastrarProduto={produtoNoModal.abrirCadastro}
           />
         )}
 
@@ -890,12 +889,12 @@ export default function Home() {
 
       {/* Modal de Detalhes do Produto & Cliente */}
       <ProductDetailModal
-        isOpen={isProductModalOpen}
-        onClose={() => setIsProductModalOpen(false)}
-        produto={selectedProdutoModal}
+        isOpen={produtoNoModal.aberto}
+        onClose={produtoNoModal.fechar}
+        produto={produtoNoModal.produto}
         cliente={
           data?.clientes?.[0] ||
-          data?.pedidos?.find(p => p.itens?.some(i => i.produto_id === selectedProdutoModal?.id))?.cliente ||
+          data?.pedidos?.find(p => p.itens?.some(i => i.produto_id === produtoNoModal.produto?.id))?.cliente ||
           null
         }
         // Releitura autoritativa, e não remendo local: o produto volta do

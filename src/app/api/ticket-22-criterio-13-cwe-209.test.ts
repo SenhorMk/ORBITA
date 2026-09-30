@@ -157,7 +157,7 @@ async function cenarioLimpo(): Promise<void> {
   }
   const { produtoRepository } = await import('@/repositories/produtoRepository');
   vi.mocked(produtoRepository.delete).mockReset();
-  vi.mocked(produtoRepository.delete).mockResolvedValue(undefined);
+  vi.mocked(produtoRepository.delete).mockResolvedValue(null);
 
   fronteira = new FronteiraDeAutorizacao();
   fronteira.sessaoDe(OWNER_ID).vinculoDe('owner');

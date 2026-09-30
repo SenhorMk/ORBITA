@@ -2,6 +2,7 @@ import { supabaseServer } from '../lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { Produto } from '../types';
 import { descreverErro } from '../lib/erroLegivel';
+import { logger } from '../lib/observability/logger';
 
 export class ProdutoRepository {
   async getAll(scope: VerifiedOrganizationScope): Promise<Produto[]> {
@@ -53,14 +54,37 @@ export class ProdutoRepository {
     if (produto.bling_id && produto.id) {
       const { data: existingBling } = await supabaseServer
         .from('produtos')
-        .select('id')
+        .select('id, imagem_storage_path')
         .eq('organizacao_id', scope.organizationId)
         .eq('bling_id', produto.bling_id)
         .maybeSingle();
 
-      if (existingBling && existingBling.id !== produto.id) {
+      // Duplicado com foto do ORBITA NÃO é apagado aqui: apagar a linha
+      // descartaria a foto em silêncio e deixaria o objeto órfão no bucket, e
+      // este repositório não fala com o Storage. O fluxo segue pelo mesmo
+      // caminho de quando a exclusão do duplicado falha: o `update` do produto
+      // editado esbarra no único `(organizacao_id, bling_id)` e o `upsert` por
+      // conflito grava os dados na linha que tem a foto — a foto sobrevive.
+      if (existingBling && existingBling.id !== produto.id && existingBling.imagem_storage_path) {
+        logger.warn('Duplicado com foto do ORBITA preservado na deduplicação por bling_id', {
+          subsystem: 'database',
+          organizacaoId: scope.organizationId,
+          produtoPreservado: existingBling.id,
+          produtoEditado: produto.id,
+        });
+      } else if (existingBling && existingBling.id !== produto.id) {
         try {
-          await this.delete(scope, existingBling.id);
+          const fotoDoExcluido = await this.delete(scope, existingBling.id);
+          // Só acontece se uma foto for confirmada entre a leitura acima e a
+          // exclusão. O objeto fica sem referência; o registro torna-o
+          // localizável pelo prefixo `<organizacao>/<produto>/`.
+          if (fotoDoExcluido !== null) {
+            logger.warn('Foto do ORBITA ficou sem referência na deduplicação por bling_id', {
+              subsystem: 'database',
+              organizacaoId: scope.organizationId,
+              produtoExcluido: existingBling.id,
+            });
+          }
         } catch (delErr: unknown) {
           const errMsg = descreverErro(delErr);
           console.warn(`⚠️ Não foi possível deletar o duplicado: ${errMsg}`);
@@ -99,17 +123,28 @@ export class ProdutoRepository {
     return data;
   }
 
-  async delete(scope: VerifiedOrganizationScope, id: string): Promise<void> {
-    const { error } = await supabaseServer
+  /**
+   * Exclui o produto da organização do escopo.
+   *
+   * @returns O `imagem_storage_path` que a linha **excluída** tinha (lido pelo
+   *   próprio `DELETE ... RETURNING`), ou `null` quando não havia foto ou
+   *   nenhuma linha saiu. É o único caminho que a limpeza do Storage pode
+   *   usar: vem do banco, depois da exclusão, e nunca do navegador.
+   */
+  async delete(scope: VerifiedOrganizationScope, id: string): Promise<string | null> {
+    const { data, error } = await supabaseServer
       .from('produtos')
       .delete()
       .eq('id', id)
-      .eq('organizacao_id', scope.organizationId);
+      .eq('organizacao_id', scope.organizationId)
+      .select('imagem_storage_path');
 
     if (error) {
       console.error(`Erro ao deletar produto com id ${id} no Supabase:`, error);
       throw error;
     }
+    const caminho = (data ?? [])[0]?.imagem_storage_path;
+    return typeof caminho === 'string' && caminho.length > 0 ? caminho : null;
   }
 }
 

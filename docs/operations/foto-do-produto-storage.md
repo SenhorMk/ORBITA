@@ -27,11 +27,13 @@ staging.
 ## Provisionamento
 
 A aplicação nunca cria bucket. O script é idempotente e somente leitura por
-padrão:
+padrão. A chave de service-role vem só da variável de ambiente
+`SUPABASE_SERVICE_ROLE_KEY`, definida no shell a partir do cofre de segredos —
+nunca como argumento e nunca escrita em arquivo:
 
 ```bash
-SUPABASE_SERVICE_ROLE_KEY=... npm run storage:status  -- --url https://<ref>.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=... npm run storage:aplicar -- --url https://<ref>.supabase.co --confirmar
+npm run storage:status  -- --url https://<ref>.supabase.co
+npm run storage:aplicar -- --url https://<ref>.supabase.co --confirmar
 ```
 
 `status` informa se o bucket falta ou diverge (público, limite ou tipos).
@@ -111,8 +113,39 @@ enviar arquivos ao projeto remoto.
 10. Conferir em `eventos_auditoria` os dois eventos, com metadata só de
     `produto_id`, `substituiu_anterior` e `limpeza_anterior`.
 
-## Limitação conhecida
+## Exclusão de produto e a foto
 
-Um upload autorizado que nunca é confirmado (aba fechada no meio) deixa um
-objeto órfão no prefixo do produto. Ele não é referenciado nem exibido. A
-varredura desses órfãos fica para uma entrega futura.
+Caminhos que removem uma linha de `public.produtos` (auditados; a guarda
+`src/repositories/produto-exclusao-e-deduplicacao.test.ts` falha se surgir
+outro chamador de `ProdutoRepository.delete` ou outro `delete` direto em
+`produtos`):
+
+| Caminho | Tratamento da foto |
+|---|---|
+| `POST /api/produtos/delete` | `excluirProdutoComFoto`: exclui a linha escopada por `id` + organização; o `DELETE ... RETURNING` devolve o `imagem_storage_path` da linha excluída; só então o objeto sai do Storage, depois de passar de novo por `caminhoPertenceAoProduto`. Exclusão local falhou → o arquivo fica. Limpeza falhou → a exclusão continua valendo, a resposta não muda, e a falha vai para o log (`produtos.delete.limpeza_da_foto`). O resto da rota (a exclusão no Bling) não mudou. |
+| Deduplicação por `bling_id` em `ProdutoRepository.upsert` | Ocorre em `POST /api/produtos/update` quando o produto editado passa a apontar para um `bling_id` que já pertence a outra linha local. Se essa outra linha tem foto do ORBITA, ela **não é excluída**: o fluxo segue pelo caminho que já existia para exclusão recusada, e o `upsert` por conflito grava os dados na linha que tem a foto. Sem foto, a exclusão continua como antes. A janela entre a leitura e a exclusão (foto confirmada no meio) fica registrada no log como foto sem referência. |
+| `ON DELETE CASCADE` de `organizacoes` e de `auth.users` | Só a limpeza do E2E (`src/lib/e2e/supabasePorta.ts`) apaga organização ou usuário, e apenas os sintéticos da execução, que não enviam foto. Não há exclusão de organização no produto. Se um dia houver, ela precisa limpar o prefixo `<organizacao>/` do bucket. |
+| Policy `produtos_org_delete` (RLS, `authenticated`) | Nenhum código do ORBITA exclui produto pelo cliente do navegador; o cliente só lê. Uma exclusão direta por PostgREST deixaria o objeto sem referência. |
+
+## Dívida operacional: objetos sem referência
+
+**Não resolvido.** Três situações deixam no bucket um objeto que nenhuma linha
+referencia:
+
+1. upload autorizado e enviado, mas nunca confirmado (aba fechada, rede caiu
+   entre o envio e a confirmação);
+2. limpeza que falhou depois de uma troca, remoção ou exclusão (registrada no
+   log e, na troca e na remoção, na auditoria como `limpeza_anterior: falhou`);
+3. as exclusões indiretas da tabela acima.
+
+Nenhum deles é exibido nem acessível sem URL assinada, que só é emitida para
+caminhos referenciados. O desenho permite identificá-los sem estado adicional:
+todo objeto tem o caminho `<organizationId>/<productId>/<uuid>.<ext>`, então um
+objeto é órfão quando **nenhuma** linha de `produtos` com aquele `id` e aquela
+`organizacao_id` tem `imagem_storage_path` igual ao caminho — inclusive quando a
+linha ou a organização já não existem.
+
+Isso deve ganhar uma limpeza por idade: listar o bucket pela API do Storage,
+considerar só objetos mais velhos que uma margem (por exemplo 24 horas, para
+não apagar um upload ainda à espera de confirmação), conferir a referência no
+banco e remover pela API. Até lá, os órfãos ocupam espaço e nada mais.

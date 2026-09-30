@@ -67,6 +67,7 @@ function fakeArmazenamento(opcoes: {
   objetos?: Record<string, { tamanho: number | null; tipo: string | null }>;
   indisponivel?: boolean;
   falharRemocao?: boolean;
+  falharAssinatura?: boolean;
 } = {}) {
   const objetos = { ...(opcoes.objetos ?? {}) };
   const uploadsAutorizados: string[] = [];
@@ -88,6 +89,7 @@ function fakeArmazenamento(opcoes: {
       return { _tag: 'Removido' };
     },
     async assinarLeituras(caminhos) {
+      if (opcoes.falharAssinatura) return { _tag: 'Indisponivel', causa: new Error('sign fora') };
       return { _tag: 'Assinadas', urls: new Map(caminhos.map((c) => [c, `https://storage.test/sign/${c}?token=leitura`])) };
     },
   };
@@ -334,6 +336,22 @@ describe('etapa C — confirmar upload', () => {
     const repetida = await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null });
     expect(repetida.corpo.resultado).toBe('ImagemConfirmada');
     expect(armazenamento.removidos).toEqual([]);
+    expect(store.linhas[0]!.imagemStoragePath).toBe(FOTO_B);
+  });
+
+  it('assinatura falha depois do CAS: a foto continua confirmada e a tela recebe a imagem do Bling', async () => {
+    armazenamento = fakeArmazenamento({ objetos: { [FOTO_B]: PNG_OK }, falharAssinatura: true });
+    const r = await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null });
+    expect(r).toEqual({ status: 200, corpo: { resultado: 'ImagemConfirmada', caminho: FOTO_B, url: BLING } });
+    expect(store.linhas[0]!.imagemStoragePath).toBe(FOTO_B);
+    expect(auditados).toHaveLength(1);
+  });
+
+  it('assinatura falha e não há imagem do Bling: url null (placeholder), sem desfazer a confirmação', async () => {
+    store.linhas[0]!.imagemDoBling = null;
+    armazenamento = fakeArmazenamento({ objetos: { [FOTO_B]: PNG_OK }, falharAssinatura: true });
+    const r = await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null });
+    expect(r.corpo).toEqual({ resultado: 'ImagemConfirmada', caminho: FOTO_B, url: null });
     expect(store.linhas[0]!.imagemStoragePath).toBe(FOTO_B);
   });
 

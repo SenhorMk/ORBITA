@@ -22,8 +22,8 @@ import { err, failureMessage, ok } from './script-result.mjs';
  * não leem nem escrevem nada nele diretamente.
  *
  * ```bash
- * SUPABASE_SERVICE_ROLE_KEY=... npm run storage:status  -- --url https://<ref>.supabase.co
- * SUPABASE_SERVICE_ROLE_KEY=... npm run storage:aplicar -- --url https://<ref>.supabase.co --confirmar
+ * npm run storage:status  -- --url https://<ref>.supabase.co
+ * npm run storage:aplicar -- --url https://<ref>.supabase.co --confirmar
  * ```
  *
  * A chave vem só do ambiente, nunca de argumento (argumento fica no histórico

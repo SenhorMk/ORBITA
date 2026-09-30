@@ -154,31 +154,34 @@ select throws_ok(
     '8. travessia de diretório é recusada'
 );
 
--- O compare-and-set que `ProdutoImagemRepository.trocarCaminho` emite: com a
--- precondição desatualizada, nenhuma linha muda.
+-- O compare-and-set que `ProdutoImagemRepository.trocarCaminho` emite. Um
+-- `WITH ... UPDATE` dentro de uma expressão não é aceito pelo Postgres
+-- (0A000), então cada `UPDATE` roda como instrução e a asserção confere que a
+-- foto ficou onde estava.
+
+-- 9. Precondição desatualizada: a linha tem A, o CAS espera B.
+update public.produtos
+   set imagem_storage_path = 'f7100000-0000-4000-8000-000000000001/f7200000-0000-4000-8000-00000000000a/cccccccc-cccc-4ccc-8ccc-cccccccccccc.webp'
+ where id = 'f7200000-0000-4000-8000-00000000000a'
+   and organizacao_id = 'f7100000-0000-4000-8000-000000000001'
+   and imagem_storage_path = 'f7100000-0000-4000-8000-000000000001/f7200000-0000-4000-8000-00000000000a/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png';
+
 select is(
-    (with trocada as (
-        update public.produtos
-           set imagem_storage_path = 'f7100000-0000-4000-8000-000000000001/f7200000-0000-4000-8000-00000000000a/cccccccc-cccc-4ccc-8ccc-cccccccccccc.webp'
-         where id = 'f7200000-0000-4000-8000-00000000000a'
-           and organizacao_id = 'f7100000-0000-4000-8000-000000000001'
-           and imagem_storage_path = 'f7100000-0000-4000-8000-000000000001/f7200000-0000-4000-8000-00000000000a/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png'
-        returning 1)
-     select count(*)::int from trocada),
-    0,
+    (select imagem_storage_path from public.produtos where id = 'f7200000-0000-4000-8000-00000000000a'),
+    'f7100000-0000-4000-8000-000000000001/f7200000-0000-4000-8000-00000000000a/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png',
     '9. CAS com precondição desatualizada não troca nada'
 );
 
+-- 10. Precondição certa, organização errada.
+update public.produtos
+   set imagem_storage_path = null
+ where id = 'f7200000-0000-4000-8000-00000000000a'
+   and organizacao_id = 'f7100000-0000-4000-8000-000000000002'
+   and imagem_storage_path = 'f7100000-0000-4000-8000-000000000001/f7200000-0000-4000-8000-00000000000a/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png';
+
 select is(
-    (with trocada as (
-        update public.produtos
-           set imagem_storage_path = null
-         where id = 'f7200000-0000-4000-8000-00000000000a'
-           and organizacao_id = 'f7100000-0000-4000-8000-000000000002'
-           and imagem_storage_path = 'f7100000-0000-4000-8000-000000000001/f7200000-0000-4000-8000-00000000000a/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png'
-        returning 1)
-     select count(*)::int from trocada),
-    0,
+    (select imagem_storage_path from public.produtos where id = 'f7200000-0000-4000-8000-00000000000a'),
+    'f7100000-0000-4000-8000-000000000001/f7200000-0000-4000-8000-00000000000a/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png',
     '10. CAS escopado por outra organização não alcança a linha'
 );
 

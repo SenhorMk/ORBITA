@@ -147,9 +147,26 @@ async function auditarSemInterromper(
   }
 }
 
-async function urlDeLeitura(deps: FotoDoProdutoDependencies, caminho: string): Promise<string | null> {
+/**
+ * A URL que a tela mostra logo depois da confirmação, com a mesma precedência
+ * de `comImagemEfetiva`: foto do ORBITA assinada → imagem do Bling → `null`.
+ * Falhar ao assinar não desfaz a confirmação; vai para o log.
+ */
+async function urlEfetiva(
+  deps: FotoDoProdutoDependencies,
+  scope: VerifiedOrganizationScope,
+  caminho: string,
+  produto: ProdutoComFoto,
+): Promise<string | null> {
   const assinadas = await deps.armazenamento.assinarLeituras([caminho], VALIDADE_DA_LEITURA_ASSINADA_S);
-  return assinadas._tag === 'Assinadas' ? assinadas.urls.get(caminho) ?? null : null;
+  const assinada = assinadas._tag === 'Assinadas' ? assinadas.urls.get(caminho) : undefined;
+  if (assinada !== undefined) return assinada;
+  registrarFalhaInterna(
+    'produtos.imagem.assinar_leitura_confirmada',
+    assinadas._tag === 'Indisponivel' ? assinadas.causa : new Error('caminho ausente na resposta de assinatura'),
+    { organizacaoId: scope.organizationId },
+  );
+  return produto.imagemDoBling;
 }
 
 /** `POST /api/produtos/imagem/upload` — etapa A. */
@@ -219,7 +236,7 @@ export function createConfirmarUploadHandler(deps: FotoDoProdutoDependencies) {
     // Repetição de uma confirmação que já valeu (queda de rede, duplo envio):
     // nada a trocar, e nada a apagar — o objeto É a foto atual.
     if (produto.imagemStoragePath === caminho) {
-      return responder({ resultado: 'ImagemConfirmada', caminho, url: await urlDeLeitura(deps, caminho) });
+      return responder({ resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, produto) });
     }
 
     const recusa = await conferirObjeto(deps, scope, caminho);
@@ -229,7 +246,7 @@ export function createConfirmarUploadHandler(deps: FotoDoProdutoDependencies) {
     if (!trocou) {
       const atual = await deps.store.carregar(scope, produto.id);
       if (atual?.imagemStoragePath === caminho) {
-        return responder({ resultado: 'ImagemConfirmada', caminho, url: await urlDeLeitura(deps, caminho) });
+        return responder({ resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, produto) });
       }
       // Perdeu a corrida: o banco guarda outra foto. O objeto desta tentativa
       // não é referenciado por ninguém e sai; a foto vencedora fica intacta.
@@ -248,7 +265,7 @@ export function createConfirmarUploadHandler(deps: FotoDoProdutoDependencies) {
       correlationId: deps.correlationId(request),
       metadata: { produto_id: produto.id, substituiu_anterior: anterior !== null, limpeza_anterior: limpeza },
     });
-    return responder({ resultado: 'ImagemConfirmada', caminho, url: await urlDeLeitura(deps, caminho) });
+    return responder({ resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, produto) });
   };
 }
 
