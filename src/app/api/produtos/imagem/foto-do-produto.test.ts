@@ -355,6 +355,19 @@ describe('etapa C — confirmar upload', () => {
     expect(store.linhas[0]!.imagemStoragePath).toBe(FOTO_B);
   });
 
+  it('confirmação concorrente da MESMA foto com assinatura falha: o fallback usa a releitura, não a imagem do Bling antiga', async () => {
+    armazenamento = fakeArmazenamento({ objetos: { [FOTO_B]: PNG_OK }, falharAssinatura: true });
+    // Entre a primeira leitura e o CAS, outra requisição confirmou esta mesma
+    // foto e a sincronização trocou a imagem do Bling.
+    store.intercalar(() => {
+      store.linhas[0]!.imagemStoragePath = FOTO_B;
+      store.linhas[0]!.imagemDoBling = 'https://orgbling.s3.amazonaws.com/nova.jpg';
+    });
+    const r = await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null });
+    expect(r.corpo).toEqual({ resultado: 'ImagemConfirmada', caminho: FOTO_B, url: 'https://orgbling.s3.amazonaws.com/nova.jpg' });
+    expect(armazenamento.removidos).toEqual([]);
+  });
+
   it('Storage indisponível na inspeção: 503, nada gravado', async () => {
     armazenamento = fakeArmazenamento({ indisponivel: true });
     expect(await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null }))

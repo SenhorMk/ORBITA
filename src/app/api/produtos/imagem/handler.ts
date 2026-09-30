@@ -246,7 +246,8 @@ export function createConfirmarUploadHandler(deps: FotoDoProdutoDependencies) {
     if (!trocou) {
       const atual = await deps.store.carregar(scope, produto.id);
       if (atual?.imagemStoragePath === caminho) {
-        return responder({ resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, produto) });
+        // `atual`, e não `produto`: a imagem do Bling pode ter mudado desde a primeira leitura.
+        return responder({ resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, atual) });
       }
       // Perdeu a corrida: o banco guarda outra foto. O objeto desta tentativa
       // não é referenciado por ninguém e sai; a foto vencedora fica intacta.

@@ -3,6 +3,10 @@ import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope
 import { Produto } from '../types';
 import { descreverErro } from '../lib/erroLegivel';
 import { logger } from '../lib/observability/logger';
+import { ReconciliacaoDeProdutoNecessaria } from './reconciliacaoDeProduto';
+
+export { ReconciliacaoDeProdutoNecessaria } from './reconciliacaoDeProduto';
+export type { MotivoDeReconciliacaoDeProduto } from './reconciliacaoDeProduto';
 
 export class ProdutoRepository {
   async getAll(scope: VerifiedOrganizationScope): Promise<Produto[]> {
@@ -52,44 +56,7 @@ export class ProdutoRepository {
     delete payloadForUpsert.imagem_storage_path;
 
     if (produto.bling_id && produto.id) {
-      const { data: existingBling } = await supabaseServer
-        .from('produtos')
-        .select('id, imagem_storage_path')
-        .eq('organizacao_id', scope.organizationId)
-        .eq('bling_id', produto.bling_id)
-        .maybeSingle();
-
-      // Duplicado com foto do ORBITA NÃO é apagado aqui: apagar a linha
-      // descartaria a foto em silêncio e deixaria o objeto órfão no bucket, e
-      // este repositório não fala com o Storage. O fluxo segue pelo mesmo
-      // caminho de quando a exclusão do duplicado falha: o `update` do produto
-      // editado esbarra no único `(organizacao_id, bling_id)` e o `upsert` por
-      // conflito grava os dados na linha que tem a foto — a foto sobrevive.
-      if (existingBling && existingBling.id !== produto.id && existingBling.imagem_storage_path) {
-        logger.warn('Duplicado com foto do ORBITA preservado na deduplicação por bling_id', {
-          subsystem: 'database',
-          organizacaoId: scope.organizationId,
-          produtoPreservado: existingBling.id,
-          produtoEditado: produto.id,
-        });
-      } else if (existingBling && existingBling.id !== produto.id) {
-        try {
-          const fotoDoExcluido = await this.delete(scope, existingBling.id);
-          // Só acontece se uma foto for confirmada entre a leitura acima e a
-          // exclusão. O objeto fica sem referência; o registro torna-o
-          // localizável pelo prefixo `<organizacao>/<produto>/`.
-          if (fotoDoExcluido !== null) {
-            logger.warn('Foto do ORBITA ficou sem referência na deduplicação por bling_id', {
-              subsystem: 'database',
-              organizacaoId: scope.organizationId,
-              produtoExcluido: existingBling.id,
-            });
-          }
-        } catch (delErr: unknown) {
-          const errMsg = descreverErro(delErr);
-          console.warn(`⚠️ Não foi possível deletar o duplicado: ${errMsg}`);
-        }
-      }
+      await this.removerDuplicadoPorBlingId(scope, produto.id, produto.bling_id);
     }
 
     if (produto.id) {
@@ -121,6 +88,92 @@ export class ProdutoRepository {
       throw error;
     }
     return data;
+  }
+
+  /** O duplicado por `bling_id` escopado, com o estado da foto — ou `null` se não existe. */
+  private async lerPorBlingOuId(
+    scope: VerifiedOrganizationScope,
+    filtro: { readonly coluna: 'bling_id' | 'id'; readonly valor: string },
+  ): Promise<{ id: string; imagem_storage_path: string | null } | null> {
+    const { data, error } = await supabaseServer
+      .from('produtos')
+      .select('id, imagem_storage_path')
+      .eq('organizacao_id', scope.organizationId)
+      .eq(filtro.coluna, filtro.valor)
+      .maybeSingle();
+    if (error) throw error;
+    return data ?? null;
+  }
+
+  /**
+   * Antes de o produto editado assumir `blingId`, remove a OUTRA linha local
+   * que já o tem — só se ela não tiver foto do ORBITA.
+   *
+   * - duplicado com foto → `ReconciliacaoDeProdutoNecessaria`, sem excluir e
+   *   sem gravar nada: a edição de A não pode terminar persistida em B, e a
+   *   foto de B não pode sumir;
+   * - duplicado sem foto → `excluirDuplicadoSemFoto`, cuja precondição está no
+   *   próprio `DELETE`. Zero linhas não é sucesso: relê e decide — ausente
+   *   (outra operação removeu) segue; com foto (confirmada no meio) é
+   *   reconciliação; qualquer outro estado falha explicitamente.
+   *
+   * Falha de banco na exclusão (FK de pedido, por exemplo) mantém o
+   * comportamento anterior a esta feature: registra e segue. Nesse caso a
+   * linha não tem foto, e a decisão sobre esse caminho é de outro ticket.
+   */
+  private async removerDuplicadoPorBlingId(
+    scope: VerifiedOrganizationScope,
+    produtoId: string,
+    blingId: string,
+  ): Promise<void> {
+    const duplicado = await this.lerPorBlingOuId(scope, { coluna: 'bling_id', valor: blingId });
+    if (!duplicado || duplicado.id === produtoId) return;
+    if (duplicado.imagem_storage_path) throw new ReconciliacaoDeProdutoNecessaria('duplicado_com_foto');
+
+    let removido: boolean;
+    try {
+      removido = await this.excluirDuplicadoSemFoto(scope, duplicado.id);
+    } catch (delErr: unknown) {
+      console.warn(`⚠️ Não foi possível deletar o duplicado: ${descreverErro(delErr)}`);
+      return;
+    }
+    if (removido) return;
+
+    const atual = await this.lerPorBlingOuId(scope, { coluna: 'id', valor: duplicado.id });
+    if (atual === null) return;
+    if (atual.imagem_storage_path) throw new ReconciliacaoDeProdutoNecessaria('foto_confirmada_durante_deduplicacao');
+    logger.warn('Duplicado sem foto não foi excluído pela deduplicação condicional', {
+      subsystem: 'database',
+      organizacaoId: scope.organizationId,
+      produtoDuplicado: duplicado.id,
+    });
+    throw new ReconciliacaoDeProdutoNecessaria('estado_inesperado_na_deduplicacao');
+  }
+
+  /**
+   * Exclusão exclusiva da deduplicação: remove o duplicado só se ele não tiver
+   * foto do ORBITA, e a condição é parte do mesmo `DELETE`:
+   *
+   * `DELETE FROM produtos WHERE id = $1 AND organizacao_id = $2
+   *    AND imagem_storage_path IS NULL RETURNING id`
+   *
+   * Uma foto confirmada entre a leitura e esta instrução faz o `DELETE` não
+   * encontrar a linha — nunca apaga a linha e deixa o objeto órfão. Não é a
+   * exclusão normal (`delete`), que remove com foto e devolve o caminho para
+   * a limpeza posterior.
+   *
+   * @returns `true` quando exatamente uma linha saiu.
+   */
+  async excluirDuplicadoSemFoto(scope: VerifiedOrganizationScope, produtoId: string): Promise<boolean> {
+    const { data, error } = await supabaseServer
+      .from('produtos')
+      .delete()
+      .eq('id', produtoId)
+      .eq('organizacao_id', scope.organizationId)
+      .is('imagem_storage_path', null)
+      .select('id');
+    if (error) throw error;
+    return (data ?? []).length === 1;
   }
 
   /**

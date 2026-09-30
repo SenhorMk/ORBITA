@@ -37,7 +37,7 @@ const CAS = `
   returning id
 `;
 
-async function semear(client) {
+async function semear(client, fotoInicial = FOTO_A) {
   await client.query('delete from public.produtos where id = $1', [PRODUTO_ID]);
   await client.query('delete from public.membros_organizacao where organizacao_id = $1', [ORG_ID]);
   await client.query('delete from public.organizacoes where id = $1', [ORG_ID]);
@@ -55,7 +55,7 @@ async function semear(client) {
   await client.query(
     `insert into public.produtos (id, organizacao_id, user_id, bling_id, nome, imagem_url, imagem_storage_path)
      values ($1, $2, $3, '71001', 'Produto Foto', 'https://bling/foto.jpg', $4)`,
-    [PRODUTO_ID, ORG_ID, OWNER_ID, FOTO_A],
+    [PRODUTO_ID, ORG_ID, OWNER_ID, fotoInicial],
   );
 }
 
@@ -63,6 +63,18 @@ async function fotoAtual(client) {
   const { rows } = await client.query('select imagem_storage_path from public.produtos where id = $1', [PRODUTO_ID]);
   return rows[0]?.imagem_storage_path ?? null;
 }
+
+/**
+ * A exclusão da deduplicação (`ProdutoRepository.excluirDuplicadoSemFoto`):
+ * a decisão "sem foto" é parte do próprio `DELETE`.
+ */
+const DELETE_SEM_FOTO = `
+  delete from public.produtos
+   where id = $1
+     and organizacao_id = $2
+     and imagem_storage_path is null
+  returning id
+`;
 
 /** T2 está parada esperando a trava de T1? Evidência de que a corrida aconteceu de fato. */
 async function esperandoTrava(base, pid) {
@@ -105,6 +117,59 @@ async function encenar({ criarCliente, novoDeT1, novoDeT2, sobreposicaoMs }) {
   }
 }
 
+/**
+ * Corrida da deduplicação: T1 confirma uma foto num produto que estava sem foto
+ * (CAS null → A) e segura a transação; T2 roda o DELETE condicionado da
+ * deduplicação sobre a mesma linha, fica presa na trava e, quando T1 commita,
+ * reavalia `imagem_storage_path is null` contra a versão nova. Zero linhas: a
+ * linha e a foto ficam.
+ */
+async function encenarDeduplicacao({ criarCliente, sobreposicaoMs }) {
+  const base = criarCliente();
+  await base.connect();
+  await semear(base, null);
+
+  const t1 = criarCliente();
+  const t2 = criarCliente();
+  await t1.connect();
+  await t2.connect();
+  try {
+    const { rows: [{ pid }] } = await t2.query('select pg_backend_pid() as pid');
+    await t1.query('begin');
+    await t2.query('begin');
+
+    const linhasT1 = (await t1.query(
+      `update public.produtos set imagem_storage_path = $1
+        where id = $2 and organizacao_id = $3 and imagem_storage_path is null returning id`,
+      [FOTO_A, PRODUTO_ID, ORG_ID],
+    )).rowCount;
+    const t2EmVoo = t2.query(DELETE_SEM_FOTO, [PRODUTO_ID, ORG_ID]);
+
+    await new Promise((resolve) => setTimeout(resolve, sobreposicaoMs));
+    const bloqueio = await esperandoTrava(base, pid);
+    await t1.query('commit');
+    const excluidasT2 = (await t2EmVoo).rowCount;
+    await t2.query('commit');
+
+    const { rows } = await base.query('select count(*)::int as n from public.produtos where id = $1', [PRODUTO_ID]);
+    return { linhasT1, excluidasT2, bloqueio, linhaExiste: rows[0].n === 1, final: await fotoAtual(base) };
+  } finally {
+    await t1.end().catch(() => {});
+    await t2.end().catch(() => {});
+    await base.end().catch(() => {});
+  }
+}
+
+function violacoesDaDeduplicacao(r) {
+  const problemas = [];
+  if (r.linhasT1 !== 1) problemas.push(`deduplicação: a confirmação trocou ${r.linhasT1} linhas, esperado 1`);
+  if (r.excluidasT2 !== 0) problemas.push(`deduplicação: o DELETE condicionado excluiu ${r.excluidasT2} linhas, esperado 0 (foto órfã)`);
+  if (!r.linhaExiste) problemas.push('deduplicação: a linha com foto sumiu');
+  if (r.final !== FOTO_A) problemas.push(`deduplicação: foto final ${r.final}, esperado ${FOTO_A}`);
+  if (r.bloqueio !== 'Lock') problemas.push(`deduplicação: o DELETE não esperou a trava (wait_event_type=${r.bloqueio})`);
+  return problemas;
+}
+
 function violacoes(nome, resultado, esperadoFinal) {
   const problemas = [];
   if (resultado.linhasT1 !== 1) problemas.push(`${nome}: T1 trocou ${resultado.linhasT1} linhas, esperado 1`);
@@ -127,10 +192,12 @@ export async function runFotoDoProdutoRaceRehearsal({
   try {
     const trocaTroca = await encenar({ criarCliente: createClient, novoDeT1: FOTO_B, novoDeT2: FOTO_C, sobreposicaoMs });
     const remocaoTroca = await encenar({ criarCliente: createClient, novoDeT1: null, novoDeT2: FOTO_C, sobreposicaoMs });
+    const deduplicacao = await encenarDeduplicacao({ criarCliente: createClient, sobreposicaoMs });
 
     const problemas = [
       ...violacoes('troca × troca', trocaTroca, FOTO_B),
       ...violacoes('remoção × troca', remocaoTroca, null),
+      ...violacoesDaDeduplicacao(deduplicacao),
     ];
     if (problemas.length > 0) {
       return err('FotoDoProdutoRaceViolated', `corrida da foto violou o invariante: ${problemas.join(' | ')}`, { problemas });
@@ -141,7 +208,8 @@ export async function runFotoDoProdutoRaceRehearsal({
         'compare-and-set da foto provado nas DUAS partidas com bloqueio observado no Postgres '
         + `(wait_event_type=${trocaTroca.bloqueio}): troca × troca deixa a foto da vencedora e a perdedora `
         + `vê ${trocaTroca.linhasT2} linhas; remoção × troca deixa o produto sem foto e a troca atrasada `
-        + `vê ${remocaoTroca.linhasT2} linhas — nenhuma sobrescrita silenciosa`,
+        + `vê ${remocaoTroca.linhasT2} linhas — nenhuma sobrescrita silenciosa; confirmação × DELETE condicionado da deduplicação: `
+        + `o DELETE espera a trava e exclui ${deduplicacao.excluidasT2} linhas, a linha e a foto ficam`,
     }));
   } catch (cause) {
     return err('FotoDoProdutoRaceFailed', 'não foi possível encenar a corrida da foto do produto', {}, cause);

@@ -11,6 +11,7 @@ import {
 } from './handler';
 import { buildProdutoRequest, produtoRequestSchema } from '@/lib/config/produtoContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import { ReconciliacaoDeProdutoNecessaria } from '@/repositories/reconciliacaoDeProduto';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const ACTOR = '22222222-2222-4222-8222-222222222222';
@@ -310,6 +311,21 @@ describe('o Bling é a fonte da verdade', () => {
     expect(resposta.status).toBe(500);
     expect(corpo.error).toContain('4242');
     expect(corpo.error).toContain('Sincronize o catálogo');
+  });
+
+  it('colisão com produto local que tem foto: falha honesta pelo mesmo caminho, sem SQL nem detalhe interno', async () => {
+    const store = fakeStore({ erro: new ReconciliacaoDeProdutoNecessaria('duplicado_com_foto') });
+    const handler = createProdutoUpdateHandler(deps({ store }));
+
+    const resposta = await handler(requisicao(corpoValido({ id: PRODUTO_LOCAL })));
+    const corpo = (await resposta.json()) as ProdutoResponseBody;
+
+    expect(resposta.status).toBe(500);
+    expect(corpo.success).toBe(false);
+    expect(corpo.error).toContain('Produto salvo no Bling (id 4242), mas falhou ao gravar no ORBITA');
+    expect(corpo.error).toContain('precisam ser reconciliados');
+    expect(corpo.error).toContain('Sincronize o catálogo');
+    expect(corpo.error).not.toMatch(/23505|constraint|imagem_storage_path/u);
   });
 });
 
