@@ -21,6 +21,8 @@ type Cadeia = Array<[string, ...unknown[]]>;
 const cadeias: Cadeia[] = [];
 let linhas: Linha[] = [];
 let antesDoDelete: (() => void) | null = null;
+/** O `DELETE` responde erro de banco (ex.: FK de pedido) e não remove nada. */
+let deleteFalha = false;
 
 function construtor() {
   const cadeia: Cadeia = [];
@@ -35,6 +37,9 @@ function construtor() {
     if (op === 'delete') {
       antesDoDelete?.();
       antesDoDelete = null;
+      if (deleteFalha) {
+        return { data: null, error: { code: '23503', message: 'update or delete on table "produtos" violates foreign key constraint "itens_pedido_produto_id_fkey"' } };
+      }
       const alvo = filtrar();
       linhas = linhas.filter((l) => !alvo.includes(l));
       return { data: alvo.map((l) => ({ ...l })), error: null };
@@ -89,6 +94,7 @@ const linha = (id: string) => linhas.find((l) => l.id === id);
 beforeEach(() => {
   cadeias.length = 0;
   antesDoDelete = null;
+  deleteFalha = false;
   linhas = [
     { id: A, organizacao_id: ORG, bling_id: 'LOCAL-A', nome: 'Editado', imagem_storage_path: null },
     { id: B, organizacao_id: ORG, bling_id: '77', nome: 'Espelho do Bling', imagem_storage_path: null },
@@ -186,6 +192,74 @@ describe('deduplicação por bling_id', () => {
       expect(mensagem).not.toContain(vazamento);
     }
     expect(mensagem).toContain('reconciliados');
+  });
+});
+
+describe('erro de banco no DELETE condicionado da deduplicação', () => {
+  it('não segue para update/upsert: A continua A, B continua B, e a gravação termina em reconciliação', async () => {
+    deleteFalha = true;
+    const antesA = { ...linha(A) };
+    const antesB = { ...linha(B) };
+    const { ReconciliacaoDeProdutoNecessaria } = await import('./produtoRepository');
+
+    const falha = await salvarA().catch((erro: unknown) => erro);
+
+    expect(falha).toBeInstanceOf(ReconciliacaoDeProdutoNecessaria);
+    expect((falha as InstanceType<typeof ReconciliacaoDeProdutoNecessaria>).motivo).toBe('falha_ao_remover_duplicado');
+    expect(operacoes()).toEqual(['select', 'delete']);
+    expect(linha(A)).toEqual(antesA);
+    expect(linha(B)).toEqual(antesB);
+    expect(linhas).toHaveLength(2);
+  });
+
+  it('pela rota de produto: a resposta é a de reconciliação, sem SQL, código, constraint nem caminho de foto', async () => {
+    deleteFalha = true;
+    const { produtoRepository } = await import('./produtoRepository');
+    const { createProdutoUpdateHandler } = await import('../app/api/produtos/update/handler');
+    const { buildProdutoRequest } = await import('../lib/config/produtoContract');
+    const ok = { _tag: 'BlingOk' as const, value: undefined };
+    const handler = createProdutoUpdateHandler({
+      auth: { async authorize() { return { _tag: 'Authorized' as const, scope }; } },
+      bling: {
+        async buscarPorCodigo() { return { _tag: 'BlingOk' as const, value: null }; },
+        async criar() { return { _tag: 'BlingOk' as const, value: { id: '77' } }; },
+        async atualizar() { return ok; },
+        async definirSaldo() { return ok; },
+      },
+      categorias: { async resolverBlingId() { return null; } },
+      // A mesma tradução de `route.ts`, sobre o repositório real.
+      store: {
+        async upsert(escopo, p) {
+          const salvo = await produtoRepository.upsert(escopo, {
+            id: p.id, bling_id: p.blingId, nome: p.nome, codigo: p.codigo ?? '', preco: p.preco, estoque: p.estoque,
+          });
+          return {
+            id: String(salvo.id), blingId: String(salvo.bling_id), nome: salvo.nome,
+            codigo: salvo.codigo ?? null, preco: salvo.preco, estoque: salvo.estoque,
+          };
+        },
+      },
+    });
+
+    const resposta = await handler(new Request('https://orbita.test/api/produtos/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildProdutoRequest({ id: A, blingId: '77', nome: 'Editado v2', preco: 1, estoque: 1 })),
+    }));
+    const corpo = await resposta.json() as { success: boolean; error: string };
+
+    expect(resposta.status).toBe(500);
+    expect(corpo.success).toBe(false);
+    expect(corpo.error).toContain('Produto salvo no Bling (id 77), mas falhou ao gravar no ORBITA');
+    expect(corpo.error).toContain('precisam ser reconciliados');
+    expect(corpo.error).toContain('Sincronize o catálogo para reconciliar');
+    for (const vazamento of ['23503', '23505', 'constraint', 'itens_pedido', 'foreign key', 'imagem_storage_path', '.png', ORG]) {
+      expect(corpo.error).not.toContain(vazamento);
+    }
+    expect(linha(A)).toMatchObject({ bling_id: 'LOCAL-A', nome: 'Editado' });
+    expect(linha(B)).toMatchObject({ bling_id: '77', nome: 'Espelho do Bling' });
+    expect(operacoes()).not.toContain('upsert');
+    expect(operacoes()).not.toContain('update');
   });
 });
 

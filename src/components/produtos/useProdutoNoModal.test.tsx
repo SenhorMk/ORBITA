@@ -7,6 +7,7 @@ import userEvent from '@testing-library/user-event';
 
 import { ProductDetailModal } from '@/components/ProductDetailModal';
 import { useLeituraDoPainel } from '@/components/painel/useLeituraDoPainel';
+import { escopoDaLeitura, useSessaoComGeracao } from '@/components/sessao/geracaoDaSessao';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import type { Produto } from '@/types';
 
@@ -130,6 +131,78 @@ describe('modal de produto preso ao escopo da leitura', () => {
 
     rerender(<Tela escopo={ESCOPO_B} />);
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+/**
+ * A composição de `page.tsx` com a sessão: `useSessaoComGeracao` e o mesmo
+ * `escopoDaLeitura` da página. A organização e a versão da seleção são FIXAS
+ * — `org-a:7` —, como quando o servidor devolve a mesma seleção ao mesmo
+ * usuário depois de um novo login.
+ */
+function TelaComSessao() {
+  const { sessao, geracao, definirSessao } = useSessaoComGeracao<{ email: string }>(() => ({ email: 'ana' }));
+  const escopo = escopoDaLeitura({ geracao, identidade: sessao?.email ?? null }, { id: 'org-a', versao: 7 });
+  const painel = useLeituraDoPainel(escopo);
+  const modal = useProdutoNoModal(escopo);
+  return (
+    <>
+      <span data-testid="escopo">{escopo ?? '(sem sessão)'}</span>
+      {painel.dados?.produtos.map((p) => (
+        <button key={p.id} type="button" onClick={() => modal.abrir(p)}>abrir {p.nome}</button>
+      ))}
+      <button type="button" onClick={() => definirSessao(null)}>sair</button>
+      <button type="button" onClick={() => definirSessao({ email: 'ana' })}>entrar</button>
+      <button type="button" onClick={() => { definirSessao(null); definirSessao({ email: 'ana' }); }}>sair e entrar no mesmo lote</button>
+      <ProductDetailModal isOpen={modal.aberto} onClose={modal.fechar} produto={modal.produto} cliente={null} />
+    </>
+  );
+}
+
+const clicarNoFundo = (nome: string) => act(async () => {
+  fireEvent.click(screen.getByRole('button', { name: nome, hidden: true }));
+});
+
+describe('logout e novo login da mesma conta, mesma organização, mesma versão', () => {
+  it('ana|org-a:7 → modal com URL assinada → sem sessão → ana|org-a:7: o modal não reabre e a URL não volta', async () => {
+    render(<TelaComSessao />);
+    await act(async () => { leituras[0]!(corpoDoPainel([produtoDeA])); });
+    await userEvent.click(screen.getByRole('button', { name: 'abrir Kuripe da Org A' }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(urlDeAVisivel()).toBe(true);
+
+    await clicarNoFundo('sair');
+    expect(screen.getByTestId('escopo')).toHaveTextContent('(sem sessão)');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(urlDeAVisivel()).toBe(false);
+
+    await clicarNoFundo('entrar');
+    // Mesma conta, mesma organização, mesma versão — e ainda assim nada revive.
+    expect(screen.getByTestId('escopo')).toHaveTextContent('ana|');
+    expect(screen.getByTestId('escopo')).toHaveTextContent('org-a:7');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(urlDeAVisivel()).toBe(false);
+    // Nem a leitura da sessão anterior: sem produto para clicar até a nova chegar.
+    expect(screen.queryByRole('button', { name: 'abrir Kuripe da Org A' })).toBeNull();
+
+    // Só um clique sobre uma leitura NOVA abre o produto de novo.
+    const urlNova = URL_ASSINADA_DE_A.replace('assinatura-de-A', 'assinatura-nova');
+    await act(async () => { leituras.at(-1)!(corpoDoPainel([{ ...produtoDeA, imagem_url: urlNova }])); });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'abrir Kuripe da Org A' }));
+    expect(screen.getByRole('img', { name: 'Imagem do produto' })).toHaveAttribute('src', urlNova);
+    expect(urlDeAVisivel()).toBe(false);
+  });
+
+  it('logout e login no MESMO lote de atualização também tornam a seleção inelegível', async () => {
+    render(<TelaComSessao />);
+    await act(async () => { leituras[0]!(corpoDoPainel([produtoDeA])); });
+    await userEvent.click(screen.getByRole('button', { name: 'abrir Kuripe da Org A' }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    await clicarNoFundo('sair e entrar no mesmo lote');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(urlDeAVisivel()).toBe(false);
   });
 });
 

@@ -1,7 +1,8 @@
 export type MotivoDeReconciliacaoDeProduto =
   | 'duplicado_com_foto'
   | 'foto_confirmada_durante_deduplicacao'
-  | 'estado_inesperado_na_deduplicacao';
+  | 'estado_inesperado_na_deduplicacao'
+  | 'falha_ao_remover_duplicado';
 
 /**
  * A gravação local foi interrompida para não trocar a identidade do produto
@@ -12,8 +13,8 @@ export type MotivoDeReconciliacaoDeProduto =
 export class ReconciliacaoDeProdutoNecessaria extends Error {
   constructor(readonly motivo: MotivoDeReconciliacaoDeProduto) {
     super(
-      'outro produto do ORBITA já usa este cadastro do Bling e tem foto personalizada '
-      + '(ou mudou durante a gravação); os dois foram preservados e precisam ser reconciliados',
+      'outro produto do ORBITA já usa este cadastro do Bling e não pôde ser unificado com segurança; '
+      + 'os dois foram preservados e precisam ser reconciliados',
     );
   }
 }

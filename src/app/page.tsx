@@ -29,6 +29,7 @@ import { ClientesEContatos } from '@/components/clientes/ClientesEContatos';
 import { ClienteDetailModal } from '@/components/ClienteDetailModal';
 import { ProductDetailModal } from '@/components/ProductDetailModal';
 import { useProdutoNoModal } from '@/components/produtos/useProdutoNoModal';
+import { escopoDaLeitura as comporEscopoDaLeitura, useSessaoComGeracao } from '@/components/sessao/geracaoDaSessao';
 import { ClienteEditModal } from '@/components/ClienteEditModal';
 import { ManualOrderModal } from '@/components/ManualOrderModal';
 import { StartupLoader } from '@/components/StartupLoader';
@@ -146,7 +147,9 @@ async function acompanharSync(
 
 export default function Home() {
   // Controle de Autenticação
-  const [session, setSession] = useState<UserSession | null>(() => {
+  // A geração distingue esta instância da sessão das anteriores, mesmo com a
+  // mesma conta: sair e entrar de novo não revive o que foi aberto antes.
+  const { sessao: session, geracao: geracaoDaSessao, definirSessao: setSession } = useSessaoComGeracao<UserSession>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('haux_session');
       if (saved) {
@@ -242,11 +245,14 @@ export default function Home() {
    * O escopo carrega a identidade da sessão e a seleção de organização com a
    * versão: sair de uma organização e voltar são seleções diferentes. Trocar de
    * organização torna a leitura anterior inelegível na hora, e a resposta
-   * atrasada da organização de antes não tem onde ser aplicada.
+   * atrasada da organização de antes não tem onde ser aplicada. A geração da
+   * sessão entra junto: logout e login com a mesma conta, mesma organização e
+   * mesma versão ainda produzem um escopo novo.
    */
-  const escopoDaLeitura = identidadeDaSessao === null
-    ? null
-    : `${identidadeDaSessao}|${selecaoDeOrganizacao ? `${selecaoDeOrganizacao.id}:${selecaoDeOrganizacao.versao}` : 'sem-organizacao'}`;
+  const escopoDaLeitura = comporEscopoDaLeitura(
+    { geracao: geracaoDaSessao, identidade: identidadeDaSessao },
+    selecaoDeOrganizacao,
+  );
 
   const painel = useLeituraDoPainel(escopoDaLeitura);
   const data = painel.dados;
@@ -364,7 +370,9 @@ export default function Home() {
     return () => {
       subscription.unsubscribe();
     };
-  }, []);
+    // `setSession` é o `useCallback` estável de `useSessaoComGeracao`: o efeito
+    // continua rodando uma vez só.
+  }, [setSession]);
 
   useEffect(() => {
     const updateSyncAgo = () => {

@@ -1,8 +1,8 @@
 import { supabaseServer } from '../lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { Produto } from '../types';
-import { descreverErro } from '../lib/erroLegivel';
 import { logger } from '../lib/observability/logger';
+import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 import { ReconciliacaoDeProdutoNecessaria } from './reconciliacaoDeProduto';
 
 export { ReconciliacaoDeProdutoNecessaria } from './reconciliacaoDeProduto';
@@ -117,9 +117,8 @@ export class ProdutoRepository {
    *   (outra operação removeu) segue; com foto (confirmada no meio) é
    *   reconciliação; qualquer outro estado falha explicitamente.
    *
-   * Falha de banco na exclusão (FK de pedido, por exemplo) mantém o
-   * comportamento anterior a esta feature: registra e segue. Nesse caso a
-   * linha não tem foto, e a decisão sobre esse caminho é de outro ticket.
+   * Falha de banco na própria exclusão (FK de pedido, por exemplo) também é
+   * reconciliação: B continua lá, e seguir gravaria a edição de A em B.
    */
   private async removerDuplicadoPorBlingId(
     scope: VerifiedOrganizationScope,
@@ -134,8 +133,11 @@ export class ProdutoRepository {
     try {
       removido = await this.excluirDuplicadoSemFoto(scope, duplicado.id);
     } catch (delErr: unknown) {
-      console.warn(`⚠️ Não foi possível deletar o duplicado: ${descreverErro(delErr)}`);
-      return;
+      // B continua existindo com o mesmo `bling_id`. Seguir levaria o `update`
+      // de A a esbarrar no único e o `upsert` por conflito a gravar a edição
+      // de A em B. A causa fica no log do servidor; a resposta é de domínio.
+      registrarFalhaInterna('produtos.deduplicacao.excluir_duplicado', delErr, { organizacaoId: scope.organizationId });
+      throw new ReconciliacaoDeProdutoNecessaria('falha_ao_remover_duplicado');
     }
     if (removido) return;
 
