@@ -9,8 +9,8 @@ describe('checkDatabaseDrift script', () => {
     const result = validateCanonicalLedger();
     expect(result._tag).toBe('ok');
     if (result._tag === 'ok') {
-      expect(result.value.checkedFiles).toBe(73);
-      expect(result.value.registeredMigrations).toBe(72);
+      expect(result.value.checkedFiles).toBe(75);
+      expect(result.value.registeredMigrations).toBe(74);
     }
   });
 

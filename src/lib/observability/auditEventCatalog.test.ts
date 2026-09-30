@@ -140,4 +140,20 @@ describe('catálogo TypeScript × projeção SQL', () => {
     expect(nomes.filter((n) => /^(org|customer|finance)\..*reset/u.test(n))).toEqual([]);
     expect(nomes).not.toContain('finance.expense_reversed');
   });
+
+  it('a foto do produto tem os dois eventos, e o catálogo recusa URL, token, caminho e nome de arquivo', () => {
+    const nomes = AUDIT_EVENT_CATALOG.map((e) => e.nome);
+    expect(nomes).toEqual(expect.arrayContaining(['catalog.product_image_uploaded', 'catalog.product_image_removed']));
+    for (const evento of ['catalog.product_image_uploaded', 'catalog.product_image_removed']) {
+      for (const campo of ['url', 'signedUrl', 'token', 'upload_token', 'caminho', 'nome_arquivo', 'fileName', 'base64', 'bytes']) {
+        expect(validateAuditEventMetadata(evento, { produto_id: 'p', [campo]: 'x' }), `${evento}.${campo}`)
+          .toEqual({ _tag: 'ForbiddenField', field: campo });
+      }
+    }
+    expect(validateAuditEventMetadata('catalog.product_image_uploaded', {
+      produto_id: 'p', substituiu_anterior: true, limpeza_anterior: 'concluida',
+    })._tag).toBe('Valid');
+    // Os campos extras são da foto; os demais eventos seguem com a lista padrão.
+    expect(validateAuditEventMetadata('customer.contact_deleted', { url: 'x' })._tag).toBe('Valid');
+  });
 });

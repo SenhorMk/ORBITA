@@ -34,12 +34,21 @@ export class ProdutoRepository {
     return data || null;
   }
 
+  /**
+   * Grava o produto espelhado do Bling ou editado no formulário.
+   *
+   * `imagem_storage_path` NUNCA sai daqui: é a foto escolhida no ORBITA, e este
+   * é o caminho da sincronização e do webhook. Um `Produto` que chegasse com o
+   * campo (lido de uma tela, por exemplo) sobrescreveria a escolha da pessoa.
+   * Quem escreve a foto é só `ProdutoImagemRepository.trocarCaminho`.
+   */
   async upsert(scope: VerifiedOrganizationScope, produto: Produto): Promise<Produto> {
     const payloadForUpsert = {
       ...produto,
       organizacao_id: scope.organizationId,
       user_id: scope.actorId,
     };
+    delete payloadForUpsert.imagem_storage_path;
 
     if (produto.bling_id && produto.id) {
       const { data: existingBling } = await supabaseServer

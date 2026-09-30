@@ -902,6 +902,9 @@ export default function Home() {
         // repositório na forma canônica de `Produto`, com `bling_id`,
         // `categoria_id` e `unidade` no lugar. Sem reload de página.
         onSaved={() => { void loadDashboardData(); }}
+        // A miniatura da tabela vem da mesma releitura, com o carimbo da
+        // organização preservado por `useLeituraDoPainel`.
+        onImagemAlterada={() => { void loadDashboardData(); }}
         onOpenChatwoot={handleOpenChatwootForPhone}
       />
 
