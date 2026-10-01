@@ -21,6 +21,8 @@ import {
 } from '@/lib/config/produtoContract';
 import { avisoDoBootstrap, carregarCategoriasDoProduto } from '@/components/produtos/bootstrapDeCategorias';
 import { lerObrigatoriosDoBling } from '@/components/produtos/obrigatoriosDoBling';
+import { ImagemDoProduto } from '@/components/produtos/ImagemDoProduto';
+import type { OperacoesDeFoto } from '@/components/produtos/fotoDoProduto';
 
 /**
  * O detalhe e a edição de um produto, agora no `Modal` do Design System.
@@ -87,6 +89,13 @@ interface ProductDetailModalProps {
    * categoria e "faltando dados", enquanto o banco tinha tudo.
    */
   onSaved?: () => void;
+  /**
+   * A foto do produto mudou. Também é só um sinal: a foto é gravada pelas
+   * rotas próprias, na hora, independente do "Salvar alterações".
+   */
+  onImagemAlterada?: () => void;
+  /** Só para teste: as chamadas de rede da foto. */
+  operacoesDeFoto?: OperacoesDeFoto;
   onOpenChatwoot?: (phone?: string, name?: string) => void;
 }
 
@@ -153,6 +162,8 @@ export function ProductDetailModal({
   onClose,
   produto,
   onSaved,
+  onImagemAlterada,
+  operacoesDeFoto,
 }: ProductDetailModalProps) {
   // Form editable state
   const [nome, setNome] = useState(produto?.nome || '');
@@ -469,6 +480,16 @@ export function ProductDetailModal({
           )}
 
           <Pilula rotulo={saldoRotulo} cor={saldoCor} />
+
+          <Secao titulo="Imagem do produto">
+            {/* A chave recomeça a seção quando o modal passa a mostrar outro produto. */}
+            <ImagemDoProduto
+              key={produto?.id ?? 'novo'}
+              produto={produto}
+              onAlterada={onImagemAlterada}
+              operacoes={operacoesDeFoto}
+            />
+          </Secao>
 
           <Secao titulo="Catálogo">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

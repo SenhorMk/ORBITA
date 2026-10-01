@@ -18,6 +18,8 @@
     "db:ledger:write": "node scripts/database-ledger.mjs --write",
     "db:remoto:status": "node scripts/migracoes-remotas.mjs",
     "db:remoto:aplicar": "node scripts/migracoes-remotas.mjs --aplicar",
+    "storage:status": "node scripts/storage-bucket-produto-imagens.mjs",
+    "storage:aplicar": "node scripts/storage-bucket-produto-imagens.mjs --aplicar",
     "boundaries:check": "node scripts/check-module-boundaries.mjs",
     "build:artifact:check": "node scripts/check-build-artifact.mjs .next",
     "deploy:readiness": "node scripts/check-deploy-readiness.mjs",

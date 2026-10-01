@@ -360,6 +360,16 @@
       "order": 72,
       "path": "../database/69_eventos_de_auditoria_da_correcao_operacional.sql",
       "sha256": "78484a3b8e110a7e2acd413fb6e93e8a368407b0e5213f35f887f533016bd801"
+    },
+    {
+      "order": 73,
+      "path": "../database/70_foto_personalizada_do_produto.sql",
+      "sha256": "f9cf03f0178689a108f5ccfc7af19f870f54fd8cbb717595ddd37054037d5d85"
+    },
+    {
+      "order": 74,
+      "path": "../database/71_eventos_de_auditoria_da_foto_do_produto.sql",
+      "sha256": "4a464e2c2556b74924e2635ae8c9067a74c5efca428a85b6e7623c3e29a4911d"
     }
   ],
   "references": [

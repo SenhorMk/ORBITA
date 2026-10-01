@@ -205,6 +205,49 @@ describe('ProductDetailModal — salvar sinaliza, e não devolve o registro', ()
   });
 });
 
+describe('ProductDetailModal — imagem do produto', () => {
+  beforeEach(() => {
+    fetchWithAuthMock.mockReset();
+    enviados.length = 0;
+  });
+
+  it('produto novo: a seção existe e só informa que é preciso salvar antes', () => {
+    rede();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} />);
+    expect(screen.getByRole('heading', { name: 'Imagem do produto' })).toBeInTheDocument();
+    expect(screen.getByText('Salve o produto primeiro para adicionar uma foto.')).toBeInTheDocument();
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+  });
+
+  it('a foto é independente do "Salvar alterações": não chama a rota de produto nem sinaliza onSaved', async () => {
+    // `rede` recusa qualquer URL não prevista — abrir o modal não dispara nada da foto.
+    const chamadas = rede();
+    const onSaved = vi.fn();
+    const onImagemAlterada = vi.fn();
+    const postar = vi.fn(async (url: string) => (url.endsWith('/upload')
+      ? { status: 200, corpo: { resultado: 'UploadAutorizado', caminho: 'c', token: 't' } }
+      : { status: 200, corpo: { resultado: 'ImagemConfirmada', caminho: 'c', url: 'https://s/c' } }));
+    render(
+      <ProductDetailModal
+        isOpen
+        onClose={vi.fn()}
+        produto={NAO_SINCRONIZADO}
+        cliente={null}
+        onSaved={onSaved}
+        onImagemAlterada={onImagemAlterada}
+        operacoesDeFoto={{ postar, enviarAoStorage: async () => true }}
+      />,
+    );
+
+    await userEvent.upload(screen.getByLabelText('Adicionar foto'), new File(['x'], 'f.png', { type: 'image/png' }));
+
+    await waitFor(() => expect(onImagemAlterada).toHaveBeenCalledTimes(1));
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(chamadas.some((c) => c.includes('/api/produtos/update'))).toBe(false);
+    expect(botaoSalvar().disabled).toBe(false);
+  });
+});
+
 describe('ProductDetailModal — todo valor do contrato tem representação no controle', () => {
   beforeEach(() => {
     fetchWithAuthMock.mockReset();
