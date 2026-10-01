@@ -88,6 +88,12 @@ describe('o tipo Produto não pode declarar coluna que a tabela não tem', () =>
     expect(colunas.has('categoria_id')).toBe(true);
   });
 
+  it('imagem_storage_path existe — a foto do ORBITA não pode morar em imagem_url, que o Bling regrava', () => {
+    expect(colunas.has('imagem_storage_path')).toBe(true);
+    expect(colunas.has('imagem_url')).toBe(true);
+    expect(camposDoTipo('Produto')).toEqual(expect.arrayContaining(['imagem_url', 'imagem_storage_path']));
+  });
+
   it('todo campo do tipo Produto tem coluna correspondente', () => {
     const semColuna = camposDoTipo('Produto').filter((campo) => !colunas.has(campo));
 

@@ -13,6 +13,7 @@ import { runPosseDaVendaRehearsal } from './database-concurrency-posse-da-venda.
 import { runReservaManualRehearsal } from './database-concurrency-reserva-manual.mjs';
 import { runConviteNominalRaceRehearsal } from './database-concurrency-convite-nominal.mjs';
 import { runItemReplayRaceRehearsal } from './database-concurrency-item-replay.mjs';
+import { runFotoDoProdutoRaceRehearsal } from './database-concurrency-foto-produto.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -35,6 +36,7 @@ let outcomePosse;
 let outcomeReserva;
 let outcomeConvite;
 let outcomeItemReplay;
+let outcomeFoto;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -46,6 +48,7 @@ try {
     outcomeReserva = started;
     outcomeConvite = started;
     outcomeItemReplay = started;
+    outcomeFoto = started;
   } else {
     const alinhado = await alinharStubDeAuthComProducao();
     const applied = alinhado._tag === 'err' ? alinhado : await applyCanonicalMigrations({});
@@ -58,6 +61,7 @@ try {
       outcomeReserva = applied;
       outcomeConvite = applied;
       outcomeItemReplay = applied;
+      outcomeFoto = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
@@ -67,6 +71,7 @@ try {
       outcomeReserva = await runReservaManualRehearsal();
       outcomeConvite = await runConviteNominalRaceRehearsal();
       outcomeItemReplay = await runItemReplayRaceRehearsal();
+      outcomeFoto = await runFotoDoProdutoRaceRehearsal();
     }
   }
 } finally {
@@ -121,6 +126,7 @@ const relatos = [
     + `convite fica ${v.statusDoConviteRecusado}; o mesmo token aceito duas vezes ao mesmo tempo falha `
     + `com ${v.usoUnico.segundaTentativaCode} e deixa ${v.usoUnico.membershipsDoConvidado} membership`],
   [outcomeItemReplay, (v) => v.relato],
+  [outcomeFoto, (v) => v.relato],
 ];
 
 const falhou = relatos.map(([outcome, resumo]) => relatar(outcome, resumo)).includes(true);

@@ -163,7 +163,17 @@ export interface Produto {
   codigo?: string;
   nome: string;
   preco: number;
+  /**
+   * No banco: a imagem espelhada do Bling, regravada pela sincronização.
+   * Nas leituras para a tela (`/api/dashboard`, `/api/produtos`): a imagem
+   * EFETIVA — URL assinada da foto do ORBITA quando existe, senão a do Bling.
+   */
   imagem_url?: string;
+  /**
+   * Caminho da foto escolhida no ORBITA, no bucket privado `produto-imagens`
+   * (migration 70). Nunca URL. Só as rotas de foto escrevem aqui.
+   */
+  imagem_storage_path?: string | null;
   unidade?: string;
   estoque: number;
   estoque_reservado?: number; // trigger controlada

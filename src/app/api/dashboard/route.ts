@@ -4,8 +4,12 @@ import { produtoRepository } from '@/repositories/produtoRepository';
 import { clienteRepository } from '@/repositories/clienteRepository';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { SupabaseArmazenamentoDeImagem } from '@/services/armazenamentoDeImagem';
+import { comImagemEfetiva } from '@/services/imagemEfetivaDoProduto';
 
 export const dynamic = 'force-dynamic';
+
+const armazenamentoDeImagem = new SupabaseArmazenamentoDeImagem(supabaseServer);
 
 export async function GET(request: Request) {
   try {
@@ -24,7 +28,9 @@ export async function GET(request: Request) {
     // Zero e "não sei" são coisas diferentes. Num painel que mostra dinheiro,
     // confundir as duas é o pior erro possível: falhar em voz alta é a única
     // opção honesta.
-    const produtos = await produtoRepository.getAll(scope);
+    // É esta leitura que abastece Estoque: a foto do ORBITA, quando existe,
+    // vira aqui a `imagem_url` apresentada — por URL assinada, gerada agora.
+    const produtos = await comImagemEfetiva(scope, await produtoRepository.getAll(scope), armazenamentoDeImagem);
     const clientes = await clienteRepository.getAll(scope);
     const pedidos = await pedidoRepository.getAllEnriched(scope);
     const stats = await pedidoRepository.getDashboardStats(scope);

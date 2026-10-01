@@ -65,7 +65,18 @@ type AuditEventRow = readonly [
   retentionDias: number,
   descricao: string,
   alertaRegra?: string,
+  /** Proibidos além do padrão, para o que só este evento corre risco de carregar. */
+  camposProibidosExtras?: readonly string[],
 ];
+
+/**
+ * A foto do produto passa por nome de arquivo, URL assinada, token de upload e
+ * bytes — nenhum deles pode chegar à trilha, nem por engano de quem chama.
+ */
+const PROIBIDOS_DA_FOTO = [
+  'url', 'signed_url', 'signedUrl', 'upload_token', 'uploadToken', 'caminho', 'path',
+  'nome_arquivo', 'file_name', 'fileName', 'base64', 'bytes', 'conteudo', 'content',
+] as const;
 
 const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   ['auth.login_failed', 'auth', 'warning', 'user', 400, 'Tentativa de login com credenciais inválidas.', 'authFailureBurst'],
@@ -110,11 +121,15 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   ['finance.entry_deleted', 'finance', 'warning', 'user', 1825, 'Lançamento de despesa puramente interno excluído por correção de entrada.'],
   ['finance.expense_cancelled', 'finance', 'warning', 'user', 1825, 'Despesa do Bling removida lá e mantida no histórico do ORBITA como cancelada.'],
   ['finance.remote_reconcile_required', 'finance', 'critical', 'user', 1825, 'Cancelamento de despesa sem confirmação do estado no Bling; nada local foi concluído.'],
+  // Foto do produto (migration 71). Metadata: id do produto, se havia foto
+  // anterior e o desfecho da limpeza — nunca nome do arquivo, URL, token ou bytes.
+  ['catalog.product_image_uploaded', 'catalog', 'info', 'user', 730, 'Foto do produto adicionada ou trocada no ORBITA.', undefined, PROIBIDOS_DA_FOTO],
+  ['catalog.product_image_removed', 'catalog', 'info', 'user', 730, 'Foto do produto removida no ORBITA; a imagem do Bling volta a ser exibida.', undefined, PROIBIDOS_DA_FOTO],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 
 export const AUDIT_EVENT_CATALOG: readonly AuditEventDefinition[] = AUDIT_EVENT_ROWS.map(
-  ([nome, produtor, severidade, atorEsperado, retentionDias, descricao, alertaRegra]) => ({
+  ([nome, produtor, severidade, atorEsperado, retentionDias, descricao, alertaRegra, camposProibidosExtras = []]) => ({
     nome,
     produtor,
     severidade,
@@ -122,7 +137,7 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventDefinition[] = AUDIT_EVENT_
     retentionDias,
     descricao,
     alertaRegra,
-    camposProibidos: CAMPOS_PROIBIDOS_PADRAO,
+    camposProibidos: [...CAMPOS_PROIBIDOS_PADRAO, ...camposProibidosExtras],
   }),
 );
 

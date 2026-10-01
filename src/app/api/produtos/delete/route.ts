@@ -4,6 +4,11 @@ import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
 import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
+import { supabaseServer } from '@/lib/supabaseServer';
+import { SupabaseArmazenamentoDeImagem } from '@/services/armazenamentoDeImagem';
+import { excluirProdutoComFoto } from '@/services/exclusaoDeProdutoComFoto';
+
+const armazenamentoDeImagem = new SupabaseArmazenamentoDeImagem(supabaseServer);
 
 /**
  * Exclusão remota best-effort: a exclusão local segue mesmo se o Bling falhar.
@@ -65,7 +70,12 @@ export async function POST(request: Request) {
     // 2. Deletar do banco Supabase
     logEntries.push(`[${new Date().toISOString()}] 💾 Excluindo registro do banco Supabase...`);
     try {
-      await produtoRepository.delete(scope, id);
+      // A foto do ORBITA sai do Storage só depois da linha, pelo caminho que o
+      // banco devolveu na exclusão. Falha nessa limpeza não é falha da exclusão.
+      await excluirProdutoComFoto(scope, id, {
+        excluirLinha: (escopo, produtoId) => produtoRepository.delete(escopo, produtoId),
+        armazenamento: armazenamentoDeImagem,
+      });
       logEntries.push(`[${new Date().toISOString()}] ✅ Registro excluído do Supabase!`);
     } catch (dbErr: unknown) {
       logEntries.push(`[${new Date().toISOString()}] ❌ Falha ao excluir o registro no Supabase.`);
