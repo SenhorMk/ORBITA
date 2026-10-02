@@ -167,6 +167,15 @@ describe('ImagemDoProduto', () => {
     expect(screen.getByText('Sincronizada com o Bling.')).toBeInTheDocument();
   });
 
+  it('outra execução detém o lease: "em andamento", foto mantida e nova tentativa disponível', async () => {
+    const { operacoes } = rede({ confirmar: { resultado: 'ImagemConfirmada', caminho: FOTO_B, url: 'https://s/b', bling: 'em_andamento' } });
+    render(<ImagemDoProduto produto={produto()} operacoes={operacoes} />);
+    await userEvent.upload(campoDeArquivo(), arquivo());
+    expect(await screen.findByText('Foto salva no ORBITA. Sincronização com o Bling em andamento.')).toBeInTheDocument();
+    expect(screen.getByText('Sincronização com o Bling em andamento em outra aba ou requisição.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tentar sincronizar novamente' })).toBeEnabled();
+  });
+
   it('pendência persistida: depois de recarregar, o produto ainda mostra o pendente e o botão', () => {
     render(<ImagemDoProduto produto={produto({ imagem_storage_path: FOTO_B, imagem_bling_sync_path: FOTO_A, imagem_url: 'https://s/b' })} operacoes={rede().operacoes} />);
     expect(screen.getByText('Sincronização com o Bling pendente.')).toBeInTheDocument();

@@ -57,12 +57,17 @@ describe('sincronização Bling → ORBITA preserva a foto do ORBITA', () => {
       imagem_url: 'https://bling/nova.jpg',
       imagem_storage_path: FOTO,
       imagem_bling_sync_path: FOTO,
+      imagem_bling_sync_lease_token: '44444444-4444-4444-8444-444444444444',
+      imagem_bling_sync_lease_expires_at: '2026-10-02T00:00:00Z',
     });
     expect(payloads).toHaveLength(1);
     expect(payloads[0]!.valores.imagem_url).toBe('https://bling/nova.jpg');
     expect(payloads[0]!.valores).not.toHaveProperty('imagem_storage_path');
     // Nem o marcador de confirmação: a sincronização não "confirma" foto nenhuma.
     expect(payloads[0]!.valores).not.toHaveProperty('imagem_bling_sync_path');
+    // Nem o lease: só as funções do lease escrevem nele.
+    expect(payloads[0]!.valores).not.toHaveProperty('imagem_bling_sync_lease_token');
+    expect(payloads[0]!.valores).not.toHaveProperty('imagem_bling_sync_lease_expires_at');
   });
 
   it('produto existente (update, e o upsert de reserva): nenhum dos dois caminhos leva o campo', async () => {
@@ -88,6 +93,7 @@ describe('sincronização Bling → ORBITA preserva a foto do ORBITA', () => {
       const fonte = readFileSync(path.join(raiz, arquivo), 'utf8');
       expect(fonte, arquivo).not.toContain('imagem_storage_path');
       expect(fonte, arquivo).not.toContain('imagem_bling_sync_path');
+      expect(fonte, arquivo).not.toContain('imagem_bling_sync_lease');
     }
   });
 

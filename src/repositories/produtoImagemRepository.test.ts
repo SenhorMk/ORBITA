@@ -9,6 +9,7 @@ const OUTRA_ORG = '99999999-9999-4999-8999-999999999999';
 const PRODUTO = '33333333-3333-4333-8333-333333333333';
 const A = `${ORG}/${PRODUTO}/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png`;
 const B = `${ORG}/${PRODUTO}/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png`;
+const LEASE = '44444444-4444-4444-8444-444444444444';
 
 /** SAFETY: o escopo é entrada do teste, não o que está sob teste. */
 const escopo = (organizationId: string) => ({ organizationId, actorId: ORG, role: 'owner' } as unknown as VerifiedOrganizationScope);
@@ -21,7 +22,10 @@ type Linha = Record<string, unknown>;
  */
 function bancoEmMemoria(linhas: Linha[]) {
   const filtrosUsados: Array<Array<[string, string, unknown]>> = [];
+  const rpcs: Array<{ nome: string; args: Record<string, unknown> }> = [];
+  let respostaRpc: { data: unknown; error: unknown } = { data: true, error: null };
   const cliente = {
+    async rpc(nome: string, args: Record<string, unknown>) { rpcs.push({ nome, args }); return respostaRpc; },
     from(tabela: string) {
       expect(tabela).toBe('produtos');
       const filtros: Array<[string, string, unknown]> = [];
@@ -44,7 +48,12 @@ function bancoEmMemoria(linhas: Linha[]) {
     },
   };
   // SAFETY: o fake implementa só a cadeia de consulta que o repositório usa.
-  return { cliente: cliente as unknown as SupabaseClient, filtrosUsados };
+  return {
+    cliente: cliente as unknown as SupabaseClient,
+    filtrosUsados,
+    rpcs,
+    responderRpc(r: { data: unknown; error: unknown }) { respostaRpc = r; },
+  };
 }
 
 let linhas: Linha[];
@@ -53,7 +62,7 @@ let repo: ProdutoImagemRepository;
 
 beforeEach(() => {
   linhas = [
-    { id: PRODUTO, organizacao_id: ORG, bling_id: '777', imagem_storage_path: A, imagem_bling_sync_path: null, imagem_url: 'https://bling/x.jpg' },
+    { id: PRODUTO, organizacao_id: ORG, bling_id: '777', imagem_storage_path: A, imagem_bling_sync_path: null, imagem_url: 'https://bling/x.jpg', imagem_bling_sync_lease_token: LEASE },
     { id: PRODUTO, organizacao_id: OUTRA_ORG, imagem_storage_path: null, imagem_url: null },
   ];
   banco = bancoEmMemoria(linhas);
@@ -110,13 +119,13 @@ describe('ProdutoImagemRepository', () => {
   it('confirmarSincronizacao marca o desejado só se ele ainda for o desejado (resposta atrasada de A não marca B)', async () => {
     // A linha já está em B: a sincronização de A chega atrasada.
     linhas[0]!.imagem_storage_path = B;
-    expect(await repo.confirmarSincronizacao(escopo(ORG), PRODUTO, A)).toBe(false);
+    expect(await repo.confirmarSincronizacao(escopo(ORG), PRODUTO, A, LEASE)).toBe(false);
     expect(linhas[0]!.imagem_bling_sync_path).toBeNull();
     expect(banco.filtrosUsados.at(-1)).toEqual([
-      ['eq', 'id', PRODUTO], ['eq', 'organizacao_id', ORG], ['eq', 'imagem_storage_path', A],
+      ['eq', 'id', PRODUTO], ['eq', 'organizacao_id', ORG], ['eq', 'imagem_bling_sync_lease_token', LEASE], ['eq', 'imagem_storage_path', A],
     ]);
 
-    expect(await repo.confirmarSincronizacao(escopo(ORG), PRODUTO, B)).toBe(true);
+    expect(await repo.confirmarSincronizacao(escopo(ORG), PRODUTO, B, LEASE)).toBe(true);
     expect(linhas[0]!.imagem_bling_sync_path).toBe(B);
     // Confirmar uma foto não mexe no espelho.
     expect(linhas[0]!.imagem_url).toBe('https://bling/x.jpg');
@@ -125,12 +134,33 @@ describe('ProdutoImagemRepository', () => {
   it('confirmar a remoção exige o desejado ainda nulo (is null) e nunca alcança outra organização', async () => {
     linhas[0]!.imagem_storage_path = null;
     linhas[0]!.imagem_bling_sync_path = A;
-    expect(await repo.confirmarSincronizacao(escopo(ORG), PRODUTO, null)).toBe(true);
+    expect(await repo.confirmarSincronizacao(escopo(ORG), PRODUTO, null, LEASE)).toBe(true);
     expect(linhas[0]!.imagem_bling_sync_path).toBeNull();
     // O Bling foi lido sem imagens: o espelho também esvazia, e a foto removida não volta por ele.
     expect(linhas[0]!.imagem_url).toBeNull();
     expect(banco.filtrosUsados.at(-1)).toContainEqual(['is', 'imagem_storage_path', null]);
     expect(linhas[1]).toEqual({ id: PRODUTO, organizacao_id: OUTRA_ORG, imagem_storage_path: null, imagem_url: null });
+  });
+
+  it('confirmar exige o lease desta execução: quem perdeu o lease não marca', async () => {
+    expect(await repo.confirmarSincronizacao(escopo(ORG), PRODUTO, A, '55555555-5555-4555-8555-555555555555')).toBe(false);
+    expect(linhas[0]!.imagem_bling_sync_path).toBeNull();
+  });
+
+  it('adquirir o lease: uma RPC escopada pela organização do escopo, com o TTL de 90 s', async () => {
+    expect(await repo.adquirirLease(escopo(ORG), PRODUTO, LEASE)).toBe(true);
+    expect(banco.rpcs).toEqual([{ nome: 'adquirir_lease_da_foto_no_bling', args: { p_organizacao_id: ORG, p_produto_id: PRODUTO, p_token: LEASE, p_ttl_segundos: 90 } }]);
+    banco.responderRpc({ data: false, error: null });
+    expect(await repo.adquirirLease(escopo(ORG), PRODUTO, LEASE)).toBe(false);
+    banco.responderRpc({ data: null, error: { message: 'fora' } });
+    await expect(repo.adquirirLease(escopo(ORG), PRODUTO, LEASE)).rejects.toEqual({ message: 'fora' });
+  });
+
+  it('liberar o lease: só pelo token, escopado pela organização', async () => {
+    expect(await repo.liberarLease(escopo(ORG), PRODUTO, LEASE)).toBe(true);
+    expect(banco.rpcs).toEqual([{ nome: 'liberar_lease_da_foto_no_bling', args: { p_organizacao_id: ORG, p_produto_id: PRODUTO, p_token: LEASE } }]);
+    banco.responderRpc({ data: false, error: null });
+    expect(await repo.liberarLease(escopo(ORG), PRODUTO, 'outro')).toBe(false);
   });
 
   it('só um id numérico do Bling é vínculo', async () => {

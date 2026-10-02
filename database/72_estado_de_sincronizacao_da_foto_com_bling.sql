@@ -23,8 +23,18 @@
 -- Como em `imagem_storage_path`, o valor é só o caminho do objeto no bucket
 -- privado — nunca URL assinada — e fica preso ao prefixo da própria linha.
 --
--- Impacto de lock: `add column` sem default é só catálogo; a restrição entra
--- `not valid` e é validada com SHARE UPDATE EXCLUSIVE sobre uma coluna nula.
+-- Lease por produto (imagem_bling_sync_lease_token / _expires_at): o
+-- compare-and-set impede uma execução velha de MARCAR outra foto, mas não de
+-- continuar ESCREVENDO no Bling. Toda escrita no Bling acontece sob o lease,
+-- adquirido por UM update condicional (lease ausente ou expirado) com o
+-- relógio do banco; duas aquisições simultâneas se serializam na trava da
+-- linha e a segunda reavalia a condição e não adquire. TTL de 90 s: excede o
+-- orçamento da convergência (40 s) e o maxDuration da rota (60 s), então um
+-- lease só expira depois que a execução que o tinha já não pode tocar no Bling.
+-- Só o próprio token libera.
+--
+-- Impacto de lock: `add column` sem default é só catálogo; as restrições entram
+-- `not valid` e são validadas com SHARE UPDATE EXCLUSIVE sobre colunas nulas.
 --
 -- Rollback: forward-only. O código anterior ignora a coluna.
 
@@ -48,6 +58,89 @@ alter table public.produtos
 
 alter table public.produtos
     validate constraint chk_produto_imagem_bling_sync_path;
+
+alter table public.produtos
+    add column if not exists imagem_bling_sync_lease_token uuid;
+
+alter table public.produtos
+    add column if not exists imagem_bling_sync_lease_expires_at timestamptz;
+
+alter table public.produtos
+    drop constraint if exists chk_produto_imagem_bling_sync_lease;
+
+alter table public.produtos
+    add constraint chk_produto_imagem_bling_sync_lease check (
+        (imagem_bling_sync_lease_token is null) = (imagem_bling_sync_lease_expires_at is null)
+    ) not valid;
+
+alter table public.produtos
+    validate constraint chk_produto_imagem_bling_sync_lease;
+
+comment on column public.produtos.imagem_bling_sync_lease_token is
+    'Lease da sincronização da foto com o Bling: dono atual. Nulo junto com o vencimento.';
+comment on column public.produtos.imagem_bling_sync_lease_expires_at is
+    'Vencimento do lease da sincronização da foto com o Bling (relógio do banco).';
+
+-- Aquisição atômica: uma instrução só, condicionada a lease ausente ou
+-- expirado, escopada por produto E organização. Sem SELECT prévio.
+create or replace function public.adquirir_lease_da_foto_no_bling(
+    p_organizacao_id uuid,
+    p_produto_id     uuid,
+    p_token          uuid,
+    p_ttl_segundos   integer
+)
+returns boolean
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+    if p_organizacao_id is null or p_produto_id is null or p_token is null then
+        raise exception 'lease da foto: organização, produto e token são obrigatórios' using errcode = '22004';
+    end if;
+    if p_ttl_segundos is null or p_ttl_segundos < 1 or p_ttl_segundos > 600 then
+        raise exception 'lease da foto: ttl fora do intervalo' using errcode = '22023';
+    end if;
+
+    update public.produtos
+       set imagem_bling_sync_lease_token      = p_token,
+           imagem_bling_sync_lease_expires_at = now() + make_interval(secs => p_ttl_segundos)
+     where id = p_produto_id
+       and organizacao_id = p_organizacao_id
+       and (imagem_bling_sync_lease_token is null
+            or imagem_bling_sync_lease_expires_at <= now());
+
+    return found;
+end;
+$$;
+
+-- Liberação: só o próprio token.
+create or replace function public.liberar_lease_da_foto_no_bling(
+    p_organizacao_id uuid,
+    p_produto_id     uuid,
+    p_token          uuid
+)
+returns boolean
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+    update public.produtos
+       set imagem_bling_sync_lease_token      = null,
+           imagem_bling_sync_lease_expires_at = null
+     where id = p_produto_id
+       and organizacao_id = p_organizacao_id
+       and imagem_bling_sync_lease_token = p_token;
+
+    return found;
+end;
+$$;
+
+revoke all on function public.adquirir_lease_da_foto_no_bling(uuid, uuid, uuid, integer) from public, anon, authenticated;
+revoke all on function public.liberar_lease_da_foto_no_bling(uuid, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.adquirir_lease_da_foto_no_bling(uuid, uuid, uuid, integer) to service_role;
+grant execute on function public.liberar_lease_da_foto_no_bling(uuid, uuid, uuid) to service_role;
 
 comment on column public.produtos.imagem_bling_sync_path is
     'Foto do ORBITA confirmada no Bling (caminho no bucket produto-imagens). '

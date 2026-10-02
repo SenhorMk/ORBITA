@@ -65,11 +65,13 @@ const ID_DO_CAMPO = 'product-detail-foto';
 export function mensagemDoDesfecho(acao: 'enviar' | 'remover', bling: EstadoDaFotoNoBling): string {
   if (acao === 'remover') {
     if (bling === 'pendente') return 'Foto removida do ORBITA. Remoção no Bling pendente.';
+    if (bling === 'em_andamento') return 'Foto removida do ORBITA. Remoção no Bling em andamento.';
     if (bling === 'sem_vinculo') return 'Foto removida do ORBITA. O produto não está vinculado ao Bling.';
     return 'Foto removida.';
   }
   if (bling === 'sincronizada') return 'Foto atualizada.';
   if (bling === 'sem_vinculo') return 'Foto salva no ORBITA. O produto ainda não está vinculado ao Bling.';
+  if (bling === 'em_andamento') return 'Foto salva no ORBITA. Sincronização com o Bling em andamento.';
   return 'Foto salva no ORBITA. Sincronização com o Bling pendente.';
 }
 
@@ -115,7 +117,9 @@ function SituacaoNoBling({ bling, ocupado, onTentar }: { bling: EstadoDaFotoNoBl
       <span className={TEXTO} style={{ color: 'var(--warning)' }}>
         {bling === 'pendente'
           ? 'Sincronização com o Bling pendente.'
-          : 'Produto sem vínculo com o Bling: sincronize o catálogo e tente de novo.'}
+          : bling === 'em_andamento'
+            ? 'Sincronização com o Bling em andamento em outra aba ou requisição.'
+            : 'Produto sem vínculo com o Bling: sincronize o catálogo e tente de novo.'}
       </span>
       <button type="button" onClick={onTentar} disabled={ocupado} className="orbita-chip cursor-pointer">
         Tentar sincronizar novamente

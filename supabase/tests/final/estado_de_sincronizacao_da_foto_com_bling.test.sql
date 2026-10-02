@@ -2,11 +2,12 @@
 -- Migration 72, contra o schema canônico completo: `imagem_bling_sync_path`
 -- (estado confirmado no Bling) preso ao prefixo da própria linha, o
 -- compare-and-set que impede uma resposta atrasada de marcar outra foto, e os
--- eventos de auditoria da sincronização.
+-- eventos de auditoria da sincronização, e o lease por produto: aquisição
+-- atômica só sem lease vigente, liberação só pelo próprio token.
 
 begin;
 
-select plan(12);
+select plan(26);
 
 insert into auth.users (id, email)
 values ('72000000-0000-4000-8000-000000000001', 'owner-t72@orbita.test');
@@ -130,6 +131,66 @@ select ok(
         '{"produto_id": "72200000-0000-4000-8000-00000000000a", "operacao": "adicionar", "havia_sincronizacao_anterior": false, "resultado": "sincronizada"}'::jsonb
     ) is not null,
     '12. a RPC de auditoria grava o evento novo para um ator membro'
+);
+
+reset role;
+
+-- Lease por produto.
+select col_type_is('public', 'produtos', 'imagem_bling_sync_lease_token', 'uuid', '13. o token do lease é uuid');
+select col_type_is('public', 'produtos', 'imagem_bling_sync_lease_expires_at', 'timestamp with time zone', '14. o vencimento do lease é timestamptz');
+
+select throws_ok(
+    $$update public.produtos set imagem_bling_sync_lease_token = '72300000-0000-4000-8000-000000000001' where id = '72200000-0000-4000-8000-00000000000a'$$,
+    '23514', null,
+    '15. token sem vencimento é recusado (ambos nulos ou ambos preenchidos)'
+);
+
+select ok(
+    not has_function_privilege('anon', 'public.adquirir_lease_da_foto_no_bling(uuid, uuid, uuid, integer)', 'execute')
+    and not has_function_privilege('authenticated', 'public.adquirir_lease_da_foto_no_bling(uuid, uuid, uuid, integer)', 'execute')
+    and not has_function_privilege('anon', 'public.liberar_lease_da_foto_no_bling(uuid, uuid, uuid)', 'execute')
+    and not has_function_privilege('authenticated', 'public.liberar_lease_da_foto_no_bling(uuid, uuid, uuid)', 'execute'),
+    '16. só o servidor (service_role) adquire ou libera o lease'
+);
+
+set local role service_role;
+
+select is(public.adquirir_lease_da_foto_no_bling('72100000-0000-4000-8000-000000000002', '72200000-0000-4000-8000-00000000000a', '72300000-0000-4000-8000-000000000001', 90), false,
+    '17. outra organização não adquire o lease do produto');
+select is(public.adquirir_lease_da_foto_no_bling('72100000-0000-4000-8000-000000000001', '72200000-0000-4000-8000-00000000000a', '72300000-0000-4000-8000-000000000001', 90), true,
+    '18. sem lease, a execução adquire');
+select is(public.adquirir_lease_da_foto_no_bling('72100000-0000-4000-8000-000000000001', '72200000-0000-4000-8000-00000000000a', '72300000-0000-4000-8000-000000000002', 90), false,
+    '19. lease vigente não é roubado por outro token');
+select is(
+    (select imagem_bling_sync_lease_token from public.produtos where id = '72200000-0000-4000-8000-00000000000a'),
+    '72300000-0000-4000-8000-000000000001'::uuid,
+    '20. o dono continua sendo o primeiro token'
+);
+select is(public.liberar_lease_da_foto_no_bling('72100000-0000-4000-8000-000000000001', '72200000-0000-4000-8000-00000000000a', '72300000-0000-4000-8000-000000000002'), false,
+    '21. token errado não libera');
+select is(public.liberar_lease_da_foto_no_bling('72100000-0000-4000-8000-000000000002', '72200000-0000-4000-8000-00000000000a', '72300000-0000-4000-8000-000000000001'), false,
+    '22. outra organização não libera');
+select is(public.liberar_lease_da_foto_no_bling('72100000-0000-4000-8000-000000000001', '72200000-0000-4000-8000-00000000000a', '72300000-0000-4000-8000-000000000001'), true,
+    '23. o próprio token libera');
+select is(
+    (select imagem_bling_sync_lease_token is null and imagem_bling_sync_lease_expires_at is null from public.produtos where id = '72200000-0000-4000-8000-00000000000a'),
+    true,
+    '24. liberado: token e vencimento voltam a nulo'
+);
+
+reset role;
+-- A execução que tinha o lease morreu: ele venceu.
+update public.produtos
+   set imagem_bling_sync_lease_token = '72300000-0000-4000-8000-000000000001', imagem_bling_sync_lease_expires_at = now() - interval '1 second'
+ where id = '72200000-0000-4000-8000-00000000000a';
+set local role service_role;
+
+select is(public.adquirir_lease_da_foto_no_bling('72100000-0000-4000-8000-000000000001', '72200000-0000-4000-8000-00000000000a', '72300000-0000-4000-8000-000000000002', 90), true,
+    '25. lease expirado é recuperado por outra execução');
+select throws_ok(
+    $$select public.adquirir_lease_da_foto_no_bling('72100000-0000-4000-8000-000000000001', '72200000-0000-4000-8000-00000000000a', '72300000-0000-4000-8000-000000000001', 0)$$,
+    '22023', null,
+    '26. ttl fora do intervalo é recusado'
 );
 
 reset role;

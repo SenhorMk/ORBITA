@@ -32,7 +32,10 @@ const armazenamento = new SupabaseArmazenamentoDeImagem(supabaseServer);
  */
 const sincronizacao: SincronizacaoDaFotoDeps = {
   carregar: (scope, id) => store.carregar(scope, id),
-  confirmar: (scope, id, desejado) => store.confirmarSincronizacao(scope, id, desejado),
+  adquirirLease: (scope, id, token) => store.adquirirLease(scope, id, token),
+  liberarLease: (scope, id, token) => store.liberarLease(scope, id, token),
+  confirmar: (scope, id, desejado, token) => store.confirmarSincronizacao(scope, id, desejado, token),
+  novoToken: () => crypto.randomUUID(),
   bling: (scope) => bling.forVerifiedOrganization(scope),
   assinarImportacao: async (caminho) => {
     const assinadas = await armazenamento.assinarLeituras([caminho], VALIDADE_DA_IMPORTACAO_NO_BLING_S);

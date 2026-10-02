@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { VALIDADE_DO_LEASE_DA_SINCRONIZACAO_S } from '../lib/config/produtoImagemContract';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
 /** O que as rotas de foto precisam do produto: o dono, o vínculo e o estado da foto. */
@@ -103,11 +104,17 @@ export class ProdutoImagemRepository {
    * `UPDATE ... SET imagem_bling_sync_path = desejado WHERE imagem_storage_path
    * = desejado` (ou `IS NULL` para a remoção). Uma sincronização da foto A que
    * termina depois de o usuário trocar para B encontra B na linha e não marca
-   * nada: o resultado remoto de A é obsoleto.
+   * nada: o resultado remoto de A é obsoleto. Exige também o lease desta
+   * execução: uma execução cujo lease expirou e foi recuperado por outra não marca.
    *
    * @returns `true` quando a marcação valeu para o estado desejado atual.
    */
-  async confirmarSincronizacao(scope: VerifiedOrganizationScope, produtoId: string, desejado: string | null): Promise<boolean> {
+  async confirmarSincronizacao(
+    scope: VerifiedOrganizationScope,
+    produtoId: string,
+    desejado: string | null,
+    token: string,
+  ): Promise<boolean> {
     // Remoção confirmada: o Bling acabou de ser lido sem imagens, então o
     // espelho também fica vazio, e a foto removida não volta pela imagem do Bling.
     const valores = desejado === null ? { imagem_bling_sync_path: null, imagem_url: null } : { imagem_bling_sync_path: desejado };
@@ -115,7 +122,8 @@ export class ProdutoImagemRepository {
       .from('produtos')
       .update(valores)
       .eq('id', produtoId)
-      .eq('organizacao_id', scope.organizationId);
+      .eq('organizacao_id', scope.organizationId)
+      .eq('imagem_bling_sync_lease_token', token);
     const comPrecondicao = desejado === null
       ? alvo.is('imagem_storage_path', null)
       : alvo.eq('imagem_storage_path', desejado);
@@ -123,5 +131,34 @@ export class ProdutoImagemRepository {
     const { data, error } = await comPrecondicao.select('id');
     if (error) throw error;
     return (data ?? []).length === 1;
+  }
+
+  /**
+   * Lease da sincronização com o Bling (migration 72): UMA escrita condicional
+   * no banco — `UPDATE ... WHERE id AND organizacao_id AND (lease ausente OU
+   * expirado)`, com o relógio do Postgres. Duas chamadas simultâneas se
+   * serializam na trava da linha e a segunda reavalia a condição: só uma
+   * adquire. Outra organização nunca adquire.
+   */
+  async adquirirLease(scope: VerifiedOrganizationScope, produtoId: string, token: string): Promise<boolean> {
+    const { data, error } = await this.db.rpc('adquirir_lease_da_foto_no_bling', {
+      p_organizacao_id: scope.organizationId,
+      p_produto_id: produtoId,
+      p_token: token,
+      p_ttl_segundos: VALIDADE_DO_LEASE_DA_SINCRONIZACAO_S,
+    });
+    if (error) throw error;
+    return data === true;
+  }
+
+  /** Libera só se o lease ainda for de `token`: nunca o de outra execução. */
+  async liberarLease(scope: VerifiedOrganizationScope, produtoId: string, token: string): Promise<boolean> {
+    const { data, error } = await this.db.rpc('liberar_lease_da_foto_no_bling', {
+      p_organizacao_id: scope.organizationId,
+      p_produto_id: produtoId,
+      p_token: token,
+    });
+    if (error) throw error;
+    return data === true;
   }
 }

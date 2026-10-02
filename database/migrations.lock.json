@@ -374,7 +374,7 @@
     {
       "order": 75,
       "path": "../database/72_estado_de_sincronizacao_da_foto_com_bling.sql",
-      "sha256": "47f84fd2d1190787d26120c56070132b226d98636dc86ba3c77d96831e2847d3"
+      "sha256": "6afe59e05a3d702971cb95a5084641b5228641e21f736cd9de635e9dfc71d744"
     }
   ],
   "references": [

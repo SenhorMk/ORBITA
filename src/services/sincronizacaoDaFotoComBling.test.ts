@@ -76,7 +76,10 @@ function blingFalso(inicial: string[], opcoes: {
   return { porta, estado, chamadas, urls };
 }
 
-interface Linha { organizacao: string; produto: ProdutoComFoto }
+/** A linha do banco: o produto e o lease (colunas da migration 72). */
+interface Linha { organizacao: string; produto: ProdutoComFoto; lease?: { token: string; expiraEm: number } | null }
+
+const TTL_MS = 90_000;
 
 let linhas: Linha[];
 let tempo: number;
@@ -93,16 +96,35 @@ function mudarLinha(campos: Partial<ProdutoComFoto>) {
   l.produto = { ...l.produto, ...campos };
 }
 
+let tokens: number;
+const acharLinha = (scope: VerifiedOrganizationScope, id: string) =>
+  linhas.find((l) => l.organizacao === scope.organizationId && l.produto.id === id);
+function lease() { return linhas.find((x) => x.organizacao === ORG && x.produto.id === PRODUTO)!.lease ?? null; }
+
 function deps(overrides: Partial<SincronizacaoDaFotoDeps> = {}): SincronizacaoDaFotoDeps {
   return {
-    carregar: async (scope, id) => linhas.find((l) => l.organizacao === scope.organizationId && l.produto.id === id)?.produto ?? null,
-    // O compare-and-set do repositório: só marca se o desejado ainda for o mesmo.
-    confirmar: async (scope, id, desejado) => {
-      const l = linhas.find((x) => x.organizacao === scope.organizationId && x.produto.id === id);
-      if (!l || l.produto.imagemStoragePath !== desejado) return false;
+    carregar: async (scope, id) => acharLinha(scope, id)?.produto ?? null,
+    // As funções SQL do lease: aquisição só sem lease vigente; liberação só pelo próprio token.
+    adquirirLease: async (scope, id, token) => {
+      const l = acharLinha(scope, id);
+      if (!l || (l.lease && l.lease.expiraEm > tempo)) return false;
+      l.lease = { token, expiraEm: tempo + TTL_MS };
+      return true;
+    },
+    liberarLease: async (scope, id, token) => {
+      const l = acharLinha(scope, id);
+      if (!l?.lease || l.lease.token !== token) return false;
+      l.lease = null;
+      return true;
+    },
+    // O compare-and-set do repositório: só marca se o desejado ainda for o mesmo e o lease ainda for deste token.
+    confirmar: async (scope, id, desejado, token) => {
+      const l = acharLinha(scope, id);
+      if (!l || l.produto.imagemStoragePath !== desejado || l.lease?.token !== token) return false;
       l.produto = { ...l.produto, imagemBlingSyncPath: desejado };
       return true;
     },
+    novoToken: () => `lease-${++tokens}`,
     bling: () => bling.porta,
     assinarImportacao: async (caminho) => {
       assinaturas.push(caminho);
@@ -122,6 +144,7 @@ const sincronizar = (d = deps(), organizacao = ORG) => sincronizarFotoComBling(e
 beforeEach(() => {
   linhas = [{ organizacao: ORG, produto: { id: PRODUTO, blingId: BLING_ID, imagemStoragePath: A, imagemBlingSyncPath: null, imagemDoBling: null } }];
   tempo = 0;
+  tokens = 0;
   aoEsperar = null;
   auditados = [];
   assinaturas = [];
@@ -267,12 +290,14 @@ describe('retry e idempotência', () => {
     expect(linha().imagemBlingSyncPath).toBe(A);
   });
 
-  it('dois retries concorrentes: o estado fica pendente ou convergido, e um retry seguinte converge para uma A', async () => {
-    const [r1, r2] = await Promise.all([sincronizar(), sincronizar()]);
-    expect([r1._tag, r2._tag].every((t) => t === 'Sincronizada' || t === 'Falhou')).toBe(true);
-    mudarLinha({ imagemBlingSyncPath: null });
-    expect(await sincronizar()).toEqual({ _tag: 'Sincronizada', jaEstava: false });
+  it('dois retries simultâneos: um adquire o lease e converge; o outro devolve EmAndamento sem tocar no Bling', async () => {
+    const chamadasDoSegundo: string[] = [];
+    const [r1, r2] = await Promise.all([sincronizar(), sincronizar(deps({ bling: () => espiar(bling.porta, chamadasDoSegundo) }))]);
+    expect(r1).toEqual({ _tag: 'Sincronizada', jaEstava: false });
+    expect(r2).toEqual({ _tag: 'EmAndamento' });
+    expect(chamadasDoSegundo).toEqual([]);
     expect(bling.estado.imagens).toEqual([A]);
+    expect(lease()).toBeNull();
   });
 });
 
@@ -309,6 +334,102 @@ describe('concorrência: uma sincronização atrasada nunca marca outra foto', (
     aoEsperar = () => { if (!bling.chamadas.includes('importar')) mudarLinha({ imagemStoragePath: B }); };
     expect(await sincronizar()).toEqual({ _tag: 'Obsoleta' });
     expect(linha().imagemBlingSyncPath).toBeNull();
+  });
+});
+
+/** Repassa a porta do Bling registrando cada chamada desta execução. */
+function espiar(porta: FotoNoBlingPort, chamadas: string[]): FotoNoBlingPort {
+  return {
+    consultarProduto: (id) => { chamadas.push('ler'); return porta.consultarProduto(id); },
+    limparImagensDoProduto: (id) => { chamadas.push('limpar'); return porta.limparImagensDoProduto(id); },
+    importarImagemDoProduto: (id, url) => { chamadas.push('importar'); return porta.importarImagemDoProduto(id, url); },
+  };
+}
+
+describe('lease por produto: nenhuma escrita no Bling sem o lease', () => {
+  it('corrida A/B: B concorrente não toca no Bling enquanto A tem o lease; o retry de B termina com exatamente [B]', async () => {
+    // A já limpou e confirmou o vazio; entre assinar e importar, o usuário troca
+    // para B e a sincronização de B roda INTEIRA. Depois A importa A. Sem lease,
+    // B convergia e marcava B, e A acrescentava A: o Bling ficava [B, A] com o
+    // banco dizendo "B sincronizada" — e o retry de B não fazia nada.
+    const chamadasDeB: string[] = [];
+    let desfechoDeB: Awaited<ReturnType<typeof sincronizar>> | null = null;
+    const depsDeA = deps({
+      assinarImportacao: async (caminho) => {
+        mudarLinha({ imagemStoragePath: B });
+        desfechoDeB = await sincronizar(deps({ bling: () => espiar(bling.porta, chamadasDeB) }));
+        return `https://storage.test/sign/${caminho}?token=capacidade-temporaria-a`;
+      },
+    });
+    const desfechoDeA = await sincronizar(depsDeA);
+    const retryDeB = await sincronizar();
+
+    expect(bling.estado.imagens).toEqual([B]);
+    expect(linha().imagemBlingSyncPath).toBe(B);
+    expect(desfechoDeA).toEqual({ _tag: 'Obsoleta' });
+    expect(desfechoDeB).toEqual({ _tag: 'EmAndamento' });
+    expect(chamadasDeB).toEqual([]);
+    expect(retryDeB).toEqual({ _tag: 'Sincronizada', jaEstava: false });
+    expect(lease()).toBeNull();
+  });
+
+  it('lease vigente de outra execução não é roubado: EmAndamento, sem chamada ao Bling', async () => {
+    linhas[0]!.lease = { token: 'outra-execucao', expiraEm: tempo + 1_000 };
+    expect(await sincronizar()).toEqual({ _tag: 'EmAndamento' });
+    expect(bling.chamadas).toEqual([]);
+    expect(lease()).toEqual({ token: 'outra-execucao', expiraEm: 1_000 });
+  });
+
+  it('lease expirado (a execução que o tinha morreu) é recuperado e a sincronização converge', async () => {
+    linhas[0]!.lease = { token: 'execucao-morta', expiraEm: tempo };
+    expect(await sincronizar()).toEqual({ _tag: 'Sincronizada', jaEstava: false });
+    expect(bling.estado.imagens).toEqual([A]);
+    expect(lease()).toBeNull();
+  });
+
+  it('execução que perdeu o lease não confirma nem libera o lease do novo dono', async () => {
+    bling = blingFalso(['antiga'], { atraso: 3 });
+    aoEsperar = () => { if (bling.chamadas.includes('importar')) linhas[0]!.lease = { token: 'novo-dono', expiraEm: tempo + TTL_MS }; };
+    expect(await sincronizar()).toEqual({ _tag: 'Obsoleta' });
+    expect(linha().imagemBlingSyncPath).toBeNull();
+    expect(lease()?.token).toBe('novo-dono');
+  });
+
+  it('exceção no meio da convergência libera o lease em finally', async () => {
+    const quebrada: FotoNoBlingPort = { ...bling.porta, limparImagensDoProduto: async () => { throw new Error('socket hang up'); } };
+    await expect(sincronizar(deps({ bling: () => quebrada }))).rejects.toThrow('socket hang up');
+    expect(lease()).toBeNull();
+  });
+
+  it('falha ao liberar não derruba a sincronização: o lease expira sozinho', async () => {
+    const r = await sincronizar(deps({ liberarLease: async () => { throw new Error('banco fora'); } }));
+    expect(r).toEqual({ _tag: 'Sincronizada', jaEstava: false });
+  });
+
+  it('outra organização não adquire o lease nem toca no Bling', async () => {
+    expect(await sincronizar(deps(), OUTRA_ORG)).toEqual({ _tag: 'NaoEncontrado' });
+    expect(await deps().adquirirLease(escopo(OUTRA_ORG), PRODUTO, 'intruso')).toBe(false);
+    expect(lease()).toBeNull();
+    expect(bling.chamadas).toEqual([]);
+  });
+
+  it('relê sob o lease: converge para o desejado atual, não o que viu antes de adquirir', async () => {
+    let leituras = 0;
+    const r = await sincronizar(deps({
+      carregar: async (scope, id) => {
+        if (++leituras === 2) mudarLinha({ imagemStoragePath: B });
+        return acharLinha(scope, id)?.produto ?? null;
+      },
+    }));
+    expect(r).toEqual({ _tag: 'Sincronizada', jaEstava: false });
+    expect(bling.estado.imagens).toEqual([B]);
+    expect(linha().imagemBlingSyncPath).toBe(B);
+  });
+
+  it('o token do lease não aparece no desfecho nem na auditoria', async () => {
+    const r = await sincronizar();
+    expect(JSON.stringify(r)).not.toContain('lease-');
+    expect(JSON.stringify(auditados)).not.toContain('lease-');
   });
 });
 

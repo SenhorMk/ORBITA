@@ -59,15 +59,27 @@ export const VALIDADE_DA_LEITURA_ASSINADA_S = 60 * 60;
 export const VALIDADE_DA_IMPORTACAO_NO_BLING_S = 15 * 60;
 
 /**
+ * Validade do lease por produto da sincronização com o Bling.
+ *
+ * Precisa exceder todo o período em que uma execução antiga ainda pode tocar
+ * o Bling: o orçamento da convergência é de 40 s e a função da rota morre em
+ * `maxDuration = 60` s. Com 90 s, um lease só expira depois que a execução que
+ * o adquiriu já não existe — e só então outra pode recuperá-lo.
+ */
+export const VALIDADE_DO_LEASE_DA_SINCRONIZACAO_S = 90;
+
+/**
  * O estado da foto do ORBITA no Bling, derivado do par persistido
  * desejado (`imagem_storage_path`) × confirmado (`imagem_bling_sync_path`):
  *
  * - `sem_foto`: o ORBITA nunca adotou a imagem do produto — o Bling é dono;
  * - `sincronizada`: o Bling tem exatamente a foto desejada (ou nenhuma, depois de uma remoção);
  * - `pendente`: o desejado ainda não foi confirmado no Bling;
- * - `sem_vinculo`: há algo a refletir, mas o produto não tem `bling_id`.
+ * - `sem_vinculo`: há algo a refletir, mas o produto não tem `bling_id`;
+ * - `em_andamento`: só na resposta — outra execução detém o lease do produto e
+ *   está convergindo o Bling; esta não tocou nele.
  */
-export const ESTADOS_DA_FOTO_NO_BLING = ['sem_foto', 'sincronizada', 'pendente', 'sem_vinculo'] as const;
+export const ESTADOS_DA_FOTO_NO_BLING = ['sem_foto', 'sincronizada', 'pendente', 'sem_vinculo', 'em_andamento'] as const;
 export type EstadoDaFotoNoBling = (typeof ESTADOS_DA_FOTO_NO_BLING)[number];
 
 /** A mesma derivação no servidor e na tela. `blingId` só vale quando numérico. */
