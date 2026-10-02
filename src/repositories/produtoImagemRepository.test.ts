@@ -53,7 +53,7 @@ let repo: ProdutoImagemRepository;
 
 beforeEach(() => {
   linhas = [
-    { id: PRODUTO, organizacao_id: ORG, imagem_storage_path: A, imagem_url: 'https://bling/x.jpg' },
+    { id: PRODUTO, organizacao_id: ORG, bling_id: '777', imagem_storage_path: A, imagem_bling_sync_path: null, imagem_url: 'https://bling/x.jpg' },
     { id: PRODUTO, organizacao_id: OUTRA_ORG, imagem_storage_path: null, imagem_url: null },
   ];
   banco = bancoEmMemoria(linhas);
@@ -62,7 +62,9 @@ beforeEach(() => {
 
 describe('ProdutoImagemRepository', () => {
   it('carrega por id E organização do escopo', async () => {
-    expect(await repo.carregar(escopo(ORG), PRODUTO)).toEqual({ id: PRODUTO, imagemStoragePath: A, imagemDoBling: 'https://bling/x.jpg' });
+    expect(await repo.carregar(escopo(ORG), PRODUTO)).toEqual({
+      id: PRODUTO, blingId: '777', imagemStoragePath: A, imagemBlingSyncPath: null, imagemDoBling: 'https://bling/x.jpg',
+    });
     expect(banco.filtrosUsados[0]).toEqual([['eq', 'id', PRODUTO], ['eq', 'organizacao_id', ORG]]);
     expect(await repo.carregar(escopo('77777777-7777-4777-8777-777777777777'), PRODUTO)).toBeNull();
   });
@@ -86,5 +88,51 @@ describe('ProdutoImagemRepository', () => {
     expect(linhas[0]!.imagem_storage_path).toBeNull();
     expect(linhas[1]).toEqual({ id: PRODUTO, organizacao_id: OUTRA_ORG, imagem_storage_path: null, imagem_url: null });
     expect(banco.filtrosUsados.at(-1)).toContainEqual(['eq', 'organizacao_id', ORG]);
+  });
+
+  it('remoção com pendenteNoBling grava os dois campos na mesma instrução, com a mesma precondição', async () => {
+    expect(await repo.trocarCaminho(escopo(ORG), PRODUTO, A, null, { pendenteNoBling: A })).toBe(true);
+    expect(linhas[0]).toMatchObject({ imagem_storage_path: null, imagem_bling_sync_path: A });
+    expect(banco.filtrosUsados.at(-1)).toEqual([['eq', 'id', PRODUTO], ['eq', 'organizacao_id', ORG], ['eq', 'imagem_storage_path', A]]);
+    // Precondição falhou: nenhum dos dois muda.
+    linhas[0]!.imagem_storage_path = B;
+    linhas[0]!.imagem_bling_sync_path = null;
+    expect(await repo.trocarCaminho(escopo(ORG), PRODUTO, A, null, { pendenteNoBling: A })).toBe(false);
+    expect(linhas[0]).toMatchObject({ imagem_storage_path: B, imagem_bling_sync_path: null });
+  });
+
+  it('sem pendenteNoBling a troca não toca o estado confirmado', async () => {
+    linhas[0]!.imagem_bling_sync_path = A;
+    await repo.trocarCaminho(escopo(ORG), PRODUTO, A, B);
+    expect(linhas[0]).toMatchObject({ imagem_storage_path: B, imagem_bling_sync_path: A });
+  });
+
+  it('confirmarSincronizacao marca o desejado só se ele ainda for o desejado (resposta atrasada de A não marca B)', async () => {
+    // A linha já está em B: a sincronização de A chega atrasada.
+    linhas[0]!.imagem_storage_path = B;
+    expect(await repo.confirmarSincronizacao(escopo(ORG), PRODUTO, A)).toBe(false);
+    expect(linhas[0]!.imagem_bling_sync_path).toBeNull();
+    expect(banco.filtrosUsados.at(-1)).toEqual([
+      ['eq', 'id', PRODUTO], ['eq', 'organizacao_id', ORG], ['eq', 'imagem_storage_path', A],
+    ]);
+
+    expect(await repo.confirmarSincronizacao(escopo(ORG), PRODUTO, B)).toBe(true);
+    expect(linhas[0]!.imagem_bling_sync_path).toBe(B);
+  });
+
+  it('confirmar a remoção exige o desejado ainda nulo (is null) e nunca alcança outra organização', async () => {
+    linhas[0]!.imagem_storage_path = null;
+    linhas[0]!.imagem_bling_sync_path = A;
+    expect(await repo.confirmarSincronizacao(escopo(ORG), PRODUTO, null)).toBe(true);
+    expect(linhas[0]!.imagem_bling_sync_path).toBeNull();
+    expect(banco.filtrosUsados.at(-1)).toContainEqual(['is', 'imagem_storage_path', null]);
+    expect(linhas[1]).toEqual({ id: PRODUTO, organizacao_id: OUTRA_ORG, imagem_storage_path: null, imagem_url: null });
+  });
+
+  it('só um id numérico do Bling é vínculo', async () => {
+    const { blingIdDoVinculo } = await import('./produtoImagemRepository');
+    expect(blingIdDoVinculo('16714230397')).toBe('16714230397');
+    expect(blingIdDoVinculo(16714230397)).toBe('16714230397');
+    for (const invalido of ['LOCAL-1', '', null, undefined, ' ', '12a']) expect(blingIdDoVinculo(invalido)).toBeNull();
   });
 });

@@ -76,6 +76,7 @@ type AuditEventRow = readonly [
 const PROIBIDOS_DA_FOTO = [
   'url', 'signed_url', 'signedUrl', 'upload_token', 'uploadToken', 'caminho', 'path',
   'nome_arquivo', 'file_name', 'fileName', 'base64', 'bytes', 'conteudo', 'content',
+  'corpo', 'body', 'resposta', 'response', 'link',
 ] as const;
 
 const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
@@ -125,6 +126,11 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   // anterior e o desfecho da limpeza — nunca nome do arquivo, URL, token ou bytes.
   ['catalog.product_image_uploaded', 'catalog', 'info', 'user', 730, 'Foto do produto adicionada ou trocada no ORBITA.', undefined, PROIBIDOS_DA_FOTO],
   ['catalog.product_image_removed', 'catalog', 'info', 'user', 730, 'Foto do produto removida no ORBITA; a imagem do Bling volta a ser exibida.', undefined, PROIBIDOS_DA_FOTO],
+  // Sincronização da foto com o Bling (migration 72). Mesmas proibições: nada de
+  // URL assinada, token, caminho ou corpo de resposta do Bling.
+  ['catalog.product_image_bling_sync_pending', 'catalog', 'info', 'user', 730, 'Foto do produto salva no ORBITA aguardando sincronização com o Bling (produto sem vínculo).', undefined, PROIBIDOS_DA_FOTO],
+  ['catalog.product_image_bling_synced', 'catalog', 'info', 'user', 730, 'Foto do produto convergida no Bling: exatamente a foto do ORBITA, ou nenhuma imagem.', undefined, PROIBIDOS_DA_FOTO],
+  ['catalog.product_image_bling_sync_failed', 'catalog', 'warning', 'user', 730, 'Sincronização da foto do produto com o Bling não confirmada; estado continua pendente.', undefined, PROIBIDOS_DA_FOTO],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 

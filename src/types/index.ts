@@ -174,6 +174,12 @@ export interface Produto {
    * (migration 70). Nunca URL. Só as rotas de foto escrevem aqui.
    */
   imagem_storage_path?: string | null;
+  /**
+   * A foto do ORBITA que se sabe refletida no Bling (migration 72). Igual a
+   * `imagem_storage_path` = sincronizada; diferente = pendente. Só a
+   * sincronização da foto escreve aqui.
+   */
+  imagem_bling_sync_path?: string | null;
   unidade?: string;
   estoque: number;
   estoque_reservado?: number; // trigger controlada

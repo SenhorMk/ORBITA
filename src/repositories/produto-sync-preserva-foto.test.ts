@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -56,10 +56,13 @@ describe('sincronização Bling → ORBITA preserva a foto do ORBITA', () => {
       bling_id: '77', nome: 'X', preco: 1, estoque: 1,
       imagem_url: 'https://bling/nova.jpg',
       imagem_storage_path: FOTO,
+      imagem_bling_sync_path: FOTO,
     });
     expect(payloads).toHaveLength(1);
     expect(payloads[0]!.valores.imagem_url).toBe('https://bling/nova.jpg');
     expect(payloads[0]!.valores).not.toHaveProperty('imagem_storage_path');
+    // Nem o marcador de confirmação: a sincronização não "confirma" foto nenhuma.
+    expect(payloads[0]!.valores).not.toHaveProperty('imagem_bling_sync_path');
   });
 
   it('produto existente (update, e o upsert de reserva): nenhum dos dois caminhos leva o campo', async () => {
@@ -69,18 +72,46 @@ describe('sincronização Bling → ORBITA preserva a foto do ORBITA', () => {
       id: '33333333-3333-4333-8333-333333333333', bling_id: '77', nome: 'X', preco: 1, estoque: 1,
       imagem_url: 'https://bling/trocada.jpg',
       imagem_storage_path: null,
+      imagem_bling_sync_path: null,
     });
     expect(payloads.map((p) => p.metodo)).toEqual(['update', 'upsert']);
     for (const { valores } of payloads) {
       expect(valores.imagem_url).toBe('https://bling/trocada.jpg');
       expect(valores).not.toHaveProperty('imagem_storage_path');
+      expect(valores).not.toHaveProperty('imagem_bling_sync_path');
     }
   });
 
-  it('nenhum caminho de sincronização monta imagem_storage_path', () => {
+  it('nenhum caminho de sincronização monta imagem_storage_path nem imagem_bling_sync_path', () => {
     const raiz = path.resolve(__dirname, '..');
     for (const arquivo of ['services/sync.ts', 'app/api/bling/webhook/route.ts']) {
-      expect(readFileSync(path.join(raiz, arquivo), 'utf8'), arquivo).not.toContain('imagem_storage_path');
+      const fonte = readFileSync(path.join(raiz, arquivo), 'utf8');
+      expect(fonte, arquivo).not.toContain('imagem_storage_path');
+      expect(fonte, arquivo).not.toContain('imagem_bling_sync_path');
     }
+  });
+
+  it('sem loop: sync e webhook nunca reenviam imagem ao Bling nem disparam a sincronização da foto', () => {
+    const raiz = path.resolve(__dirname, '..');
+    for (const arquivo of ['services/sync.ts', 'app/api/bling/webhook/route.ts']) {
+      const fonte = readFileSync(path.join(raiz, arquivo), 'utf8');
+      for (const gatilho of ['sincronizacaoDaFotoComBling', 'sincronizarFotoComBling', 'importarImagemDoProduto', 'limparImagensDoProduto', 'imagensURL']) {
+        expect(fonte, `${arquivo} → ${gatilho}`).not.toContain(gatilho);
+      }
+    }
+  });
+
+  it('só as rotas da foto disparam a sincronização com o Bling', () => {
+    const raiz = path.resolve(__dirname, '..');
+    const fontes = (dir: string): string[] => readdirSync(dir).flatMap((nome) => {
+      const completo = path.join(dir, nome);
+      if (statSync(completo).isDirectory()) return fontes(completo);
+      return /\.tsx?$/u.test(nome) && !/\.test\.tsx?$/u.test(nome) ? [completo] : [];
+    });
+    const chamadores = fontes(raiz)
+      .filter((f) => /await sincronizarFotoComBling\(/u.test(readFileSync(f, 'utf8')))
+      .map((f) => path.relative(raiz, f).replaceAll('\\', '/'))
+      .sort();
+    expect(chamadores).toEqual(['app/api/produtos/imagem/dependencias.ts']);
   });
 });

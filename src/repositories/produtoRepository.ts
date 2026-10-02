@@ -42,10 +42,12 @@ export class ProdutoRepository {
   /**
    * Grava o produto espelhado do Bling ou editado no formulário.
    *
-   * `imagem_storage_path` NUNCA sai daqui: é a foto escolhida no ORBITA, e este
-   * é o caminho da sincronização e do webhook. Um `Produto` que chegasse com o
-   * campo (lido de uma tela, por exemplo) sobrescreveria a escolha da pessoa.
-   * Quem escreve a foto é só `ProdutoImagemRepository.trocarCaminho`.
+   * `imagem_storage_path` e `imagem_bling_sync_path` NUNCA saem daqui: são a
+   * foto escolhida no ORBITA e a confirmação de que ela chegou ao Bling, e este
+   * é o caminho da sincronização e do webhook. Um `Produto` que chegasse com os
+   * campos (lido de uma tela, por exemplo) sobrescreveria a escolha da pessoa
+   * ou marcaria como sincronizado o que não foi. Quem escreve os dois é só
+   * `ProdutoImagemRepository`.
    */
   async upsert(scope: VerifiedOrganizationScope, produto: Produto): Promise<Produto> {
     const payloadForUpsert = {
@@ -54,6 +56,7 @@ export class ProdutoRepository {
       user_id: scope.actorId,
     };
     delete payloadForUpsert.imagem_storage_path;
+    delete payloadForUpsert.imagem_bling_sync_path;
 
     if (produto.bling_id && produto.id) {
       await this.removerDuplicadoPorBlingId(scope, produto.id, produto.bling_id);
