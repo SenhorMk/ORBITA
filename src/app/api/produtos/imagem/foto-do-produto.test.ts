@@ -417,16 +417,22 @@ describe('remoção', () => {
     armazenamento.objetos[FOTO_A] = PNG_OK;
   });
 
-  it('CAS para null, depois remove o objeto, e devolve a imagem do Bling para a tela', async () => {
+  it('CAS para null, depois remove o objeto; produto vinculado volta placeholder, sem ressuscitar o espelho do Bling', async () => {
     let removidoAntesDoCas = false;
     store.intercalar(() => { removidoAntesDoCas = armazenamento.removidos.length > 0; });
-    expect(await remover({ produtoId: PRODUTO, anterior: FOTO_A })).toEqual({ status: 200, corpo: { resultado: 'ImagemRemovida', url: BLING, bling: 'sincronizada' } });
+    expect(await remover({ produtoId: PRODUTO, anterior: FOTO_A })).toEqual({ status: 200, corpo: { resultado: 'ImagemRemovida', url: null, bling: 'sincronizada' } });
     expect(removidoAntesDoCas).toBe(false);
     expect(store.linhas[0]!.imagemStoragePath).toBeNull();
-    // A imagem do Bling não é tocada.
+    // O espelho não é apagado pela rota: só deixa de aparecer.
     expect(store.linhas[0]!.imagemDoBling).toBe(BLING);
     expect(armazenamento.removidos).toEqual([FOTO_A]);
     expect(auditados[0]).toMatchObject({ acao: 'catalog.product_image_removed', metadata: { produto_id: PRODUTO, limpeza_anterior: 'concluida' } });
+  });
+
+  it('produto sem vínculo: o ORBITA nunca tocou o Bling, então a imagem do Bling volta a valer', async () => {
+    store.linhas[0]!.blingId = null;
+    estadoNoBling = 'sem_foto';
+    expect((await remover({ produtoId: PRODUTO, anterior: FOTO_A })).corpo).toEqual({ resultado: 'ImagemRemovida', url: BLING, bling: 'sem_foto' });
   });
 
   it('sem imagem do Bling, volta url null — a tela mostra o placeholder', async () => {
@@ -443,7 +449,7 @@ describe('remoção', () => {
 
   it('remoção repetida é idempotente', async () => {
     await remover({ produtoId: PRODUTO, anterior: FOTO_A });
-    expect((await remover({ produtoId: PRODUTO, anterior: FOTO_A })).corpo).toEqual({ resultado: 'ImagemRemovida', url: BLING, bling: 'sincronizada' });
+    expect((await remover({ produtoId: PRODUTO, anterior: FOTO_A })).corpo).toEqual({ resultado: 'ImagemRemovida', url: null, bling: 'sincronizada' });
     expect(armazenamento.removidos).toEqual([FOTO_A]);
   });
 

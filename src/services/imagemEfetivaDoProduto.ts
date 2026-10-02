@@ -13,6 +13,10 @@ import type { ArmazenamentoDeImagemPort } from './armazenamentoDeImagem';
  * 2. a imagem espelhada do Bling, já persistida em `imagem_url`;
  * 3. nenhuma — a tela desenha o placeholder.
  *
+ * Remoção pendente no Bling (`imagem_storage_path` nulo, `imagem_bling_sync_path`
+ * preenchido): o espelho do Bling é a foto que está saindo de lá, então não
+ * volta para a tela — nem se uma sincronização atrasada regravar `imagem_url`.
+ *
  * O caminho persistido segue no objeto, separado: é ele que o formulário usa
  * como precondição ao trocar ou remover a foto. A URL assinada nunca volta ao
  * banco: é gerada aqui, a cada leitura, e expira.
@@ -43,7 +47,8 @@ export async function comImagemEfetiva(
 
   return produtos.map((produto) => {
     const daFoto = produto.imagem_storage_path ? urls.get(produto.imagem_storage_path) : undefined;
-    const doBling = produto.imagem_url?.trim() ? produto.imagem_url : undefined;
+    const remocaoPendente = !produto.imagem_storage_path && !!produto.imagem_bling_sync_path;
+    const doBling = !remocaoPendente && produto.imagem_url?.trim() ? produto.imagem_url : undefined;
     const apresentado: Produto = { ...produto, imagem_url: daFoto ?? doBling };
     if (apresentado.imagem_url === undefined) delete apresentado.imagem_url;
     return apresentado;

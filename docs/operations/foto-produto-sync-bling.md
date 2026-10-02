@@ -76,6 +76,19 @@ Bling → ORBITA e o webhook nunca escrevem nenhuma das duas colunas:
 também garante que eles não chamam a sincronização da foto nem montam
 `imagensURL`, então não há laço.
 
+## Precedência visual
+
+1. Com `imagem_storage_path`, a tela mostra a foto do ORBITA, por URL assinada.
+2. Se o ORBITA nunca adotou a foto, a tela mostra a imagem do Bling (`imagem_url`).
+3. Com remoção pendente no Bling (desejado nulo, confirmado preenchido), o
+   espelho é a foto que está saindo de lá e **não volta** para a tela, mesmo
+   que uma sincronização atrasada regrave `imagem_url`. A tela mostra o
+   placeholder (`comImagemEfetiva`).
+4. Depois de remover a foto de um produto vinculado, a rota responde com o
+   placeholder, não com o espelho.
+5. Quando a remoção é confirmada (zero imagens lidas no Bling), o mesmo
+   compare-and-set esvazia `imagem_url`.
+
 ## Algoritmo (`sincronizarFotoComBling`)
 
 Roda depois do compare-and-set local em confirmar, trocar e remover, e no botão

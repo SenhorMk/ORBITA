@@ -118,6 +118,8 @@ describe('ProdutoImagemRepository', () => {
 
     expect(await repo.confirmarSincronizacao(escopo(ORG), PRODUTO, B)).toBe(true);
     expect(linhas[0]!.imagem_bling_sync_path).toBe(B);
+    // Confirmar uma foto não mexe no espelho.
+    expect(linhas[0]!.imagem_url).toBe('https://bling/x.jpg');
   });
 
   it('confirmar a remoção exige o desejado ainda nulo (is null) e nunca alcança outra organização', async () => {
@@ -125,6 +127,8 @@ describe('ProdutoImagemRepository', () => {
     linhas[0]!.imagem_bling_sync_path = A;
     expect(await repo.confirmarSincronizacao(escopo(ORG), PRODUTO, null)).toBe(true);
     expect(linhas[0]!.imagem_bling_sync_path).toBeNull();
+    // O Bling foi lido sem imagens: o espelho também esvazia, e a foto removida não volta por ele.
+    expect(linhas[0]!.imagem_url).toBeNull();
     expect(banco.filtrosUsados.at(-1)).toContainEqual(['is', 'imagem_storage_path', null]);
     expect(linhas[1]).toEqual({ id: PRODUTO, organizacao_id: OUTRA_ORG, imagem_storage_path: null, imagem_url: null });
   });

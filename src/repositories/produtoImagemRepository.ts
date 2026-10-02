@@ -108,9 +108,12 @@ export class ProdutoImagemRepository {
    * @returns `true` quando a marcação valeu para o estado desejado atual.
    */
   async confirmarSincronizacao(scope: VerifiedOrganizationScope, produtoId: string, desejado: string | null): Promise<boolean> {
+    // Remoção confirmada: o Bling acabou de ser lido sem imagens, então o
+    // espelho também fica vazio, e a foto removida não volta pela imagem do Bling.
+    const valores = desejado === null ? { imagem_bling_sync_path: null, imagem_url: null } : { imagem_bling_sync_path: desejado };
     const alvo = this.db
       .from('produtos')
-      .update({ imagem_bling_sync_path: desejado })
+      .update(valores)
       .eq('id', produtoId)
       .eq('organizacao_id', scope.organizationId);
     const comPrecondicao = desejado === null

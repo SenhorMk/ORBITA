@@ -201,6 +201,15 @@ async function urlEfetiva(
   return produto.imagemDoBling;
 }
 
+/**
+ * O que a tela mostra depois de remover. Produto vinculado: o Bling converge
+ * para nenhuma imagem, então o espelho (a foto que está saindo de lá) não
+ * volta — placeholder. Sem vínculo, o ORBITA nunca tocou o Bling.
+ */
+function imagemAposRemocao(produto: ProdutoComFoto): string | null {
+  return produto.blingId === null ? produto.imagemDoBling : null;
+}
+
 /** `POST /api/produtos/imagem/upload` — etapa A. */
 export function createAutorizarUploadHandler(deps: FotoDoProdutoDependencies) {
   return async function autorizarUpload(request: Request): Promise<NextResponse> {
@@ -331,7 +340,7 @@ export function createRemoverImagemHandler(deps: FotoDoProdutoDependencies) {
       const atual = await deps.store.carregar(scope, produto.id);
       // Já sem foto: outra requisição removeu antes. O estado pedido é o atual.
       if (atual && atual.imagemStoragePath === null) {
-        return responder({ resultado: 'ImagemRemovida', url: atual.imagemDoBling, bling: await estadoNoBling(deps, scope, produto.id, request) });
+        return responder({ resultado: 'ImagemRemovida', url: imagemAposRemocao(atual), bling: await estadoNoBling(deps, scope, produto.id, request) });
       }
       return responder({ resultado: 'Conflito' });
     }
@@ -345,7 +354,7 @@ export function createRemoverImagemHandler(deps: FotoDoProdutoDependencies) {
       correlationId: deps.correlationId(request),
       metadata: { produto_id: produto.id, limpeza_anterior: limpeza },
     });
-    return responder({ resultado: 'ImagemRemovida', url: produto.imagemDoBling, bling: await estadoNoBling(deps, scope, produto.id, request) });
+    return responder({ resultado: 'ImagemRemovida', url: imagemAposRemocao(produto), bling: await estadoNoBling(deps, scope, produto.id, request) });
   };
 }
 

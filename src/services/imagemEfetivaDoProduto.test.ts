@@ -45,6 +45,12 @@ describe('imagem efetiva: foto do ORBITA → Bling → placeholder', () => {
     expect(chamadas).toEqual([]);
   });
 
+  it('remoção pendente no Bling: o espelho é a foto que está saindo, e não volta para a tela', async () => {
+    const { porta } = armazenamento();
+    const [p] = await comImagemEfetiva(scope, [produto('p1', { imagem_url: BLING, imagem_storage_path: null, imagem_bling_sync_path: FOTO })], porta);
+    expect(p).not.toHaveProperty('imagem_url');
+  });
+
   it('sem nenhuma das duas, imagem_url fica ausente — a tela desenha o placeholder', async () => {
     const { porta } = armazenamento();
     const [a, b] = await comImagemEfetiva(scope, [produto('a'), produto('b', { imagem_url: '  ' })], porta);
