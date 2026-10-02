@@ -68,6 +68,8 @@ Estado da tela (`estadoDaFotoNoBling`), sem booleanos persistidos:
   o produto por nome ou SKU.
 
 `sincronizando` existe só na tela, enquanto a requisição está em curso.
+`em_andamento` existe só na resposta: outra execução detém o lease do produto
+e esta não tocou no Bling. A tela mantém a foto e oferece a nova tentativa.
 
 A migration 72 prende `imagem_bling_sync_path` ao prefixo da própria linha, com
 a mesma regra de `imagem_storage_path`, e recusa URL. A sincronização
@@ -95,7 +97,8 @@ Roda depois do compare-and-set local em confirmar, trocar e remover, e no botão
 "Tentar sincronizar novamente", que não exige novo upload porque o objeto já
 está no bucket.
 
-1. Relê o produto no banco, escopado pela organização verificada.
+1. Relê o produto no banco, escopado pela organização verificada, adquire o
+   lease do produto (sem ele, `em_andamento`) e relê de novo sob o lease.
 2. `sem_foto` → nada a fazer. `sincronizada` → sucesso idempotente, sem
    nenhuma chamada ao Bling. Sem `bling_id` → `sem_vinculo` (evento `pending`).
 3. `PATCH imagensURL: []`, depois leitura até zero imagens.
@@ -103,8 +106,9 @@ está no bucket.
 5. URL assinada temporária do desejado, depois `PATCH imagensURL: [url]`.
 6. Leitura até **exatamente uma** imagem.
 7. Compare-and-set: `imagem_bling_sync_path = desejado WHERE
-   imagem_storage_path = desejado` (ou `IS NULL` na remoção), escopado por id
-   e organização.
+   imagem_storage_path = desejado` (ou `IS NULL` na remoção) `AND
+   imagem_bling_sync_lease_token = token`, escopado por id e organização.
+   Depois, o lease é liberado em `finally`.
 
 Cada espera cabe num orçamento total de 40 s, com leitura a cada 2 s; as rotas
 têm `maxDuration = 60`. Limite (429) e erro indeterminado durante a leitura são
@@ -140,16 +144,74 @@ para produto vinculado. A remoção fica `pendente` e a sincronização limpa o
 Bling. Sem isso, uma importação ainda em curso, ou que estourou o prazo,
 deixaria no Bling uma foto que o usuário removeu, com a tela dizendo `sem_foto`.
 
-**Risco residual, aceito e registrado.** Não há trava por produto entre
-instâncias. Considere duas execuções simultâneas com desejados diferentes, por
-exemplo duas abas trocando quase ao mesmo tempo. Se a importação de uma for
-processada pelo Bling exatamente entre a releitura de "uma imagem" da outra e o
-processamento da própria importação, a outra pode marcar `sincronizada`
-enquanto o Bling termina com duas imagens. A releitura conta imagens e não
-identifica a foto, porque o Bling não expõe identidade estável. A tela de uma
-aba fica bloqueada em "sincronizando" durante a execução, o que reduz a janela.
-A correção é uma nova troca, ou remover e enviar de novo. Se isso se mostrar
-real em produção, o próximo passo é um lease por produto no banco.
+### Lease por produto: uma execução escreve no Bling por vez
+
+O compare-and-set impede uma execução velha de **marcar** outra foto, mas não
+de continuar **escrevendo** no Bling. Sem uma trava, a corrida seria esta:
+
+1. A começa;
+2. o desejado muda para B;
+3. B começa, limpa, importa B e confirma B;
+4. A, atrasada, importa A;
+5. o compare-and-set de A falha;
+6. o banco diz "B sincronizada" e o Bling termina com `[B, A]`.
+
+Por isso toda escrita no Bling acontece sob o lease do produto (migration 72):
+`imagem_bling_sync_lease_token uuid` e `imagem_bling_sync_lease_expires_at
+timestamptz`, ambos nulos ou ambos preenchidos.
+
+- **Aquisição** é atômica: `adquirir_lease_da_foto_no_bling` é **um**
+  `UPDATE ... WHERE id AND organizacao_id AND (token IS NULL OR expires_at <=
+  now())`, com o relógio do Postgres. Não há SELECT prévio. Duas aquisições
+  simultâneas se serializam na trava da linha, e a segunda reavalia a
+  condição e não adquire. Isso está provado com duas transações reais em
+  `scripts/database-concurrency-foto-produto.mjs`.
+- **Fluxo:**
+  1. detecta se há trabalho;
+  2. adquire o lease; sem ele devolve `EmAndamento`, sem tocar no Bling;
+  3. **relê** o produto e converge para o desejado atual;
+  4. confirma por compare-and-set, que também exige o próprio token;
+  5. libera em `finally`.
+- **Liberação**: `liberar_lease_da_foto_no_bling` só zera o lease quando o
+  token é o desta execução. Nunca libera o de outra. Se a liberação falhar,
+  o lease expira sozinho.
+- **TTL de 90 s** (`VALIDADE_DO_LEASE_DA_SINCRONIZACAO_S`): excede o
+  orçamento da convergência (40 s) e o `maxDuration` da rota (60 s). Um
+  lease só vence depois que a execução que o tinha já não pode tocar no Bling.
+  Lease vencido pode ser recuperado. Uma execução que perdeu o lease não
+  confirma.
+- As duas funções são `security invoker`, com `execute` só para
+  `service_role`. O token nunca sai em resposta, log ou auditoria.
+
+Com o lease, a mesma corrida termina assim: B concorrente devolve
+`em_andamento` sem tocar no Bling; A termina `Obsoleta` e libera; a nova
+tentativa de B adquire e o Bling termina exatamente com `[B]`.
+
+## Espelho `imagem_url`: tri-estado
+
+`imagem_url` é o espelho da imagem do Bling. A sincronização e o webhook o
+gravam em três estados, que não se confundem (`src/services/imagemDoBling.ts`):
+
+| Estado | Quando | Gravação |
+|---|---|---|
+| Imagem confirmada | O Bling mostrou uma imagem | a URL atual |
+| Ausência confirmada | Leitura **completa** (bloco `midia.imagens` com `internas` e `externas`, como o `GET /produtos/{id}`) sem imagem | `null` explícito |
+| Desconhecida | O payload não traz a mídia e a leitura complementar falhou | o valor local anterior |
+
+- **Webhook:** se o payload não tem o bloco de mídia, busca o detalhe. Se o
+  detalhe veio completo e sem imagem, grava `null`. Se a busca falhou, mantém
+  o valor local.
+- **Sincronização de catálogo:** a listagem `GET /produtos` confirma imagem
+  presente, mas não prova ausência. Sem imagem na listagem, ela faz **uma**
+  leitura de detalhe, e só quando o espelho local tem imagem a perder (o
+  espelho local da página é lido numa consulta só). Não há GET extra para
+  cada produto.
+- Nenhum dos dois escreve `imagem_storage_path`, `imagem_bling_sync_path`
+  ou o lease.
+
+Origem: o produto "Kuripe Cobra" estava sem imagem no Bling e com imagem no
+espelho. A ausência nunca era gravada. O dado real não foi alterado: a
+próxima sincronização o corrige pelo caminho normal.
 
 ## Auditoria (migration 72)
 

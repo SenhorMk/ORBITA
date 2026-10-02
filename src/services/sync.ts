@@ -1,5 +1,6 @@
-import { bling, extractBlingImageUrl } from './bling';
+import { bling } from './bling';
 import type { BlingPort } from './blingPort';
+import { imagemUrlDaListagem } from './imagemDoBling';
 import { clienteRepository } from '../repositories/clienteRepository';
 import { produtoRepository } from '../repositories/produtoRepository';
 import { pedidoRepository } from '../repositories/pedidoRepository';
@@ -315,20 +316,21 @@ export class SyncService {
             }
           });
 
+          const imagensLocais = await produtoRepository.imagensPorBlingId(scope, idsToFetch);
           return blingProdutos.map((bp) => ({
             raw: bp,
             saldo: saldosMap.get(String(bp.id)) ?? 0,
+            imagemLocal: imagensLocais.get(String(bp.id)) ?? null,
           }));
         },
-        async ({ raw: bp, saldo }) => {
-          const imgUrl = extractBlingImageUrl(bp);
+        async ({ raw: bp, saldo, imagemLocal }) => {
           const produto: Produto = {
             bling_id: String(bp.id),
             codigo: bp.codigo || undefined,
             nome: bp.nome,
             preco: Number(bp.preco),
             unidade: bp.unidade || 'UN',
-            imagem_url: imgUrl,
+            imagem_url: await imagemUrlDaListagem(bp, imagemLocal, () => blingClient.getProduto(String(bp.id))),
             estoque: saldo,
           };
           await produtoRepository.upsert(scope, produto);

@@ -24,6 +24,18 @@ export class ProdutoRepository {
     return data || [];
   }
 
+  /** O espelho `imagem_url` local de cada `bling_id` da página, numa consulta só. */
+  async imagensPorBlingId(scope: VerifiedOrganizationScope, blingIds: readonly string[]): Promise<ReadonlyMap<string, string | null>> {
+    if (blingIds.length === 0) return new Map();
+    const { data, error } = await supabaseServer
+      .from('produtos')
+      .select('bling_id, imagem_url')
+      .eq('organizacao_id', scope.organizationId)
+      .in('bling_id', [...blingIds]);
+    if (error) throw error;
+    return new Map((data ?? []).map((linha) => [String(linha.bling_id), (linha.imagem_url as string | null) ?? null]));
+  }
+
   async getByBlingId(scope: VerifiedOrganizationScope, blingId: string): Promise<Produto | null> {
     const { data, error } = await supabaseServer
       .from('produtos')
@@ -47,7 +59,10 @@ export class ProdutoRepository {
    * é o caminho da sincronização e do webhook. Um `Produto` que chegasse com os
    * campos (lido de uma tela, por exemplo) sobrescreveria a escolha da pessoa
    * ou marcaria como sincronizado o que não foi. Quem escreve os dois é só
-   * `ProdutoImagemRepository`.
+   * `ProdutoImagemRepository`. O lease da sincronização também nunca sai daqui.
+   *
+   * `imagem_url` é tri-estado: `undefined` não vai no payload (o valor local
+   * fica), `null` grava ausência confirmada, texto grava a imagem confirmada.
    */
   async upsert(scope: VerifiedOrganizationScope, produto: Produto): Promise<Produto> {
     const payloadForUpsert = {
@@ -57,6 +72,8 @@ export class ProdutoRepository {
     };
     delete payloadForUpsert.imagem_storage_path;
     delete payloadForUpsert.imagem_bling_sync_path;
+    delete payloadForUpsert.imagem_bling_sync_lease_token;
+    delete payloadForUpsert.imagem_bling_sync_lease_expires_at;
 
     if (produto.bling_id && produto.id) {
       await this.removerDuplicadoPorBlingId(scope, produto.id, produto.bling_id);

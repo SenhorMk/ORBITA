@@ -167,8 +167,9 @@ export interface Produto {
    * No banco: a imagem espelhada do Bling, regravada pela sincronização.
    * Nas leituras para a tela (`/api/dashboard`, `/api/produtos`): a imagem
    * EFETIVA — URL assinada da foto do ORBITA quando existe, senão a do Bling.
+   * Na gravação é tri-estado: ausente = mantém, `null` = ausência confirmada no Bling.
    */
-  imagem_url?: string;
+  imagem_url?: string | null;
   /**
    * Caminho da foto escolhida no ORBITA, no bucket privado `produto-imagens`
    * (migration 70). Nunca URL. Só as rotas de foto escrevem aqui.
@@ -180,6 +181,9 @@ export interface Produto {
    * sincronização da foto escreve aqui.
    */
   imagem_bling_sync_path?: string | null;
+  /** Lease da sincronização da foto com o Bling (migration 72). Só as funções do lease escrevem. */
+  imagem_bling_sync_lease_token?: string | null;
+  imagem_bling_sync_lease_expires_at?: string | null;
   unidade?: string;
   estoque: number;
   estoque_reservado?: number; // trigger controlada

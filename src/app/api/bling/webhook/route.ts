@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { produtoRepository } from '../../../../repositories/produtoRepository';
 import { clienteRepository } from '../../../../repositories/clienteRepository';
 import { pedidoRepository } from '../../../../repositories/pedidoRepository';
-import { extractBlingImageUrl } from '../../../../services/bling';
+import { imagemDoBling, imagemUrlParaGravar, midiaCompleta } from '../../../../services/imagemDoBling';
 import type { BlingPort } from '../../../../services/blingPort';
 import { Produto, Cliente, Pedido, ItemPedido } from '../../../../types';
 import { supabaseServer } from '../../../../lib/supabaseServer';
@@ -191,23 +191,27 @@ function resolveSaldoEstoque(fullProduct: Record<string, unknown>, existingLocal
   return existingLocal?.estoque ?? 0;
 }
 
-/** Busca detalhes estendidos do produto no Bling quando o payload do evento veio incompleto. */
+/**
+ * O produto do evento, completo quando possível, e se a leitura é autoritativa
+ * sobre mídia (`midiaCompleta`). Payload sem o bloco de mídia → busca o
+ * detalhe; se a busca falhar, a imagem fica desconhecida e o espelho local não muda.
+ */
 async function fetchFullProdutoIfIncomplete(
   prodData: Record<string, unknown>,
   blingId: string,
   blingClient: BlingPort,
-): Promise<Record<string, unknown>> {
-  const isComplete = prodData.nome !== undefined && prodData.preco !== undefined && Boolean(extractBlingImageUrl(prodData));
-  if (isComplete) return prodData;
+): Promise<{ readonly dados: Record<string, unknown>; readonly autoritativo: boolean }> {
+  const isComplete = prodData.nome !== undefined && prodData.preco !== undefined && midiaCompleta(prodData);
+  if (isComplete) return { dados: prodData, autoritativo: true };
 
   try {
     const fetched = await blingClient.getProduto(blingId);
-    return fetched ? { ...prodData, ...fetched } : prodData;
+    if (fetched) return { dados: { ...prodData, ...fetched }, autoritativo: midiaCompleta(fetched) };
   } catch (e: unknown) {
     const errMsg = e instanceof Error ? e.message : 'Erro ao buscar produto';
     console.warn(`⚠️ Webhook Bling: Não foi possível buscar detalhes estendidos do produto ${blingId}:`, errMsg);
-    return prodData;
   }
+  return { dados: prodData, autoritativo: midiaCompleta(prodData) };
 }
 
 /** Sincroniza um evento de produto/estoque recebido do webhook. Retorna `true` quando um produto foi persistido. */
@@ -224,9 +228,10 @@ async function processProdutoEvent(
     return { blingId, processed: false, ignoredReason: 'missing_id' };
   }
 
-  const fullProduct = await fetchFullProdutoIfIncomplete(prodData, blingId, blingClient);
+  const { dados: fullProduct, autoritativo } = await fetchFullProdutoIfIncomplete(prodData, blingId, blingClient);
   const existingLocal = await produtoRepository.getByBlingId(organizationScope, blingId);
-  const imgUrl = extractBlingImageUrl(fullProduct) || existingLocal?.imagem_url;
+  // Tri-estado: imagem confirmada → URL; leitura completa sem imagem → null; desconhecida → a local.
+  const imgUrl = imagemUrlParaGravar(imagemDoBling(fullProduct, { autoritativo }), existingLocal?.imagem_url);
   const saldoEstoque = resolveSaldoEstoque(fullProduct, existingLocal);
 
   const produto: Produto = {
@@ -234,7 +239,7 @@ async function processProdutoEvent(
     codigo: (fullProduct.codigo as string) || existingLocal?.codigo || undefined,
     nome: (fullProduct.nome as string) || existingLocal?.nome || `Produto Bling #${blingId}`,
     preco: fullProduct.preco !== undefined ? Number(fullProduct.preco) : (existingLocal?.preco || 0),
-    imagem_url: imgUrl || undefined,
+    imagem_url: imgUrl,
     estoque: Math.max(0, saldoEstoque),
   };
 
