@@ -2,6 +2,7 @@ import {
   MENSAGEM_DA_FALHA_DE_IMAGEM,
   problemaDoArquivo,
   respostaDeImagemSchema,
+  type EstadoDaFotoNoBling,
   type FalhaDeImagem,
   type RespostaDeImagem,
 } from '@/lib/config/produtoImagemContract';
@@ -22,7 +23,8 @@ export interface OperacoesDeFoto {
 }
 
 export type DesfechoDaFoto =
-  | { readonly _tag: 'Alterada'; readonly caminho: string | null; readonly url: string | null }
+  /** `bling`: onde a sincronização com o Bling parou — a foto local já está salva. */
+  | { readonly _tag: 'Alterada'; readonly caminho: string | null; readonly url: string | null; readonly bling: EstadoDaFotoNoBling }
   | { readonly _tag: 'Falhou'; readonly mensagem: string; readonly conflito: boolean };
 
 const FALHA_NO_ENVIO = 'Não foi possível enviar a imagem. Tente de novo.';
@@ -87,7 +89,7 @@ export async function enviarFoto(
     anterior: alvo.anterior,
   }));
   if ('_tag' in confirmacao || confirmacao.resultado !== 'ImagemConfirmada') return comoFalha(confirmacao);
-  return { _tag: 'Alterada', caminho: confirmacao.caminho, url: confirmacao.url };
+  return { _tag: 'Alterada', caminho: confirmacao.caminho, url: confirmacao.url, bling: confirmacao.bling };
 }
 
 /** Remove a foto do ORBITA; `url` volta como a imagem do Bling, quando há. */
@@ -97,5 +99,19 @@ export async function removerFoto(
 ): Promise<DesfechoDaFoto> {
   const resposta = lerResposta(await operacoes.postar('/api/produtos/imagem/remover', alvo));
   if ('_tag' in resposta || resposta.resultado !== 'ImagemRemovida') return comoFalha(resposta);
-  return { _tag: 'Alterada', caminho: null, url: resposta.url };
+  return { _tag: 'Alterada', caminho: null, url: resposta.url, bling: resposta.bling };
+}
+
+/** "Tentar sincronizar novamente": a foto já está no ORBITA; nenhum arquivo é reenviado. */
+export async function sincronizarFoto(
+  produtoId: string,
+  operacoes: OperacoesDeFoto,
+): Promise<{ readonly _tag: 'Sincronizacao'; readonly bling: EstadoDaFotoNoBling } | Extract<DesfechoDaFoto, { _tag: 'Falhou' }>> {
+  const resposta = lerResposta(await operacoes.postar('/api/produtos/imagem/sincronizar', { produtoId }));
+  if ('_tag' in resposta) return resposta._tag === 'Falhou' ? resposta : { _tag: 'Falhou', mensagem: FALHA_NO_ENVIO, conflito: false };
+  if (resposta.resultado !== 'SincronizacaoDaFoto') {
+    const falha = comoFalha(resposta);
+    return falha._tag === 'Falhou' ? falha : { _tag: 'Falhou', mensagem: FALHA_NO_ENVIO, conflito: false };
+  }
+  return { _tag: 'Sincronizacao', bling: resposta.bling };
 }

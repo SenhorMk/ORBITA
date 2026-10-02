@@ -226,7 +226,7 @@ describe('ProductDetailModal — imagem do produto', () => {
     const onImagemAlterada = vi.fn();
     const postar = vi.fn(async (url: string) => (url.endsWith('/upload')
       ? { status: 200, corpo: { resultado: 'UploadAutorizado', caminho: 'c', token: 't' } }
-      : { status: 200, corpo: { resultado: 'ImagemConfirmada', caminho: 'c', url: 'https://s/c' } }));
+      : { status: 200, corpo: { resultado: 'ImagemConfirmada', caminho: 'c', url: 'https://s/c', bling: 'sincronizada' } }));
     render(
       <ProductDetailModal
         isOpen

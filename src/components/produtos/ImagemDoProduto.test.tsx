@@ -20,7 +20,7 @@ const produto = (extra: Partial<Produto> = {}): Produto => ({ id: ID, bling_id: 
 const arquivo = (tipo = 'image/png', tamanho = 1024) => new File([new Uint8Array(tamanho)], 'foto-da-cliente.png', { type: tipo });
 
 /** Rede falsa: grava cada chamada e responde pelo roteiro. */
-function rede(roteiro: { confirmar?: unknown; remover?: unknown; enviar?: boolean; segurar?: Promise<void> } = {}) {
+function rede(roteiro: { confirmar?: unknown; remover?: unknown; sincronizar?: unknown; enviar?: boolean; segurar?: Promise<void> } = {}) {
   const chamadas: Array<{ url: string; corpo: unknown }> = [];
   const enviados: string[] = [];
   const operacoes: OperacoesDeFoto = {
@@ -29,9 +29,10 @@ function rede(roteiro: { confirmar?: unknown; remover?: unknown; enviar?: boolea
       if (url.endsWith('/upload')) return { status: 200, corpo: { resultado: 'UploadAutorizado', caminho: FOTO_B, token: 'tk' } };
       if (url.endsWith('/confirmar')) {
         await roteiro.segurar;
-        return { status: 200, corpo: roteiro.confirmar ?? { resultado: 'ImagemConfirmada', caminho: FOTO_B, url: 'https://s/b' } };
+        return { status: 200, corpo: roteiro.confirmar ?? { resultado: 'ImagemConfirmada', caminho: FOTO_B, url: 'https://s/b', bling: 'sincronizada' } };
       }
-      return { status: 200, corpo: roteiro.remover ?? { resultado: 'ImagemRemovida', url: BLING } };
+      if (url.endsWith('/sincronizar')) return { status: 200, corpo: roteiro.sincronizar ?? { resultado: 'SincronizacaoDaFoto', bling: 'sincronizada' } };
+      return { status: 200, corpo: roteiro.remover ?? { resultado: 'ImagemRemovida', url: BLING, bling: 'sincronizada' } };
     },
     async enviarAoStorage(caminho) {
       enviados.push(caminho);
@@ -84,7 +85,7 @@ describe('ImagemDoProduto', () => {
 
     await userEvent.upload(campoDeArquivo(), arquivo());
 
-    expect(await screen.findByText('Foto adicionada.')).toBeInTheDocument();
+    expect(await screen.findByText('Foto atualizada.')).toBeInTheDocument();
     expect(chamadas.map((c) => c.url)).toEqual(['/api/produtos/imagem/upload', '/api/produtos/imagem/confirmar']);
     expect(chamadas[0]!.corpo).toEqual({ produtoId: ID, tipo: 'image/png', tamanho: 1024 });
     expect(chamadas[1]!.corpo).toEqual({ produtoId: ID, caminho: FOTO_B, anterior: null });
@@ -100,7 +101,7 @@ describe('ImagemDoProduto', () => {
     const { operacoes, chamadas } = rede();
     render(<ImagemDoProduto produto={produto({ imagem_storage_path: FOTO_A })} operacoes={operacoes} />);
     await userEvent.upload(campoDeArquivo(), arquivo('image/webp'));
-    expect(await screen.findByText('Foto trocada.')).toBeInTheDocument();
+    expect(await screen.findByText('Foto atualizada.')).toBeInTheDocument();
     expect(chamadas[1]!.corpo).toEqual({ produtoId: ID, caminho: FOTO_B, anterior: FOTO_A });
   });
 
@@ -117,8 +118,8 @@ describe('ImagemDoProduto', () => {
   it('tipo e tamanho são conferidos antes de qualquer chamada (UX; o servidor confere de novo)', async () => {
     const { operacoes, chamadas } = rede();
     render(<ImagemDoProduto produto={produto()} operacoes={operacoes} />);
-    await userEvent.upload(campoDeArquivo(), arquivo('image/png', 5 * 1024 * 1024 + 1));
-    expect(await screen.findByRole('alert')).toHaveTextContent('A imagem passa de 5 MB');
+    await userEvent.upload(campoDeArquivo(), arquivo('image/png', 3 * 1024 * 1024 + 1));
+    expect(await screen.findByRole('alert')).toHaveTextContent('A imagem passa de 3 MB');
     expect(chamadas).toEqual([]);
   });
 
@@ -150,6 +151,54 @@ describe('ImagemDoProduto', () => {
     expect(alerta).not.toHaveTextContent('detalhe interno');
   });
 
+  it('Bling pendente depois do upload: foto salva, aviso claro e "Tentar sincronizar novamente" sem novo arquivo', async () => {
+    const { operacoes, chamadas, enviados } = rede({ confirmar: { resultado: 'ImagemConfirmada', caminho: FOTO_B, url: 'https://s/b', bling: 'pendente' } });
+    render(<ImagemDoProduto produto={produto()} operacoes={operacoes} />);
+    await userEvent.upload(campoDeArquivo(), arquivo());
+
+    expect(await screen.findByText('Foto salva no ORBITA. Sincronização com o Bling pendente.')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Imagem do produto' })).toHaveAttribute('src', 'https://s/b');
+    await userEvent.click(screen.getByRole('button', { name: 'Tentar sincronizar novamente' }));
+
+    expect(await screen.findByText('Foto sincronizada com o Bling.')).toBeInTheDocument();
+    expect(chamadas.at(-1)).toEqual({ url: '/api/produtos/imagem/sincronizar', corpo: { produtoId: ID } });
+    // A nova tentativa não reenvia arquivo nenhum.
+    expect(enviados).toEqual([FOTO_B]);
+    expect(screen.getByText('Sincronizada com o Bling.')).toBeInTheDocument();
+  });
+
+  it('pendência persistida: depois de recarregar, o produto ainda mostra o pendente e o botão', () => {
+    render(<ImagemDoProduto produto={produto({ imagem_storage_path: FOTO_B, imagem_bling_sync_path: FOTO_A, imagem_url: 'https://s/b' })} operacoes={rede().operacoes} />);
+    expect(screen.getByText('Sincronização com o Bling pendente.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tentar sincronizar novamente' })).toBeEnabled();
+  });
+
+  it('sincronizada: sem botão de nova tentativa', () => {
+    render(<ImagemDoProduto produto={produto({ imagem_storage_path: FOTO_A, imagem_bling_sync_path: FOTO_A })} operacoes={rede().operacoes} />);
+    expect(screen.getByText('Sincronizada com o Bling.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Tentar sincronizar novamente' })).toBeNull();
+  });
+
+  it('produto sem vínculo com o Bling: explica e permite tentar depois', () => {
+    render(<ImagemDoProduto produto={produto({ bling_id: 'LOCAL-1', imagem_storage_path: FOTO_A })} operacoes={rede().operacoes} />);
+    expect(screen.getByText('Produto sem vínculo com o Bling: sincronize o catálogo e tente de novo.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tentar sincronizar novamente' })).toBeInTheDocument();
+  });
+
+  it('nunca adotou foto: nenhum estado de sincronização (as imagens do Bling são do Bling)', () => {
+    render(<ImagemDoProduto produto={produto({ imagem_url: BLING })} operacoes={rede().operacoes} />);
+    expect(screen.queryByText(/Sincroniza/u)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Tentar sincronizar novamente' })).toBeNull();
+  });
+
+  it('remoção com Bling pendente: foto local removida, mensagem de remoção pendente', async () => {
+    const { operacoes } = rede({ remover: { resultado: 'ImagemRemovida', url: null, bling: 'pendente' } });
+    render(<ImagemDoProduto produto={produto({ imagem_storage_path: FOTO_A, imagem_bling_sync_path: FOTO_A })} operacoes={operacoes} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Remover foto' }));
+    expect(await screen.findByText('Foto removida do ORBITA. Remoção no Bling pendente.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Adicionar foto')).toBeInTheDocument();
+  });
+
   it('durante a operação os controles travam: não há duplo envio', async () => {
     let liberar: () => void = () => {};
     const segurar = new Promise<void>((resolve) => { liberar = resolve; });
@@ -163,7 +212,7 @@ describe('ImagemDoProduto', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Remover foto' }));
 
     liberar();
-    await waitFor(() => expect(screen.getByText('Foto trocada.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Foto atualizada.')).toBeInTheDocument());
     expect(chamadas.filter((c) => c.url.endsWith('/remover'))).toEqual([]);
     expect(chamadas.filter((c) => c.url.endsWith('/confirmar'))).toHaveLength(1);
   });
