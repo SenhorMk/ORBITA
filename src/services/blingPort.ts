@@ -1,7 +1,7 @@
 import type { BlingCategoria, BlingCliente, BlingPedido, BlingProduto } from '../types';
 import type { BlingCallResult, BuscaDePedidoPorNumeroLoja, PedidoVendaPayload } from '../lib/integrations/bling/pedidoVendaContract';
 import type { Situacao } from '../lib/integrations/bling/situacoesContract';
-import type { ContatoRemoto, ExclusaoRemota, LeituraRemota } from '../lib/integrations/bling/operacaoRemotaContract';
+import type { ContatoRemoto, EscritaRemota, ExclusaoRemota, LeituraRemota, ProdutoRemoto } from '../lib/integrations/bling/operacaoRemotaContract';
 import type { CodigoDaSituacaoDaConta } from '../lib/integrations/bling/situacaoDaContaBling';
 
 /** Conta a pagar lida por id: só o que a correção precisa. */
@@ -69,7 +69,17 @@ export interface BlingPort {
   // ── Produtos e estoque ─────────────────────────────────────────────────
   getProdutos(pagina?: number, limite?: number, codigo?: string, dataAlteracaoInicial?: string): Promise<BlingProduto[]>;
   getProduto(id: string): Promise<BlingProduto | null>;
-  deleteProduto(id: string): Promise<unknown>;
+  /**
+   * Leitura, exclusão e imagens de produto com resultado classificado pelo que
+   * prova (`operacaoRemotaContract.ts`). A exclusão definitiva exige a situação
+   * `E` antes do `DELETE`; as imagens convergem por "limpar tudo" e "importar
+   * uma" — a API não remove uma imagem só.
+   */
+  consultarProduto(id: string): Promise<LeituraRemota<ProdutoRemoto>>;
+  marcarProdutoExcluido(id: string): Promise<EscritaRemota>;
+  excluirProduto(id: string): Promise<ExclusaoRemota>;
+  limparImagensDoProduto(id: string): Promise<EscritaRemota>;
+  importarImagemDoProduto(id: string, url: string): Promise<EscritaRemota>;
   getEstoquesSaldos(idsProdutos: string[]): Promise<unknown[]>;
   getCategoriasProdutos(pagina?: number, limite?: number): Promise<BlingCategoria[]>;
   /** Busca por SKU exato, com conferência do código. */

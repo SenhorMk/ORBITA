@@ -48,7 +48,10 @@ const consultarContatoMock = vi.fn();
 const carregarParaExclusaoMock = vi.fn();
 const excluirClienteMock = vi.fn();
 const CLIENTE_ID = '22000000-0000-4000-8000-0000000000c1';
-const deleteProdutoMock = vi.fn();
+const marcarProdutoExcluidoMock = vi.fn();
+const excluirProdutoMock = vi.fn();
+const consultarProdutoMock = vi.fn();
+const PRODUTO_ID = '22000000-0000-4000-8000-0000000000d1';
 const deletePedidoMock = vi.fn();
 const getResumoMock = vi.fn();
 const createNfeMock = vi.fn();
@@ -66,7 +69,9 @@ vi.mock('@/services/bling', () => ({
       createContato: createContatoMock,
       excluirContato: excluirContatoMock,
       consultarContato: consultarContatoMock,
-      deleteProduto: deleteProdutoMock,
+      marcarProdutoExcluido: marcarProdutoExcluidoMock,
+      excluirProduto: excluirProdutoMock,
+      consultarProduto: consultarProdutoMock,
       deletePedido: deletePedidoMock,
       createNfe: createNfeMock,
     }),
@@ -147,7 +152,9 @@ async function cenarioLimpo(): Promise<void> {
     consultarContatoMock,
     carregarParaExclusaoMock,
     excluirClienteMock,
-    deleteProdutoMock,
+    marcarProdutoExcluidoMock,
+    excluirProdutoMock,
+    consultarProdutoMock,
     deletePedidoMock,
     getResumoMock,
     createNfeMock,
@@ -238,12 +245,16 @@ describe('critério 13 — nenhuma rota migrada devolve diagnóstico interno', (
   it('POST /api/produtos/delete não devolve `details` nem `logs`', async () => {
     const { produtoRepository } = await import('@/repositories/produtoRepository');
     vi.mocked(produtoRepository.delete).mockRejectedValue(falharCom);
+    // O Bling confirma a exclusão; é a exclusão local que falha.
+    fronteira.tabela('produtos', { data: { id: PRODUTO_ID, bling_id: '123' }, error: null });
+    marcarProdutoExcluidoMock.mockResolvedValue({ _tag: 'EscritaAceita' });
+    excluirProdutoMock.mockResolvedValue({ _tag: 'ExclusaoAceita' });
     const { POST } = await import('./produtos/delete/route');
 
     const resposta = await POST(
       requisicao('https://orbita.test/api/produtos/delete', {
         metodo: 'POST',
-        corpo: { id: 'p1', bling_id: '123' },
+        corpo: { id: PRODUTO_ID },
       }),
     );
 
@@ -348,21 +359,27 @@ describe('critério 13 — os ramos que a primeira auditoria não olhou', () => 
     await naoVazaDiagnostico(resposta);
   });
 
-  it('POST /api/produtos/delete não vaza a causa da falha do Bling no 200', async () => {
-    deleteProdutoMock.mockRejectedValue(falharCom);
+  // Antes: o Bling falhava e o produto saía do ORBITA mesmo assim (200 com
+  // aviso), ficando vivo no Bling. Agora a exclusão é Bling-primeiro
+  // confirmada: sem prova da ausência remota, nada local é apagado.
+  it('POST /api/produtos/delete preserva o produto local quando o Bling não confirma, sem vazar a causa', async () => {
+    const { produtoRepository } = await import('@/repositories/produtoRepository');
+    fronteira.tabela('produtos', { data: { id: PRODUTO_ID, bling_id: '123' }, error: null });
+    marcarProdutoExcluidoMock.mockResolvedValue({ _tag: 'RemotoIndeterminado', causa: 'falha_de_rede' });
+    consultarProdutoMock.mockResolvedValue({ _tag: 'RemotoIndeterminado', causa: 'falha_de_rede' });
     const { POST } = await import('./produtos/delete/route');
 
     const resposta = await POST(
       requisicao('https://orbita.test/api/produtos/delete', {
         metodo: 'POST',
-        corpo: { id: 'p1', bling_id: '123' },
+        corpo: { id: PRODUTO_ID },
       }),
     );
 
-    expect(resposta.status).toBe(200);
-    const corpo = await naoVazaDiagnostico(resposta);
-    // O aviso continua: o produto saiu daqui e não de lá.
-    expect(corpo.warning).toBe(true);
+    expect(resposta.status).toBe(503);
+    await naoVazaDiagnostico(resposta);
+    expect(produtoRepository.delete).not.toHaveBeenCalled();
+    expect(excluirProdutoMock).not.toHaveBeenCalled();
   });
 
   // `nfeError` é um `PostgrestError`: `message` carrega texto do Postgres, e
