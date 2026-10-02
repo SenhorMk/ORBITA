@@ -18,6 +18,11 @@ const gravados: Produto[] = [];
 let local: Partial<Produto> | null;
 let detalhe: unknown;
 const getProduto = vi.fn(async () => detalhe);
+const registrarDivergencia = vi.fn(async () => true);
+
+vi.mock('../../../../repositories/produtoImagemRepository', () => ({
+  ProdutoImagemRepository: class { registrarDivergencia = registrarDivergencia; },
+}));
 
 vi.mock('./autorizacao', () => ({
   authorizeWebhookTenant: async () => ({
@@ -62,6 +67,7 @@ beforeEach(() => {
   local = { bling_id: BLING_ID, nome: 'Kuripe Cobra', preco: 80, estoque: 1, imagem_url: URL_ANTIGA };
   detalhe = null;
   getProduto.mockClear();
+  registrarDivergencia.mockClear();
 });
 
 describe('webhook de produto: imagem_url tri-estado', () => {
@@ -95,9 +101,21 @@ describe('webhook de produto: imagem_url tri-estado', () => {
     expect(gravado.imagem_url).toBe(URL_NOVA);
   });
 
+  it('drift: GET atual com imagem registra a divergência (a função SQL só vale para produto gerenciado sem foto)', async () => {
+    detalhe = { id: Number(BLING_ID), nome: 'Kuripe Cobra', preco: 80, ...midia([{ link: URL_NOVA }]) };
+    await evento({ idProduto: BLING_ID });
+    expect(registrarDivergencia).toHaveBeenCalledWith(expect.objectContaining({ organizationId: ORG }), BLING_ID);
+  });
+
+  it('payload completo (possivelmente atrasado) com imagem não registra drift: só leitura atual conta', async () => {
+    await evento({ id: BLING_ID, nome: 'Kuripe Cobra', preco: 80, ...midia([{ link: URL_NOVA }]) });
+    expect(getProduto).not.toHaveBeenCalled();
+    expect(registrarDivergencia).not.toHaveBeenCalled();
+  });
+
   it('o webhook nunca envia a foto do ORBITA, a confirmação nem o lease', async () => {
     const gravado = await evento({ id: BLING_ID, nome: 'Kuripe Cobra', preco: 80, ...midia([]) });
-    for (const campo of ['imagem_storage_path', 'imagem_bling_sync_path', 'imagem_bling_sync_lease_token', 'imagem_bling_sync_lease_expires_at']) {
+    for (const campo of ['imagem_storage_path', 'imagem_bling_sync_path', 'imagem_bling_sync_lease_token', 'imagem_bling_sync_lease_expires_at', 'imagem_bling_gerenciada_pelo_orbita', 'imagem_bling_divergencia_detectada_em']) {
       expect(gravado).not.toHaveProperty(campo);
     }
   });

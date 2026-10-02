@@ -15,6 +15,10 @@ export interface ProdutoComFoto {
    * Igual ao desejado = sincronizada; diferente = pendente.
    */
   readonly imagemBlingSyncPath: string | null;
+  /** O ORBITA é a autoridade da imagem desde o primeiro upload; nunca volta a false. */
+  readonly gerenciada: boolean;
+  /** Uma leitura atual do Bling mostrou imagem que o ORBITA não deseja. */
+  readonly divergente: boolean;
   /** A imagem espelhada do Bling — o que a tela mostra sem foto do ORBITA. */
   readonly imagemDoBling: string | null;
 }
@@ -41,7 +45,7 @@ export class ProdutoImagemRepository {
   async carregar(scope: VerifiedOrganizationScope, produtoId: string): Promise<ProdutoComFoto | null> {
     const { data, error } = await this.db
       .from('produtos')
-      .select('id, bling_id, imagem_storage_path, imagem_bling_sync_path, imagem_url')
+      .select('id, bling_id, imagem_storage_path, imagem_bling_sync_path, imagem_bling_gerenciada_pelo_orbita, imagem_bling_divergencia_detectada_em, imagem_url')
       .eq('id', produtoId)
       .eq('organizacao_id', scope.organizationId)
       .maybeSingle();
@@ -54,6 +58,8 @@ export class ProdutoImagemRepository {
       blingId: blingIdDoVinculo(data.bling_id),
       imagemStoragePath: texto(data.imagem_storage_path),
       imagemBlingSyncPath: texto(data.imagem_bling_sync_path),
+      gerenciada: data.imagem_bling_gerenciada_pelo_orbita === true,
+      divergente: data.imagem_bling_divergencia_detectada_em != null,
       imagemDoBling: texto(data.imagem_url),
     };
   }
@@ -68,6 +74,10 @@ export class ProdutoImagemRepository {
    * mais nada. `scripts/database-concurrency-foto-produto.mjs` prova isso com
    * duas transações reais.
    *
+   * Apontar para uma foto ADOTA a imagem do produto: `imagem_bling_gerenciada_pelo_orbita
+   * = true` vai na mesma instrução (e nunca volta a false — remover não o
+   * toca). CAS perdido não adota nada.
+   *
    * `pendenteNoBling` (só na remoção) grava junto, na mesma instrução, que o
    * Bling pode estar exibindo aquela foto: a remoção fica pendente lá até a
    * sincronização confirmar zero imagens.
@@ -81,9 +91,9 @@ export class ProdutoImagemRepository {
     novo: string | null,
     opcoes: { readonly pendenteNoBling?: string } = {},
   ): Promise<boolean> {
-    const valores = opcoes.pendenteNoBling === undefined
-      ? { imagem_storage_path: novo }
-      : { imagem_storage_path: novo, imagem_bling_sync_path: opcoes.pendenteNoBling };
+    const valores: Record<string, unknown> = { imagem_storage_path: novo };
+    if (novo !== null) valores.imagem_bling_gerenciada_pelo_orbita = true;
+    if (opcoes.pendenteNoBling !== undefined) valores.imagem_bling_sync_path = opcoes.pendenteNoBling;
     const alvo = this.db
       .from('produtos')
       .update(valores)
@@ -117,7 +127,10 @@ export class ProdutoImagemRepository {
   ): Promise<boolean> {
     // Remoção confirmada: o Bling acabou de ser lido sem imagens, então o
     // espelho também fica vazio, e a foto removida não volta pela imagem do Bling.
-    const valores = desejado === null ? { imagem_bling_sync_path: null, imagem_url: null } : { imagem_bling_sync_path: desejado };
+    // O Bling convergiu: um drift registrado antes deixa de valer.
+    const valores = desejado === null
+      ? { imagem_bling_sync_path: null, imagem_bling_divergencia_detectada_em: null, imagem_url: null }
+      : { imagem_bling_sync_path: desejado, imagem_bling_divergencia_detectada_em: null };
     const alvo = this.db
       .from('produtos')
       .update(valores)
@@ -146,6 +159,20 @@ export class ProdutoImagemRepository {
       p_produto_id: produtoId,
       p_token: token,
       p_ttl_segundos: VALIDADE_DO_LEASE_DA_SINCRONIZACAO_S,
+    });
+    if (error) throw error;
+    return data === true;
+  }
+
+  /**
+   * Drift: uma leitura ATUAL do Bling mostrou imagem neste produto. A função
+   * SQL só registra em produto gerenciado, sem foto, sem drift já registrado e
+   * sem lease vigente — nunca adota nem devolve a imagem.
+   */
+  async registrarDivergencia(scope: VerifiedOrganizationScope, blingId: string): Promise<boolean> {
+    const { data, error } = await this.db.rpc('registrar_divergencia_da_foto_no_bling', {
+      p_organizacao_id: scope.organizationId,
+      p_bling_id: blingId,
     });
     if (error) throw error;
     return data === true;

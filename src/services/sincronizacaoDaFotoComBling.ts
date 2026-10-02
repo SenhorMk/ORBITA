@@ -220,10 +220,12 @@ async function semTrabalho(
 ): Promise<DesfechoDaSincronizacao | null> {
   if (!produto) return { _tag: 'NaoEncontrado' };
   const { imagemStoragePath: desejado, imagemBlingSyncPath: confirmado } = produto;
-  const estado = estadoDaFotoNoBling({ blingId: produto.blingId, desejado, confirmado });
+  const estado = estadoDaFotoNoBling({
+    blingId: produto.blingId, gerenciada: produto.gerenciada, desejado, confirmado, divergente: produto.divergente,
+  });
   if (estado === 'sem_foto') return { _tag: 'SemFoto' };
   if (estado === 'sincronizada') return { _tag: 'Sincronizada', jaEstava: true };
-  if (produto.blingId !== null) return null;
+  if (estado === 'pendente') return null;
   await auditarSemInterromper(deps, scope, {
     acao: 'catalog.product_image_bling_sync_pending', recurso: 'produto', recursoId: produto.id, correlationId,
     metadata: { ...metadataDe(produto), motivo: 'sem_vinculo' },

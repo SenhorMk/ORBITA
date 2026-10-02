@@ -69,30 +69,47 @@ export const VALIDADE_DA_IMPORTACAO_NO_BLING_S = 15 * 60;
 export const VALIDADE_DO_LEASE_DA_SINCRONIZACAO_S = 90;
 
 /**
- * O estado da foto do ORBITA no Bling, derivado do par persistido
- * desejado (`imagem_storage_path`) × confirmado (`imagem_bling_sync_path`):
+ * O estado da foto do ORBITA no Bling, derivado de quatro dados persistidos:
+ * a autoridade (`imagem_bling_gerenciada_pelo_orbita`), o desejado
+ * (`imagem_storage_path`), o confirmado (`imagem_bling_sync_path`) e o drift
+ * (`imagem_bling_divergencia_detectada_em`):
  *
  * - `sem_foto`: o ORBITA nunca adotou a imagem do produto — o Bling é dono;
- * - `sincronizada`: o Bling tem exatamente a foto desejada (ou nenhuma, depois de uma remoção);
- * - `pendente`: o desejado ainda não foi confirmado no Bling;
- * - `sem_vinculo`: há algo a refletir, mas o produto não tem `bling_id`;
+ * - `sincronizada`: o Bling tem exatamente o desejado — uma foto, ou NENHUMA
+ *   imagem num produto gerenciado (remoção confirmada);
+ * - `pendente`: o desejado ainda não foi confirmado, ou uma leitura atual do
+ *   Bling mostrou imagem que o ORBITA não deseja (drift);
+ * - `sem_vinculo`: produto gerenciado, mas sem `bling_id`;
  * - `em_andamento`: só na resposta — outra execução detém o lease do produto e
  *   está convergindo o Bling; esta não tocou nele.
  */
 export const ESTADOS_DA_FOTO_NO_BLING = ['sem_foto', 'sincronizada', 'pendente', 'sem_vinculo', 'em_andamento'] as const;
 export type EstadoDaFotoNoBling = (typeof ESTADOS_DA_FOTO_NO_BLING)[number];
 
+/**
+ * A autoridade da imagem é do ORBITA? Sim depois do primeiro upload. Foto ou
+ * confirmação sem o campo (leitura antiga) também provam a adoção.
+ */
+export function imagemGerenciadaPeloOrbita(produto: {
+  readonly gerenciada: boolean | null | undefined;
+  readonly desejado: string | null | undefined;
+  readonly confirmado: string | null | undefined;
+}): boolean {
+  return produto.gerenciada === true || !!produto.desejado || !!produto.confirmado;
+}
+
 /** A mesma derivação no servidor e na tela. `blingId` só vale quando numérico. */
 export function estadoDaFotoNoBling(produto: {
   readonly blingId: string | null | undefined;
+  readonly gerenciada: boolean | null | undefined;
   readonly desejado: string | null | undefined;
   readonly confirmado: string | null | undefined;
+  readonly divergente: boolean | null | undefined;
 }): EstadoDaFotoNoBling {
-  const desejado = produto.desejado ?? null;
-  const confirmado = produto.confirmado ?? null;
-  if (desejado === null && confirmado === null) return 'sem_foto';
-  if (desejado === confirmado) return 'sincronizada';
-  return /^\d+$/u.test(String(produto.blingId ?? '').trim()) ? 'pendente' : 'sem_vinculo';
+  if (!imagemGerenciadaPeloOrbita(produto)) return 'sem_foto';
+  if (!/^\d+$/u.test(String(produto.blingId ?? '').trim())) return 'sem_vinculo';
+  const emDia = (produto.desejado ?? null) === (produto.confirmado ?? null) && produto.divergente !== true;
+  return emDia ? 'sincronizada' : 'pendente';
 }
 
 export function tipoDeImagemPermitido(tipo: string): tipo is TipoDeImagem {

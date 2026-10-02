@@ -8,6 +8,8 @@ import {
   TAMANHO_MAXIMO_DA_IMAGEM,
   caminhoDaImagem,
   caminhoPertenceAoProduto,
+  estadoDaFotoNoBling,
+  imagemGerenciadaPeloOrbita,
   problemaDoArquivo,
   tipoDoCaminho,
 } from './produtoImagemContract';
@@ -59,5 +61,39 @@ describe('contrato da foto do produto', () => {
     const sql = readFileSync(path.resolve(__dirname, '../../../database/70_foto_personalizada_do_produto.sql'), 'utf8');
     expect(sql).toContain("'^' || organizacao_id::text || '/' || id::text");
     expect(sql).toContain('/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.(jpg|png|webp)$');
+  });
+});
+
+describe('estado da foto no Bling: autoridade da imagem × desejado × confirmado × drift', () => {
+  const A = `${ORG}/${PRODUTO}/${OBJ}.png`;
+  const base = { blingId: '777', gerenciada: false, desejado: null, confirmado: null, divergente: false };
+
+  it('nunca adotada + null/null = sem_foto: o Bling é dono da imagem', () => {
+    expect(estadoDaFotoNoBling(base)).toBe('sem_foto');
+    expect(imagemGerenciadaPeloOrbita(base)).toBe(false);
+  });
+
+  it('gerenciada + null/null = sincronizada: o estado sincronizado é NENHUMA imagem, nunca sem_foto', () => {
+    expect(estadoDaFotoNoBling({ ...base, gerenciada: true })).toBe('sincronizada');
+  });
+
+  it('gerenciada com foto confirmada = sincronizada; remoção pendente = pendente', () => {
+    expect(estadoDaFotoNoBling({ ...base, gerenciada: true, desejado: A, confirmado: A })).toBe('sincronizada');
+    expect(estadoDaFotoNoBling({ ...base, gerenciada: true, desejado: null, confirmado: A })).toBe('pendente');
+  });
+
+  it('drift: gerenciada, nada desejado, e uma leitura atual mostrou imagem no Bling = pendente', () => {
+    expect(estadoDaFotoNoBling({ ...base, gerenciada: true, divergente: true })).toBe('pendente');
+  });
+
+  it('gerenciada sem vínculo = sem_vinculo, inclusive sem foto', () => {
+    expect(estadoDaFotoNoBling({ ...base, blingId: 'LOCAL-1', gerenciada: true })).toBe('sem_vinculo');
+    expect(estadoDaFotoNoBling({ ...base, blingId: null, gerenciada: true, desejado: A })).toBe('sem_vinculo');
+  });
+
+  it('foto ou confirmação sem o campo de autoridade (leitura antiga) já provam a adoção', () => {
+    expect(imagemGerenciadaPeloOrbita({ gerenciada: undefined, desejado: A, confirmado: null })).toBe(true);
+    expect(imagemGerenciadaPeloOrbita({ gerenciada: undefined, desejado: null, confirmado: A })).toBe(true);
+    expect(estadoDaFotoNoBling({ ...base, gerenciada: undefined, desejado: A })).toBe('pendente');
   });
 });

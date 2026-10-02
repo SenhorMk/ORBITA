@@ -27,10 +27,15 @@ const FOTO_A = `${prefixo}/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png`;
 const FOTO_B = `${prefixo}/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png`;
 const FOTO_C = `${prefixo}/cccccccc-cccc-4ccc-8ccc-cccccccccccc.webp`;
 
-/** O `UPDATE` que `ProdutoImagemRepository.trocarCaminho` emite pelo PostgREST. */
+/**
+ * O `UPDATE` que `ProdutoImagemRepository.trocarCaminho` emite pelo PostgREST:
+ * apontar para uma foto adota a imagem (`imagem_bling_gerenciada_pelo_orbita`)
+ * na mesma instrução; remover não a devolve.
+ */
 const CAS = `
   update public.produtos
-     set imagem_storage_path = $1
+     set imagem_storage_path = $1::text,
+         imagem_bling_gerenciada_pelo_orbita = imagem_bling_gerenciada_pelo_orbita or $1::text is not null
    where id = $2
      and organizacao_id = $3
      and imagem_storage_path = $4
@@ -53,8 +58,8 @@ async function semear(client, fotoInicial = FOTO_A) {
     [ORG_ID, OWNER_ID],
   );
   await client.query(
-    `insert into public.produtos (id, organizacao_id, user_id, bling_id, nome, imagem_url, imagem_storage_path)
-     values ($1, $2, $3, '71001', 'Produto Foto', 'https://bling/foto.jpg', $4)`,
+    `insert into public.produtos (id, organizacao_id, user_id, bling_id, nome, imagem_url, imagem_storage_path, imagem_bling_gerenciada_pelo_orbita)
+     values ($1, $2, $3, '71001', 'Produto Foto', 'https://bling/foto.jpg', $4::text, $4::text is not null)`,
     [PRODUTO_ID, ORG_ID, OWNER_ID, fotoInicial],
   );
 }
@@ -62,6 +67,12 @@ async function semear(client, fotoInicial = FOTO_A) {
 async function fotoAtual(client) {
   const { rows } = await client.query('select imagem_storage_path from public.produtos where id = $1', [PRODUTO_ID]);
   return rows[0]?.imagem_storage_path ?? null;
+}
+
+/** A autoridade da imagem: depois de uma foto, nunca volta a false. */
+async function gerenciada(client) {
+  const { rows } = await client.query('select imagem_bling_gerenciada_pelo_orbita as g from public.produtos where id = $1', [PRODUTO_ID]);
+  return rows[0]?.g ?? null;
 }
 
 /**
@@ -109,7 +120,7 @@ async function encenar({ criarCliente, novoDeT1, novoDeT2, sobreposicaoMs }) {
     const linhasT2 = (await t2EmVoo).rowCount;
     await t2.query('commit');
 
-    return { linhasT1, linhasT2, bloqueio, final: await fotoAtual(base) };
+    return { linhasT1, linhasT2, bloqueio, final: await fotoAtual(base), gerenciada: await gerenciada(base) };
   } finally {
     await t1.end().catch(() => {});
     await t2.end().catch(() => {});
@@ -139,7 +150,7 @@ async function encenarDeduplicacao({ criarCliente, sobreposicaoMs }) {
     await t2.query('begin');
 
     const linhasT1 = (await t1.query(
-      `update public.produtos set imagem_storage_path = $1
+      `update public.produtos set imagem_storage_path = $1, imagem_bling_gerenciada_pelo_orbita = true
         where id = $2 and organizacao_id = $3 and imagem_storage_path is null returning id`,
       [FOTO_A, PRODUTO_ID, ORG_ID],
     )).rowCount;
@@ -152,7 +163,7 @@ async function encenarDeduplicacao({ criarCliente, sobreposicaoMs }) {
     await t2.query('commit');
 
     const { rows } = await base.query('select count(*)::int as n from public.produtos where id = $1', [PRODUTO_ID]);
-    return { linhasT1, excluidasT2, bloqueio, linhaExiste: rows[0].n === 1, final: await fotoAtual(base) };
+    return { linhasT1, excluidasT2, bloqueio, linhaExiste: rows[0].n === 1, final: await fotoAtual(base), gerenciada: await gerenciada(base) };
   } finally {
     await t1.end().catch(() => {});
     await t2.end().catch(() => {});
@@ -218,6 +229,7 @@ function violacoesDaDeduplicacao(r) {
   if (!r.linhaExiste) problemas.push('deduplicação: a linha com foto sumiu');
   if (r.final !== FOTO_A) problemas.push(`deduplicação: foto final ${r.final}, esperado ${FOTO_A}`);
   if (r.bloqueio !== 'Lock') problemas.push(`deduplicação: o DELETE não esperou a trava (wait_event_type=${r.bloqueio})`);
+  if (r.gerenciada !== true) problemas.push('deduplicação: a confirmação vencedora não adotou a imagem');
   return problemas;
 }
 
@@ -227,6 +239,7 @@ function violacoes(nome, resultado, esperadoFinal) {
   if (resultado.linhasT2 !== 0) problemas.push(`${nome}: T2 trocou ${resultado.linhasT2} linhas, esperado 0 (sobrescrita silenciosa)`);
   if (resultado.final !== esperadoFinal) problemas.push(`${nome}: foto final ${resultado.final}, esperado ${esperadoFinal}`);
   if (resultado.bloqueio !== 'Lock') problemas.push(`${nome}: T2 não esperou a trava (wait_event_type=${resultado.bloqueio})`);
+  if (resultado.gerenciada !== true) problemas.push(`${nome}: a autoridade da imagem não ficou com o ORBITA (${resultado.gerenciada})`);
   return problemas;
 }
 

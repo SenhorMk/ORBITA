@@ -7,7 +7,7 @@
 
 begin;
 
-select plan(26);
+select plan(38);
 
 insert into auth.users (id, email)
 values ('72000000-0000-4000-8000-000000000001', 'owner-t72@orbita.test');
@@ -192,6 +192,71 @@ select throws_ok(
     '22023', null,
     '26. ttl fora do intervalo é recusado'
 );
+
+reset role;
+
+-- Autoridade da imagem e drift.
+select col_type_is('public', 'produtos', 'imagem_bling_gerenciada_pelo_orbita', 'boolean', '27. a autoridade da imagem é boolean');
+select col_not_null('public', 'produtos', 'imagem_bling_gerenciada_pelo_orbita', '28. a autoridade da imagem nunca é nula');
+select col_default_is('public', 'produtos', 'imagem_bling_gerenciada_pelo_orbita', 'false', '29. produto novo: o Bling é dono da imagem');
+select col_type_is('public', 'produtos', 'imagem_bling_divergencia_detectada_em', 'timestamp with time zone', '30. o drift é o instante da detecção');
+
+select ok(
+    not has_function_privilege('anon', 'public.registrar_divergencia_da_foto_no_bling(uuid, text)', 'execute')
+    and not has_function_privilege('authenticated', 'public.registrar_divergencia_da_foto_no_bling(uuid, text)', 'execute'),
+    '31. só o servidor (service_role) registra drift'
+);
+
+update public.produtos
+   set imagem_bling_gerenciada_pelo_orbita = false,
+       imagem_storage_path = null,
+       imagem_bling_sync_path = null,
+       imagem_bling_sync_lease_token = null,
+       imagem_bling_sync_lease_expires_at = null,
+       imagem_bling_divergencia_detectada_em = null
+ where id = '72200000-0000-4000-8000-00000000000a';
+
+set local role service_role;
+select is(public.registrar_divergencia_da_foto_no_bling('72100000-0000-4000-8000-000000000001', '72001'), false,
+    '32. produto que o ORBITA nunca adotou: imagem no Bling não é drift');
+reset role;
+
+update public.produtos
+   set imagem_bling_gerenciada_pelo_orbita = true,
+       imagem_storage_path = '72100000-0000-4000-8000-000000000001/72200000-0000-4000-8000-00000000000a/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png'
+ where id = '72200000-0000-4000-8000-00000000000a';
+
+set local role service_role;
+select is(public.registrar_divergencia_da_foto_no_bling('72100000-0000-4000-8000-000000000001', '72001'), false,
+    '33. produto gerenciado COM foto: não é o drift de "nenhuma imagem"');
+reset role;
+
+update public.produtos set imagem_storage_path = null where id = '72200000-0000-4000-8000-00000000000a';
+
+set local role service_role;
+select is(public.registrar_divergencia_da_foto_no_bling('72100000-0000-4000-8000-000000000002', '72001'), false,
+    '34. outra organização não registra drift');
+select is(public.registrar_divergencia_da_foto_no_bling('72100000-0000-4000-8000-000000000001', '72001'), true,
+    '35. gerenciado e sem foto: o drift é registrado');
+select is(
+    (select imagem_bling_divergencia_detectada_em is not null and imagem_bling_gerenciada_pelo_orbita
+       from public.produtos where id = '72200000-0000-4000-8000-00000000000a'),
+    true,
+    '36. o drift fica registrado e a autoridade continua do ORBITA'
+);
+select is(public.registrar_divergencia_da_foto_no_bling('72100000-0000-4000-8000-000000000001', '72001'), false,
+    '37. drift já registrado não é regravado');
+reset role;
+
+update public.produtos
+   set imagem_bling_divergencia_detectada_em = null,
+       imagem_bling_sync_lease_token = '72300000-0000-4000-8000-000000000001',
+       imagem_bling_sync_lease_expires_at = now() + interval '90 seconds'
+ where id = '72200000-0000-4000-8000-00000000000a';
+
+set local role service_role;
+select is(public.registrar_divergencia_da_foto_no_bling('72100000-0000-4000-8000-000000000001', '72001'), false,
+    '38. com lease vigente (sincronização em curso) não há drift: estados intermediários não contam');
 
 reset role;
 

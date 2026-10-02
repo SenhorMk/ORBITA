@@ -9,9 +9,10 @@ import type { Produto } from '../types';
  * listagem e com imagem no local, UMA leitura de detalhe decide.
  */
 
-const { gravados, imagensLocais, mockGetProdutos, mockGetProduto } = vi.hoisted(() => ({
+const { gravados, imagensLocais, mockGetProdutos, mockGetProduto, mockRegistrarDivergencia } = vi.hoisted(() => ({
+  mockRegistrarDivergencia: vi.fn(),
   gravados: [] as Produto[],
-  imagensLocais: new Map<string, string | null>(),
+  imagensLocais: new Map<string, { imagemUrl: string | null; gerenciadaSemFoto: boolean }>(),
   mockGetProdutos: vi.fn(),
   mockGetProduto: vi.fn(),
 }));
@@ -25,6 +26,9 @@ vi.mock('../repositories/syncJobRepository', () => ({
   releaseExpiredLeases: async () => 0,
 }));
 vi.mock('../lib/supabaseServer', () => ({ supabaseServer: {} }));
+vi.mock('../repositories/produtoImagemRepository', () => ({
+  ProdutoImagemRepository: class { registrarDivergencia = mockRegistrarDivergencia; },
+}));
 vi.mock('./syncCheckpoint', async () => {
   const real = await vi.importActual<typeof import('./syncCheckpoint')>('./syncCheckpoint');
   return { ...real, touchSyncState: async () => {}, getLastSyncedAt: async () => null };
@@ -81,12 +85,14 @@ beforeEach(() => {
   imagensLocais.clear();
   mockGetProdutos.mockReset();
   mockGetProduto.mockReset();
+  mockRegistrarDivergencia.mockReset();
+  mockRegistrarDivergencia.mockResolvedValue(true);
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 describe('sincronização de catálogo: imagem_url tri-estado', () => {
   it('regressão Kuripe Cobra: local com URL antiga, Bling autoritativo sem imagem → imagem_url = null', async () => {
-    imagensLocais.set(KURIPE, URL_ANTIGA);
+    imagensLocais.set(KURIPE, { imagemUrl: URL_ANTIGA, gerenciadaSemFoto: false });
     mockGetProduto.mockResolvedValue(detalhe([]));
     const gravado = await sincronizarCom(itemDaListagem(null));
     expect(mockGetProduto).toHaveBeenCalledTimes(1);
@@ -95,38 +101,61 @@ describe('sincronização de catálogo: imagem_url tri-estado', () => {
   });
 
   it('remoto com imagem na listagem atualiza a URL, sem leitura extra', async () => {
-    imagensLocais.set(KURIPE, URL_ANTIGA);
+    imagensLocais.set(KURIPE, { imagemUrl: URL_ANTIGA, gerenciadaSemFoto: false });
     const gravado = await sincronizarCom(itemDaListagem(URL_NOVA));
     expect(gravado.imagem_url).toBe(URL_NOVA);
     expect(mockGetProduto).not.toHaveBeenCalled();
   });
 
   it('sem imagem na listagem e sem imagem local: nada a decidir, nenhum GET extra', async () => {
-    imagensLocais.set(KURIPE, null);
+    imagensLocais.set(KURIPE, { imagemUrl: null, gerenciadaSemFoto: false });
     const gravado = await sincronizarCom(itemDaListagem(null));
     expect(mockGetProduto).not.toHaveBeenCalled();
     expect(gravado.imagem_url).toBeUndefined();
   });
 
   it('leitura de detalhe que falhou: desconhecido, a URL local fica', async () => {
-    imagensLocais.set(KURIPE, URL_ANTIGA);
+    imagensLocais.set(KURIPE, { imagemUrl: URL_ANTIGA, gerenciadaSemFoto: false });
     mockGetProduto.mockResolvedValue(null);
     const gravado = await sincronizarCom(itemDaListagem(null));
     expect(gravado.imagem_url).toBe(URL_ANTIGA);
   });
 
   it('leitura de detalhe que lança: desconhecido, a URL local fica e a sincronização segue', async () => {
-    imagensLocais.set(KURIPE, URL_ANTIGA);
+    imagensLocais.set(KURIPE, { imagemUrl: URL_ANTIGA, gerenciadaSemFoto: false });
     mockGetProduto.mockRejectedValue(new Error('rede'));
     const gravado = await sincronizarCom(itemDaListagem(null));
     expect(gravado.imagem_url).toBe(URL_ANTIGA);
   });
 
+  it('drift: produto gerenciado sem foto e a listagem atual mostra imagem → registra a divergência; o espelho recebe a URL', async () => {
+    imagensLocais.set(KURIPE, { imagemUrl: null, gerenciadaSemFoto: true });
+    const gravado = await sincronizarCom(itemDaListagem(URL_NOVA));
+    expect(mockRegistrarDivergencia).toHaveBeenCalledWith(ESCOPO, KURIPE);
+    expect(gravado.imagem_url).toBe(URL_NOVA);
+    for (const campo of ['imagem_bling_gerenciada_pelo_orbita', 'imagem_bling_divergencia_detectada_em']) {
+      expect(gravado).not.toHaveProperty(campo);
+    }
+  });
+
+  it('produto que o ORBITA não gerencia, ou gerenciado com foto: imagem no Bling não é drift', async () => {
+    imagensLocais.set(KURIPE, { imagemUrl: URL_ANTIGA, gerenciadaSemFoto: false });
+    await sincronizarCom(itemDaListagem(URL_NOVA));
+    expect(mockRegistrarDivergencia).not.toHaveBeenCalled();
+  });
+
+  it('falha ao registrar o drift não derruba a sincronização', async () => {
+    imagensLocais.set(KURIPE, { imagemUrl: null, gerenciadaSemFoto: true });
+    mockRegistrarDivergencia.mockRejectedValue(new Error('rpc fora'));
+    const gravado = await sincronizarCom(itemDaListagem(URL_NOVA));
+    expect(gravado.imagem_url).toBe(URL_NOVA);
+  });
+
   it('a sincronização nunca envia a foto do ORBITA, a confirmação nem o lease', async () => {
-    imagensLocais.set(KURIPE, URL_ANTIGA);
+    imagensLocais.set(KURIPE, { imagemUrl: URL_ANTIGA, gerenciadaSemFoto: false });
     mockGetProduto.mockResolvedValue(detalhe([]));
     const gravado = await sincronizarCom(itemDaListagem(null));
-    for (const campo of ['imagem_storage_path', 'imagem_bling_sync_path', 'imagem_bling_sync_lease_token', 'imagem_bling_sync_lease_expires_at']) {
+    for (const campo of ['imagem_storage_path', 'imagem_bling_sync_path', 'imagem_bling_sync_lease_token', 'imagem_bling_sync_lease_expires_at', 'imagem_bling_gerenciada_pelo_orbita', 'imagem_bling_divergencia_detectada_em']) {
       expect(gravado).not.toHaveProperty(campo);
     }
   });

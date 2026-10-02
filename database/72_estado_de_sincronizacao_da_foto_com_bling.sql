@@ -8,7 +8,9 @@
 --   imagem_storage_path     — a foto que o ORBITA deseja (migration 70);
 --   imagem_bling_sync_path  — a foto que se sabe refletida no Bling.
 --
---   sem foto           : ambos nulos (o ORBITA nunca adotou a imagem do produto)
+--   sem foto           : nunca adotada (gerenciada = false) e ambos nulos —
+--                        o Bling é dono da imagem
+--   nenhuma imagem     : gerenciada, ambos nulos — sincronizada, sem fallback
 --   sincronizada       : storage_path = sync_path
 --   nova foto pendente : storage_path distinto de sync_path
 --   remoção pendente   : storage_path nulo e sync_path não nulo
@@ -36,7 +38,7 @@
 -- Impacto de lock: `add column` sem default é só catálogo; as restrições entram
 -- `not valid` e são validadas com SHARE UPDATE EXCLUSIVE sobre colunas nulas.
 --
--- Rollback: forward-only. O código anterior ignora a coluna.
+-- Rollback: forward-only. O código anterior ignora as colunas.
 
 alter table public.produtos
     add column if not exists imagem_bling_sync_path text;
@@ -141,6 +143,69 @@ revoke all on function public.adquirir_lease_da_foto_no_bling(uuid, uuid, uuid, 
 revoke all on function public.liberar_lease_da_foto_no_bling(uuid, uuid, uuid) from public, anon, authenticated;
 grant execute on function public.adquirir_lease_da_foto_no_bling(uuid, uuid, uuid, integer) to service_role;
 grant execute on function public.liberar_lease_da_foto_no_bling(uuid, uuid, uuid) to service_role;
+
+-- Autoridade da imagem do produto: quem decide o que o Bling mostra. Não é
+-- redundante com o par desejado × confirmado: depois de uma remoção
+-- confirmada, os dois voltam a nulo, e "nunca adotou" ficaria igual a
+-- "adotou e decidiu por nenhuma imagem". Passa a true no MESMO compare-and-set
+-- que aponta imagem_storage_path para a primeira foto, e nunca volta a false
+-- nesta entrega (não há ação de devolver a imagem ao Bling).
+alter table public.produtos
+    add column if not exists imagem_bling_gerenciada_pelo_orbita boolean not null default false;
+
+-- Backfill: uma linha que já tem foto ou confirmação foi adotada.
+update public.produtos
+   set imagem_bling_gerenciada_pelo_orbita = true
+ where not imagem_bling_gerenciada_pelo_orbita
+   and (imagem_storage_path is not null or imagem_bling_sync_path is not null);
+
+comment on column public.produtos.imagem_bling_gerenciada_pelo_orbita is
+    'O ORBITA é a autoridade da imagem deste produto no Bling desde o primeiro upload confirmado. '
+    'Sem foto e gerenciada = nenhuma imagem, sem fallback para o espelho do Bling. Nunca volta a false.';
+
+-- Drift no estado gerenciado: uma leitura ATUAL do Bling provou uma imagem
+-- que o ORBITA não deseja (produto gerenciado e sem foto). O par desejado ×
+-- confirmado não representa "nenhuma imagem desejada, remoto divergente"
+-- (confirmado é um caminho do bucket, não uma imagem qualquer do Bling), então
+-- o menor estado adicional é o instante da detecção. Não nulo = pendente,
+-- até a próxima sincronização convergir; o compare-and-set da confirmação o limpa.
+alter table public.produtos
+    add column if not exists imagem_bling_divergencia_detectada_em timestamptz;
+
+comment on column public.produtos.imagem_bling_divergencia_detectada_em is
+    'Quando uma leitura atual do Bling mostrou imagem num produto gerenciado pelo ORBITA e sem foto. '
+    'Não nulo = sincronização pendente. Limpo pela confirmação da sincronização.';
+
+-- Registro do drift: uma instrução condicional, escopada por organização e
+-- bling_id, que só vale para produto gerenciado, sem foto, sem drift já
+-- registrado e sem lease vigente (uma sincronização em curso passa por
+-- estados intermediários que não são drift). Nunca adota nem devolve a imagem.
+create or replace function public.registrar_divergencia_da_foto_no_bling(
+    p_organizacao_id uuid,
+    p_bling_id       text
+)
+returns boolean
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+    update public.produtos
+       set imagem_bling_divergencia_detectada_em = now()
+     where organizacao_id = p_organizacao_id
+       and bling_id = p_bling_id
+       and imagem_bling_gerenciada_pelo_orbita
+       and imagem_storage_path is null
+       and imagem_bling_divergencia_detectada_em is null
+       and (imagem_bling_sync_lease_token is null
+            or imagem_bling_sync_lease_expires_at <= now());
+
+    return found;
+end;
+$$;
+
+revoke all on function public.registrar_divergencia_da_foto_no_bling(uuid, text) from public, anon, authenticated;
+grant execute on function public.registrar_divergencia_da_foto_no_bling(uuid, text) to service_role;
 
 comment on column public.produtos.imagem_bling_sync_path is
     'Foto do ORBITA confirmada no Bling (caminho no bucket produto-imagens). '

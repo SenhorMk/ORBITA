@@ -59,6 +59,8 @@ describe('sincronização Bling → ORBITA preserva a foto do ORBITA', () => {
       imagem_bling_sync_path: FOTO,
       imagem_bling_sync_lease_token: '44444444-4444-4444-8444-444444444444',
       imagem_bling_sync_lease_expires_at: '2026-10-02T00:00:00Z',
+      imagem_bling_gerenciada_pelo_orbita: false,
+      imagem_bling_divergencia_detectada_em: '2026-10-02T00:00:00Z',
     });
     expect(payloads).toHaveLength(1);
     expect(payloads[0]!.valores.imagem_url).toBe('https://bling/nova.jpg');
@@ -68,6 +70,9 @@ describe('sincronização Bling → ORBITA preserva a foto do ORBITA', () => {
     // Nem o lease: só as funções do lease escrevem nele.
     expect(payloads[0]!.valores).not.toHaveProperty('imagem_bling_sync_lease_token');
     expect(payloads[0]!.valores).not.toHaveProperty('imagem_bling_sync_lease_expires_at');
+    // Nem a autoridade da imagem: o Bling não toma (false → true) nem devolve (true → false) a posse.
+    expect(payloads[0]!.valores).not.toHaveProperty('imagem_bling_gerenciada_pelo_orbita');
+    expect(payloads[0]!.valores).not.toHaveProperty('imagem_bling_divergencia_detectada_em');
   });
 
   it('produto existente (update, e o upsert de reserva): nenhum dos dois caminhos leva o campo', async () => {
@@ -78,22 +83,26 @@ describe('sincronização Bling → ORBITA preserva a foto do ORBITA', () => {
       imagem_url: 'https://bling/trocada.jpg',
       imagem_storage_path: null,
       imagem_bling_sync_path: null,
+      imagem_bling_gerenciada_pelo_orbita: true,
     });
     expect(payloads.map((p) => p.metodo)).toEqual(['update', 'upsert']);
     for (const { valores } of payloads) {
       expect(valores.imagem_url).toBe('https://bling/trocada.jpg');
       expect(valores).not.toHaveProperty('imagem_storage_path');
       expect(valores).not.toHaveProperty('imagem_bling_sync_path');
+      expect(valores).not.toHaveProperty('imagem_bling_gerenciada_pelo_orbita');
     }
   });
 
   it('nenhum caminho de sincronização monta imagem_storage_path nem imagem_bling_sync_path', () => {
     const raiz = path.resolve(__dirname, '..');
-    for (const arquivo of ['services/sync.ts', 'app/api/bling/webhook/route.ts']) {
+    for (const arquivo of ['services/sync.ts', 'app/api/bling/webhook/route.ts', 'services/espelhoDaImagemDoBling.ts', 'services/imagemDoBling.ts']) {
       const fonte = readFileSync(path.join(raiz, arquivo), 'utf8');
       expect(fonte, arquivo).not.toContain('imagem_storage_path');
       expect(fonte, arquivo).not.toContain('imagem_bling_sync_path');
       expect(fonte, arquivo).not.toContain('imagem_bling_sync_lease');
+      expect(fonte, arquivo).not.toContain('imagem_bling_gerenciada_pelo_orbita');
+      expect(fonte, arquivo).not.toContain('imagem_bling_divergencia');
     }
   });
 

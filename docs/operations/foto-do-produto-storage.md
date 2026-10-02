@@ -20,7 +20,9 @@ staging.
   [foto-produto-sync-bling.md](foto-produto-sync-bling.md).
 - `imagem_url` continua sendo o espelho do Bling. As leituras da tela
   (`/api/dashboard` e `/api/produtos`) devolvem em `imagem_url` a imagem efetiva:
-  a foto do ORBITA por URL assinada, senão a do Bling, senão nada (placeholder).
+  a foto do ORBITA por URL assinada; sem foto, a do Bling só se o ORBITA nunca
+  adotou a imagem do produto; senão nada (placeholder). Ver
+  [foto-produto-sync-bling.md](foto-produto-sync-bling.md).
 - Upload direto do navegador para o Storage, com token de `createSignedUploadUrl`
   emitido pelo servidor para um caminho que o servidor gerou. Nenhuma rota do
   ORBITA recebe os bytes.
@@ -46,7 +48,7 @@ Uma segunda execução encontra o bucket em conformidade e não escreve nada.
 
 Ordem no ambiente: aplicar as migrations 70, 71 e 72 (`npm run db:remoto:aplicar`),
 provisionar o bucket e, só depois, publicar o código. Sem o bucket, as leituras
-continuam funcionando (a assinatura falha e cai para a imagem do Bling, com
+continuam funcionando (a assinatura falha e o produto com foto mostra o placeholder, com
 registro no log), e as rotas de foto respondem `ArmazenamentoIndisponivel`.
 
 Rollback: o código anterior ignora a coluna nova. Não há rollback de dados; a
@@ -107,7 +109,8 @@ enviar arquivos ao projeto remoto.
    prefixo `<org>/<produto>/`.
 5. Abrir o mesmo produto em duas abas e trocar nas duas: a segunda mostra a
    mensagem de conflito, e só um objeto novo fica no prefixo.
-6. Remover a foto: volta a imagem do Bling (ou o placeholder) e o objeto some.
+6. Remover a foto: o placeholder aparece (o produto continua gerenciado pelo
+   ORBITA, então a imagem do Bling não volta) e o objeto some.
 7. Tentar enviar um GIF, um arquivo de 4 MB e, pelo console, confirmar um
    caminho de outra organização: as recusas respectivas, sem nada gravado.
 8. Com uma conta `member` (sem `organization:manage`): os controles respondem

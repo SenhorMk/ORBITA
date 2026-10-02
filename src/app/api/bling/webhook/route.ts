@@ -3,6 +3,7 @@ import { produtoRepository } from '../../../../repositories/produtoRepository';
 import { clienteRepository } from '../../../../repositories/clienteRepository';
 import { pedidoRepository } from '../../../../repositories/pedidoRepository';
 import { imagemDoBling, imagemUrlParaGravar, midiaCompleta } from '../../../../services/imagemDoBling';
+import { registrarSeDivergente } from '../../../../services/espelhoDaImagemDoBling';
 import type { BlingPort } from '../../../../services/blingPort';
 import { Produto, Cliente, Pedido, ItemPedido } from '../../../../types';
 import { supabaseServer } from '../../../../lib/supabaseServer';
@@ -200,18 +201,18 @@ async function fetchFullProdutoIfIncomplete(
   prodData: Record<string, unknown>,
   blingId: string,
   blingClient: BlingPort,
-): Promise<{ readonly dados: Record<string, unknown>; readonly autoritativo: boolean }> {
+): Promise<{ readonly dados: Record<string, unknown>; readonly autoritativo: boolean; readonly leituraAtual: boolean }> {
   const isComplete = prodData.nome !== undefined && prodData.preco !== undefined && midiaCompleta(prodData);
-  if (isComplete) return { dados: prodData, autoritativo: true };
+  if (isComplete) return { dados: prodData, autoritativo: true, leituraAtual: false };
 
   try {
     const fetched = await blingClient.getProduto(blingId);
-    if (fetched) return { dados: { ...prodData, ...fetched }, autoritativo: midiaCompleta(fetched) };
+    if (fetched) return { dados: { ...prodData, ...fetched }, autoritativo: midiaCompleta(fetched), leituraAtual: true };
   } catch (e: unknown) {
     const errMsg = e instanceof Error ? e.message : 'Erro ao buscar produto';
     console.warn(`⚠️ Webhook Bling: Não foi possível buscar detalhes estendidos do produto ${blingId}:`, errMsg);
   }
-  return { dados: prodData, autoritativo: midiaCompleta(prodData) };
+  return { dados: prodData, autoritativo: midiaCompleta(prodData), leituraAtual: false };
 }
 
 /** Sincroniza um evento de produto/estoque recebido do webhook. Retorna `true` quando um produto foi persistido. */
@@ -228,10 +229,11 @@ async function processProdutoEvent(
     return { blingId, processed: false, ignoredReason: 'missing_id' };
   }
 
-  const { dados: fullProduct, autoritativo } = await fetchFullProdutoIfIncomplete(prodData, blingId, blingClient);
+  const { dados: fullProduct, autoritativo, leituraAtual } = await fetchFullProdutoIfIncomplete(prodData, blingId, blingClient);
   const existingLocal = await produtoRepository.getByBlingId(organizationScope, blingId);
   // Tri-estado: imagem confirmada → URL; leitura completa sem imagem → null; desconhecida → a local.
-  const imgUrl = imagemUrlParaGravar(imagemDoBling(fullProduct, { autoritativo }), existingLocal?.imagem_url);
+  const imagem = imagemDoBling(fullProduct, { autoritativo });
+  const imgUrl = imagemUrlParaGravar(imagem, existingLocal?.imagem_url);
   const saldoEstoque = resolveSaldoEstoque(fullProduct, existingLocal);
 
   const produto: Produto = {
@@ -244,6 +246,8 @@ async function processProdutoEvent(
   };
 
   await produtoRepository.upsert(organizationScope, produto);
+  // Leitura atual com imagem num produto que o ORBITA gerencia sem foto = drift.
+  await registrarSeDivergente(organizationScope, blingId, imagem, leituraAtual);
   return { blingId, processed: true };
 }
 

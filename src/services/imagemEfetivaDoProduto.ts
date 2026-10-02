@@ -1,4 +1,4 @@
-import { VALIDADE_DA_LEITURA_ASSINADA_S } from '@/lib/config/produtoImagemContract';
+import { imagemGerenciadaPeloOrbita, VALIDADE_DA_LEITURA_ASSINADA_S } from '@/lib/config/produtoImagemContract';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import type { Produto } from '@/types';
@@ -10,20 +10,22 @@ import type { ArmazenamentoDeImagemPort } from './armazenamentoDeImagem';
  * EFETIVA, com uma precedência só:
  *
  * 1. a foto escolhida no ORBITA (`imagem_storage_path`), por URL assinada;
- * 2. a imagem espelhada do Bling, já persistida em `imagem_url`;
+ * 2. a imagem espelhada do Bling (`imagem_url`) — SÓ se o ORBITA nunca adotou
+ *    a imagem do produto (`imagem_bling_gerenciada_pelo_orbita = false`);
  * 3. nenhuma — a tela desenha o placeholder.
  *
- * Remoção pendente no Bling (`imagem_storage_path` nulo, `imagem_bling_sync_path`
- * preenchido): o espelho do Bling é a foto que está saindo de lá, então não
- * volta para a tela — nem se uma sincronização atrasada regravar `imagem_url`.
+ * Produto gerenciado pelo ORBITA e sem foto deseja NENHUMA imagem: o espelho
+ * nunca volta para a tela — nem durante a remoção pendente, nem depois dela,
+ * nem se um webhook ou uma sincronização atrasada regravar `imagem_url`.
  *
  * O caminho persistido segue no objeto, separado: é ele que o formulário usa
  * como precondição ao trocar ou remover a foto. A URL assinada nunca volta ao
  * banco: é gerada aqui, a cada leitura, e expira.
  *
  * As assinaturas saem numa chamada só (`createSignedUrls`). Se o Storage não
- * responder, o catálogo não cai: cada produto mostra a imagem do Bling, e a
- * falha vai para o log com a organização. É apresentação — nenhum dado muda,
+ * responder, o catálogo não cai: o produto com foto mostra o placeholder (é
+ * gerenciado, então o espelho do Bling não vale), e a falha vai para o log com
+ * a organização. É apresentação — nenhum dado muda,
  * e a próxima leitura tenta de novo.
  */
 export async function comImagemEfetiva(
@@ -47,8 +49,12 @@ export async function comImagemEfetiva(
 
   return produtos.map((produto) => {
     const daFoto = produto.imagem_storage_path ? urls.get(produto.imagem_storage_path) : undefined;
-    const remocaoPendente = !produto.imagem_storage_path && !!produto.imagem_bling_sync_path;
-    const doBling = !remocaoPendente && produto.imagem_url?.trim() ? produto.imagem_url : undefined;
+    const gerenciada = imagemGerenciadaPeloOrbita({
+      gerenciada: produto.imagem_bling_gerenciada_pelo_orbita,
+      desejado: produto.imagem_storage_path,
+      confirmado: produto.imagem_bling_sync_path,
+    });
+    const doBling = !gerenciada && produto.imagem_url?.trim() ? produto.imagem_url : undefined;
     const apresentado: Produto = { ...produto, imagem_url: daFoto ?? doBling };
     if (apresentado.imagem_url === undefined) delete apresentado.imagem_url;
     return apresentado;

@@ -121,7 +121,7 @@ function deps(overrides: Partial<SincronizacaoDaFotoDeps> = {}): SincronizacaoDa
     confirmar: async (scope, id, desejado, token) => {
       const l = acharLinha(scope, id);
       if (!l || l.produto.imagemStoragePath !== desejado || l.lease?.token !== token) return false;
-      l.produto = { ...l.produto, imagemBlingSyncPath: desejado };
+      l.produto = { ...l.produto, imagemBlingSyncPath: desejado, divergente: false };
       return true;
     },
     novoToken: () => `lease-${++tokens}`,
@@ -142,7 +142,7 @@ function deps(overrides: Partial<SincronizacaoDaFotoDeps> = {}): SincronizacaoDa
 const sincronizar = (d = deps(), organizacao = ORG) => sincronizarFotoComBling(escopo(organizacao), PRODUTO, 'corr-1', d);
 
 beforeEach(() => {
-  linhas = [{ organizacao: ORG, produto: { id: PRODUTO, blingId: BLING_ID, imagemStoragePath: A, imagemBlingSyncPath: null, imagemDoBling: null } }];
+  linhas = [{ organizacao: ORG, produto: { id: PRODUTO, blingId: BLING_ID, imagemStoragePath: A, imagemBlingSyncPath: null, gerenciada: true, divergente: false, imagemDoBling: null } }];
   tempo = 0;
   tokens = 0;
   aoEsperar = null;
@@ -194,7 +194,7 @@ describe('convergência: o Bling termina com exatamente a foto do ORBITA', () =>
 
 describe('nada a fazer', () => {
   it('produto que o ORBITA nunca adotou: as imagens do Bling ficam intocadas', async () => {
-    mudarLinha({ imagemStoragePath: null, imagemBlingSyncPath: null });
+    mudarLinha({ imagemStoragePath: null, imagemBlingSyncPath: null, gerenciada: false });
     expect(await sincronizar()).toEqual({ _tag: 'SemFoto' });
     expect(bling.chamadas).toEqual([]);
     expect(bling.estado.imagens).toEqual(['antiga-1', 'antiga-2']);
@@ -345,6 +345,23 @@ function espiar(porta: FotoNoBlingPort, chamadas: string[]): FotoNoBlingPort {
     importarImagemDoProduto: (id, url) => { chamadas.push('importar'); return porta.importarImagemDoProduto(id, url); },
   };
 }
+
+describe('autoridade da imagem: gerenciada sem foto deseja nenhuma imagem', () => {
+  it('gerenciada + null/null já está sincronizada: nenhuma chamada ao Bling, nunca SemFoto', async () => {
+    mudarLinha({ imagemStoragePath: null, imagemBlingSyncPath: null, gerenciada: true });
+    expect(await sincronizar()).toEqual({ _tag: 'Sincronizada', jaEstava: true });
+    expect(bling.chamadas).toEqual([]);
+  });
+
+  it('drift: gerenciada sem foto e o Bling com imagem → pendente; a nova tentativa limpa o Bling e volta a sincronizada', async () => {
+    bling = blingFalso(['imagem-que-voltou']);
+    mudarLinha({ imagemStoragePath: null, imagemBlingSyncPath: null, gerenciada: true, divergente: true });
+    expect(estadoAposSincronizacao(await sincronizar())).toBe('sincronizada');
+    expect(bling.estado.imagens).toEqual([]);
+    expect(assinaturas).toEqual([]);
+    expect(linha()).toMatchObject({ imagemStoragePath: null, imagemBlingSyncPath: null, gerenciada: true, divergente: false });
+  });
+});
 
 describe('lease por produto: nenhuma escrita no Bling sem o lease', () => {
   it('corrida A/B: B concorrente não toca no Bling enquanto A tem o lease; o retry de B termina com exatamente [B]', async () => {

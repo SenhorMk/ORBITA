@@ -184,6 +184,10 @@ export interface Produto {
   /** Lease da sincronização da foto com o Bling (migration 72). Só as funções do lease escrevem. */
   imagem_bling_sync_lease_token?: string | null;
   imagem_bling_sync_lease_expires_at?: string | null;
+  /** O ORBITA é a autoridade da imagem no Bling desde o primeiro upload (migration 72). Nunca volta a false. */
+  imagem_bling_gerenciada_pelo_orbita?: boolean;
+  /** Drift: uma leitura atual do Bling mostrou imagem num produto gerenciado e sem foto (migration 72). */
+  imagem_bling_divergencia_detectada_em?: string | null;
   unidade?: string;
   estoque: number;
   estoque_reservado?: number; // trigger controlada

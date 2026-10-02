@@ -75,12 +75,3 @@ export async function imagemDaListagem(
   }
   return imagemDoBling(detalhe, { autoritativo: midiaCompleta(detalhe) });
 }
-
-/** `imagemDaListagem` já convertida no valor a gravar (o espelho local decide se vale ler o detalhe). */
-export async function imagemUrlDaListagem(
-  item: unknown,
-  imagemLocal: string | null | undefined,
-  lerDetalhe: () => Promise<unknown>,
-): Promise<string | null | undefined> {
-  return imagemUrlParaGravar(await imagemDaListagem(item, imagemLocal, lerDetalhe), imagemLocal);
-}

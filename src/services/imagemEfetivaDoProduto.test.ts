@@ -51,6 +51,22 @@ describe('imagem efetiva: foto do ORBITA → Bling → placeholder', () => {
     expect(p).not.toHaveProperty('imagem_url');
   });
 
+  it('nunca adotada pelo ORBITA + imagem do Bling: o fallback aparece', async () => {
+    const { porta } = armazenamento();
+    const [p] = await comImagemEfetiva(scope, [produto('p1', { imagem_url: BLING, imagem_bling_gerenciada_pelo_orbita: false })], porta);
+    expect(p!.imagem_url).toBe(BLING);
+  });
+
+  it('gerenciada pelo ORBITA e sem foto: nunca mostra imagem_url — remoção pendente, confirmada, ou espelho regravado', async () => {
+    const { porta } = armazenamento();
+    const casos = [
+      produto('confirmada', { imagem_url: BLING, imagem_bling_gerenciada_pelo_orbita: true }),
+      produto('pendente', { imagem_url: BLING, imagem_bling_gerenciada_pelo_orbita: true, imagem_bling_sync_path: FOTO }),
+      produto('drift', { imagem_url: BLING, imagem_bling_gerenciada_pelo_orbita: true, imagem_bling_divergencia_detectada_em: '2026-10-02T12:00:00Z' }),
+    ];
+    for (const p of await comImagemEfetiva(scope, casos, porta)) expect(p, p.id).not.toHaveProperty('imagem_url');
+  });
+
   it('sem nenhuma das duas, imagem_url fica ausente — a tela desenha o placeholder', async () => {
     const { porta } = armazenamento();
     const [a, b] = await comImagemEfetiva(scope, [produto('a'), produto('b', { imagem_url: '  ' })], porta);
@@ -70,13 +86,13 @@ describe('imagem efetiva: foto do ORBITA → Bling → placeholder', () => {
     expect(chamadas).toEqual([{ caminhos: [FOTO, outra], validade: VALIDADE_DA_LEITURA_ASSINADA_S }]);
   });
 
-  it('Storage fora do ar: o catálogo não cai, e cada produto volta para a imagem do Bling', async () => {
+  it('Storage fora do ar: o catálogo não cai; produto com foto é gerenciado, então placeholder, nunca o espelho', async () => {
     const { porta } = armazenamento('indisponivel');
     const produtos = await comImagemEfetiva(scope, [
       produto('a', { imagem_url: BLING, imagem_storage_path: FOTO }),
       produto('b', { imagem_storage_path: FOTO }),
     ], porta);
-    expect(produtos[0]!.imagem_url).toBe(BLING);
+    expect(produtos[0]).not.toHaveProperty('imagem_url');
     expect(produtos[1]).not.toHaveProperty('imagem_url');
   });
 });

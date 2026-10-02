@@ -194,6 +194,23 @@ describe('ImagemDoProduto', () => {
     expect(screen.getByRole('button', { name: 'Tentar sincronizar novamente' })).toBeInTheDocument();
   });
 
+  it('gerenciada pelo ORBITA e sem foto: sincronizada "sem imagem", sem o espelho do Bling e sem nova tentativa', () => {
+    // A API entrega a imagem efetiva: produto gerenciado sem foto chega sem imagem_url.
+    render(<ImagemDoProduto produto={produto({ imagem_bling_gerenciada_pelo_orbita: true })} operacoes={rede().operacoes} />);
+    expect(screen.getByText('Sincronizada com o Bling.')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Imagem do produto' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Tentar sincronizar novamente' })).toBeNull();
+  });
+
+  it('drift registrado num produto gerenciado sem foto: pendente, com "Tentar sincronizar novamente"', () => {
+    render(<ImagemDoProduto
+      produto={produto({ imagem_bling_gerenciada_pelo_orbita: true, imagem_bling_divergencia_detectada_em: '2026-10-02T12:00:00Z' })}
+      operacoes={rede().operacoes}
+    />);
+    expect(screen.getByText('Sincronização com o Bling pendente.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tentar sincronizar novamente' })).toBeEnabled();
+  });
+
   it('nunca adotou foto: nenhum estado de sincronização (as imagens do Bling são do Bling)', () => {
     render(<ImagemDoProduto produto={produto({ imagem_url: BLING })} operacoes={rede().operacoes} />);
     expect(screen.queryByText(/Sincroniza/u)).toBeNull();

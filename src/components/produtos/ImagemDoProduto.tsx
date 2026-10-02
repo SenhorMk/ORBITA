@@ -141,7 +141,11 @@ export function ImagemDoProduto({
   const [caminho, setCaminho] = useState<string | null>(produto?.imagem_storage_path ?? null);
   const [url, setUrl] = useState<string | null>(produto?.imagem_url ?? null);
   const [bling, setBling] = useState<EstadoDaFotoNoBling>(() => estadoDaFotoNoBling({
-    blingId: produto?.bling_id, desejado: produto?.imagem_storage_path, confirmado: produto?.imagem_bling_sync_path,
+    blingId: produto?.bling_id,
+    gerenciada: produto?.imagem_bling_gerenciada_pelo_orbita,
+    desejado: produto?.imagem_storage_path,
+    confirmado: produto?.imagem_bling_sync_path,
+    divergente: produto?.imagem_bling_divergencia_detectada_em != null,
   }));
   const [estado, setEstado] = useState<Estado>({ _tag: 'Ocioso' });
   // O estado de React só muda no próximo render; dois cliques no mesmo quadro

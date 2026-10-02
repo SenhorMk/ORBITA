@@ -41,6 +41,8 @@ interface Linha {
   /** Ausente = vinculado ('777'). */
   blingId?: string | null;
   imagemBlingSyncPath?: string | null;
+  /** A autoridade da imagem (migration 72): o CAS que aponta para uma foto adota. */
+  gerenciada?: boolean;
 }
 
 /**
@@ -64,6 +66,8 @@ function fakeStore(linhas: Linha[]) {
             blingId: linha.blingId === undefined ? '777' : linha.blingId,
             imagemStoragePath: linha.imagemStoragePath,
             imagemBlingSyncPath: linha.imagemBlingSyncPath ?? null,
+            gerenciada: linha.gerenciada ?? false,
+            divergente: false,
             imagemDoBling: linha.imagemDoBling,
           }
         : null;
@@ -81,6 +85,7 @@ function fakeStore(linhas: Linha[]) {
       const linha = linhas.find((l) => l.id === produtoId && l.organizacaoId === escopo.organizationId);
       if (!linha || linha.imagemStoragePath !== anterior) return false;
       linha.imagemStoragePath = novo;
+      if (novo !== null) linha.gerenciada = true;
       if (opcoes.pendenteNoBling !== undefined) linha.imagemBlingSyncPath = opcoes.pendenteNoBling;
       return true;
     },
@@ -374,10 +379,11 @@ describe('etapa C — confirmar upload', () => {
     expect(store.linhas[0]!.imagemStoragePath).toBe(FOTO_B);
   });
 
-  it('assinatura falha depois do CAS: a foto continua confirmada e a tela recebe a imagem do Bling', async () => {
+  it('assinatura falha depois do CAS: a foto continua confirmada e a tela recebe placeholder, nunca o espelho do Bling', async () => {
     armazenamento = fakeArmazenamento({ objetos: { [FOTO_B]: PNG_OK }, falharAssinatura: true });
     const r = await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null });
-    expect(r).toEqual({ status: 200, corpo: { resultado: 'ImagemConfirmada', caminho: FOTO_B, url: BLING, bling: 'sincronizada' } });
+    // O produto acabou de ser adotado: o espelho do Bling não vale como fallback.
+    expect(r).toEqual({ status: 200, corpo: { resultado: 'ImagemConfirmada', caminho: FOTO_B, url: null, bling: 'sincronizada' } });
     expect(store.linhas[0]!.imagemStoragePath).toBe(FOTO_B);
     expect(auditados).toHaveLength(1);
   });
@@ -390,7 +396,7 @@ describe('etapa C — confirmar upload', () => {
     expect(store.linhas[0]!.imagemStoragePath).toBe(FOTO_B);
   });
 
-  it('confirmação concorrente da MESMA foto com assinatura falha: o fallback usa a releitura, não a imagem do Bling antiga', async () => {
+  it('confirmação concorrente da MESMA foto com assinatura falha: placeholder, nada removido', async () => {
     armazenamento = fakeArmazenamento({ objetos: { [FOTO_B]: PNG_OK }, falharAssinatura: true });
     // Entre a primeira leitura e o CAS, outra requisição confirmou esta mesma
     // foto e a sincronização trocou a imagem do Bling.
@@ -399,7 +405,7 @@ describe('etapa C — confirmar upload', () => {
       store.linhas[0]!.imagemDoBling = 'https://orgbling.s3.amazonaws.com/nova.jpg';
     });
     const r = await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null });
-    expect(r.corpo).toEqual({ resultado: 'ImagemConfirmada', caminho: FOTO_B, url: 'https://orgbling.s3.amazonaws.com/nova.jpg', bling: 'sincronizada' });
+    expect(r.corpo).toEqual({ resultado: 'ImagemConfirmada', caminho: FOTO_B, url: null, bling: 'sincronizada' });
     expect(armazenamento.removidos).toEqual([]);
   });
 
@@ -429,10 +435,10 @@ describe('remoção', () => {
     expect(auditados[0]).toMatchObject({ acao: 'catalog.product_image_removed', metadata: { produto_id: PRODUTO, limpeza_anterior: 'concluida' } });
   });
 
-  it('produto sem vínculo: o ORBITA nunca tocou o Bling, então a imagem do Bling volta a valer', async () => {
+  it('produto sem vínculo: continua gerenciado pelo ORBITA, então a imagem do Bling também não volta', async () => {
     store.linhas[0]!.blingId = null;
-    estadoNoBling = 'sem_foto';
-    expect((await remover({ produtoId: PRODUTO, anterior: FOTO_A })).corpo).toEqual({ resultado: 'ImagemRemovida', url: BLING, bling: 'sem_foto' });
+    estadoNoBling = 'sem_vinculo';
+    expect((await remover({ produtoId: PRODUTO, anterior: FOTO_A })).corpo).toEqual({ resultado: 'ImagemRemovida', url: null, bling: 'sem_vinculo' });
   });
 
   it('sem imagem do Bling, volta url null — a tela mostra o placeholder', async () => {

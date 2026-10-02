@@ -51,21 +51,71 @@ somente ao Bling. A URL nunca vai para o banco, para o log, para a auditoria
 nem para a resposta da rota. Como o Bling copia o arquivo, a expiração da URL
 não afeta a imagem depois de importada.
 
-## Modelo: desejado × confirmado
+## Modelo: autoridade, desejado, confirmado e drift
 
-| Coluna | Significado |
+| Coluna (migration) | Significado |
 |---|---|
-| `imagem_storage_path` (migration 70) | **Desejado**: a foto escolhida no ORBITA, ou `null` |
-| `imagem_bling_sync_path` (migration 72) | **Confirmado**: a foto que o Bling sabidamente reflete. Na remoção de uma foto ainda não confirmada, é a foto que o Bling pode estar exibindo (remoção pendente) |
+| `imagem_bling_gerenciada_pelo_orbita` (72) | **Autoridade**: `true` desde o primeiro upload confirmado. Nunca volta a `false` |
+| `imagem_storage_path` (70) | **Desejado**: a foto escolhida no ORBITA, ou `null` (nenhuma imagem) |
+| `imagem_bling_sync_path` (72) | **Confirmado**: a foto que o Bling sabidamente reflete. Na remoção de uma foto ainda não confirmada, é a foto que o Bling pode estar exibindo (remoção pendente) |
+| `imagem_bling_divergencia_detectada_em` (72) | **Drift**: quando uma leitura atual do Bling mostrou imagem num produto gerenciado e sem foto |
 
-Estado da tela (`estadoDaFotoNoBling`), sem booleanos persistidos:
+### Por que a autoridade não é redundante
 
-- `sem_foto`: os dois são nulos. O ORBITA nunca adotou as imagens, ou a
-  remoção foi confirmada.
-- `sincronizada`: desejado = confirmado.
-- `pendente`: os dois diferem e o produto tem `bling_id` numérico.
-- `sem_vinculo`: os dois diferem e o produto não tem `bling_id`. Nunca se busca
-  o produto por nome ou SKU.
+Depois de uma remoção confirmada, desejado e confirmado voltam a `null`.
+Isso é idêntico a "o ORBITA nunca adotou a imagem", mas o significado é
+oposto:
+
+- **nunca adotou:** o Bling é dono, e a imagem dele aparece como fallback;
+- **adotou e removeu:** o ORBITA decidiu por nenhuma imagem, e o espelho do
+  Bling nunca volta.
+
+A dupla desejado/confirmado não guarda quem é a autoridade. Daí o boolean,
+que é outra dimensão.
+
+### Adoção
+
+- A adoção acontece no compare-and-set que aponta `imagem_storage_path` para
+  uma foto (`trocarCaminho` com `novo` não nulo): `imagem_bling_gerenciada_pelo_orbita
+  = true` vai na mesma instrução. CAS perdido não adota.
+- Trocar mantém `true`. Remover não toca no campo, nem a confirmação, nem
+  uma falha no Bling. Excluir o produto apaga a linha.
+- Nesta entrega não existe ação para devolver a imagem ao Bling.
+- A sincronização Bling → ORBITA e o webhook nunca escrevem o campo, nem de
+  `false` para `true` nem de volta: `ProdutoRepository.upsert` o remove do
+  payload.
+- A migration faz backfill: linha com foto ou confirmação já é gerenciada.
+
+### Drift no estado "nenhuma imagem"
+
+Com o produto gerenciado e nada desejado, uma leitura **atual** do Bling pode
+mostrar uma imagem: alguém pôs no Bling, ou um efeito antigo chegou depois. O
+par desejado/confirmado não representa "nenhuma imagem desejada, remoto
+divergente": o confirmado é um caminho do bucket, não uma imagem qualquer do
+Bling. Por isso a migration 72 guarda o menor estado extra, o instante da
+detecção.
+
+- **Registro:** `registrar_divergencia_da_foto_no_bling` é um UPDATE
+  condicional. Só vale para produto gerenciado, sem foto, sem drift já
+  registrado e sem lease vigente, porque uma sincronização em curso passa por
+  estados intermediários.
+- **Leitura atual:** só a listagem e o detalhe lidos agora contam. O payload
+  de um webhook pode descrever um momento superado e não registra drift.
+- **Efeito:** o estado vira `pendente`, com "Tentar sincronizar novamente".
+  A convergência limpa o Bling, e o compare-and-set da confirmação apaga o
+  drift. A imagem nunca aparece como fallback.
+
+### Estados (`estadoDaFotoNoBling`)
+
+| Autoridade | Desejado | Confirmado | Drift | Estado |
+|---|---|---|---|---|
+| `false` | `null` | `null` | — | `sem_foto`: o Bling é dono |
+| `true` | A | A | não | `sincronizada` |
+| `true` | `null` | `null` | não | `sincronizada`: **nenhuma imagem**, nunca `sem_foto` |
+| `true` | `null` | A | — | `pendente` (remoção) |
+| `true` | B | A ou `null` | — | `pendente` |
+| `true` | qualquer | igual ao desejado | sim | `pendente` |
+| `true`, sem `bling_id` | qualquer | qualquer | — | `sem_vinculo`: nunca se busca por nome ou SKU |
 
 `sincronizando` existe só na tela, enquanto a requisição está em curso.
 `em_andamento` existe só na resposta: outra execução detém o lease do produto
@@ -73,21 +123,22 @@ e esta não tocou no Bling. A tela mantém a foto e oferece a nova tentativa.
 
 A migration 72 prende `imagem_bling_sync_path` ao prefixo da própria linha, com
 a mesma regra de `imagem_storage_path`, e recusa URL. A sincronização
-Bling → ORBITA e o webhook nunca escrevem nenhuma das duas colunas:
-`produtoRepository.upsert` remove ambas do payload. Uma guarda de código-fonte
-também garante que eles não chamam a sincronização da foto nem montam
-`imagensURL`, então não há laço.
+Bling → ORBITA e o webhook nunca escrevem a foto, a confirmação, a autoridade
+nem o lease. `produtoRepository.upsert` remove esses campos do payload. Guardas
+de código-fonte também garantem que eles não chamam a sincronização da foto
+nem montam `imagensURL`, então não há laço.
 
-## Precedência visual
+## Precedência visual (`comImagemEfetiva`)
 
 1. Com `imagem_storage_path`, a tela mostra a foto do ORBITA, por URL assinada.
-2. Se o ORBITA nunca adotou a foto, a tela mostra a imagem do Bling (`imagem_url`).
-3. Com remoção pendente no Bling (desejado nulo, confirmado preenchido), o
-   espelho é a foto que está saindo de lá e **não volta** para a tela, mesmo
-   que uma sincronização atrasada regrave `imagem_url`. A tela mostra o
-   placeholder (`comImagemEfetiva`).
-4. Depois de remover a foto de um produto vinculado, a rota responde com o
-   placeholder, não com o espelho.
+2. Sem foto e **gerenciada**: placeholder. O espelho `imagem_url` nunca é
+   usado, nem na remoção pendente, nem depois da remoção confirmada, nem com
+   drift, nem quando um webhook ou uma sincronização atrasada regrava
+   `imagem_url`. Se a assinatura da foto falhar, também placeholder.
+3. Só quando o ORBITA nunca adotou a imagem, a imagem do Bling (`imagem_url`)
+   aparece como fallback.
+4. As rotas de confirmar e remover respondem pela mesma regra: placeholder,
+   nunca o espelho.
 5. Quando a remoção é confirmada (zero imagens lidas no Bling), o mesmo
    compare-and-set esvazia `imagem_url`.
 

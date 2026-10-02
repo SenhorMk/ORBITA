@@ -181,14 +181,14 @@ async function auditarSemInterromper(
 
 /**
  * A URL que a tela mostra logo depois da confirmação, com a mesma precedência
- * de `comImagemEfetiva`: foto do ORBITA assinada → imagem do Bling → `null`.
+ * de `comImagemEfetiva`: foto do ORBITA assinada, senão `null`. Confirmar
+ * adotou a imagem, então o espelho do Bling não vale como fallback.
  * Falhar ao assinar não desfaz a confirmação; vai para o log.
  */
 async function urlEfetiva(
   deps: FotoDoProdutoDependencies,
   scope: VerifiedOrganizationScope,
   caminho: string,
-  produto: ProdutoComFoto,
 ): Promise<string | null> {
   const assinadas = await deps.armazenamento.assinarLeituras([caminho], VALIDADE_DA_LEITURA_ASSINADA_S);
   const assinada = assinadas._tag === 'Assinadas' ? assinadas.urls.get(caminho) : undefined;
@@ -198,16 +198,7 @@ async function urlEfetiva(
     assinadas._tag === 'Indisponivel' ? assinadas.causa : new Error('caminho ausente na resposta de assinatura'),
     { organizacaoId: scope.organizationId },
   );
-  return produto.imagemDoBling;
-}
-
-/**
- * O que a tela mostra depois de remover. Produto vinculado: o Bling converge
- * para nenhuma imagem, então o espelho (a foto que está saindo de lá) não
- * volta — placeholder. Sem vínculo, o ORBITA nunca tocou o Bling.
- */
-function imagemAposRemocao(produto: ProdutoComFoto): string | null {
-  return produto.blingId === null ? produto.imagemDoBling : null;
+  return null;
 }
 
 /** `POST /api/produtos/imagem/upload` — etapa A. */
@@ -278,7 +269,7 @@ export function createConfirmarUploadHandler(deps: FotoDoProdutoDependencies) {
     // nada a trocar, e nada a apagar — o objeto É a foto atual.
     if (produto.imagemStoragePath === caminho) {
       return responder({
-        resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, produto),
+        resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho),
         bling: await estadoNoBling(deps, scope, produto.id, request),
       });
     }
@@ -292,7 +283,7 @@ export function createConfirmarUploadHandler(deps: FotoDoProdutoDependencies) {
       if (atual?.imagemStoragePath === caminho) {
         // `atual`, e não `produto`: a imagem do Bling pode ter mudado desde a primeira leitura.
         return responder({
-          resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, atual),
+          resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho),
           bling: await estadoNoBling(deps, scope, produto.id, request),
         });
       }
@@ -314,7 +305,7 @@ export function createConfirmarUploadHandler(deps: FotoDoProdutoDependencies) {
       metadata: { produto_id: produto.id, substituiu_anterior: anterior !== null, limpeza_anterior: limpeza },
     });
     return responder({
-      resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, produto),
+      resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho),
       bling: await estadoNoBling(deps, scope, produto.id, request),
     });
   };
@@ -340,7 +331,7 @@ export function createRemoverImagemHandler(deps: FotoDoProdutoDependencies) {
       const atual = await deps.store.carregar(scope, produto.id);
       // Já sem foto: outra requisição removeu antes. O estado pedido é o atual.
       if (atual && atual.imagemStoragePath === null) {
-        return responder({ resultado: 'ImagemRemovida', url: imagemAposRemocao(atual), bling: await estadoNoBling(deps, scope, produto.id, request) });
+        return responder({ resultado: 'ImagemRemovida', url: null, bling: await estadoNoBling(deps, scope, produto.id, request) });
       }
       return responder({ resultado: 'Conflito' });
     }
@@ -354,7 +345,7 @@ export function createRemoverImagemHandler(deps: FotoDoProdutoDependencies) {
       correlationId: deps.correlationId(request),
       metadata: { produto_id: produto.id, limpeza_anterior: limpeza },
     });
-    return responder({ resultado: 'ImagemRemovida', url: imagemAposRemocao(produto), bling: await estadoNoBling(deps, scope, produto.id, request) });
+    return responder({ resultado: 'ImagemRemovida', url: null, bling: await estadoNoBling(deps, scope, produto.id, request) });
   };
 }
 
