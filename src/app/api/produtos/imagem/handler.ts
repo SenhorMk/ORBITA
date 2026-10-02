@@ -10,8 +10,10 @@ import {
   pedidoDeUploadSchema,
   problemaDoArquivo,
   remocaoDeImagemSchema,
+  sincronizacaoDeImagemSchema,
   tipoDeImagemPermitido,
   tipoDoCaminho,
+  type EstadoDaFotoNoBling,
   type RespostaDeImagem,
 } from '@/lib/config/produtoImagemContract';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
@@ -41,6 +43,14 @@ import type { ArmazenamentoDeImagemPort } from '@/services/armazenamentoDeImagem
  *
  * Quem perde a corrida do compare-and-set recebe `Conflito` e o objeto que
  * acabou de enviar é removido, porque ninguém o referencia.
+ *
+ * ## Bling
+ *
+ * Confirmada ou removida a foto local, a rota tenta convergir o produto
+ * vinculado no Bling (`sincronizarFotoComBling`). O resultado vai em `bling`
+ * na resposta: falha lá **não** é falha da foto — ela fica salva, o estado fica
+ * pendente, e `POST /api/produtos/imagem/sincronizar` repete a convergência
+ * a partir do objeto já armazenado, sem novo upload.
  */
 
 export type EventoDaFoto =
@@ -72,6 +82,7 @@ export interface FotoDoProdutoStorePort {
     produtoId: string,
     anterior: string | null,
     novo: string | null,
+    opcoes?: { readonly pendenteNoBling?: string },
   ): Promise<boolean>;
 }
 
@@ -86,6 +97,27 @@ export interface FotoDoProdutoDependencies {
   readonly correlationId: (request: Request) => string;
   /** Id do objeto novo. `crypto.randomUUID` em produção. */
   readonly novoId: () => string;
+  /** Converge o produto no Bling para a foto atual e devolve o estado resultante. */
+  readonly sincronizarBling: (
+    scope: VerifiedOrganizationScope,
+    produtoId: string,
+    correlationId: string,
+  ) => Promise<EstadoDaFotoNoBling>;
+}
+
+/** O estado no Bling depois de tentar convergir. Exceção aqui nunca derruba a foto local. */
+async function estadoNoBling(
+  deps: FotoDoProdutoDependencies,
+  scope: VerifiedOrganizationScope,
+  produtoId: string,
+  request: Request,
+): Promise<EstadoDaFotoNoBling> {
+  try {
+    return await deps.sincronizarBling(scope, produtoId, deps.correlationId(request));
+  } catch (erro: unknown) {
+    registrarFalhaInterna('produtos.imagem.bling.sincronizar', erro, { organizacaoId: scope.organizationId });
+    return 'pendente';
+  }
 }
 
 function responder(corpo: RespostaDeImagem): NextResponse {
@@ -236,7 +268,10 @@ export function createConfirmarUploadHandler(deps: FotoDoProdutoDependencies) {
     // Repetição de uma confirmação que já valeu (queda de rede, duplo envio):
     // nada a trocar, e nada a apagar — o objeto É a foto atual.
     if (produto.imagemStoragePath === caminho) {
-      return responder({ resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, produto) });
+      return responder({
+        resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, produto),
+        bling: await estadoNoBling(deps, scope, produto.id, request),
+      });
     }
 
     const recusa = await conferirObjeto(deps, scope, caminho);
@@ -247,7 +282,10 @@ export function createConfirmarUploadHandler(deps: FotoDoProdutoDependencies) {
       const atual = await deps.store.carregar(scope, produto.id);
       if (atual?.imagemStoragePath === caminho) {
         // `atual`, e não `produto`: a imagem do Bling pode ter mudado desde a primeira leitura.
-        return responder({ resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, atual) });
+        return responder({
+          resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, atual),
+          bling: await estadoNoBling(deps, scope, produto.id, request),
+        });
       }
       // Perdeu a corrida: o banco guarda outra foto. O objeto desta tentativa
       // não é referenciado por ninguém e sai; a foto vencedora fica intacta.
@@ -266,7 +304,10 @@ export function createConfirmarUploadHandler(deps: FotoDoProdutoDependencies) {
       correlationId: deps.correlationId(request),
       metadata: { produto_id: produto.id, substituiu_anterior: anterior !== null, limpeza_anterior: limpeza },
     });
-    return responder({ resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, produto) });
+    return responder({
+      resultado: 'ImagemConfirmada', caminho, url: await urlEfetiva(deps, scope, caminho, produto),
+      bling: await estadoNoBling(deps, scope, produto.id, request),
+    });
   };
 }
 
@@ -281,12 +322,16 @@ export function createRemoverImagemHandler(deps: FotoDoProdutoDependencies) {
       return responder({ resultado: 'CaminhoInvalido' });
     }
 
-    const trocou = await deps.store.trocarCaminho(scope, produto.id, corpo.anterior, null);
+    // O primeiro upload já tornou o ORBITA dono das imagens no Bling, e uma
+    // sincronização pode ter limpado ou importado sem chegar a confirmar.
+    // Remover então deixa a remoção pendente lá, em vez de "nunca adotada".
+    const pendenteNoBling = produto.blingId !== null && produto.imagemBlingSyncPath === null ? corpo.anterior : undefined;
+    const trocou = await deps.store.trocarCaminho(scope, produto.id, corpo.anterior, null, { pendenteNoBling });
     if (!trocou) {
       const atual = await deps.store.carregar(scope, produto.id);
       // Já sem foto: outra requisição removeu antes. O estado pedido é o atual.
       if (atual && atual.imagemStoragePath === null) {
-        return responder({ resultado: 'ImagemRemovida', url: atual.imagemDoBling });
+        return responder({ resultado: 'ImagemRemovida', url: atual.imagemDoBling, bling: await estadoNoBling(deps, scope, produto.id, request) });
       }
       return responder({ resultado: 'Conflito' });
     }
@@ -300,6 +345,19 @@ export function createRemoverImagemHandler(deps: FotoDoProdutoDependencies) {
       correlationId: deps.correlationId(request),
       metadata: { produto_id: produto.id, limpeza_anterior: limpeza },
     });
-    return responder({ resultado: 'ImagemRemovida', url: produto.imagemDoBling });
+    return responder({ resultado: 'ImagemRemovida', url: produto.imagemDoBling, bling: await estadoNoBling(deps, scope, produto.id, request) });
+  };
+}
+
+/**
+ * `POST /api/produtos/imagem/sincronizar` — "Tentar sincronizar novamente".
+ * A foto vem do banco (o objeto já está no bucket); o corpo só traz o produto.
+ */
+export function createSincronizarFotoHandler(deps: FotoDoProdutoDependencies) {
+  return async function sincronizarFoto(request: Request): Promise<NextResponse> {
+    const preparo = await preparar(deps, request, sincronizacaoDeImagemSchema);
+    if (preparo._tag === 'Encerrado') return preparo.response;
+    const { scope, produto } = preparo;
+    return responder({ resultado: 'SincronizacaoDaFoto', bling: await estadoNoBling(deps, scope, produto.id, request) });
   };
 }

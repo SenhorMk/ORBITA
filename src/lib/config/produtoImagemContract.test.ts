@@ -17,9 +17,9 @@ const PRODUTO = '33333333-3333-4333-8333-333333333333';
 const OBJ = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 describe('contrato da foto do produto', () => {
-  it('bucket privado, JPEG/PNG/WebP, 5 MB', () => {
+  it('bucket privado, JPEG/PNG/WebP, 3 MB (limite do Bling)', () => {
     expect(BUCKET_PRODUTO_IMAGENS).toBe('produto-imagens');
-    expect(TAMANHO_MAXIMO_DA_IMAGEM).toBe(5 * 1024 * 1024);
+    expect(TAMANHO_MAXIMO_DA_IMAGEM).toBe(3 * 1024 * 1024);
     expect(ACCEPT_DE_IMAGEM).toBe('image/jpeg,image/png,image/webp');
   });
 

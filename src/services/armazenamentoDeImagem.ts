@@ -51,7 +51,7 @@ function textoOuNulo(valor: unknown): string | null {
  *
  * O cliente é service-role e é só do servidor. Nada aqui toca
  * `storage.objects` por SQL: upload, inspeção, remoção e assinatura passam pela
- * API, que aplica as regras do bucket (privado, JPEG/PNG/WebP, 5 MB).
+ * API, que aplica as regras do bucket (privado, JPEG/PNG/WebP, 3 MB).
  */
 export class SupabaseArmazenamentoDeImagem implements ArmazenamentoDeImagemPort {
   constructor(private readonly client: SupabaseClient) {}

@@ -43,7 +43,7 @@ describe('provisionamento do bucket produto-imagens', () => {
 
   it('planeja criar, ajustar (com cada divergência nomeada) ou nada', () => {
     expect(planejarBucket(null, desejado)).toEqual({ _tag: 'Criar' });
-    expect(planejarBucket({ public: false, file_size_limit: 5242880, allowed_mime_types: ['image/webp', 'image/png', 'image/jpeg'] }, desejado))
+    expect(planejarBucket({ public: false, file_size_limit: 3145728, allowed_mime_types: ['image/webp', 'image/png', 'image/jpeg'] }, desejado))
       .toEqual({ _tag: 'EmConformidade' });
     const plano = planejarBucket({ public: true, file_size_limit: null, allowed_mime_types: null }, desejado);
     expect(plano._tag).toBe('Atualizar');
@@ -65,7 +65,7 @@ describe('provisionamento do bucket produto-imagens', () => {
   });
 
   it('bucket público é tornado privado por update', async () => {
-    const falso = storageFalso({ id: 'produto-imagens', public: true, file_size_limit: 5242880, allowed_mime_types: ['image/jpeg', 'image/png', 'image/webp'] });
+    const falso = storageFalso({ id: 'produto-imagens', public: true, file_size_limit: 3145728, allowed_mime_types: ['image/jpeg', 'image/png', 'image/webp'] });
     expect((await provisionarBucket({ storage: falso.storage, aplicar: true, desejado }))._tag).toBe('ok');
     expect(falso.escritas).toEqual(['update produto-imagens']);
   });
