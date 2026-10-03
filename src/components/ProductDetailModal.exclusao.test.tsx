@@ -169,6 +169,33 @@ describe('ProductDetailModal — a requisição', () => {
   });
 });
 
+describe('ProductDetailModal — o X do cabeçalho durante a exclusão', () => {
+  it('com a resposta pendente, o X não fecha; a requisição é única; só o sucesso fecha', async () => {
+    const resposta = pendente();
+    const { exclusoes } = rede(resposta.responder);
+    const { usuaria, onClose, onDeleted } = await abrirConfirmacao();
+    await usuaria.click(botao('Excluir definitivamente'));
+    await usuaria.click(botao('Fechar'));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(botao('Excluindo…')).toBeInTheDocument();
+    expect(exclusoes()).toHaveLength(1);
+    resposta.soltar(SUCESSO());
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(exclusoes()).toHaveLength(1);
+  });
+
+  it('depois de uma falha, fechar pelo X volta a ser permitido', async () => {
+    rede(() => json({ success: false, error: 'O Bling não confirmou a exclusão: o produto continua lá. O produto foi mantido no ORBITA.' }, 409));
+    const { usuaria, onClose, onDeleted } = await abrirConfirmacao();
+    await usuaria.click(botao('Excluir definitivamente'));
+    await screen.findByRole('alert');
+    await usuaria.click(botao('Fechar'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onDeleted).not.toHaveBeenCalled();
+  });
+});
+
 describe('ProductDetailModal — o desfecho', () => {
   it('200: fecha o modal e sinaliza onDeleted, sem passar registro (quem chama relê o catálogo)', async () => {
     rede();

@@ -178,6 +178,12 @@ export function useExclusaoDoProduto({
     tamanho: 'sm',
     destrutivo: true,
     dispensavel: !excluindo,
+    // `dispensavel` só segura ESC e clique fora; o X do cabeçalho fecha por
+    // `onAbertoChange(false)`. Enquanto a exclusão corre, NENHUM pedido de
+    // fechar vale — o sucesso fecha por código, e a falha devolve o controle.
+    onAbertoChange: (abertoAgora) => {
+      if (!abertoAgora && !travaRef.current) onClose();
+    },
     eyebrow: 'Excluir produto',
     titulo: `Excluir “${produto.nome || 'Produto sem nome'}”?`,
     descricao: 'Confirmação de exclusão de produto.',
