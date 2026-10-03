@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import { ImageIcon } from 'lucide-react';
 
@@ -131,11 +131,14 @@ function SituacaoNoBling({ bling, ocupado, onTentar }: { bling: EstadoDaFotoNoBl
 export function ImagemDoProduto({
   produto,
   onAlterada,
+  onOcupadoChange,
   operacoes = operacoesDoNavegador,
 }: {
   produto: Produto | null;
   /** A foto mudou (ou mudou em outra janela): quem abriu relê o catálogo. */
   onAlterada?: () => void;
+  /** A foto está enviando, removendo ou sincronizando: quem abriu não deixa excluir o produto no meio. */
+  onOcupadoChange?: (ocupado: boolean) => void;
   operacoes?: OperacoesDeFoto;
 }) {
   const [caminho, setCaminho] = useState<string | null>(produto?.imagem_storage_path ?? null);
@@ -152,6 +155,12 @@ export function ImagemDoProduto({
   // passariam pelo `disabled`. A trava síncrona fecha essa janela.
   const ocupadoRef = useRef(false);
   const ocupado = estado._tag === 'Enviando' || estado._tag === 'Removendo' || estado._tag === 'Sincronizando';
+
+  useEffect(() => {
+    onOcupadoChange?.(ocupado);
+    // Desmontar no meio de uma operação não pode deixar quem abriu travado.
+    return () => onOcupadoChange?.(false);
+  }, [ocupado, onOcupadoChange]);
 
   if (!produto?.id) {
     return (

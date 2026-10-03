@@ -23,6 +23,7 @@ import { avisoDoBootstrap, carregarCategoriasDoProduto } from '@/components/prod
 import { lerObrigatoriosDoBling } from '@/components/produtos/obrigatoriosDoBling';
 import { ImagemDoProduto } from '@/components/produtos/ImagemDoProduto';
 import type { OperacoesDeFoto } from '@/components/produtos/fotoDoProduto';
+import { useExclusaoDoProduto } from '@/components/produtos/exclusaoDoProduto';
 
 /**
  * O detalhe e a edição de um produto, agora no `Modal` do Design System.
@@ -89,6 +90,8 @@ interface ProductDetailModalProps {
    * categoria e "faltando dados", enquanto o banco tinha tudo.
    */
   onSaved?: () => void;
+  /** O produto foi excluído (confirmado pelo servidor). Só um sinal: quem chama relê o catálogo. */
+  onDeleted?: () => void;
   /**
    * A foto do produto mudou. Também é só um sinal: a foto é gravada pelas
    * rotas próprias, na hora, independente do "Salvar alterações".
@@ -162,6 +165,7 @@ export function ProductDetailModal({
   onClose,
   produto,
   onSaved,
+  onDeleted,
   onImagemAlterada,
   operacoesDeFoto,
 }: ProductDetailModalProps) {
@@ -194,6 +198,8 @@ export function ProductDetailModal({
   const [isCopied, setIsCopied] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [fotoOcupada, setFotoOcupada] = useState(false);
+  const exclusao = useExclusaoDoProduto({ aberto: isOpen, produto, bloqueada: isSaving || fotoOcupada, onDeleted, onClose });
 
   const [prevProduto, setPrevProduto] = useState<Produto | null>(produto);
   const [prevOpen, setPrevOpen] = useState(isOpen);
@@ -448,6 +454,7 @@ export function ProductDetailModal({
         descricao="Os dados do produto, sincronizados com o Bling ERP ao salvar."
         rodape={
           <RodapeDeModal
+            destrutiva={exclusao.botao}
             secundaria={
               <button type="button" onClick={onClose} className="orbita-chip cursor-pointer">
                 Cancelar
@@ -467,7 +474,9 @@ export function ProductDetailModal({
             }
           />
         }
+        {...exclusao.confirmacao?.modal}
       >
+        {exclusao.confirmacao ? exclusao.confirmacao.corpo : (
         <div className="flex flex-col gap-6">
           {savedSuccess && (
             <output
@@ -487,6 +496,7 @@ export function ProductDetailModal({
               key={produto?.id ?? 'novo'}
               produto={produto}
               onAlterada={onImagemAlterada}
+              onOcupadoChange={setFotoOcupada}
               operacoes={operacoesDeFoto}
             />
           </Secao>
@@ -627,6 +637,7 @@ export function ProductDetailModal({
             />
           </Secao>
         </div>
+        )}
       </Modal>
 
       <ErrorLogModal
