@@ -30,6 +30,13 @@
       "ticket": "n/a — structural SQL limitation, not a code defect",
       "date": "2026-08-28",
       "reason": "Ticket 21's real backup/restore lab (`captureSchemaFingerprint`) must build per-table `SELECT count(*) FROM \"<table>\"` and checksum queries dynamically, because Postgres has no parameterized-identifier syntax ($1 placeholders only bind values, never identifiers). The interpolated `tableName` is never user or network input: it comes exclusively from this same function's own prior query against `information_schema.tables` on a disposable local Postgres lab this script itself created seconds earlier (see `scripts/test-backup-restore.mjs`). Defense in depth is still applied: `assertSafeIdentifier` rejects any table name that is not a plain lowercase Postgres identifier before it is interpolated, and the identifier is double-quoted. The static scanner cannot distinguish a validated, catalog-sourced identifier from untrusted input, so this is a genuine tool limitation rather than a fixable defect."
+    },
+    {
+      "fingerprint": "package.json|security|security/vulnerable-dependency|error|braces (high) — upgrade to aislop@0.6.0",
+      "owner": "SenhorMk",
+      "ticket": "follow-up: remove this exception as soon as braces (or micromatch/fast-glob, or aislop/eslint-config-next) publishes a release that resolves GHSA-vfj7-8cjw-p6xm (CVE-2026-93687); re-check with `npm audit` on every dependency update",
+      "date": "2026-10-03",
+      "reason": "TEMPORARY. Known High advisory GHSA-vfj7-8cjw-p6xm / CVE-2026-93687: braces <= 3.0.3 is vulnerable to stack-exhaustion denial of service through deeply nested brace patterns. The affected chain is development tooling only (aislop -> micromatch -> braces, and eslint-config-next -> @next/eslint-plugin-next -> fast-glob -> micromatch -> braces); nothing in it ships to the runtime, and the production gate `npm run audit:check` (`npm audit --omit=dev --audit-level=high`) still reports 0 vulnerabilities and is NOT affected by this allowlist. There is no fixed version upstream (3.0.3 is the latest braces release; the advisory has no first patched version). The only fix the scanner offers is `npm audit fix --force`, which would downgrade aislop to 0.6.0 and eslint-config-next to 14 — a regressive, incompatible change to the gate tooling itself — so it is not applied. The fingerprint is matched exactly: a different severity, package, recommendation or any other advisory still fails the gate. The full `npm audit` keeps reporting this advisory until a fix exists."
     }
   ]
 }

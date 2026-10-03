@@ -16,6 +16,20 @@ export function collectAislopDiagnosticCounts(diagnostics) {
   return counts;
 }
 
+/**
+ * The gate decision: blocking fingerprints that no documented exception covers.
+ * `severity: info` never blocks. Matching is by EXACT fingerprint string — no
+ * wildcard, prefix or pattern — so an exception covers one diagnostic only,
+ * and any change to its file, engine, rule, severity or message fails again.
+ */
+export function findUnlistedDiagnostics(diagnostics, allowlist) {
+  const blocking = diagnostics.filter((diagnostic) => diagnostic.severity !== 'info');
+  const allowed = new Set((allowlist.exceptions ?? []).map((entry) => entry.fingerprint));
+  return Object.keys(collectAislopDiagnosticCounts(blocking))
+    .filter((fingerprint) => !allowed.has(fingerprint))
+    .sort();
+}
+
 /** Return AI slop diagnostics whose count exceeds the accepted baseline. */
 export function findAislopRegressions(current, baseline) {
   return Object.entries(current)
