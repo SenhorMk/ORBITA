@@ -28,9 +28,11 @@ import {
 import type {
   CausaIndeterminada,
   ContatoRemoto,
+  EscritaRemota,
   ExclusaoRemota,
   FalhaDeOperacaoRemota,
   LeituraRemota,
+  ProdutoRemoto,
 } from '../lib/integrations/bling/operacaoRemotaContract';
 import { codigoDaSituacaoDaContaSchema } from '../lib/integrations/bling/situacaoDaContaBling';
 import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
@@ -173,6 +175,23 @@ export class BlingAcessoRecusadoError extends Error {
 
 const contatoLidoSchema = z.object({
   data: z.object({ id: z.union([z.number().int().positive(), z.string().regex(/^\d+$/u)]) }),
+});
+
+/**
+ * `GET /produtos/{id}` reduzido ao que a exclusão confirmada e a foto precisam.
+ * As imagens vêm em `midia.imagens.internas` (cópias no armazenamento do
+ * Bling) e `externas`; a ausência de `midia` é produto sem imagem.
+ */
+const produtoLidoSchema = z.object({
+  data: z.object({
+    id: z.union([z.number().int().positive(), z.string().regex(/^\d+$/u)]),
+    midia: z.object({
+      imagens: z.object({
+        internas: z.array(z.unknown()).optional(),
+        externas: z.array(z.unknown()).optional(),
+      }).partial().optional(),
+    }).partial().optional(),
+  }),
 });
 
 const contaPagarLidaSchema = z.object({
@@ -610,19 +629,73 @@ export class BlingClient implements BlingPort {
     }
   }
 
-  // Deletar um produto no Bling ERP
-  async deleteProduto(id: string): Promise<unknown> {
-    const url = `${this.baseUrl}/produtos/${id}`;
-    const response = await this.fetchWithAuth(url, {
-      method: 'DELETE',
-    });
+  // Produto: leitura, exclusão confirmada e imagens.
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Erro na API Bling ao deletar produto (HTTP ${response.status}): ${errorText}`);
-    }
+  /** `GET /produtos/{id}`: o produto existe, e com quantas imagens? */
+  async consultarProduto(id: string): Promise<LeituraRemota<ProdutoRemoto>> {
+    const resposta = await this.requisicaoDeCorrecao('bling.produto.consultar', `/produtos/${encodeURIComponent(id)}`, 'GET');
+    if (resposta._tag !== 'Resposta') return resposta;
+    return this.lerRecursoConfirmado(resposta.response, produtoLidoSchema, (data) => ({
+      id: String(data.id),
+      imagens: (data.midia?.imagens?.internas?.length ?? 0) + (data.midia?.imagens?.externas?.length ?? 0),
+    }));
+  }
 
-    return { success: true };
+  /**
+   * `PATCH /produtos/{id}/situacoes` com `E`. O Bling só exclui definitivamente
+   * produto na situação "excluído": `DELETE` de produto ativo responde 400
+   * (código 12), provado em 2026-10-02.
+   */
+  async marcarProdutoExcluido(id: string): Promise<EscritaRemota> {
+    const resposta = await this.requisicaoDeCorrecao(
+      'bling.produto.situacao-excluido',
+      `/produtos/${encodeURIComponent(id)}/situacoes`,
+      'PATCH',
+      { situacao: 'E' },
+    );
+    if (resposta._tag !== 'Resposta') return resposta;
+    return this.escritaConfirmada(resposta.response);
+  }
+
+  /** `DELETE /produtos/{id}` — `204` no OpenAPI oficial. Exige a situação `E` antes. */
+  async excluirProduto(id: string): Promise<ExclusaoRemota> {
+    const resposta = await this.requisicaoDeCorrecao('bling.produto.excluir', `/produtos/${encodeURIComponent(id)}`, 'DELETE');
+    if (resposta._tag !== 'Resposta') return resposta;
+    return this.exclusaoConfirmada(resposta.response);
+  }
+
+  /**
+   * Remove TODAS as imagens do produto: `PATCH` com `midia.imagens.imagensURL: []`.
+   * Provado em 2026-10-02: a lista vazia apaga tudo, de forma assíncrona. Não
+   * existe remoção de uma imagem só pela API documentada.
+   */
+  async limparImagensDoProduto(id: string): Promise<EscritaRemota> {
+    const resposta = await this.requisicaoDeCorrecao(
+      'bling.produto.limpar-imagens',
+      `/produtos/${encodeURIComponent(id)}`,
+      'PATCH',
+      { midia: { imagens: { imagensURL: [] } } },
+    );
+    if (resposta._tag !== 'Resposta') return resposta;
+    return this.escritaConfirmada(resposta.response);
+  }
+
+  /**
+   * Importa UMA imagem a partir de uma URL: `PATCH` com
+   * `midia.imagens.imagensURL: [{ link }]`. Lista não vazia **acrescenta** (ao
+   * fim, com deduplicação); o Bling copia o arquivo para o próprio
+   * armazenamento, de forma assíncrona, e a URL pode expirar depois. A URL é
+   * capacidade temporária: nunca vai para log nem para retorno.
+   */
+  async importarImagemDoProduto(id: string, url: string): Promise<EscritaRemota> {
+    const resposta = await this.requisicaoDeCorrecao(
+      'bling.produto.importar-imagem',
+      `/produtos/${encodeURIComponent(id)}`,
+      'PATCH',
+      { midia: { imagens: { imagensURL: [{ link: url }] } } },
+    );
+    if (resposta._tag !== 'Resposta') return resposta;
+    return this.escritaConfirmada(resposta.response);
   }
 
   // Obter saldos de estoque físicos de múltiplos produtos
@@ -1155,12 +1228,21 @@ export class BlingClient implements BlingPort {
     return { _tag: 'BlingOk', value: { id: String(id) } };
   }
 
-  /** Atualiza o produto existente, com falha tipada em vez de string concatenada. */
+  /**
+   * Atualiza o produto existente, com falha tipada em vez de string concatenada.
+   *
+   * **`PATCH`, nunca `PUT`.** Provado na conta Bling em 2026-10-02 (duas vezes,
+   * com controle de estabilidade): `PUT /produtos/{id}` sem `midia` APAGA todas
+   * as imagens do produto, de forma assíncrona (< 6 s). O `PATCH` com o mesmo
+   * corpo aplica os campos e preserva as imagens. `midia` nunca entra aqui —
+   * a foto tem operação própria (`limparImagensDoProduto`/`importarImagemDoProduto`).
+   * Ver `docs/operations/foto-produto-sync-bling.md`.
+   */
   async atualizarProduto(id: string, payload: ProdutoBlingEntrada): Promise<BlingCallResult<void>> {
     const corpo = corpoProdutoBling(payload);
 
     const response = await this.fetchWithAuth(`${this.baseUrl}/produtos/${encodeURIComponent(id)}`, {
-      method: 'PUT',
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(corpo),
     });
@@ -1547,7 +1629,8 @@ export class BlingClient implements BlingPort {
   private async requisicaoDeCorrecao(
     operacao: string,
     caminho: string,
-    metodo: 'GET' | 'DELETE',
+    metodo: 'GET' | 'DELETE' | 'PATCH',
+    corpo?: Record<string, unknown>,
   ): Promise<{ readonly _tag: 'Resposta'; readonly response: Response } | FalhaDeOperacaoRemota> {
     const controle = new AbortController();
     const temporizador = setTimeout(
@@ -1558,7 +1641,11 @@ export class BlingClient implements BlingPort {
 
     try {
       const response = await Promise.race([
-        this.fetchWithAuth(`${this.baseUrl}${caminho}`, { method: metodo, signal: controle.signal }),
+        this.fetchWithAuth(`${this.baseUrl}${caminho}`, {
+          method: metodo,
+          signal: controle.signal,
+          ...(corpo === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }),
+        }),
         new Promise<never>((_, rejeitar) => {
           aoAbortar = () => rejeitar(controle.signal.reason);
           controle.signal.addEventListener('abort', aoAbortar, { once: true });
@@ -1575,6 +1662,14 @@ export class BlingClient implements BlingPort {
       clearTimeout(temporizador);
       if (aoAbortar) controle.signal.removeEventListener('abort', aoAbortar);
     }
+  }
+
+  /** `2xx` de um `PATCH` é aceite da escrita; o corpo é descartado sem ser lido. */
+  private escritaConfirmada(response: Response): EscritaRemota {
+    void response.body?.cancel().catch(() => {});
+    if (response.ok) return { _tag: 'EscritaAceita' };
+    if (response.status === 404) return { _tag: 'RemotoAusente' };
+    return falhaPorStatus(response.status);
   }
 
   /** `2xx` de um `DELETE` é a confirmação; o corpo é descartado sem ser lido. */

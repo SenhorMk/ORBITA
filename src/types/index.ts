@@ -167,13 +167,27 @@ export interface Produto {
    * No banco: a imagem espelhada do Bling, regravada pela sincronização.
    * Nas leituras para a tela (`/api/dashboard`, `/api/produtos`): a imagem
    * EFETIVA — URL assinada da foto do ORBITA quando existe, senão a do Bling.
+   * Na gravação é tri-estado: ausente = mantém, `null` = ausência confirmada no Bling.
    */
-  imagem_url?: string;
+  imagem_url?: string | null;
   /**
    * Caminho da foto escolhida no ORBITA, no bucket privado `produto-imagens`
    * (migration 70). Nunca URL. Só as rotas de foto escrevem aqui.
    */
   imagem_storage_path?: string | null;
+  /**
+   * A foto do ORBITA que se sabe refletida no Bling (migration 72). Igual a
+   * `imagem_storage_path` = sincronizada; diferente = pendente. Só a
+   * sincronização da foto escreve aqui.
+   */
+  imagem_bling_sync_path?: string | null;
+  /** Lease da sincronização da foto com o Bling (migration 72). Só as funções do lease escrevem. */
+  imagem_bling_sync_lease_token?: string | null;
+  imagem_bling_sync_lease_expires_at?: string | null;
+  /** O ORBITA é a autoridade da imagem no Bling desde o primeiro upload (migration 72). Nunca volta a false. */
+  imagem_bling_gerenciada_pelo_orbita?: boolean;
+  /** Drift: uma leitura atual do Bling mostrou imagem num produto gerenciado e sem foto (migration 72). */
+  imagem_bling_divergencia_detectada_em?: string | null;
   unidade?: string;
   estoque: number;
   estoque_reservado?: number; // trigger controlada

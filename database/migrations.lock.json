@@ -370,6 +370,11 @@
       "order": 74,
       "path": "../database/71_eventos_de_auditoria_da_foto_do_produto.sql",
       "sha256": "4a464e2c2556b74924e2635ae8c9067a74c5efca428a85b6e7623c3e29a4911d"
+    },
+    {
+      "order": 75,
+      "path": "../database/72_estado_de_sincronizacao_da_foto_com_bling.sql",
+      "sha256": "475352262a443d9e3faad68b75dc22893944cbb257afd0e3623b3dd41c4baea4"
     }
   ],
   "references": [

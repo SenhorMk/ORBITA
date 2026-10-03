@@ -135,7 +135,8 @@ schema_paths = [
   "../database/68_situacao_bling_e_titulo_terminal_monotonico.sql",
   "../database/69_eventos_de_auditoria_da_correcao_operacional.sql",
   "../database/70_foto_personalizada_do_produto.sql",
-  "../database/71_eventos_de_auditoria_da_foto_do_produto.sql"
+  "../database/71_eventos_de_auditoria_da_foto_do_produto.sql",
+  "../database/72_estado_de_sincronizacao_da_foto_com_bling.sql"
 ]
 
 [db.seed]

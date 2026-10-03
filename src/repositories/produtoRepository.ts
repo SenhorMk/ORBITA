@@ -24,6 +24,28 @@ export class ProdutoRepository {
     return data || [];
   }
 
+/**
+   * O espelho `imagem_url` local de cada `bling_id` da página, numa consulta
+   * só, e se o produto é gerenciado pelo ORBITA e está sem foto (onde imagem
+   * no Bling é drift). Só leitura: a posse da imagem nunca é escrita aqui.
+   */
+  async imagensPorBlingId(
+    scope: VerifiedOrganizationScope,
+    blingIds: readonly string[],
+  ): Promise<ReadonlyMap<string, { readonly imagemUrl: string | null; readonly gerenciadaSemFoto: boolean }>> {
+    if (blingIds.length === 0) return new Map();
+    const { data, error } = await supabaseServer
+      .from('produtos')
+      .select('bling_id, imagem_url, imagem_storage_path, imagem_bling_gerenciada_pelo_orbita')
+      .eq('organizacao_id', scope.organizationId)
+      .in('bling_id', [...blingIds]);
+    if (error) throw error;
+    return new Map((data ?? []).map((linha) => [String(linha.bling_id), {
+      imagemUrl: (linha.imagem_url as string | null) ?? null,
+      gerenciadaSemFoto: linha.imagem_bling_gerenciada_pelo_orbita === true && !linha.imagem_storage_path,
+    }]));
+  }
+
   async getByBlingId(scope: VerifiedOrganizationScope, blingId: string): Promise<Produto | null> {
     const { data, error } = await supabaseServer
       .from('produtos')
@@ -42,10 +64,17 @@ export class ProdutoRepository {
   /**
    * Grava o produto espelhado do Bling ou editado no formulário.
    *
-   * `imagem_storage_path` NUNCA sai daqui: é a foto escolhida no ORBITA, e este
-   * é o caminho da sincronização e do webhook. Um `Produto` que chegasse com o
-   * campo (lido de uma tela, por exemplo) sobrescreveria a escolha da pessoa.
-   * Quem escreve a foto é só `ProdutoImagemRepository.trocarCaminho`.
+   * `imagem_storage_path` e `imagem_bling_sync_path` NUNCA saem daqui: são a
+   * foto escolhida no ORBITA e a confirmação de que ela chegou ao Bling, e este
+   * é o caminho da sincronização e do webhook. Um `Produto` que chegasse com os
+   * campos (lido de uma tela, por exemplo) sobrescreveria a escolha da pessoa
+   * ou marcaria como sincronizado o que não foi. Quem escreve os dois é só
+   * `ProdutoImagemRepository`. O lease da sincronização, a autoridade da imagem
+   * (`imagem_bling_gerenciada_pelo_orbita`) e o drift também nunca saem daqui:
+   * o Bling não toma nem devolve a posse da imagem.
+   *
+   * `imagem_url` é tri-estado: `undefined` não vai no payload (o valor local
+   * fica), `null` grava ausência confirmada, texto grava a imagem confirmada.
    */
   async upsert(scope: VerifiedOrganizationScope, produto: Produto): Promise<Produto> {
     const payloadForUpsert = {
@@ -54,6 +83,11 @@ export class ProdutoRepository {
       user_id: scope.actorId,
     };
     delete payloadForUpsert.imagem_storage_path;
+    delete payloadForUpsert.imagem_bling_sync_path;
+    delete payloadForUpsert.imagem_bling_sync_lease_token;
+    delete payloadForUpsert.imagem_bling_sync_lease_expires_at;
+    delete payloadForUpsert.imagem_bling_gerenciada_pelo_orbita;
+    delete payloadForUpsert.imagem_bling_divergencia_detectada_em;
 
     if (produto.bling_id && produto.id) {
       await this.removerDuplicadoPorBlingId(scope, produto.id, produto.bling_id);

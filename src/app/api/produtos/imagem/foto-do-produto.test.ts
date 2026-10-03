@@ -5,6 +5,7 @@ import {
   createAutorizarUploadHandler,
   createConfirmarUploadHandler,
   createRemoverImagemHandler,
+  createSincronizarFotoHandler,
   type EventoDaFoto,
   type FotoDoProdutoDependencies,
 } from './handler';
@@ -32,7 +33,17 @@ const BLING = 'https://orgbling.s3.amazonaws.com/produto.jpg';
 /** SAFETY: o escopo é entrada do teste, não o que está sob teste — convenção dos demais testes de rota. */
 const scope = { organizationId: ORG, actorId: ATOR, role: 'owner' } as unknown as VerifiedOrganizationScope;
 
-interface Linha { id: string; organizacaoId: string; imagemStoragePath: string | null; imagemDoBling: string | null }
+interface Linha {
+  id: string;
+  organizacaoId: string;
+  imagemStoragePath: string | null;
+  imagemDoBling: string | null;
+  /** Ausente = vinculado ('777'). */
+  blingId?: string | null;
+  imagemBlingSyncPath?: string | null;
+  /** A autoridade da imagem (migration 72): o CAS que aponta para uma foto adota. */
+  gerenciada?: boolean;
+}
 
 /**
  * Banco em memória com linhas de DUAS organizações. O fake aplica o filtro por
@@ -49,15 +60,33 @@ function fakeStore(linhas: Linha[]) {
     intercalar(acao: () => void) { antesDaTroca = acao; },
     async carregar(escopo: VerifiedOrganizationScope, produtoId: string): Promise<ProdutoComFoto | null> {
       const linha = linhas.find((l) => l.id === produtoId && l.organizacaoId === escopo.organizationId);
-      return linha ? { id: linha.id, imagemStoragePath: linha.imagemStoragePath, imagemDoBling: linha.imagemDoBling } : null;
+      return linha
+        ? {
+            id: linha.id,
+            blingId: linha.blingId === undefined ? '777' : linha.blingId,
+            imagemStoragePath: linha.imagemStoragePath,
+            imagemBlingSyncPath: linha.imagemBlingSyncPath ?? null,
+            gerenciada: linha.gerenciada ?? false,
+            divergente: false,
+            imagemDoBling: linha.imagemDoBling,
+          }
+        : null;
     },
-    async trocarCaminho(escopo: VerifiedOrganizationScope, produtoId: string, anterior: string | null, novo: string | null) {
+    async trocarCaminho(
+      escopo: VerifiedOrganizationScope,
+      produtoId: string,
+      anterior: string | null,
+      novo: string | null,
+      opcoes: { readonly pendenteNoBling?: string } = {},
+    ) {
       antesDaTroca?.();
       antesDaTroca = null;
       trocas.push({ organizacaoId: escopo.organizationId, produtoId, anterior, novo });
       const linha = linhas.find((l) => l.id === produtoId && l.organizacaoId === escopo.organizationId);
       if (!linha || linha.imagemStoragePath !== anterior) return false;
       linha.imagemStoragePath = novo;
+      if (novo !== null) linha.gerenciada = true;
+      if (opcoes.pendenteNoBling !== undefined) linha.imagemBlingSyncPath = opcoes.pendenteNoBling;
       return true;
     },
   };
@@ -101,6 +130,10 @@ let armazenamento: ReturnType<typeof fakeArmazenamento>;
 let auditados: EventoDaFoto[];
 let proximoId: string;
 
+/** O que a sincronização com o Bling viu: o caminho no banco no momento em que foi chamada. */
+let sincronizacoes: Array<{ produtoId: string; caminhoNoBanco: string | null }>;
+let estadoNoBling: Awaited<ReturnType<FotoDoProdutoDependencies['sincronizarBling']>>;
+
 function deps(overrides: Partial<FotoDoProdutoDependencies> = {}): FotoDoProdutoDependencies {
   return {
     autorizar: async () => ({ _tag: 'Autorizado', scope }),
@@ -109,6 +142,10 @@ function deps(overrides: Partial<FotoDoProdutoDependencies> = {}): FotoDoProduto
     auditar: async (_escopo, evento) => { auditados.push(evento); },
     correlationId: () => 'corr-teste',
     novoId: () => proximoId,
+    sincronizarBling: async (_escopo, produtoId) => {
+      sincronizacoes.push({ produtoId, caminhoNoBanco: store.linhas.find((l) => l.id === produtoId)?.imagemStoragePath ?? null });
+      return estadoNoBling;
+    },
     ...overrides,
   };
 }
@@ -129,6 +166,7 @@ async function chamar(handler: (r: Request) => Promise<NextResponse>, corpo: unk
 const upload = (corpo: unknown, d = deps()) => chamar(createAutorizarUploadHandler(d), corpo);
 const confirmar = (corpo: unknown, d = deps()) => chamar(createConfirmarUploadHandler(d), corpo);
 const remover = (corpo: unknown, d = deps()) => chamar(createRemoverImagemHandler(d), corpo);
+const sincronizar = (corpo: unknown, d = deps()) => chamar(createSincronizarFotoHandler(d), corpo);
 
 const PNG_OK = { tamanho: 1024, tipo: 'image/png' };
 
@@ -141,6 +179,8 @@ beforeEach(() => {
   armazenamento = fakeArmazenamento();
   auditados = [];
   proximoId = OBJ_B;
+  sincronizacoes = [];
+  estadoNoBling = 'sincronizada';
 });
 
 describe('autorização — ninguém chega ao produto nem ao Storage sem organization:manage', () => {
@@ -193,10 +233,10 @@ describe('etapa A — autorizar upload', () => {
     expect(armazenamento.uploadsAutorizados).toEqual([]);
   });
 
-  it('recusa acima de 5 MB com 413, e aceita exatamente 5 MB', async () => {
-    expect(await upload({ produtoId: PRODUTO, tipo: 'image/png', tamanho: 5 * 1024 * 1024 + 1 }))
+  it('recusa acima de 3 MB com 413, e aceita exatamente 3 MB', async () => {
+    expect(await upload({ produtoId: PRODUTO, tipo: 'image/png', tamanho: 3 * 1024 * 1024 + 1 }))
       .toEqual({ status: 413, corpo: { resultado: 'ArquivoGrandeDemais' } });
-    expect((await upload({ produtoId: PRODUTO, tipo: 'image/png', tamanho: 5 * 1024 * 1024 })).status).toBe(200);
+    expect((await upload({ produtoId: PRODUTO, tipo: 'image/png', tamanho: 3 * 1024 * 1024 })).status).toBe(200);
   });
 
   it('corpo inválido (sem produtoId, id que não é uuid, JSON quebrado) é 400', async () => {
@@ -269,7 +309,7 @@ describe('etapa C — confirmar upload', () => {
     expect(store.linhas.find((l) => l.id === PRODUTO_DE_OUTRA_ORG)?.imagemStoragePath).toBe(caminho(OBJ_A, 'png', OUTRA_ORG, PRODUTO_DE_OUTRA_ORG));
   });
 
-  it('objeto acima de 5 MB ou com tipo diferente do prometido é recusado e removido', async () => {
+  it('objeto acima de 3 MB ou com tipo diferente do prometido é recusado e removido', async () => {
     armazenamento.objetos[FOTO_B] = { tamanho: 6 * 1024 * 1024, tipo: 'image/png' };
     expect((await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null })).corpo).toEqual({ resultado: 'ArquivoGrandeDemais' });
     armazenamento.objetos[FOTO_C] = { tamanho: 10, tipo: 'text/html' };
@@ -339,10 +379,11 @@ describe('etapa C — confirmar upload', () => {
     expect(store.linhas[0]!.imagemStoragePath).toBe(FOTO_B);
   });
 
-  it('assinatura falha depois do CAS: a foto continua confirmada e a tela recebe a imagem do Bling', async () => {
+  it('assinatura falha depois do CAS: a foto continua confirmada e a tela recebe placeholder, nunca o espelho do Bling', async () => {
     armazenamento = fakeArmazenamento({ objetos: { [FOTO_B]: PNG_OK }, falharAssinatura: true });
     const r = await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null });
-    expect(r).toEqual({ status: 200, corpo: { resultado: 'ImagemConfirmada', caminho: FOTO_B, url: BLING } });
+    // O produto acabou de ser adotado: o espelho do Bling não vale como fallback.
+    expect(r).toEqual({ status: 200, corpo: { resultado: 'ImagemConfirmada', caminho: FOTO_B, url: null, bling: 'sincronizada' } });
     expect(store.linhas[0]!.imagemStoragePath).toBe(FOTO_B);
     expect(auditados).toHaveLength(1);
   });
@@ -351,11 +392,11 @@ describe('etapa C — confirmar upload', () => {
     store.linhas[0]!.imagemDoBling = null;
     armazenamento = fakeArmazenamento({ objetos: { [FOTO_B]: PNG_OK }, falharAssinatura: true });
     const r = await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null });
-    expect(r.corpo).toEqual({ resultado: 'ImagemConfirmada', caminho: FOTO_B, url: null });
+    expect(r.corpo).toEqual({ resultado: 'ImagemConfirmada', caminho: FOTO_B, url: null, bling: 'sincronizada' });
     expect(store.linhas[0]!.imagemStoragePath).toBe(FOTO_B);
   });
 
-  it('confirmação concorrente da MESMA foto com assinatura falha: o fallback usa a releitura, não a imagem do Bling antiga', async () => {
+  it('confirmação concorrente da MESMA foto com assinatura falha: placeholder, nada removido', async () => {
     armazenamento = fakeArmazenamento({ objetos: { [FOTO_B]: PNG_OK }, falharAssinatura: true });
     // Entre a primeira leitura e o CAS, outra requisição confirmou esta mesma
     // foto e a sincronização trocou a imagem do Bling.
@@ -364,7 +405,7 @@ describe('etapa C — confirmar upload', () => {
       store.linhas[0]!.imagemDoBling = 'https://orgbling.s3.amazonaws.com/nova.jpg';
     });
     const r = await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null });
-    expect(r.corpo).toEqual({ resultado: 'ImagemConfirmada', caminho: FOTO_B, url: 'https://orgbling.s3.amazonaws.com/nova.jpg' });
+    expect(r.corpo).toEqual({ resultado: 'ImagemConfirmada', caminho: FOTO_B, url: null, bling: 'sincronizada' });
     expect(armazenamento.removidos).toEqual([]);
   });
 
@@ -382,21 +423,27 @@ describe('remoção', () => {
     armazenamento.objetos[FOTO_A] = PNG_OK;
   });
 
-  it('CAS para null, depois remove o objeto, e devolve a imagem do Bling para a tela', async () => {
+  it('CAS para null, depois remove o objeto; produto vinculado volta placeholder, sem ressuscitar o espelho do Bling', async () => {
     let removidoAntesDoCas = false;
     store.intercalar(() => { removidoAntesDoCas = armazenamento.removidos.length > 0; });
-    expect(await remover({ produtoId: PRODUTO, anterior: FOTO_A })).toEqual({ status: 200, corpo: { resultado: 'ImagemRemovida', url: BLING } });
+    expect(await remover({ produtoId: PRODUTO, anterior: FOTO_A })).toEqual({ status: 200, corpo: { resultado: 'ImagemRemovida', url: null, bling: 'sincronizada' } });
     expect(removidoAntesDoCas).toBe(false);
     expect(store.linhas[0]!.imagemStoragePath).toBeNull();
-    // A imagem do Bling não é tocada.
+    // O espelho não é apagado pela rota: só deixa de aparecer.
     expect(store.linhas[0]!.imagemDoBling).toBe(BLING);
     expect(armazenamento.removidos).toEqual([FOTO_A]);
     expect(auditados[0]).toMatchObject({ acao: 'catalog.product_image_removed', metadata: { produto_id: PRODUTO, limpeza_anterior: 'concluida' } });
   });
 
+  it('produto sem vínculo: continua gerenciado pelo ORBITA, então a imagem do Bling também não volta', async () => {
+    store.linhas[0]!.blingId = null;
+    estadoNoBling = 'sem_vinculo';
+    expect((await remover({ produtoId: PRODUTO, anterior: FOTO_A })).corpo).toEqual({ resultado: 'ImagemRemovida', url: null, bling: 'sem_vinculo' });
+  });
+
   it('sem imagem do Bling, volta url null — a tela mostra o placeholder', async () => {
     store.linhas[0]!.imagemDoBling = null;
-    expect((await remover({ produtoId: PRODUTO, anterior: FOTO_A })).corpo).toEqual({ resultado: 'ImagemRemovida', url: null });
+    expect((await remover({ produtoId: PRODUTO, anterior: FOTO_A })).corpo).toEqual({ resultado: 'ImagemRemovida', url: null, bling: 'sincronizada' });
   });
 
   it('precondição desatualizada (foto trocada em outra aba): 409, nada removido', async () => {
@@ -408,7 +455,7 @@ describe('remoção', () => {
 
   it('remoção repetida é idempotente', async () => {
     await remover({ produtoId: PRODUTO, anterior: FOTO_A });
-    expect((await remover({ produtoId: PRODUTO, anterior: FOTO_A })).corpo).toEqual({ resultado: 'ImagemRemovida', url: BLING });
+    expect((await remover({ produtoId: PRODUTO, anterior: FOTO_A })).corpo).toEqual({ resultado: 'ImagemRemovida', url: null, bling: 'sincronizada' });
     expect(armazenamento.removidos).toEqual([FOTO_A]);
   });
 
@@ -425,6 +472,84 @@ describe('remoção', () => {
     expect((await remover({ produtoId: PRODUTO, anterior: FOTO_A })).status).toBe(200);
     expect(store.linhas[0]!.imagemStoragePath).toBeNull();
     expect(auditados[0]?.metadata.limpeza_anterior).toBe('falhou');
+  });
+});
+
+describe('sincronização com o Bling depois da foto local', () => {
+  it('confirmar: a sincronização só roda DEPOIS do compare-and-set local, e o estado volta na resposta', async () => {
+    armazenamento.objetos[FOTO_B] = PNG_OK;
+    const r = await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null });
+    expect(r.corpo.bling).toBe('sincronizada');
+    expect(sincronizacoes).toEqual([{ produtoId: PRODUTO, caminhoNoBanco: FOTO_B }]);
+  });
+
+  it('Bling pendente não é falha da foto: 200, foto local gravada, estado pendente', async () => {
+    estadoNoBling = 'pendente';
+    armazenamento.objetos[FOTO_B] = PNG_OK;
+    const r = await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null });
+    expect(r.status).toBe(200);
+    expect(r.corpo).toMatchObject({ resultado: 'ImagemConfirmada', bling: 'pendente' });
+    expect(store.linhas[0]!.imagemStoragePath).toBe(FOTO_B);
+  });
+
+  it('exceção na sincronização vira pendente, sem vazar nada e sem desfazer a foto', async () => {
+    armazenamento.objetos[FOTO_B] = PNG_OK;
+    const r = await confirmar({ produtoId: PRODUTO, caminho: FOTO_B, anterior: null }, deps({
+      sincronizarBling: async () => { throw new Error('Bling 500: corpo remoto com detalhe interno'); },
+    }));
+    expect(r.status).toBe(200);
+    expect(r.corpo.bling).toBe('pendente');
+    expect(JSON.stringify(r.corpo)).not.toContain('corpo remoto');
+    expect(store.linhas[0]!.imagemStoragePath).toBe(FOTO_B);
+  });
+
+  it('remover: sincroniza depois do CAS para null; sem vínculo volta sem_vinculo', async () => {
+    store.linhas[0]!.imagemStoragePath = FOTO_A;
+    estadoNoBling = 'sem_vinculo';
+    const r = await remover({ produtoId: PRODUTO, anterior: FOTO_A });
+    expect(r.corpo).toMatchObject({ resultado: 'ImagemRemovida', bling: 'sem_vinculo' });
+    expect(sincronizacoes).toEqual([{ produtoId: PRODUTO, caminhoNoBanco: null }]);
+  });
+
+  it('remover foto ainda não confirmada no Bling deixa a remoção pendente lá (o ORBITA já é dono das imagens)', async () => {
+    // O upload de A sincronizou só em parte: o Bling pode ter sido limpo ou ter A.
+    store.linhas[0]!.imagemStoragePath = FOTO_A;
+    await remover({ produtoId: PRODUTO, anterior: FOTO_A });
+    expect(store.linhas[0]).toMatchObject({ imagemStoragePath: null, imagemBlingSyncPath: FOTO_A });
+  });
+
+  it('remover foto já confirmada mantém o confirmado; produto sem vínculo não marca nada', async () => {
+    store.linhas[0]!.imagemStoragePath = FOTO_B;
+    store.linhas[0]!.imagemBlingSyncPath = FOTO_A;
+    await remover({ produtoId: PRODUTO, anterior: FOTO_B });
+    expect(store.linhas[0]).toMatchObject({ imagemStoragePath: null, imagemBlingSyncPath: FOTO_A });
+
+    store.linhas[0]!.imagemStoragePath = FOTO_C;
+    store.linhas[0]!.imagemBlingSyncPath = null;
+    store.linhas[0]!.blingId = null;
+    await remover({ produtoId: PRODUTO, anterior: FOTO_C });
+    expect(store.linhas[0]).toMatchObject({ imagemStoragePath: null, imagemBlingSyncPath: null });
+  });
+
+  it('conflito e recusa não disparam sincronização', async () => {
+    store.linhas[0]!.imagemStoragePath = FOTO_A;
+    expect((await remover({ produtoId: PRODUTO, anterior: FOTO_B })).status).toBe(409);
+    expect((await confirmar({ produtoId: PRODUTO, caminho: FOTO_C, anterior: FOTO_A })).status).toBe(422);
+    expect(sincronizacoes).toEqual([]);
+  });
+
+  it('"Tentar sincronizar novamente": só o produtoId, escopado; outra organização é 404 sem sincronizar', async () => {
+    estadoNoBling = 'pendente';
+    const ok = await sincronizar({ produtoId: PRODUTO, caminho: 'qualquer/coisa.png', organizationId: OUTRA_ORG });
+    expect(ok).toEqual({ status: 200, corpo: { resultado: 'SincronizacaoDaFoto', bling: 'pendente' } });
+    expect(await sincronizar({ produtoId: PRODUTO_DE_OUTRA_ORG })).toEqual({ status: 404, corpo: { resultado: 'ProdutoNaoEncontrado' } });
+    expect(sincronizacoes).toEqual([{ produtoId: PRODUTO, caminhoNoBanco: null }]);
+  });
+
+  it('sincronizar sem organization:manage é negado antes de qualquer leitura', async () => {
+    const negado = deps({ autorizar: async () => ({ _tag: 'Negado', response: NextResponse.json({ success: false }, { status: 403 }) }) });
+    expect((await sincronizar({ produtoId: PRODUTO }, negado)).status).toBe(403);
+    expect(sincronizacoes).toEqual([]);
   });
 });
 

@@ -1,6 +1,6 @@
 {
   "id": "produto-imagens",
   "public": false,
-  "fileSizeLimit": 5242880,
+  "fileSizeLimit": 3145728,
   "allowedMimeTypes": ["image/jpeg", "image/png", "image/webp"]
 }

@@ -7,16 +7,22 @@ staging.
 
 ## Modelo
 
-- Bucket privado `produto-imagens`: JPEG, PNG e WebP, até 5 MB por objeto.
+- Bucket privado `produto-imagens`: JPEG, PNG e WebP, até 3 MB por objeto (o limite
+  por imagem do Bling).
   A configuração vive em `src/lib/config/produtoImagemBucket.json`, lido pelo
   contrato TypeScript e pelo script de provisionamento.
 - O banco guarda só o caminho: `produtos.imagem_storage_path`
   (migration 70), no formato `<organizacao_id>/<produto_id>/<uuid>.<ext>`.
   A restrição `chk_produto_imagem_storage_path` prende o caminho à própria
   linha.
+- `produtos.imagem_bling_sync_path` (migration 72) guarda a foto que o Bling
+  confirmadamente tem. A sincronização ORBITA → Bling está em
+  [foto-produto-sync-bling.md](foto-produto-sync-bling.md).
 - `imagem_url` continua sendo o espelho do Bling. As leituras da tela
   (`/api/dashboard` e `/api/produtos`) devolvem em `imagem_url` a imagem efetiva:
-  a foto do ORBITA por URL assinada, senão a do Bling, senão nada (placeholder).
+  a foto do ORBITA por URL assinada; sem foto, a do Bling só se o ORBITA nunca
+  adotou a imagem do produto; senão nada (placeholder). Ver
+  [foto-produto-sync-bling.md](foto-produto-sync-bling.md).
 - Upload direto do navegador para o Storage, com token de `createSignedUploadUrl`
   emitido pelo servidor para um caminho que o servidor gerou. Nenhuma rota do
   ORBITA recebe os bytes.
@@ -40,9 +46,9 @@ npm run storage:aplicar -- --url https://<ref>.supabase.co --confirmar
 `aplicar --confirmar` cria ou ajusta pela API oficial e confere pela releitura.
 Uma segunda execução encontra o bucket em conformidade e não escreve nada.
 
-Ordem no ambiente: aplicar as migrations 70 e 71 (`npm run db:remoto:aplicar`),
+Ordem no ambiente: aplicar as migrations 70, 71 e 72 (`npm run db:remoto:aplicar`),
 provisionar o bucket e, só depois, publicar o código. Sem o bucket, as leituras
-continuam funcionando (a assinatura falha e cai para a imagem do Bling, com
+continuam funcionando (a assinatura falha e o produto com foto mostra o placeholder, com
 registro no log), e as rotas de foto respondem `ArmazenamentoIndisponivel`.
 
 Rollback: o código anterior ignora a coluna nova. Não há rollback de dados; a
@@ -54,9 +60,9 @@ nenhuma versão do código a ler.
 O laboratório (`npm run test:db`) sobe só o Postgres, com Storage desabilitado
 em `supabase/config.toml`. Ele prova:
 
-- as migrations 70 e 71 se aplicam em ordem sobre a cadeia canônica, e o
-  catálogo (`database/catalog-reference.json`) muda em exatamente uma coluna e
-  uma restrição;
+- as migrations 70, 71 e 72 se aplicam em ordem sobre a cadeia canônica, e
+  cada coluna nova (70 e 72) muda o catálogo
+  (`database/catalog-reference.json`) em exatamente uma coluna e uma restrição;
 - a restrição recusa caminho de outra organização, de outro produto, com
   travessia de diretório, e URL assinada
   (`supabase/tests/database/foto_personalizada_do_produto.test.sql`);
@@ -79,7 +85,7 @@ idempotência, auditoria sem dado sensível, leitura efetiva e UI.
 O laboratório não executa a API do Storage. Estes comportamentos dependem do
 serviço e precisam ser validados no staging:
 
-1. o bucket recusa, no upload assinado, tipo fora da lista e objeto acima de 5 MB;
+1. o bucket recusa, no upload assinado, tipo fora da lista e objeto acima de 3 MB;
 2. `createSignedUploadUrl(caminho, { upsert: false })` só aceita aquele caminho,
    e o token não sobrescreve objeto existente;
 3. `info` de um objeto inexistente é classificado como ausente (o adapter
@@ -94,7 +100,7 @@ serviço e precisam ser validados no staging:
 Depende de autorização explícita para aplicar migrations, criar o bucket e
 enviar arquivos ao projeto remoto.
 
-1. `npm run db:remoto:status`, depois `db:remoto:aplicar --confirmar`: 70 e 71 aplicadas.
+1. `npm run db:remoto:status`, depois `db:remoto:aplicar --confirmar`: 70, 71 e 72 aplicadas.
 2. `npm run storage:status`, depois `storage:aplicar --confirmar`, e `storage:status`
    de novo: "em conformidade".
 3. Com uma conta `owner`, abrir um produto já salvo e adicionar uma foto JPEG
@@ -103,8 +109,9 @@ enviar arquivos ao projeto remoto.
    prefixo `<org>/<produto>/`.
 5. Abrir o mesmo produto em duas abas e trocar nas duas: a segunda mostra a
    mensagem de conflito, e só um objeto novo fica no prefixo.
-6. Remover a foto: volta a imagem do Bling (ou o placeholder) e o objeto some.
-7. Tentar enviar um GIF, um arquivo de 6 MB e, pelo console, confirmar um
+6. Remover a foto: o placeholder aparece (o produto continua gerenciado pelo
+   ORBITA, então a imagem do Bling não volta) e o objeto some.
+7. Tentar enviar um GIF, um arquivo de 4 MB e, pelo console, confirmar um
    caminho de outra organização: as recusas respectivas, sem nada gravado.
 8. Com uma conta `member` (sem `organization:manage`): os controles respondem
    "Apenas quem administra…" e nada é gravado.
@@ -122,7 +129,7 @@ outro chamador de `ProdutoRepository.delete` ou outro `delete` direto em
 
 | Caminho | Tratamento da foto |
 |---|---|
-| `POST /api/produtos/delete` | `excluirProdutoComFoto`: exclui a linha escopada por `id` + organização; o `DELETE ... RETURNING` devolve o `imagem_storage_path` da linha excluída; só então o objeto sai do Storage, depois de passar de novo por `caminhoPertenceAoProduto`. Exclusão local falhou → o arquivo fica. Limpeza falhou → a exclusão continua valendo, a resposta não muda, e a falha vai para o log (`produtos.delete.limpeza_da_foto`). O resto da rota (a exclusão no Bling) não mudou. |
+| `POST /api/produtos/delete` | `excluirProdutoComFoto`: exclui a linha escopada por `id` + organização; o `DELETE ... RETURNING` devolve o `imagem_storage_path` da linha excluída; só então o objeto sai do Storage, depois de passar de novo por `caminhoPertenceAoProduto`. Exclusão local falhou → o arquivo fica. Limpeza falhou → a exclusão continua valendo, a resposta não muda, e a falha vai para o log (`produtos.delete.limpeza_da_foto`). Antes disso, se o produto tem `bling_id`, a exclusão no Bling precisa estar confirmada: situação `E`, `DELETE` e `GET` 404 (`excluirProdutoNoBling`). Sem confirmação, nada local é apagado. |
 | Deduplicação por `bling_id` em `ProdutoRepository.upsert` | Ocorre em `POST /api/produtos/update` quando o produto editado (A) passa a apontar para um `bling_id` que já pertence a outra linha local (B). B com foto → nada é excluído nem gravado localmente; a gravação falha com `ReconciliacaoDeProdutoNecessaria` e a rota responde "Produto salvo no Bling (id …), mas falhou ao gravar no ORBITA … Sincronize o catálogo para reconciliar". A continua A, B continua B com a foto. B sem foto → `excluirDuplicadoSemFoto`, um `DELETE ... WHERE id AND organizacao_id AND imagem_storage_path IS NULL RETURNING id`: a decisão "sem foto" é da mesma instrução. Zero linhas → relê: ausente segue; com foto (confirmada no meio) é reconciliação; outro estado falha explicitamente. Erro de banco nesse `DELETE` (FK de pedido, por exemplo) também é reconciliação: A e B ficam como estão, sem `update` nem `upsert`, e a causa vai só para o log do servidor. A corrida confirmação × DELETE condicionado é provada com duas transações reais em `scripts/database-concurrency-foto-produto.mjs`. |
 | `ON DELETE CASCADE` de `organizacoes` e de `auth.users` | Só a limpeza do E2E (`src/lib/e2e/supabasePorta.ts`) apaga organização ou usuário, e apenas os sintéticos da execução, que não enviam foto. Não há exclusão de organização no produto. Se um dia houver, ela precisa limpar o prefixo `<organizacao>/` do bucket. |
 | Policy `produtos_org_delete` (RLS, `authenticated`) | Nenhum código do ORBITA exclui produto pelo cliente do navegador; o cliente só lê. Uma exclusão direta por PostgREST deixaria o objeto sem referência. |

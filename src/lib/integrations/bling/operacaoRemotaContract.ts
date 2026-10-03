@@ -48,3 +48,27 @@ export type ExclusaoRemota =
 export interface ContatoRemoto {
   readonly id: string;
 }
+
+/**
+ * Escrita parcial (`PATCH`) num recurso por id.
+ *
+ * `2xx` prova que o Bling **aceitou** a escrita — não que o efeito já é
+ * visível: imagens de produto são processadas de forma assíncrona, e quem
+ * precisa do efeito confirma por leitura.
+ */
+export type EscritaRemota =
+  | { readonly _tag: 'EscritaAceita' }
+  /** `404`: o recurso não estava lá. */
+  | { readonly _tag: 'RemotoAusente' }
+  | FalhaDeOperacaoRemota;
+
+/**
+ * Produto lido por id: só o que a exclusão confirmada e a sincronização da
+ * foto precisam. `imagens` conta internas + externas — o ORBITA converge o
+ * conjunto inteiro para zero ou uma imagem, então a quantidade é o que se
+ * confere, não a identidade de cada uma.
+ */
+export interface ProdutoRemoto {
+  readonly id: string;
+  readonly imagens: number;
+}

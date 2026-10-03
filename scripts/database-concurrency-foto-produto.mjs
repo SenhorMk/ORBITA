@@ -27,10 +27,15 @@ const FOTO_A = `${prefixo}/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png`;
 const FOTO_B = `${prefixo}/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png`;
 const FOTO_C = `${prefixo}/cccccccc-cccc-4ccc-8ccc-cccccccccccc.webp`;
 
-/** O `UPDATE` que `ProdutoImagemRepository.trocarCaminho` emite pelo PostgREST. */
+/**
+ * O `UPDATE` que `ProdutoImagemRepository.trocarCaminho` emite pelo PostgREST:
+ * apontar para uma foto adota a imagem (`imagem_bling_gerenciada_pelo_orbita`)
+ * na mesma instrução; remover não a devolve.
+ */
 const CAS = `
   update public.produtos
-     set imagem_storage_path = $1
+     set imagem_storage_path = $1::text,
+         imagem_bling_gerenciada_pelo_orbita = imagem_bling_gerenciada_pelo_orbita or $1::text is not null
    where id = $2
      and organizacao_id = $3
      and imagem_storage_path = $4
@@ -53,8 +58,8 @@ async function semear(client, fotoInicial = FOTO_A) {
     [ORG_ID, OWNER_ID],
   );
   await client.query(
-    `insert into public.produtos (id, organizacao_id, user_id, bling_id, nome, imagem_url, imagem_storage_path)
-     values ($1, $2, $3, '71001', 'Produto Foto', 'https://bling/foto.jpg', $4)`,
+    `insert into public.produtos (id, organizacao_id, user_id, bling_id, nome, imagem_url, imagem_storage_path, imagem_bling_gerenciada_pelo_orbita)
+     values ($1, $2, $3, '71001', 'Produto Foto', 'https://bling/foto.jpg', $4::text, $4::text is not null)`,
     [PRODUTO_ID, ORG_ID, OWNER_ID, fotoInicial],
   );
 }
@@ -62,6 +67,12 @@ async function semear(client, fotoInicial = FOTO_A) {
 async function fotoAtual(client) {
   const { rows } = await client.query('select imagem_storage_path from public.produtos where id = $1', [PRODUTO_ID]);
   return rows[0]?.imagem_storage_path ?? null;
+}
+
+/** A autoridade da imagem: depois de uma foto, nunca volta a false. */
+async function gerenciada(client) {
+  const { rows } = await client.query('select imagem_bling_gerenciada_pelo_orbita as g from public.produtos where id = $1', [PRODUTO_ID]);
+  return rows[0]?.g ?? null;
 }
 
 /**
@@ -109,7 +120,7 @@ async function encenar({ criarCliente, novoDeT1, novoDeT2, sobreposicaoMs }) {
     const linhasT2 = (await t2EmVoo).rowCount;
     await t2.query('commit');
 
-    return { linhasT1, linhasT2, bloqueio, final: await fotoAtual(base) };
+    return { linhasT1, linhasT2, bloqueio, final: await fotoAtual(base), gerenciada: await gerenciada(base) };
   } finally {
     await t1.end().catch(() => {});
     await t2.end().catch(() => {});
@@ -139,7 +150,7 @@ async function encenarDeduplicacao({ criarCliente, sobreposicaoMs }) {
     await t2.query('begin');
 
     const linhasT1 = (await t1.query(
-      `update public.produtos set imagem_storage_path = $1
+      `update public.produtos set imagem_storage_path = $1, imagem_bling_gerenciada_pelo_orbita = true
         where id = $2 and organizacao_id = $3 and imagem_storage_path is null returning id`,
       [FOTO_A, PRODUTO_ID, ORG_ID],
     )).rowCount;
@@ -152,12 +163,63 @@ async function encenarDeduplicacao({ criarCliente, sobreposicaoMs }) {
     await t2.query('commit');
 
     const { rows } = await base.query('select count(*)::int as n from public.produtos where id = $1', [PRODUTO_ID]);
-    return { linhasT1, excluidasT2, bloqueio, linhaExiste: rows[0].n === 1, final: await fotoAtual(base) };
+    return { linhasT1, excluidasT2, bloqueio, linhaExiste: rows[0].n === 1, final: await fotoAtual(base), gerenciada: await gerenciada(base) };
   } finally {
     await t1.end().catch(() => {});
     await t2.end().catch(() => {});
     await base.end().catch(() => {});
   }
+}
+
+const ADQUIRIR_LEASE = 'select public.adquirir_lease_da_foto_no_bling($1, $2, $3, 90) as adquiriu';
+const TOKEN_1 = 'c7000000-0000-4000-8000-0000000000e1';
+const TOKEN_2 = 'c7000000-0000-4000-8000-0000000000e2';
+
+/**
+ * Corrida do lease da sincronização com o Bling (migration 72): T1 adquire e
+ * segura a transação; T2 tenta adquirir o MESMO produto, fica presa na trava
+ * da linha e, quando T1 commita, reavalia "lease ausente ou expirado" contra a
+ * versão nova — que já tem o lease vigente de T1. Só uma adquire.
+ */
+async function encenarLease({ criarCliente, sobreposicaoMs }) {
+  const base = criarCliente();
+  await base.connect();
+  await semear(base);
+
+  const t1 = criarCliente();
+  const t2 = criarCliente();
+  await t1.connect();
+  await t2.connect();
+  try {
+    const { rows: [{ pid }] } = await t2.query('select pg_backend_pid() as pid');
+    await t1.query('begin');
+    await t2.query('begin');
+
+    const adquiriuT1 = (await t1.query(ADQUIRIR_LEASE, [ORG_ID, PRODUTO_ID, TOKEN_1])).rows[0].adquiriu;
+    const t2EmVoo = t2.query(ADQUIRIR_LEASE, [ORG_ID, PRODUTO_ID, TOKEN_2]);
+
+    await new Promise((resolve) => setTimeout(resolve, sobreposicaoMs));
+    const bloqueio = await esperandoTrava(base, pid);
+    await t1.query('commit');
+    const adquiriuT2 = (await t2EmVoo).rows[0].adquiriu;
+    await t2.query('commit');
+
+    const { rows } = await base.query('select imagem_bling_sync_lease_token::text as dono from public.produtos where id = $1', [PRODUTO_ID]);
+    return { adquiriuT1, adquiriuT2, bloqueio, dono: rows[0]?.dono ?? null };
+  } finally {
+    await t1.end().catch(() => {});
+    await t2.end().catch(() => {});
+    await base.end().catch(() => {});
+  }
+}
+
+function violacoesDoLease(r) {
+  const problemas = [];
+  if (r.adquiriuT1 !== true) problemas.push('lease: T1 não adquiriu um produto sem lease');
+  if (r.adquiriuT2 !== false) problemas.push('lease: T2 também adquiriu — duas execuções escreveriam no Bling');
+  if (r.dono !== TOKEN_1) problemas.push('lease: o dono final não é T1');
+  if (r.bloqueio !== 'Lock') problemas.push(`lease: T2 não esperou a trava (wait_event_type=${r.bloqueio})`);
+  return problemas;
 }
 
 function violacoesDaDeduplicacao(r) {
@@ -167,6 +229,7 @@ function violacoesDaDeduplicacao(r) {
   if (!r.linhaExiste) problemas.push('deduplicação: a linha com foto sumiu');
   if (r.final !== FOTO_A) problemas.push(`deduplicação: foto final ${r.final}, esperado ${FOTO_A}`);
   if (r.bloqueio !== 'Lock') problemas.push(`deduplicação: o DELETE não esperou a trava (wait_event_type=${r.bloqueio})`);
+  if (r.gerenciada !== true) problemas.push('deduplicação: a confirmação vencedora não adotou a imagem');
   return problemas;
 }
 
@@ -176,6 +239,7 @@ function violacoes(nome, resultado, esperadoFinal) {
   if (resultado.linhasT2 !== 0) problemas.push(`${nome}: T2 trocou ${resultado.linhasT2} linhas, esperado 0 (sobrescrita silenciosa)`);
   if (resultado.final !== esperadoFinal) problemas.push(`${nome}: foto final ${resultado.final}, esperado ${esperadoFinal}`);
   if (resultado.bloqueio !== 'Lock') problemas.push(`${nome}: T2 não esperou a trava (wait_event_type=${resultado.bloqueio})`);
+  if (resultado.gerenciada !== true) problemas.push(`${nome}: a autoridade da imagem não ficou com o ORBITA (${resultado.gerenciada})`);
   return problemas;
 }
 
@@ -193,11 +257,13 @@ export async function runFotoDoProdutoRaceRehearsal({
     const trocaTroca = await encenar({ criarCliente: createClient, novoDeT1: FOTO_B, novoDeT2: FOTO_C, sobreposicaoMs });
     const remocaoTroca = await encenar({ criarCliente: createClient, novoDeT1: null, novoDeT2: FOTO_C, sobreposicaoMs });
     const deduplicacao = await encenarDeduplicacao({ criarCliente: createClient, sobreposicaoMs });
+    const lease = await encenarLease({ criarCliente: createClient, sobreposicaoMs });
 
     const problemas = [
       ...violacoes('troca × troca', trocaTroca, FOTO_B),
       ...violacoes('remoção × troca', remocaoTroca, null),
       ...violacoesDaDeduplicacao(deduplicacao),
+      ...violacoesDoLease(lease),
     ];
     if (problemas.length > 0) {
       return err('FotoDoProdutoRaceViolated', `corrida da foto violou o invariante: ${problemas.join(' | ')}`, { problemas });
@@ -209,7 +275,9 @@ export async function runFotoDoProdutoRaceRehearsal({
         + `(wait_event_type=${trocaTroca.bloqueio}): troca × troca deixa a foto da vencedora e a perdedora `
         + `vê ${trocaTroca.linhasT2} linhas; remoção × troca deixa o produto sem foto e a troca atrasada `
         + `vê ${remocaoTroca.linhasT2} linhas — nenhuma sobrescrita silenciosa; confirmação × DELETE condicionado da deduplicação: `
-        + `o DELETE espera a trava e exclui ${deduplicacao.excluidasT2} linhas, a linha e a foto ficam`,
+        + `o DELETE espera a trava e exclui ${deduplicacao.excluidasT2} linhas, a linha e a foto ficam; `
+        + `lease da sincronização com o Bling × lease: a segunda aquisição espera a trava `
+        + `(wait_event_type=${lease.bloqueio}) e não adquire (${lease.adquiriuT2}) — uma execução por produto`,
     }));
   } catch (cause) {
     return err('FotoDoProdutoRaceFailed', 'não foi possível encenar a corrida da foto do produto', {}, cause);

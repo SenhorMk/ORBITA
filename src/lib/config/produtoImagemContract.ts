@@ -29,8 +29,15 @@ export const BUCKET_PRODUTO_IMAGENS: string = bucket.id;
 export const TIPOS_DE_IMAGEM = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export type TipoDeImagem = (typeof TIPOS_DE_IMAGEM)[number];
 
-/** 5 MB. O bucket impõe o mesmo limite; conferir aqui é só antecipar a recusa. */
+/**
+ * 3 MB — o limite por imagem do Bling (central de ajuda oficial), já que a
+ * foto do ORBITA é importada lá. Fonte única: `produtoImagemBucket.json`, que
+ * o bucket também impõe; conferir aqui é só antecipar a recusa.
+ */
 export const TAMANHO_MAXIMO_DA_IMAGEM: number = bucket.fileSizeLimit;
+
+/** O limite em MB inteiros, para as frases da tela e da API. */
+export const TAMANHO_MAXIMO_DA_IMAGEM_MB = Math.round(TAMANHO_MAXIMO_DA_IMAGEM / (1024 * 1024));
 
 /** Para o `accept` do `<input type="file">`. É conveniência de UX, nunca a barreira. */
 export const ACCEPT_DE_IMAGEM = TIPOS_DE_IMAGEM.join(',');
@@ -43,6 +50,67 @@ const EXTENSAO_POR_TIPO: Readonly<Record<TipoDeImagem, 'jpg' | 'png' | 'webp'>> 
 
 /** Validade da URL de leitura gerada a cada leitura do catálogo, em segundos. */
 export const VALIDADE_DA_LEITURA_ASSINADA_S = 60 * 60;
+
+/**
+ * Validade da URL assinada entregue ao Bling para importar a foto. O Bling
+ * copia o arquivo para o próprio armazenamento em segundos (provado em
+ * 2026-10-02) e não depende da URL depois; a margem cobre a fila dele.
+ */
+export const VALIDADE_DA_IMPORTACAO_NO_BLING_S = 15 * 60;
+
+/**
+ * Validade do lease por produto da sincronização com o Bling.
+ *
+ * Precisa exceder todo o período em que uma execução antiga ainda pode tocar
+ * o Bling: o orçamento da convergência é de 40 s e a função da rota morre em
+ * `maxDuration = 60` s. Com 90 s, um lease só expira depois que a execução que
+ * o adquiriu já não existe — e só então outra pode recuperá-lo.
+ */
+export const VALIDADE_DO_LEASE_DA_SINCRONIZACAO_S = 90;
+
+/**
+ * O estado da foto do ORBITA no Bling, derivado de quatro dados persistidos:
+ * a autoridade (`imagem_bling_gerenciada_pelo_orbita`), o desejado
+ * (`imagem_storage_path`), o confirmado (`imagem_bling_sync_path`) e o drift
+ * (`imagem_bling_divergencia_detectada_em`):
+ *
+ * - `sem_foto`: o ORBITA nunca adotou a imagem do produto — o Bling é dono;
+ * - `sincronizada`: o Bling tem exatamente o desejado — uma foto, ou NENHUMA
+ *   imagem num produto gerenciado (remoção confirmada);
+ * - `pendente`: o desejado ainda não foi confirmado, ou uma leitura atual do
+ *   Bling mostrou imagem que o ORBITA não deseja (drift);
+ * - `sem_vinculo`: produto gerenciado, mas sem `bling_id`;
+ * - `em_andamento`: só na resposta — outra execução detém o lease do produto e
+ *   está convergindo o Bling; esta não tocou nele.
+ */
+export const ESTADOS_DA_FOTO_NO_BLING = ['sem_foto', 'sincronizada', 'pendente', 'sem_vinculo', 'em_andamento'] as const;
+export type EstadoDaFotoNoBling = (typeof ESTADOS_DA_FOTO_NO_BLING)[number];
+
+/**
+ * A autoridade da imagem é do ORBITA? Sim depois do primeiro upload. Foto ou
+ * confirmação sem o campo (leitura antiga) também provam a adoção.
+ */
+export function imagemGerenciadaPeloOrbita(produto: {
+  readonly gerenciada: boolean | null | undefined;
+  readonly desejado: string | null | undefined;
+  readonly confirmado: string | null | undefined;
+}): boolean {
+  return produto.gerenciada === true || !!produto.desejado || !!produto.confirmado;
+}
+
+/** A mesma derivação no servidor e na tela. `blingId` só vale quando numérico. */
+export function estadoDaFotoNoBling(produto: {
+  readonly blingId: string | null | undefined;
+  readonly gerenciada: boolean | null | undefined;
+  readonly desejado: string | null | undefined;
+  readonly confirmado: string | null | undefined;
+  readonly divergente: boolean | null | undefined;
+}): EstadoDaFotoNoBling {
+  if (!imagemGerenciadaPeloOrbita(produto)) return 'sem_foto';
+  if (!/^\d+$/u.test(String(produto.blingId ?? '').trim())) return 'sem_vinculo';
+  const emDia = (produto.desejado ?? null) === (produto.confirmado ?? null) && produto.divergente !== true;
+  return emDia ? 'sincronizada' : 'pendente';
+}
 
 export function tipoDeImagemPermitido(tipo: string): tipo is TipoDeImagem {
   return (TIPOS_DE_IMAGEM as readonly string[]).includes(tipo);
@@ -118,11 +186,18 @@ export const remocaoDeImagemSchema = z.object({
 });
 export type RemocaoDeImagem = z.infer<typeof remocaoDeImagemSchema>;
 
+/** `POST /api/produtos/imagem/sincronizar`: só o produto — a foto vem do banco. */
+export const sincronizacaoDeImagemSchema = z.object({ produtoId: z.string().uuid() });
+
+const estadoDaFotoNoBlingSchema = z.enum(ESTADOS_DA_FOTO_NO_BLING);
+
 export const respostaDeImagemSchema = z.discriminatedUnion('resultado', [
   z.object({ resultado: z.literal('UploadAutorizado'), caminho: z.string(), token: z.string() }),
-  z.object({ resultado: z.literal('ImagemConfirmada'), caminho: z.string(), url: z.string().nullable() }),
+  /** `bling`: onde a sincronização com o Bling parou. Falha lá não desfaz a foto local. */
+  z.object({ resultado: z.literal('ImagemConfirmada'), caminho: z.string(), url: z.string().nullable(), bling: estadoDaFotoNoBlingSchema }),
   /** `url` é a imagem do Bling que volta a valer, quando existe. */
-  z.object({ resultado: z.literal('ImagemRemovida'), url: z.string().nullable() }),
+  z.object({ resultado: z.literal('ImagemRemovida'), url: z.string().nullable(), bling: estadoDaFotoNoBlingSchema }),
+  z.object({ resultado: z.literal('SincronizacaoDaFoto'), bling: estadoDaFotoNoBlingSchema }),
   z.object({ resultado: z.literal('TipoNaoPermitido') }),
   z.object({ resultado: z.literal('ArquivoGrandeDemais') }),
   z.object({ resultado: z.literal('ProdutoNaoEncontrado') }),
@@ -135,13 +210,14 @@ export const respostaDeImagemSchema = z.discriminatedUnion('resultado', [
 export type RespostaDeImagem = z.infer<typeof respostaDeImagemSchema>;
 export type FalhaDeImagem = Exclude<
   RespostaDeImagem['resultado'],
-  'UploadAutorizado' | 'ImagemConfirmada' | 'ImagemRemovida'
+  'UploadAutorizado' | 'ImagemConfirmada' | 'ImagemRemovida' | 'SincronizacaoDaFoto'
 >;
 
 export const STATUS_HTTP_DA_IMAGEM: Readonly<Record<RespostaDeImagem['resultado'], number>> = {
   UploadAutorizado: 200,
   ImagemConfirmada: 200,
   ImagemRemovida: 200,
+  SincronizacaoDaFoto: 200,
   TipoNaoPermitido: 415,
   ArquivoGrandeDemais: 413,
   // Inexistente e de outra organização são a MESMA resposta: a diferença
@@ -157,7 +233,7 @@ export const STATUS_HTTP_DA_IMAGEM: Readonly<Record<RespostaDeImagem['resultado'
 /** Frases públicas. Nenhuma carrega texto do Storage nem detalhe do servidor. */
 export const MENSAGEM_DA_FALHA_DE_IMAGEM: Readonly<Record<FalhaDeImagem, string>> = {
   TipoNaoPermitido: 'Formato não suportado. Use uma imagem JPEG, PNG ou WebP.',
-  ArquivoGrandeDemais: 'A imagem passa de 5 MB. Escolha um arquivo menor.',
+  ArquivoGrandeDemais: `A imagem passa de ${TAMANHO_MAXIMO_DA_IMAGEM_MB} MB. Escolha um arquivo menor.`,
   ProdutoNaoEncontrado: 'Produto não encontrado.',
   Conflito: 'A foto deste produto foi alterada em outra janela. Feche e abra o produto de novo para ver a versão atual.',
   UploadAusente: 'O envio da imagem não foi concluído. Tente de novo.',

@@ -13,7 +13,7 @@ import { err, failureMessage, ok } from './script-result.mjs';
  *
  * A configuração desejada é lida de `src/lib/config/produtoImagemBucket.json`,
  * o mesmo arquivo que o contrato TypeScript importa: privado, JPEG/PNG/WebP,
- * 5 MB. Tudo passa pela API oficial do Storage (`getBucket`, `createBucket`,
+ * 3 MB (o limite por imagem do Bling). Tudo passa pela API oficial do Storage (`getBucket`, `createBucket`,
  * `updateBucket`); nada toca `storage.buckets` ou `storage.objects` por SQL.
  *
  * Nenhuma policy de `storage.objects` é criada nem precisa existir: o bucket é
