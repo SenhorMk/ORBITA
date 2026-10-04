@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { collectAislopDiagnosticCounts } from './aislop-ratchet.mjs';
+import { findUnlistedDiagnostics } from './aislop-ratchet.mjs';
 
 // Zero-tolerance AI-slop gate (ticket 20): there is no anonymous
 // baseline/ratchet snapshot and no global ceiling. Every diagnostic must
@@ -27,8 +27,6 @@ if (!scan.stdout) {
 } else {
   const report = JSON.parse(scan.stdout);
   const allDiagnostics = report.diagnostics ?? [];
-  const blockingDiagnostics = allDiagnostics.filter((d) => d.severity !== 'info');
-  const diagnostics = collectAislopDiagnosticCounts(blockingDiagnostics);
   const summary = report.summary ?? { errors: 0, warnings: 0 };
 
   const allowlist = JSON.parse(readFileSync(allowlistPath, 'utf8'));
@@ -39,9 +37,7 @@ if (!scan.stdout) {
       + `(zero-tolerance; ${allowedFingerprints.size} documented exceptions in ${allowlistPath}).`,
   );
 
-  const unlisted = Object.keys(diagnostics)
-    .filter((fingerprint) => !allowedFingerprints.has(fingerprint))
-    .sort();
+  const unlisted = findUnlistedDiagnostics(allDiagnostics, allowlist);
 
   if (unlisted.length > 0) {
     console.error('New AI slop diagnostics detected (not in quality/aislop-allowlist.json):');
