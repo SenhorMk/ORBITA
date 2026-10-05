@@ -131,15 +131,59 @@ function fail(
 }
 
 /**
- * Frase do desfecho ambíguo.
+ * Frases do desfecho ambíguo — uma para CRIAR, outra para ATUALIZAR.
  *
- * Ela **não** diz que o contato não foi criado, porque não se sabe. O que ela
- * pede é a conferência antes de qualquer nova tentativa — que é a única ação
- * correta quando o efeito externo é desconhecido.
+ * Nenhuma diz que nada aconteceu, porque não se sabe; as duas pedem conferência
+ * antes de qualquer nova tentativa. E a de atualização nunca fala em "criado":
+ * com `blingId` conhecido o pedido é `PUT /contatos/{id}`, que não cria contato.
  */
-const FALHA_AMBIGUA_PUBLICA =
-  'Não foi possível confirmar o resultado do envio ao Bling. O contato pode ter sido criado lá. '
+export const FALHA_AMBIGUA_NA_CRIACAO =
+  'Não foi possível confirmar o resultado do envio. O contato pode ter sido criado no Bling. '
   + 'Sincronize os clientes e confira antes de tentar de novo.';
+export const FALHA_AMBIGUA_NA_ATUALIZACAO =
+  'Não foi possível confirmar o resultado da atualização. As alterações podem ter sido aplicadas no Bling. '
+  + 'Sincronize os clientes e confira o contato antes de tentar novamente.';
+
+/** O Bling limitou todas as tentativas: requisição acima do limite não é processada. */
+const LIMITE_DO_BLING =
+  'O Bling está limitando as requisições no momento. Nada foi alterado no Bling. Tente de novo em instantes.';
+/** 401/403 sem renovação possível: o pedido não foi autorizado. */
+const ACESSO_RECUSADO =
+  'O Bling recusou o acesso desta conexão. Nada foi alterado no Bling. Refaça a conexão em Integrações e tente de novo.';
+
+type Operacao = 'criar' | 'atualizar';
+
+/**
+ * Uma exceção lançada ao falar com o Bling (`fetchWithAuth`: token, rede,
+ * limite) vira resposta ESTRUTURADA, classificada pelo que ela prova. Antes ela
+ * escapava do handler: a rota respondia um 500 sem JSON, a tela não conseguia
+ * ler o corpo e caía na frase genérica de "pode ter sido criado" — inclusive
+ * ao editar.
+ *
+ * Só duas exceções provam que nada aconteceu lá (`retrySafe`): o limite
+ * esgotado e o acesso recusado. Qualquer outra — rede, timeout, falha de
+ * leitura — pode ter acontecido depois de o Bling receber o pedido: ambíguo.
+ * Nada do erro (mensagem, token, corpo) vai para a resposta; só para o log.
+ */
+function respostaDaExcecao(erro: unknown, operacao: Operacao, scope: VerifiedOrganizationScope): NextResponse {
+  registrarFalhaInterna(`clientes.update.bling_${operacao}`, erro, {
+    organizacaoId: scope.organizationId,
+    atorId: scope.actorId,
+  });
+  const nome = erro instanceof Error ? erro.name : '';
+  if (nome === 'BlingLimiteDeRequisicoesError') return fail(LIMITE_DO_BLING, 503, { retrySafe: true });
+  if (nome === 'BlingAcessoRecusadoError') return fail(ACESSO_RECUSADO, 502, { retrySafe: true });
+  return fail(operacao === 'criar' ? FALHA_AMBIGUA_NA_CRIACAO : FALHA_AMBIGUA_NA_ATUALIZACAO, 502);
+}
+
+/**
+ * A recusa do Bling na tela: só a validação ESTRUTURADA dele (descrição e
+ * campos). Um corpo fora do envelope de erro — HTML, texto cru — não é
+ * repassado: vira a frase com o status.
+ */
+function motivoDaRecusa(failure: { readonly type: string; readonly status: number; readonly message: string }): string {
+  return failure.type.startsWith('HTTP_') ? `HTTP ${failure.status}` : failure.message;
+}
 
 /**
  * Frase pública da falha parcial. Fixa, e sem nada da linha recusada.
@@ -170,6 +214,49 @@ function toContatoPayload(body: ClienteRequest): ContatoBlingPayload {
     cidade: opcional(body.cidade),
     uf: opcional(body.uf),
   };
+}
+
+/**
+ * O pedido ao Bling: `PUT` com `blingId` conhecido, `POST` sem ele. Devolve o
+ * id confirmado, ou a resposta HTTP já classificada (recusa, ambíguo, exceção).
+ */
+async function enviarAoBling(
+  deps: ClienteDependencies,
+  body: ClienteRequest,
+  payload: ContatoBlingPayload,
+  scope: VerifiedOrganizationScope,
+): Promise<{ readonly _tag: 'Enviado'; readonly blingId: string } | { readonly _tag: 'Respondido'; readonly resposta: NextResponse }> {
+  if (body.blingId) {
+    // Edição: `PUT /contatos/{id}`. Falha aqui NUNCA vira POST, e o retry
+    // não é automático — repetir o PUT pode sobrescrever uma edição feita no
+    // Bling entretanto. Ambíguo pede conferência antes.
+    let atualizado: Awaited<ReturnType<ClienteBlingPort['atualizar']>>;
+    try {
+      atualizado = await deps.bling.atualizar(body.blingId, payload);
+    } catch (erro: unknown) {
+      return { _tag: 'Respondido', resposta: respostaDaExcecao(erro, 'atualizar', scope) };
+    }
+    if (atualizado._tag === 'BlingFailed') {
+      return { _tag: 'Respondido', resposta: recusaProvadaPeloProvedor(atualizado.failure.status)
+        ? fail(`O Bling recusou a atualização do contato: ${motivoDaRecusa(atualizado.failure)}`, 400, { retrySafe: true })
+        : fail(FALHA_AMBIGUA_NA_ATUALIZACAO, 502) };
+    }
+    return { _tag: 'Enviado', blingId: body.blingId };
+  }
+  let criado: Awaited<ReturnType<ClienteBlingPort['criar']>>;
+  try {
+    criado = await deps.bling.criar(payload);
+  } catch (erro: unknown) {
+    return { _tag: 'Respondido', resposta: respostaDaExcecao(erro, 'criar', scope) };
+  }
+  if (criado._tag === 'BlingFailed') {
+    // Recusa (4xx) é prova de que não há contato criado; qualquer outra
+    // coisa é desfecho ambíguo, e aí a tela não pode oferecer repetir.
+    return { _tag: 'Respondido', resposta: recusaProvadaPeloProvedor(criado.failure.status)
+      ? fail(`O Bling recusou o cadastro do contato: ${motivoDaRecusa(criado.failure)}`, 400, { retrySafe: true })
+      : fail(FALHA_AMBIGUA_NA_CRIACAO, 502) };
+  }
+  return { _tag: 'Enviado', blingId: criado.value.id };
 }
 
 /**
@@ -212,26 +299,9 @@ export function createClienteUpdateHandler(deps: ClienteDependencies) {
     const body = parsed.data;
     const payload = toContatoPayload(body);
 
-    let blingId: string;
-    if (body.blingId) {
-      const atualizado = await deps.bling.atualizar(body.blingId, payload);
-      if (atualizado._tag === 'BlingFailed') {
-        return recusaProvadaPeloProvedor(atualizado.failure.status)
-          ? fail(`O Bling recusou a atualização do contato: ${atualizado.failure.message}`, 400, { retrySafe: true })
-          : fail(FALHA_AMBIGUA_PUBLICA, 502);
-      }
-      blingId = body.blingId;
-    } else {
-      const criado = await deps.bling.criar(payload);
-      if (criado._tag === 'BlingFailed') {
-        // Recusa (4xx) é prova de que não há contato criado; qualquer outra
-        // coisa é desfecho ambíguo, e aí a tela não pode oferecer repetir.
-        return recusaProvadaPeloProvedor(criado.failure.status)
-          ? fail(`O Bling recusou o cadastro do contato: ${criado.failure.message}`, 400, { retrySafe: true })
-          : fail(FALHA_AMBIGUA_PUBLICA, 502);
-      }
-      blingId = criado.value.id;
-    }
+    const envio = await enviarAoBling(deps, body, payload, scope);
+    if (envio._tag === 'Respondido') return envio.resposta;
+    const { blingId } = envio;
 
     try {
       const client = await deps.store.upsert(scope, {
