@@ -48,11 +48,18 @@ function saldoDoProduto(estoque: number): { rotulo: string; cor: string } {
   return { rotulo: 'Em estoque', cor: 'var(--accent)' };
 }
 
+/**
+ * Cabe na linha em qualquer preset de geometria: 34px, mas nunca mais que a
+ * altura da linha menos o respiro da célula. No preset compacto (40px) a
+ * miniatura de 34px com 9px de respiro somava 52px e vazava sobre as bordas.
+ */
+const LADO_DA_MINIATURA = 'min(34px, calc(var(--linha-h) - 8px))';
+
 function Miniatura({ produto }: { produto: Produto }) {
   return (
     <span
       className="relative flex items-center justify-center shrink-0 overflow-hidden"
-      style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--chip)', border: '1px solid var(--line)' }}
+      style={{ width: LADO_DA_MINIATURA, height: LADO_DA_MINIATURA, borderRadius: 10, background: 'var(--chip)', border: '1px solid var(--line)' }}
       aria-hidden
     >
       <ImageIcon className="absolute w-4 h-4" style={{ color: 'var(--txt3)' }} />
@@ -129,7 +136,7 @@ export function TabelaDeProdutos({
               type="button"
               onClick={() => onAbrir(produto)}
               className="flex items-center min-w-0 text-left cursor-pointer"
-              style={{ gap: 10, padding: '9px 0' }}
+              style={{ gap: 10, padding: '4px 0' }}
             >
               <Miniatura produto={produto} />
               <span className="flex flex-col min-w-0" style={{ gap: 3 }}>
