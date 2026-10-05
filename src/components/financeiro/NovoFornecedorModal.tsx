@@ -4,27 +4,14 @@ import React from 'react';
 import { Building2, CheckCircle, Loader2, XCircle } from 'lucide-react';
 
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
-
-export interface DadosCNPJ {
-  razao_social: string;
-  nome_fantasia: string;
-  logradouro: string;
-  numero: string;
-  bairro: string;
-  municipio: string;
-  uf: string;
-  cep: string;
-  ddd_telefone_1?: string;
-  email?: string;
-  descricao_situacao_cadastral?: string;
-}
+import type { EmpresaCompleta } from '@/lib/empresas/empresaContract';
 
 interface NovoFornecedorModalProps {
   isOpen: boolean;
   onVoltar: () => void;
   cnpj: string;
   onCNPJChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  dadosCNPJ: DadosCNPJ | null;
+  dadosCNPJ: EmpresaCompleta | null;
   buscandoCNPJ: boolean;
   erroCNPJ: string;
   salvandoFornecedor: boolean;
@@ -134,15 +121,15 @@ export function NovoFornecedorModal({
           )}
         </div>
 
-        <CampoBloqueado id="fornecedor-razao-social" rotulo="Razão Social" valor={dadosCNPJ?.razao_social || ''} />
-        <CampoBloqueado id="fornecedor-nome-fantasia" rotulo="Nome Fantasia" valor={dadosCNPJ?.nome_fantasia || ''} />
+        <CampoBloqueado id="fornecedor-razao-social" rotulo="Razão Social" valor={dadosCNPJ?.razaoSocial || ''} />
+        <CampoBloqueado id="fornecedor-nome-fantasia" rotulo="Nome Fantasia" valor={dadosCNPJ?.nomeFantasia || ''} />
 
         <div className="grid grid-cols-3 gap-3">
           <div className="col-span-2">
             <CampoBloqueado
               id="fornecedor-logradouro"
               rotulo="Logradouro"
-              valor={dadosCNPJ ? `${dadosCNPJ.logradouro}, ${dadosCNPJ.numero}` : ''}
+              valor={dadosCNPJ ? [dadosCNPJ.logradouro, dadosCNPJ.numero].filter(Boolean).join(', ') : ''}
               placeholder="Rua, Número"
             />
           </div>

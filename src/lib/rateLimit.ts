@@ -7,7 +7,7 @@
  */
 
 /** One rate-limited action recognised by the durable store. */
-export type RateLimitAction = 'register' | 'bling_authorize' | 'bling_callback';
+export type RateLimitAction = 'register' | 'bling_authorize' | 'bling_callback' | 'empresa_busca' | 'empresa_cnpj';
 
 /** Outcome recorded by the durable store for one consume attempt. */
 export type RateLimitStoreResult =
@@ -44,6 +44,9 @@ export const DEFAULT_RATE_LIMIT_POLICIES: Readonly<Record<RateLimitAction, RateL
   register: { limit: 5, windowMs: 15 * 60 * 1_000 },
   bling_authorize: { limit: 10, windowMs: 5 * 60 * 1_000 },
   bling_callback: { limit: 20, windowMs: 5 * 60 * 1_000 },
+  // Busca com debounce no navegador: ~2 consultas por empresa encontrada.
+  empresa_busca: { limit: 30, windowMs: 60 * 1_000 },
+  empresa_cnpj: { limit: 20, windowMs: 60 * 1_000 },
 };
 
 /** Check and record one rate-limited attempt for `action:identifier`. */

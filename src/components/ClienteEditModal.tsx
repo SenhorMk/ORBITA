@@ -8,6 +8,9 @@ import { supabase } from '@/lib/supabaseClient';
 import { buildClienteRequest, contatoTipoSchema, indicadorIeSchema } from '@/lib/config/clienteContract';
 import { ErrorLogModal } from './ErrorLogModal';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
+import type { EmpresaCompleta } from '@/lib/empresas/empresaContract';
+import { AvisoDePreenchimento, BuscaDeEmpresa } from './clientes/BuscaDeEmpresa';
+import { preencherComEmpresa, ROTULO_DO_CAMPO, type CampoPreenchido, type ValoresDoFormulario } from './clientes/consultaDeEmpresa';
 
 /**
  * O cadastro e a edição de um contato, agora no `Modal` do Design System.
@@ -146,6 +149,10 @@ export function ClienteEditModal({
   const [cidade, setCidade] = useState(cliente?.cidade || '');
   const [uf, setUf] = useState(cliente?.uf || '');
 
+  // A busca de empresa só preenche: o que ela pôs (para não confundir com o que a pessoa digitou) e o aviso.
+  const [daBusca, setDaBusca] = useState<Partial<ValoresDoFormulario>>({});
+  const [preenchimento, setPreenchimento] = useState<{ nomeFantasia: string | null; mantidos: readonly CampoPreenchido[] } | null>(null);
+
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
@@ -156,6 +163,8 @@ export function ClienteEditModal({
   if (isOpen !== prevOpen || cliente !== prevCliente) {
     setPrevOpen(isOpen);
     setPrevCliente(cliente);
+    setDaBusca({});
+    setPreenchimento(null);
     if (cliente) {
       setNome(cliente.nome || '');
       setEmail(cliente.email || '');
@@ -218,6 +227,29 @@ export function ClienteEditModal({
       setTipo('F');
       setContribuinte('9');
     }
+  };
+
+  /**
+   * Preenche com a empresa escolhida — sem salvar, sem tocar no Bling. `tipo`
+   * vira `J`; o tipo de contribuinte fica como está (o CNPJ não diz se a
+   * empresa contribui ICMS), por isso o documento NÃO passa por `handleDocChange`.
+   */
+  const aplicarEmpresa = (empresa: EmpresaCompleta) => {
+    const r = preencherComEmpresa({ nome, cpfCnpj, email, telefone, cep, endereco, numero, bairro, cidade, uf }, daBusca, empresa);
+    setNome(r.valores.nome);
+    setCpfCnpj(r.valores.cpfCnpj);
+    setEmail(r.valores.email);
+    setTelefone(r.valores.telefone);
+    setCep(r.valores.cep);
+    setEndereco(r.valores.endereco);
+    setNumero(r.valores.numero);
+    setBairro(r.valores.bairro);
+    setCidade(r.valores.cidade);
+    setUf(r.valores.uf);
+    setTipo('J');
+    setDaBusca(r.daBusca);
+    setPreenchimento({ nomeFantasia: empresa.nomeFantasia, mantidos: r.mantidos });
+    if (errors.nome && r.valores.nome.trim()) setErrors((prev) => ({ ...prev, nome: '' }));
   };
 
   const handleSave = async () => {
@@ -341,6 +373,19 @@ export function ClienteEditModal({
               <CheckCircle2 className="w-4 h-4" aria-hidden />
               Contato salvo.
             </output>
+          )}
+
+          {isNew && (
+            <Secao titulo="Empresa">
+              <BuscaDeEmpresa buscar={fetchWithAuth} onEmpresa={aplicarEmpresa} />
+              {preenchimento && (
+                <AvisoDePreenchimento
+                  nomeFantasia={preenchimento.nomeFantasia}
+                  mantidos={preenchimento.mantidos.map((campo) => ROTULO_DO_CAMPO[campo])}
+                  onUsarNomeFantasia={() => { if (preenchimento.nomeFantasia) setNome(preenchimento.nomeFantasia); }}
+                />
+              )}
+            </Secao>
           )}
 
           <Secao titulo="Dados principais">
