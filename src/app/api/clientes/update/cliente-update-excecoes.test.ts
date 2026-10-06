@@ -117,6 +117,25 @@ describe('criação × edição', () => {
     expect(chamadas).not.toContain('POST');
   });
 
+  it('408 na criação NÃO é recusa provada: criação ambígua, sem retrySafe', async () => {
+    const { porta } = bling({
+      criar: async () => ({ _tag: 'BlingFailed', failure: { _tag: 'BlingProviderFailure', type: 'HTTP_408', status: 408, message: 'Request Timeout', duplicateSale: false } }),
+    });
+    const r = await responder(deps(porta), criacao());
+    expect(r.corpo.error).toBe(FALHA_AMBIGUA_NA_CRIACAO);
+    expect(r.corpo.retrySafe).toBeUndefined();
+  });
+
+  it('408 na edição NÃO é recusa provada: atualização ambígua, sem retrySafe, nunca "criado"', async () => {
+    const { porta } = bling({
+      atualizar: async () => ({ _tag: 'BlingFailed', failure: { _tag: 'BlingProviderFailure', type: 'HTTP_408', status: 408, message: 'Request Timeout', duplicateSale: false } }),
+    });
+    const r = await responder(deps(porta), edicao());
+    expect(r.corpo.error).toBe(FALHA_AMBIGUA_NA_ATUALIZACAO);
+    expect(r.corpo.retrySafe).toBeUndefined();
+    expect(r.corpo.error).not.toMatch(/pode ter sido criado/iu);
+  });
+
   it('recusa com corpo fora do envelope do Bling (HTML, texto) não é repassada à tela', async () => {
     const { porta } = bling({
       atualizar: async () => ({ _tag: 'BlingFailed', failure: { _tag: 'BlingProviderFailure', type: 'HTTP_400', status: 400, message: '<html>nginx debug id=99</html>', duplicateSale: false } }),

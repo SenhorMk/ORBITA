@@ -119,7 +119,9 @@ function recusaProvadaPeloProvedor(status: number): boolean {
   // conclusivo — a requisição pode ter sido processada antes de ele falhar.
   // E `INVALID_RESPONSE` carrega o status 2xx original, então cai fora daqui
   // por construção: ali o contato provavelmente FOI criado, só sem id de volta.
-  return status >= 400 && status < 500;
+  // 408 também NÃO é recusa: o pedido pode ter chegado e o prazo ter estourado
+  // depois — a mesma regra de `falhaPorStatus` (408 → indeterminado).
+  return status >= 400 && status < 500 && status !== 408;
 }
 
 function fail(
