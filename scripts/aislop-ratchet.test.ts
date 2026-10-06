@@ -38,13 +38,13 @@ describe('allowlist do aislop: a exceção temporária do braces é exata', () =
   const allowlist = JSON.parse(readFileSync(path.resolve('quality/aislop-allowlist.json'), 'utf8')) as {
     exceptions: Array<{ fingerprint: string; owner: string; ticket: string; date: string; reason: string }>;
   };
-  const BRACES = 'package.json|security|security/vulnerable-dependency|error|braces (high) — upgrade to aislop@0.18.0';
+  const BRACES = 'package.json|security|security/vulnerable-dependency|error|braces (high) — upgrade to aislop@0.18.1';
   const advisory = (message: string, overrides: Record<string, string> = {}) => ({
     filePath: 'package.json', engine: 'security', rule: 'security/vulnerable-dependency', severity: 'error', message, ...overrides,
   });
 
   it('o fingerprint exato do braces é aceito', () => {
-    expect(findUnlistedDiagnostics([advisory('braces (high) — upgrade to aislop@0.18.0')], allowlist)).toEqual([]);
+    expect(findUnlistedDiagnostics([advisory('braces (high) — upgrade to aislop@0.18.1')], allowlist)).toEqual([]);
   });
 
   it('qualquer outro advisory continua reprovando', () => {
@@ -54,17 +54,19 @@ describe('allowlist do aislop: a exceção temporária do braces é exata', () =
 
   it('mudar qualquer parte material do fingerprint não é coberto', () => {
     const variantes = [
-      advisory('braces (critical) — upgrade to aislop@0.18.0'),
-      // A recomendação ANTIGA deste mesmo advisory já não é coberta: a entrada foi substituída.
+      advisory('braces (critical) — upgrade to aislop@0.18.1'),
+      // As recomendações ANTERIORES deste advisory (0.6.0, 0.18.0) e uma versão futura não são cobertas.
       advisory('braces (high) — upgrade to aislop@0.6.0'),
+      advisory('braces (high) — upgrade to aislop@0.18.0'),
+      advisory('braces (high) — upgrade to aislop@0.18.2'),
       advisory('braces (high) — upgrade to aislop@0.19.0'),
       advisory('braces (high) — transitive — needs override or parent upgrade'),
-      advisory('braces (high) — upgrade to aislop@0.18.0 (2 advisories)'),
-      advisory('micromatch (high) — upgrade to aislop@0.18.0'),
-      advisory('braces (high) — upgrade to aislop@0.18.0', { filePath: 'apps/outro/package.json' }),
-      advisory('braces (high) — upgrade to aislop@0.18.0', { rule: 'security/outra-regra' }),
-      advisory('braces (high) — upgrade to aislop@0.18.0', { engine: 'code-quality' }),
-      advisory('braces (high) — upgrade to aislop@0.18.0', { severity: 'warning' }),
+      advisory('braces (high) — upgrade to aislop@0.18.1 (2 advisories)'),
+      advisory('micromatch (high) — upgrade to aislop@0.18.1'),
+      advisory('braces (high) — upgrade to aislop@0.18.1', { filePath: 'apps/outro/package.json' }),
+      advisory('braces (high) — upgrade to aislop@0.18.1', { rule: 'security/outra-regra' }),
+      advisory('braces (high) — upgrade to aislop@0.18.1', { engine: 'code-quality' }),
+      advisory('braces (high) — upgrade to aislop@0.18.1', { severity: 'warning' }),
     ];
     for (const variante of variantes) {
       expect(findUnlistedDiagnostics([variante], allowlist), JSON.stringify(variante)).toHaveLength(1);
