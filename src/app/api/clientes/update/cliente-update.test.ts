@@ -94,13 +94,14 @@ function requisicao(corpo: unknown): Request {
 }
 
 function corpoValido(overrides: Record<string, unknown> = {}) {
-  return buildClienteRequest({ nome: 'Ana Souza', ...overrides });
+  return buildClienteRequest({ nome: 'Ana Souza', tipo: 'F', indicadorIe: 9, ...overrides });
 }
 
 describe('fronteira formulário <-> rota do cliente', () => {
   it('o corpo montado pelo builder do cliente é aceito pelo schema que a rota executa', () => {
     const corpo = buildClienteRequest({
       nome: 'Ana Souza', email: 'ana@exemplo.com', telefone: '4899990000', cpfCnpj: '12345678901', uf: 'SC',
+      tipo: 'F', indicadorIe: 9,
     });
 
     expect(clienteRequestSchema.safeParse(corpo).success).toBe(true);
@@ -133,17 +134,31 @@ describe('fronteira formulário <-> rota do cliente', () => {
 });
 
 describe('campos que o Bling realmente aceita', () => {
-  it('deriva tipo J e indicadorIe 1 de um CNPJ', () => {
-    const corpo = buildClienteRequest({ nome: 'Empresa', cpfCnpj: '12345678000199' });
-
-    expect(corpo.tipo).toBe('J');
-    expect(corpo.indicadorIe).toBe(1);
+  it('CNPJ NÃO define contribuinte de ICMS: sem indicadorIe explícito o corpo é recusado', () => {
+    const semIndicador = clienteRequestSchema.safeParse({ nome: 'Empresa', cpfCnpj: '11222333000181', tipo: 'J' });
+    expect(semIndicador.success).toBe(false);
+    expect(semIndicador.error?.issues.map((i) => i.path.join('.'))).toEqual(['indicadorIe']);
   });
 
-  it('deriva tipo F e indicadorIe 9 de um CPF', () => {
-    const corpo = buildClienteRequest({ nome: 'Ana', cpfCnpj: '12345678901' });
+  it('sem tipo explícito o corpo é recusado: nada é deduzido do documento', () => {
+    const semTipo = clienteRequestSchema.safeParse({ nome: 'Empresa', cpfCnpj: '11222333000181', indicadorIe: 9 });
+    expect(semTipo.success).toBe(false);
+    expect(semTipo.error?.issues.map((i) => i.path.join('.'))).toEqual(['tipo']);
+  });
 
-    expect(corpo.tipo).toBe('F');
+  it('rota: corpo sem indicadorIe é 400 retrySafe e não chega ao Bling', async () => {
+    const bling = fakeBling();
+    const handler = createClienteUpdateHandler(deps({ bling }));
+    const resposta = await handler(requisicao({ nome: 'Empresa', cpfCnpj: '11222333000181', tipo: 'J' }));
+    const corpo = (await resposta.json()) as ClienteResponseBody;
+
+    expect(resposta.status).toBe(400);
+    expect(corpo.retrySafe).toBe(true);
+    expect(bling.criados).toHaveLength(0);
+  });
+
+  it('CNPJ com indicadorIe 9 escolhido: vai 9, não 1', () => {
+    const corpo = buildClienteRequest({ nome: 'Empresa', cpfCnpj: '11222333000181', tipo: 'J', indicadorIe: 9 });
     expect(corpo.indicadorIe).toBe(9);
   });
 

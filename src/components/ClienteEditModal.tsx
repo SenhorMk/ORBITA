@@ -8,6 +8,16 @@ import { supabase } from '@/lib/supabaseClient';
 import { buildClienteRequest, contatoTipoSchema, indicadorIeSchema } from '@/lib/config/clienteContract';
 import { ErrorLogModal } from './ErrorLogModal';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
+import { tipoDePessoaDoDocumento } from '@/lib/documento';
+import type { EmpresaCompleta } from '@/lib/empresas/empresaContract';
+import { AvisoDePreenchimento, ConsultaDeCnpj } from './clientes/ConsultaDeCnpj';
+import {
+  documentoCorrespondeAEmpresa,
+  preencherComEmpresa,
+  ROTULO_DO_CAMPO,
+  type CampoPreenchido,
+  type ValoresDoFormulario,
+} from './clientes/consultaDeEmpresa';
 
 /**
  * O cadastro e a edição de um contato, agora no `Modal` do Design System.
@@ -129,6 +139,52 @@ async function lerResposta(res: Response): Promise<RespostaDoContato | null> {
   }
 }
 
+/**
+ * Tipo de pessoa inicial: o gravado; sem ele, o que um documento VÁLIDO indica;
+ * sem nenhum dos dois, vazio, e a pessoa escolhe. Nunca um `F` inventado: um
+ * `PUT` levaria esse chute ao Bling por cima do que está lá.
+ */
+function tipoInicial(cliente: Cliente | null): string {
+  return cliente?.tipo || tipoDePessoaDoDocumento(cliente?.cpf_cnpj ?? '') || '';
+}
+
+/**
+ * Tipo de contribuinte inicial: o gravado, ou vazio. Nunca deduzido: o CNPJ não
+ * diz se a empresa contribui ICMS, e um `9` pré-selecionado num contato sem
+ * classificação local seria enviado ao Bling como se alguém tivesse escolhido.
+ */
+function contribuinteInicial(cliente: Cliente | null): string {
+  return cliente?.indicador_ie != null ? String(cliente.indicador_ie) : '';
+}
+
+/**
+ * Recusas locais, antes de qualquer envio: sem nome, sem tipo de pessoa, sem
+ * tipo de contribuinte escolhido, ou com um documento que não é o da empresa
+ * consultada, nada sai do navegador.
+ */
+function errosDoFormulario(f: {
+  readonly nome: string;
+  readonly tipo: string;
+  readonly contribuinte: string;
+  readonly documentoDivergente: boolean;
+}): { [campo: string]: string } {
+  const erros: { [campo: string]: string } = {};
+  if (!f.nome.trim()) erros.nome = 'Campo obrigatório';
+  if (!f.tipo) erros.tipo = 'Selecione o tipo de pessoa';
+  if (!f.contribuinte) erros.contribuinte = 'Selecione o tipo de contribuinte';
+  if (f.documentoDivergente) {
+    erros.cpfCnpj = 'O documento não é o da empresa consultada. Corrija o CPF/CNPJ ou descarte a consulta.';
+  }
+  return erros;
+}
+
+/** O que a consulta por CNPJ deixou no formulário, para conferir antes de salvar. */
+interface ConsultaAplicada {
+  readonly empresa: EmpresaCompleta;
+  readonly mantidos: readonly CampoPreenchido[];
+  readonly documentoSubstituido: string | null;
+}
+
 interface ClienteEditModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -169,14 +225,18 @@ export function ClienteEditModal({
   const [cpfCnpj, setCpfCnpj] = useState(cliente?.cpf_cnpj || '');
 
   // Extra fields for Bling
-  const [tipo, setTipo] = useState(cliente?.tipo || 'F');
-  const [contribuinte, setContribuinte] = useState(cliente?.indicador_ie !== undefined ? String(cliente.indicador_ie) : '9');
+  const [tipo, setTipo] = useState(() => tipoInicial(cliente));
+  const [contribuinte, setContribuinte] = useState(() => contribuinteInicial(cliente));
   const [cep, setCep] = useState(cliente?.cep || '');
   const [endereco, setEndereco] = useState(cliente?.endereco || '');
   const [numero, setNumero] = useState(cliente?.numero || '');
   const [bairro, setBairro] = useState(cliente?.bairro || '');
   const [cidade, setCidade] = useState(cliente?.cidade || '');
   const [uf, setUf] = useState(cliente?.uf || '');
+
+  // A consulta por CNPJ só preenche: o que ela pôs (para não confundir com o que a pessoa digitou) e o aviso.
+  const [daBusca, setDaBusca] = useState<Partial<ValoresDoFormulario>>({});
+  const [consulta, setConsulta] = useState<ConsultaAplicada | null>(null);
 
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -188,13 +248,15 @@ export function ClienteEditModal({
   if (isOpen !== prevOpen || cliente !== prevCliente) {
     setPrevOpen(isOpen);
     setPrevCliente(cliente);
+    setDaBusca({});
+    setConsulta(null);
     if (cliente) {
       setNome(cliente.nome || '');
       setEmail(cliente.email || '');
       setTelefone(cliente.telefone || '');
       setCpfCnpj(cliente.cpf_cnpj || '');
-      setTipo(cliente.tipo || 'F');
-      setContribuinte(cliente.indicador_ie !== undefined ? String(cliente.indicador_ie) : '9');
+      setTipo(tipoInicial(cliente));
+      setContribuinte(contribuinteInicial(cliente));
       setCep(cliente.cep || '');
       setEndereco(cliente.endereco || '');
       setNumero(cliente.numero || '');
@@ -206,8 +268,8 @@ export function ClienteEditModal({
       setEmail('');
       setTelefone('');
       setCpfCnpj('');
-      setTipo('F');
-      setContribuinte('9');
+      setTipo('');
+      setContribuinte('');
       setCep('');
       setEndereco('');
       setNumero('');
@@ -239,25 +301,52 @@ export function ClienteEditModal({
     errorMessage: '',
   });
 
-  // Inferência automática baseada no tamanho do documento (opcional para melhorar UX)
+  /**
+   * Um documento VÁLIDO indica o tipo de pessoa (CNPJ → J, CPF → F), salvo
+   * `Estrangeiro`, que é escolha explícita. O tipo de contribuinte nunca muda
+   * aqui: ter CNPJ não torna ninguém contribuinte de ICMS.
+   */
   const handleDocChange = (val: string) => {
     setCpfCnpj(val);
-    const digits = val.replace(/\D/g, '');
-    if (digits.length === 14) {
-      setTipo('J');
-      setContribuinte('1');
-    } else if (digits.length === 11) {
-      setTipo('F');
-      setContribuinte('9');
-    }
+    const indicado = tipoDePessoaDoDocumento(val);
+    if (indicado && tipo !== 'E') setTipo(indicado);
+    if (errors.cpfCnpj) setErrors((prev) => ({ ...prev, cpfCnpj: '' }));
   };
 
-  const handleSave = async () => {
-    const newErrors: { [key: string]: string } = {};
+  /**
+   * Preenche com a empresa consultada, sem salvar e sem tocar no Bling. `tipo`
+   * vira `J`; o tipo de contribuinte fica como está (o CNPJ não diz se a
+   * empresa contribui ICMS). Ver `preencherComEmpresa` para o que é mantido.
+   */
+  const aplicarEmpresa = (empresa: EmpresaCompleta) => {
+    const r = preencherComEmpresa({ nome, cpfCnpj, email, telefone, cep, endereco, numero, bairro, cidade, uf }, daBusca, empresa);
+    setNome(r.valores.nome);
+    setCpfCnpj(r.valores.cpfCnpj);
+    setEmail(r.valores.email);
+    setTelefone(r.valores.telefone);
+    setCep(r.valores.cep);
+    setEndereco(r.valores.endereco);
+    setNumero(r.valores.numero);
+    setBairro(r.valores.bairro);
+    setCidade(r.valores.cidade);
+    setUf(r.valores.uf);
+    setTipo('J');
+    setDaBusca(r.daBusca);
+    setConsulta({ empresa, mantidos: r.mantidos, documentoSubstituido: r.documentoSubstituido });
+    setErrors((prev) => ({ ...prev, tipo: '', cpfCnpj: '', ...(r.valores.nome.trim() ? { nome: '' } : {}) }));
+  };
 
-    if (!nome.trim()) {
-      newErrors.nome = 'Campo obrigatório';
-    }
+  /** A pessoa assume os dados como estão: o formulário deixa de estar ligado à consulta. */
+  const descartarConsulta = () => {
+    setConsulta(null);
+    setDaBusca({});
+    if (errors.cpfCnpj) setErrors((prev) => ({ ...prev, cpfCnpj: '' }));
+  };
+
+  const documentoDivergente = consulta !== null && !documentoCorrespondeAEmpresa(cpfCnpj, consulta.empresa);
+
+  const handleSave = async () => {
+    const newErrors = errosDoFormulario({ nome, tipo, contribuinte, documentoDivergente });
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
@@ -380,6 +469,22 @@ export function ClienteEditModal({
             </output>
           )}
 
+          {isNew && (
+            <Secao titulo="Empresa">
+              <ConsultaDeCnpj buscar={fetchWithAuth} onEmpresa={aplicarEmpresa} />
+              {consulta && (
+                <AvisoDePreenchimento
+                  empresa={consulta.empresa}
+                  mantidos={consulta.mantidos.map((campo) => ROTULO_DO_CAMPO[campo])}
+                  documentoSubstituido={consulta.documentoSubstituido}
+                  documentoDivergente={documentoDivergente}
+                  onUsarNomeFantasia={() => { if (consulta.empresa.nomeFantasia) setNome(consulta.empresa.nomeFantasia); }}
+                  onDescartar={descartarConsulta}
+                />
+              )}
+            </Secao>
+          )}
+
           <Secao titulo="Dados principais">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="flex flex-col gap-1.5 md:col-span-2">
@@ -433,36 +538,56 @@ export function ClienteEditModal({
                   id="cliente-edit-cpf-cnpj"
                   type="text"
                   value={cpfCnpj}
+                  aria-invalid={errors.cpfCnpj ? true : undefined}
                   onChange={(e) => handleDocChange(e.target.value)}
                   className="orbita-campo orbita-campo--mono"
                   placeholder="000.000.000-00"
                 />
+                {errors.cpfCnpj && (
+                  <span className="text-xs font-semibold" style={{ color: 'var(--danger)' }}>{errors.cpfCnpj}</span>
+                )}
               </div>
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="cliente-edit-tipo">Tipo de pessoa *</Rotulo>
                 <select
                   id="cliente-edit-tipo"
                   value={tipo}
-                  onChange={(e) => setTipo(e.target.value)}
+                  aria-invalid={errors.tipo ? true : undefined}
+                  onChange={(e) => {
+                    setTipo(e.target.value);
+                    if (errors.tipo) setErrors((prev) => ({ ...prev, tipo: '' }));
+                  }}
                   className="orbita-campo"
                 >
+                  <option value="" disabled>Selecione…</option>
                   <option value="F">Física (F)</option>
                   <option value="J">Jurídica (J)</option>
                   <option value="E">Estrangeiro (E)</option>
                 </select>
+                {errors.tipo && (
+                  <span className="text-xs font-semibold" style={{ color: 'var(--danger)' }}>{errors.tipo}</span>
+                )}
               </div>
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="cliente-edit-contribuinte">Tipo de contribuinte *</Rotulo>
                 <select
                   id="cliente-edit-contribuinte"
                   value={contribuinte}
-                  onChange={(e) => setContribuinte(e.target.value)}
+                  aria-invalid={errors.contribuinte ? true : undefined}
+                  onChange={(e) => {
+                    setContribuinte(e.target.value);
+                    if (errors.contribuinte) setErrors((prev) => ({ ...prev, contribuinte: '' }));
+                  }}
                   className="orbita-campo"
                 >
+                  <option value="" disabled>Selecione…</option>
                   <option value="1">1 - Contribuinte ICMS</option>
                   <option value="2">2 - Contribuinte isento</option>
                   <option value="9">9 - Não contribuinte</option>
                 </select>
+                {errors.contribuinte && (
+                  <span className="text-xs font-semibold" style={{ color: 'var(--danger)' }}>{errors.contribuinte}</span>
+                )}
               </div>
             </div>
           </Secao>
