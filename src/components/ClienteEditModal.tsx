@@ -38,9 +38,24 @@ interface FalhaDoContato {
  * criar o contato: a resposta se perde, e o navegador cai no `catch` sem saber
  * de nada.
  */
-const FALHA_AMBIGUA =
+const FALHA_AMBIGUA_NA_CRIACAO =
   'O envio não pôde ser confirmado. O contato pode ter sido criado no Bling. '
   + 'Sincronize os clientes e confira antes de tentar de novo.';
+
+/**
+ * A mesma dúvida na EDIÇÃO: o pedido é `PUT` de um contato que já existe, então
+ * nada pode ter sido "criado" — o que pode ter acontecido é a atualização.
+ */
+const FALHA_AMBIGUA_NA_ATUALIZACAO =
+  'A atualização pode ter sido aplicada no Bling. Sincronize os clientes antes de tentar novamente.';
+
+function falhaAmbigua(isNew: boolean) {
+  return isNew ? FALHA_AMBIGUA_NA_CRIACAO : FALHA_AMBIGUA_NA_ATUALIZACAO;
+}
+
+function tituloAmbiguo(isNew: boolean) {
+  return isNew ? 'Resultado do envio não confirmado' : 'Resultado da atualização não confirmado';
+}
 
 /**
  * O estado do diálogo quando o navegador não sabe o que aconteceu.
@@ -55,11 +70,11 @@ const FALHA_AMBIGUA =
  * A mensagem técnica do erro também não vai para a tela: ela não diz nada
  * acionável sobre o efeito externo, que é justamente o que está em dúvida.
  */
-function estadoAmbiguo() {
+function estadoAmbiguo(isNew: boolean) {
   return {
     isOpen: true,
-    title: 'Resultado do envio não confirmado',
-    errorMessage: FALHA_AMBIGUA,
+    title: tituloAmbiguo(isNew),
+    errorMessage: falhaAmbigua(isNew),
     permiteRepetir: false,
   };
 }
@@ -93,11 +108,28 @@ function estadoDeFalhaDoContato(
         ? isNew
           ? 'Falha ao Cadastrar Contato'
           : 'Falha ao Atualizar Contato'
-        : 'Resultado do envio não confirmado',
-    errorMessage: resposta.error || (permiteRepetir ? 'Erro ao processar sincronização.' : FALHA_AMBIGUA),
+        : tituloAmbiguo(isNew),
+    errorMessage: resposta.error || (permiteRepetir ? 'Erro ao processar sincronização.' : falhaAmbigua(isNew)),
     logs: [`[${new Date().toISOString()}] HTTP Status: ${status}`],
     permiteRepetir,
   };
+}
+
+/** O corpo de `POST /api/clientes/update`, quando é JSON. Todos os campos podem faltar. */
+type RespostaDoContato = FalhaDoContato & { readonly success?: boolean; readonly client?: Cliente };
+
+/**
+ * Lida defensivamente: um 500 sem JSON (HTML, corpo vazio) não pode derrubar a
+ * leitura. `null` é resultado NÃO confirmado, e nada do corpo vai para a tela.
+ */
+async function lerResposta(res: Response): Promise<RespostaDoContato | null> {
+  try {
+    const corpo: unknown = await res.json();
+    // SAFETY: só os campos opcionais de `RespostaDoContato` são lidos, e cada um é conferido no uso.
+    return corpo && typeof corpo === 'object' ? (corpo as RespostaDoContato) : null;
+  } catch {
+    return null;
+  }
 }
 
 interface ClienteEditModalProps {
@@ -301,7 +333,12 @@ export function ClienteEditModal({
         body: JSON.stringify(payload),
       });
 
-      const resData = await res.json();
+      const resData = await lerResposta(res);
+      if (resData === null) {
+        setErrorLogData({ ...estadoAmbiguo(isNew), logs: [`[${new Date().toISOString()}] HTTP Status: ${res.status}`] });
+        setIsSaving(false);
+        return;
+      }
 
       if (!res.ok || !resData.success) {
         setErrorLogData(estadoDeFalhaDoContato(resData, res.status, isNew));
@@ -324,7 +361,7 @@ export function ClienteEditModal({
       }, 1500);
     } catch {
       // Desfecho ambíguo. Ver `estadoAmbiguo`.
-      setErrorLogData(estadoAmbiguo());
+      setErrorLogData(estadoAmbiguo(isNew));
       setIsSaving(false);
     }
   };
