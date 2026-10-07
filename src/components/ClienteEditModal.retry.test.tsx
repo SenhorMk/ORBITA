@@ -32,6 +32,9 @@ async function salvarContatoNovo() {
   const usuaria = userEvent.setup();
   render(<ClienteEditModal isOpen onClose={vi.fn()} cliente={null} />);
   await usuaria.type(screen.getByLabelText('Nome / Razão social *'), 'Ana Souza');
+  // Tipo e contribuinte são escolha explícita: sem eles o formulário nem envia.
+  await usuaria.selectOptions(screen.getByLabelText('Tipo de pessoa *'), 'F');
+  await usuaria.selectOptions(screen.getByLabelText('Tipo de contribuinte *'), '9');
   await usuaria.click(screen.getByRole('button', { name: 'Salvar contato' }));
 }
 

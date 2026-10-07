@@ -1,33 +1,37 @@
-import { cnpjValido, digitosDoCnpj, formatarCnpj } from '@/lib/empresas/cnpj';
+import { cnpjValido, digitosDoDocumento, formatarCnpj } from '@/lib/documento';
 import {
-  respostaDaBuscaSchema,
   respostaDaConsultaPorCnpjSchema,
-  TERMO_MINIMO,
   type EmpresaCompleta,
-  type RespostaDaBusca,
   type RespostaDaConsultaPorCnpj,
 } from '@/lib/empresas/empresaContract';
 
 /**
- * O lado do navegador da busca de empresa: as chamadas às rotas do ORBITA e a
- * regra de preenchimento do formulário. Nada aqui grava: preencher é só
- * sugerir; quem salva é "Salvar contato", pelo fluxo de sempre.
+ * O lado do navegador da consulta por CNPJ: a chamada à rota do ORBITA e a
+ * regra de preenchimento do formulário de contato. Nada aqui grava: preencher
+ * é só sugerir; quem salva é "Salvar contato", pelo fluxo de sempre.
  */
 
-/** `fetch` autenticado (`fetchWithAuth`) — o mesmo do resto da tela. */
+/** `fetch` autenticado (`fetchWithAuth`), o mesmo do resto da tela. */
 export type BuscaAutenticada = (url: string, opcoes?: RequestInit) => Promise<Response>;
 
-/** O que fazer com o que a pessoa digitou. */
+/** O que fazer com o que a pessoa digitou no campo de consulta. */
 export type Intencao =
-  | { readonly _tag: 'Curto' }
-  | { readonly _tag: 'Cnpj'; readonly cnpj: string }
-  | { readonly _tag: 'Nome'; readonly termo: string };
+  | { readonly _tag: 'Vazio' }
+  /** Só dígitos e pontuação de CNPJ, ainda sem os 14 dígitos: espera. */
+  | { readonly _tag: 'Incompleto' }
+  /** 14 dígitos (ou mais) que não formam um CNPJ válido: não consulta. */
+  | { readonly _tag: 'CnpjInvalido' }
+  /** Letras ou outros caracteres: a consulta é só por CNPJ. */
+  | { readonly _tag: 'NaoCnpj' }
+  | { readonly _tag: 'Cnpj'; readonly cnpj: string };
 
-export function intencaoDaBusca(texto: string): Intencao {
+export function intencaoDaConsulta(texto: string): Intencao {
   const limpo = texto.trim();
-  // Só dígitos e pontuação de CNPJ, 14 dígitos válidos: é consulta direta.
-  if (/^[\d./\-\s]+$/u.test(limpo) && cnpjValido(limpo)) return { _tag: 'Cnpj', cnpj: digitosDoCnpj(limpo) };
-  return limpo.length < TERMO_MINIMO ? { _tag: 'Curto' } : { _tag: 'Nome', termo: limpo };
+  if (limpo === '') return { _tag: 'Vazio' };
+  if (!/^[\d./\-\s]+$/u.test(limpo)) return { _tag: 'NaoCnpj' };
+  const digitos = digitosDoDocumento(limpo);
+  if (digitos.length < 14) return { _tag: 'Incompleto' };
+  return cnpjValido(digitos) ? { _tag: 'Cnpj', cnpj: digitos } : { _tag: 'CnpjInvalido' };
 }
 
 async function lerJson(resposta: Response): Promise<unknown> {
@@ -38,20 +42,21 @@ async function lerJson(resposta: Response): Promise<unknown> {
   }
 }
 
-/** Resposta fora do contrato vira "indisponível" — nunca eco do corpo. */
-export async function buscarEmpresas(termo: string, buscar: BuscaAutenticada, sinal?: AbortSignal): Promise<RespostaDaBusca> {
-  const resposta = await buscar(`/api/empresas/busca?termo=${encodeURIComponent(termo)}`, { signal: sinal });
-  const lido = respostaDaBuscaSchema.safeParse(await lerJson(resposta));
-  return lido.success ? lido.data : { resultado: 'BuscaIndisponivel' };
-}
-
+/**
+ * Consulta a rota do ORBITA. Resposta fora do contrato, ou de outra empresa
+ * que não a pedida, vira "indisponível": nunca eco do corpo, nunca dado de
+ * um CNPJ diferente.
+ */
 export async function consultarCnpj(cnpj: string, buscar: BuscaAutenticada, sinal?: AbortSignal): Promise<RespostaDaConsultaPorCnpj> {
-  const resposta = await buscar(`/api/empresas/cnpj/${digitosDoCnpj(cnpj)}`, { signal: sinal });
+  const pedido = digitosDoDocumento(cnpj);
+  const resposta = await buscar(`/api/empresas/cnpj/${pedido}`, { signal: sinal });
   const lido = respostaDaConsultaPorCnpjSchema.safeParse(await lerJson(resposta));
-  return lido.success ? lido.data : { resultado: 'ConsultaIndisponivel' };
+  if (!lido.success) return { resultado: 'ConsultaIndisponivel' };
+  if (lido.data.resultado === 'EmpresaEncontrada' && lido.data.empresa.cnpj !== pedido) return { resultado: 'ConsultaIndisponivel' };
+  return lido.data;
 }
 
-/** Os campos do formulário de contato que a busca preenche. `tipo` é decidido à parte. */
+/** Os campos do formulário de contato que a consulta preenche. `tipo` é decidido à parte. */
 export const CAMPOS_PREENCHIDOS = ['nome', 'cpfCnpj', 'email', 'telefone', 'cep', 'endereco', 'numero', 'bairro', 'cidade', 'uf'] as const;
 export type CampoPreenchido = (typeof CAMPOS_PREENCHIDOS)[number];
 export type ValoresDoFormulario = Record<CampoPreenchido, string>;
@@ -85,30 +90,62 @@ export function valoresDaEmpresa(empresa: EmpresaCompleta): ValoresDoFormulario 
   };
 }
 
+export interface ResultadoDoPreenchimento {
+  readonly valores: ValoresDoFormulario;
+  /** O que a consulta pôs em cada campo, para a próxima consulta saber o que é dela. */
+  readonly daBusca: ValoresDoFormulario;
+  /** Campos que a pessoa tinha preenchido com outro valor e ficaram como estavam. */
+  readonly mantidos: readonly CampoPreenchido[];
+  /** O documento que a pessoa tinha digitado e que o CNPJ consultado substituiu. */
+  readonly documentoSubstituido: string | null;
+}
+
 /**
- * Preenche sem atropelar quem digitou.
+ * Preenche sem atropelar quem digitou, e sem deixar o cadastro com duas
+ * identidades.
  *
- * Um campo é da PESSOA quando tem valor e esse valor não é o que a busca
- * anterior colocou lá. Esses ficam como estão e voltam em `mantidos`. Os
- * demais — vazios, ou ainda com o valor de uma busca anterior — recebem o da
- * empresa nova: escolher outra empresa troca o que a busca tinha posto.
+ * - **CPF/CNPJ recebe sempre o CNPJ consultado.** Ele identifica a empresa:
+ *   manter um documento digitado antes, com o resto vindo de outra empresa,
+ *   gravaria um cadastro contraditório. Se a pessoa tinha digitado outro
+ *   documento, ele volta em `documentoSubstituido` para a tela dizer isso.
+ * - Os demais campos são da PESSOA quando têm valor e esse valor não é o que a
+ *   consulta anterior colocou lá. Esses ficam como estão e voltam em
+ *   `mantidos`. Os outros (vazios, ou ainda com o valor de uma consulta
+ *   anterior) recebem o da empresa nova: consultar outra empresa troca o que
+ *   a consulta tinha posto.
  */
 export function preencherComEmpresa(
   atuais: ValoresDoFormulario,
   daBuscaAnterior: Partial<ValoresDoFormulario>,
   empresa: EmpresaCompleta,
-): { readonly valores: ValoresDoFormulario; readonly daBusca: ValoresDoFormulario; readonly mantidos: readonly CampoPreenchido[] } {
+): ResultadoDoPreenchimento {
   const encontrados = valoresDaEmpresa(empresa);
   const valores = { ...atuais };
   const mantidos: CampoPreenchido[] = [];
-  for (const campo of CAMPOS_PREENCHIDOS) {
+  const editadoPelaPessoa = (campo: CampoPreenchido) => {
     const atual = atuais[campo].trim();
-    const editadoPelaPessoa = atual !== '' && atual !== (daBuscaAnterior[campo] ?? '').trim();
-    if (editadoPelaPessoa) {
-      if (atual !== encontrados[campo].trim()) mantidos.push(campo);
+    return atual !== '' && atual !== (daBuscaAnterior[campo] ?? '').trim();
+  };
+
+  for (const campo of CAMPOS_PREENCHIDOS) {
+    if (campo === 'cpfCnpj') continue;
+    if (editadoPelaPessoa(campo)) {
+      if (atuais[campo].trim() !== encontrados[campo].trim()) mantidos.push(campo);
       continue;
     }
     valores[campo] = encontrados[campo];
   }
-  return { valores, daBusca: encontrados, mantidos };
+
+  const documentoAnterior = atuais.cpfCnpj.trim();
+  const documentoSubstituido = editadoPelaPessoa('cpfCnpj') && digitosDoDocumento(documentoAnterior) !== empresa.cnpj
+    ? documentoAnterior
+    : null;
+  valores.cpfCnpj = encontrados.cpfCnpj;
+
+  return { valores, daBusca: encontrados, mantidos, documentoSubstituido };
+}
+
+/** O CPF/CNPJ do formulário ainda é o da empresa consultada? */
+export function documentoCorrespondeAEmpresa(cpfCnpj: string, empresa: EmpresaCompleta): boolean {
+  return digitosDoDocumento(cpfCnpj) === empresa.cnpj;
 }

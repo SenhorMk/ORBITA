@@ -48,27 +48,20 @@ export const clienteRequestSchema = z
       })
       .optional()
       .or(z.literal('')),
-    tipo: contatoTipoSchema.optional(),
-    indicadorIe: indicadorIeSchema.optional(),
+    /**
+     * Obrigatórios e explícitos. Nada é deduzido do documento: CNPJ não diz se
+     * a empresa contribui ICMS, e um valor inventado aqui iria ao Bling, num
+     * `PUT`, por cima da classificação real do contato.
+     */
+    tipo: contatoTipoSchema,
+    indicadorIe: indicadorIeSchema,
     cep: z.string().trim().max(12).optional().or(z.literal('')),
     endereco: z.string().trim().max(120).optional().or(z.literal('')),
     numero: z.string().trim().max(20).optional().or(z.literal('')),
     bairro: z.string().trim().max(80).optional().or(z.literal('')),
     cidade: z.string().trim().max(80).optional().or(z.literal('')),
     uf: z.string().trim().length(2, 'UF deve ter 2 letras').optional().or(z.literal('')),
-  })
-  .transform((valor) => ({
-    ...valor,
-    /**
-     * `tipo` e `indicadorIe` derivados do documento quando não informados:
-     * 14 dígitos é pessoa jurídica e contribuinte de ICMS; o resto é pessoa
-     * física e não contribuinte. A inferência fica aqui, num lugar só, em vez
-     * de espalhada pelo adapter.
-     */
-    tipo: valor.tipo ?? (apenasDigitos(valor.cpfCnpj ?? '').length === 14 ? ('J' as const) : ('F' as const)),
-    indicadorIe:
-      valor.indicadorIe ?? (apenasDigitos(valor.cpfCnpj ?? '').length === 14 ? (1 as const) : (9 as const)),
-  }));
+  });
 
 export type ClienteRequest = z.infer<typeof clienteRequestSchema>;
 export type ClienteRequestInput = z.input<typeof clienteRequestSchema>;

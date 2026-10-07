@@ -46,8 +46,9 @@ function deps(porta: ClienteBlingPort, store?: ClienteDependencies['store']): Cl
 const pedido = (corpo: unknown) => new Request('https://orbita.test/api/clientes/update', {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo),
 });
-const criacao = () => pedido(buildClienteRequest({ nome: 'Ana Souza' }));
-const edicao = () => pedido(buildClienteRequest({ nome: 'Ana Souza', blingId: '4321', id: '33333333-3333-4333-8333-333333333333' }));
+// `tipo` e `indicadorIe` são escolhas explícitas obrigatórias no contrato.
+const criacao = () => pedido(buildClienteRequest({ nome: 'Ana Souza', tipo: 'F', indicadorIe: 9 }));
+const edicao = () => pedido(buildClienteRequest({ nome: 'Ana Souza', tipo: 'F', indicadorIe: 9, blingId: '4321', id: '33333333-3333-4333-8333-333333333333' }));
 
 async function responder(d: ClienteDependencies, req: Request) {
   const r = await createClienteUpdateHandler(d)(req);

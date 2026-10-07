@@ -1,16 +1,14 @@
 import { z } from 'zod';
 
-import { cnpjValido, digitosDoCnpj } from '@/lib/empresas/cnpj';
+import { cnpjValido, digitosDoDocumento } from '@/lib/documento';
 import type { EmpresaCompleta } from '@/lib/empresas/empresaContract';
 
 /**
- * Consulta de dados cadastrais por CNPJ — a ÚNICA do ORBITA. Serve o cadastro
- * de contatos e o cadastro de fornecedor do Financeiro, que antes chamava a
- * BrasilAPI direto do navegador e espalhava o mapeamento pelos componentes.
+ * Consulta de dados cadastrais por CNPJ para o cadastro de contatos.
  *
- * Roda só no servidor: o endpoint vem da ligação de produção (`BRASILAPI_CNPJ_URL`,
- * só do servidor, ou o padrão da BrasilAPI), nunca de uma URL vinda do cliente; o payload do provedor é validado
- * e reduzido ao vocabulário do ORBITA antes de sair.
+ * Roda só no servidor: o endpoint é fixo na ligação de produção, nunca uma URL
+ * vinda do cliente. O payload do provedor é validado e reduzido ao vocabulário
+ * do ORBITA antes de sair, e só sai se for da empresa pedida.
  */
 
 export type DesfechoDaConsultaPorCnpj =
@@ -26,7 +24,7 @@ const numeroOuTexto = z.union([z.string(), z.number()]).nullish().transform((v) 
 
 /** O que a BrasilAPI devolve e o ORBITA usa. O resto é descartado. */
 const payloadBrasilApiSchema = z.object({
-  cnpj: z.union([z.string(), z.number()]).transform((v) => digitosDoCnpj(String(v)).padStart(14, '0')),
+  cnpj: z.union([z.string(), z.number()]).transform((v) => digitosDoDocumento(String(v)).padStart(14, '0')),
   razao_social: z.string().trim().min(1),
   nome_fantasia: opcional,
   descricao_situacao_cadastral: opcional,
@@ -51,7 +49,7 @@ export function empresaDaBrasilApi(payload: unknown): EmpresaCompleta | null {
     situacao: d.descricao_situacao_cadastral,
     email: d.email ? d.email.toLowerCase() : null,
     telefone: d.ddd_telefone_1,
-    cep: d.cep ? digitosDoCnpj(d.cep).padStart(8, '0') : null,
+    cep: d.cep ? digitosDoDocumento(d.cep).padStart(8, '0') : null,
     logradouro: d.logradouro,
     numero: d.numero,
     bairro: d.bairro,
@@ -72,7 +70,7 @@ export async function consultarEmpresaPorCnpj(cnpj: string, deps: ConsultaPorCnp
 
   let resposta: Response;
   try {
-    resposta = await deps.fetch(`${base}/${digitosDoCnpj(cnpj)}`, {
+    resposta = await deps.fetch(`${base}/${digitosDoDocumento(cnpj)}`, {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(TEMPO_LIMITE_MS),
       cache: 'no-store',
@@ -92,5 +90,9 @@ export async function consultarEmpresaPorCnpj(cnpj: string, deps: ConsultaPorCnp
     return { _tag: 'ConsultaIndisponivel', causa: 'json_invalido' };
   }
   const empresa = empresaDaBrasilApi(corpo);
-  return empresa ? { _tag: 'EmpresaEncontrada', empresa } : { _tag: 'ConsultaIndisponivel', causa: 'contrato_inesperado' };
+  if (!empresa) return { _tag: 'ConsultaIndisponivel', causa: 'contrato_inesperado' };
+  // A resposta precisa ser da empresa pedida: preencher o cadastro com os
+  // dados de outro CNPJ seria pior do que não preencher.
+  if (empresa.cnpj !== digitosDoDocumento(cnpj)) return { _tag: 'ConsultaIndisponivel', causa: 'cnpj_divergente' };
+  return { _tag: 'EmpresaEncontrada', empresa };
 }

@@ -2,29 +2,35 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 
-import { consultarCnpj } from '@/components/clientes/consultaDeEmpresa';
 import { buildDespesaRequest } from '@/lib/config/despesaContract';
-import { formatarCnpj } from '@/lib/empresas/cnpj';
-import type { EmpresaCompleta } from '@/lib/empresas/empresaContract';
 import { descreverErro } from '@/lib/erroLegivel';
 
 import { NovaDespesaModal, type Fornecedor } from './NovaDespesaModal';
-import { NovoFornecedorModal } from './NovoFornecedorModal';
+import { NovoFornecedorModal, type DadosCNPJ } from './NovoFornecedorModal';
 import type { BuscaAutenticada, CategoriaFinanceira } from './useLeituraFinanceira';
+
+const BRASILAPI_CNPJ_URL =
+  process.env.NEXT_PUBLIC_BRASILAPI_CNPJ_URL || 'https://brasilapi.com.br/api/cnpj/v1';
 
 const FORNECEDOR_GENERICO_ID = -1;
 
-/**
- * Estado e handlers do fluxo "cadastrar fornecedor via CNPJ": a consulta é a
- * mesma do cadastro de contatos (`/api/empresas/cnpj`, no servidor) + POST no Bling.
- */
+function formatCNPJ(value: string): string {
+  const digits = value.replace(/\D/g, '').slice(0, 14);
+  return digits
+    .replace(/^(\d{2})(\d)/, '$1.$2')
+    .replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/\.(\d{3})(\d)/, '.$1/$2')
+    .replace(/(\d{4})(\d)/, '$1-$2');
+}
+
+/** Estado e handlers do fluxo "cadastrar fornecedor via CNPJ" (consulta BrasilAPI + POST no Bling). */
 function useFornecedorCadastro(
   fetchWithAuth: BuscaAutenticada,
   searchFornecedor: string,
   onCadastrado: (novoFornecedor: Fornecedor) => void,
 ) {
   const [cnpj, setCnpj] = useState('');
-  const [dadosCNPJ, setDadosCNPJ] = useState<EmpresaCompleta | null>(null);
+  const [dadosCNPJ, setDadosCNPJ] = useState<DadosCNPJ | null>(null);
   const [buscandoCNPJ, setBuscandoCNPJ] = useState(false);
   const [erroCNPJ, setErroCNPJ] = useState('');
   const [salvandoFornecedor, setSalvandoFornecedor] = useState(false);
@@ -39,19 +45,21 @@ function useFornecedorCadastro(
     setErroCNPJ('');
     setDadosCNPJ(null);
     try {
-      const r = await consultarCnpj(cnpjLimpo, fetchWithAuth);
-      if (r.resultado === 'EmpresaEncontrada') setDadosCNPJ(r.empresa);
-      else if (r.resultado === 'EmpresaNaoEncontrada' || r.resultado === 'CnpjInvalido') setErroCNPJ('CNPJ não encontrado ou inválido na Receita Federal.');
-      else setErroCNPJ('Falha ao consultar CNPJ');
-    } catch {
-      setErroCNPJ('Falha ao consultar CNPJ');
+      const res = await fetch(`${BRASILAPI_CNPJ_URL}/${cnpjLimpo}`);
+      if (!res.ok) {
+        throw new Error('CNPJ não encontrado ou inválido na Receita Federal.');
+      }
+      const data = await res.json();
+      setDadosCNPJ(data);
+    } catch (err: unknown) {
+      setErroCNPJ(err instanceof Error ? err.message : 'Falha ao consultar CNPJ');
     } finally {
       setBuscandoCNPJ(false);
     }
   };
 
   const handleCNPJChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const formatted = formatarCnpj(e.target.value);
+    const formatted = formatCNPJ(e.target.value);
     setCnpj(formatted);
     const limpo = formatted.replace(/\D/g, '');
     if (limpo.length === 14) buscarCNPJ(limpo);
@@ -70,10 +78,10 @@ function useFornecedorCadastro(
     setSalvandoFornecedor(true);
     try {
       const payload = {
-        nome: dadosCNPJ ? (dadosCNPJ.nomeFantasia || dadosCNPJ.razaoSocial) : searchFornecedor.trim(),
-        fantasia: dadosCNPJ?.nomeFantasia || undefined,
+        nome: dadosCNPJ ? (dadosCNPJ.nome_fantasia || dadosCNPJ.razao_social) : searchFornecedor.trim(),
+        fantasia: dadosCNPJ?.nome_fantasia || undefined,
         cpf_cnpj: cnpj.replace(/\D/g, '') || undefined,
-        telefone: dadosCNPJ?.telefone || undefined,
+        telefone: dadosCNPJ?.ddd_telefone_1 || undefined,
         email: dadosCNPJ?.email || undefined,
         endereco: dadosCNPJ?.logradouro || undefined,
         numero: dadosCNPJ?.numero || undefined,
