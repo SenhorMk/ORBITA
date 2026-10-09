@@ -3,16 +3,12 @@ import { NextResponse } from 'next/server';
 
 import {
   createDespesaHandler,
-  type ContaPagarPayload,
-  type DespesaBlingPort,
   type DespesaDependencies,
   type DespesaResponseBody,
-  type DespesaStorePort,
-  type GravacaoDeTentativa,
-  type IntencaoDeContaPagar,
 } from './despesaHandler';
+import { depsDeTeste, fakeBling, fakeStore } from './__testkit__/despesaFakes';
 import { buildDespesaRequest, despesaRequestSchema } from '@/lib/config/despesaContract';
-import type { EnvioDeCriacaoAoBling } from '@/lib/integrations/bling/classificacaoDeFalhaDeCriacao';
+import { parseBlingFailure } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
@@ -27,216 +23,8 @@ const scope = { organizationId: ORG, actorId: ACTOR, role: 'owner' } as unknown 
 /** SAFETY: idem, para a organização B. */
 const scopeB = { organizationId: ORG_B, actorId: ACTOR, role: 'owner' } as unknown as VerifiedOrganizationScope;
 
-// ---------------------------------------------------------------------------
-// Bling fake. Separa o que ACONTECEU no Bling (`contasCriadasNoBling`) do que a
-// resposta diz — é isso que deixa um teste de ACK perdido falhar com dois POSTs.
-// ---------------------------------------------------------------------------
-
-type ModoDeCriacao =
-  | 'confirma'
-  | 'perde-ack' // cria no Bling e a resposta se perde (prazo/conexão)
-  | 'timeout-sem-criar' // nada criado, mas também nada voltou
-  | 'sem-credencial' // nenhuma requisição sai
-  | 'erro-5xx' // o Bling responde 500 — e pode ter criado
-  | 'sucesso-sem-id' // cria e responde 2xx sem id
-  | 'recusa'; // VALIDATION_ERROR 400
-
-interface FakeBling extends DespesaBlingPort {
-  /** Payloads que CHEGARAM ao Bling, criando ou não. */
-  readonly posts: ContaPagarPayload[];
-  /** Contas que EXISTEM no Bling. A contraprova principal conta isto. */
-  readonly contasCriadasNoBling: () => number;
-  readonly baixadas: Array<{ id: string; portadorId: number; categoriaId: number }>;
-}
-
-function falhaBling(type: string, status: number, message: string) {
-  return {
-    _tag: 'BlingFailed' as const,
-    failure: { _tag: 'BlingProviderFailure' as const, type, status, message, duplicateSale: false },
-  };
-}
-
-function fakeBling(options: {
-  modo?: ModoDeCriacao;
-  falhaCriar?: string;
-  falhaPortador?: string;
-  falhaBaixa?: string;
-  baixaAmbigua?: boolean;
-  falhaContato?: string;
-  /** Chamado no instante do POST — antes de qualquer resposta. */
-  aoReceberPost?: () => void;
-  /** Segura a resposta até a promessa resolver (corrida). */
-  segurarResposta?: Promise<void>;
-} = {}): FakeBling {
-  const posts: ContaPagarPayload[] = [];
-  const baixadas: Array<{ id: string; portadorId: number; categoriaId: number }> = [];
-  let criadas = 0;
-  const modo: ModoDeCriacao = options.falhaCriar ? 'recusa' : options.modo ?? 'confirma';
-
-  return {
-    posts,
-    baixadas,
-    contasCriadasNoBling: () => criadas,
-    async resolverContatoPadrao() {
-      if (options.falhaContato) return falhaBling('VALIDATION_ERROR', 400, options.falhaContato);
-      return { _tag: 'BlingOk' as const, value: 7001 };
-    },
-    async criarContaPagar(payload): Promise<EnvioDeCriacaoAoBling<{ id: string }>> {
-      if (modo === 'sem-credencial') return { _tag: 'NaoEnviado', motivo: 'credencial_indisponivel' };
-      posts.push(payload);
-      options.aoReceberPost?.();
-      if (options.segurarResposta) await options.segurarResposta;
-      switch (modo) {
-        case 'confirma':
-          criadas++;
-          return { _tag: 'Despachado', resultado: { _tag: 'BlingOk', value: { id: String(88122 + criadas) } } };
-        case 'perde-ack':
-          criadas++;
-          return { _tag: 'Despachado', resultado: falhaBling('UNKNOWN_ERROR', 0, 'prazo esgotado') };
-        case 'timeout-sem-criar':
-          return { _tag: 'Despachado', resultado: falhaBling('UNKNOWN_ERROR', 0, 'prazo esgotado') };
-        case 'erro-5xx':
-          criadas++;
-          return { _tag: 'Despachado', resultado: falhaBling('SERVER_ERROR', 500, 'Erro interno') };
-        case 'sucesso-sem-id':
-          criadas++;
-          return { _tag: 'Despachado', resultado: falhaBling('INVALID_RESPONSE', 201, 'sem id') };
-        case 'recusa':
-          return { _tag: 'Despachado', resultado: falhaBling('VALIDATION_ERROR', 400, options.falhaCriar ?? 'contato.id inválido') };
-      }
-    },
-    async obterPortadorPadrao() {
-      if (options.falhaPortador) return falhaBling('VALIDATION_ERROR', 400, options.falhaPortador);
-      return { _tag: 'BlingOk' as const, value: 55 };
-    },
-    async baixarContaPagar(id, payload) {
-      if (options.baixaAmbigua) return falhaBling('UNKNOWN_ERROR', 0, 'prazo esgotado');
-      if (options.falhaBaixa) return falhaBling('VALIDATION_ERROR', 400, options.falhaBaixa);
-      baixadas.push({ id, portadorId: payload.portadorId, categoriaId: payload.categoriaId });
-      return { _tag: 'BlingOk' as const, value: undefined };
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Store em memória com as MESMAS regras da migration 73: chave por
-// organização, digest, pendência idêntica (em_voo/indeterminada) e CAS por
-// estado+época. A própria migration é provada no pgTAP e na corrida real.
-// ---------------------------------------------------------------------------
-
-type EstadoTentativa = 'em_voo' | 'nao_enviada' | 'confirmada' | 'recusada' | 'indeterminada';
-
-interface TentativaFake {
-  readonly id: string;
-  readonly org: string;
-  readonly chave: string;
-  readonly digest: string;
-  estado: EstadoTentativa;
-  epoca: number;
-  blingContaId: string | null;
-  tituloId: string | null;
-  contatoBlingId: number | null;
-  motivo: string | null;
-}
-
-interface FakeStore extends DespesaStorePort {
-  readonly salvos: Array<Record<string, unknown>>;
-  readonly tentativas: TentativaFake[];
-  tentativa(org: string, chave: string): TentativaFake | undefined;
-}
-
-function fakeStore(options: {
-  categoriaBlingId?: number | null;
-  erro?: Error;
-  /** Quantas gravações de título falham antes de voltar a funcionar. */
-  falhasDeTitulo?: number;
-  reivindicacaoIndisponivel?: boolean;
-  concluirFalha?: boolean;
-} = {}): FakeStore {
-  const salvos: Array<Record<string, unknown>> = [];
-  const tentativas: TentativaFake[] = [];
-  let falhasDeTitulo = options.falhasDeTitulo ?? 0;
-  let seq = 0;
-
-  const pendente = (org: string, digest: string) =>
-    tentativas.find((t) => t.org === org && t.digest === digest && (t.estado === 'em_voo' || t.estado === 'indeterminada'));
-
-  return {
-    salvos,
-    tentativas,
-    tentativa: (org, chave) => tentativas.find((t) => t.org === org && t.chave === chave),
-    async resolverCategoriaBling() {
-      return options.categoriaBlingId === undefined ? 900 : options.categoriaBlingId;
-    },
-    async salvarTitulo(_scope, titulo) {
-      if (options.erro) throw options.erro;
-      if (falhasDeTitulo > 0) {
-        falhasDeTitulo--;
-        throw new Error('conexão perdida');
-      }
-      salvos.push({ ...titulo });
-      return { id: `titulo-${salvos.length}`, blingId: titulo.blingId, situacao: titulo.situacao };
-    },
-    async reivindicarTentativa(s, intencao: IntencaoDeContaPagar) {
-      if (options.reivindicacaoIndisponivel) return { _tag: 'TentativaIndisponivel' as const };
-      const org = s.organizationId;
-      const existente = tentativas.find((t) => t.org === org && t.chave === intencao.chave);
-      if (!existente) {
-        const outra = pendente(org, intencao.digest);
-        if (outra) return { _tag: 'PendenciaIdentica' as const, chavePendente: outra.chave };
-        const nova: TentativaFake = {
-          id: `tentativa-${++seq}`, org, chave: intencao.chave, digest: intencao.digest, estado: 'em_voo', epoca: 1,
-          blingContaId: null, tituloId: null, contatoBlingId: intencao.contatoBlingId, motivo: null,
-        };
-        tentativas.push(nova);
-        return { _tag: 'TentativaPropria' as const, tentativaId: nova.id, epoca: 1 };
-      }
-      if (existente.digest !== intencao.digest) return { _tag: 'ConflitoDeConteudo' as const };
-      if (existente.estado === 'nao_enviada') {
-        const outra = pendente(org, intencao.digest);
-        if (outra) return { _tag: 'PendenciaIdentica' as const, chavePendente: outra.chave };
-        existente.estado = 'em_voo';
-        existente.epoca++;
-        return { _tag: 'TentativaPropria' as const, tentativaId: existente.id, epoca: existente.epoca };
-      }
-      return {
-        _tag: 'TentativaRepetida' as const,
-        tentativaId: existente.id,
-        estado: existente.estado,
-        blingContaId: existente.blingContaId,
-        tituloId: existente.tituloId,
-        contatoBlingId: existente.contatoBlingId,
-      };
-    },
-    async concluirTentativa(s, { tentativaId, epoca }, desfecho): Promise<GravacaoDeTentativa> {
-      if (options.concluirFalha) return 'NaoGravado';
-      const t = tentativas.find((x) => x.id === tentativaId && x.org === s.organizationId);
-      if (!t || t.estado !== 'em_voo' || t.epoca !== epoca) return 'NaoGravado';
-      t.estado = desfecho.estado;
-      if (desfecho.estado === 'confirmada') t.blingContaId = desfecho.blingContaId;
-      else t.motivo = desfecho.motivo;
-      if (desfecho.contatoBlingId !== null) t.contatoBlingId = desfecho.contatoBlingId;
-      return 'Gravado';
-    },
-    async vincularTitulo(s, tentativaId, tituloId): Promise<GravacaoDeTentativa> {
-      const t = tentativas.find((x) => x.id === tentativaId && x.org === s.organizationId);
-      if (!t || t.estado !== 'confirmada' || t.tituloId !== null) return 'NaoGravado';
-      t.tituloId = tituloId;
-      return 'Gravado';
-    },
-  };
-}
-
 function deps(overrides: Partial<DespesaDependencies> = {}): DespesaDependencies {
-  let chaves = 0;
-  return {
-    auth: { async authorize() { return { _tag: 'Authorized', scope }; } },
-    bling: fakeBling(),
-    store: fakeStore(),
-    hoje: () => '2026-08-29',
-    novaChave: () => `77777777-7777-4777-8777-${String(++chaves).padStart(12, '0')}`,
-    ...overrides,
-  };
+  return depsDeTeste(scope, overrides);
 }
 
 function requisicao(corpo: unknown): Request {
@@ -249,7 +37,7 @@ function requisicao(corpo: unknown): Request {
 
 function corpoValido(overrides: Record<string, unknown> = {}) {
   return buildDespesaRequest({
-    descricao: 'Aluguel', valor: 1200, dataVencimento: '2026-09-10', categoriaId: CATEGORIA, ...overrides,
+    descricao: 'Aluguel', valor: 1200, dataVencimento: '2026-09-10', categoriaId: CATEGORIA, chaveIdempotencia: CHAVE, ...overrides,
   });
 }
 
@@ -415,7 +203,8 @@ describe('o Bling é a fonte da verdade', () => {
     const corpo = (await resposta.json()) as DespesaResponseBody;
 
     expect(resposta.status).toBe(400);
-    expect(corpo.error).toContain('contato.id inválido');
+    expect(corpo.error).toContain('recusou os dados');
+    expect(corpo.error).not.toContain('contato.id inválido');
     expect(store.salvos).toHaveLength(0);
   });
 
@@ -536,14 +325,31 @@ describe('PRE-001 — a intenção existe antes do POST', () => {
     expect(store.tentativa(ORG, CHAVE)).toMatchObject({ estado: 'confirmada', blingContaId: '88123', tituloId: 'titulo-1' });
   });
 
-  it('sem chave do cliente, o servidor gera uma ANTES do POST e a devolve', async () => {
+  it('contábil sem chave (bundle antigo): 400 antes de qualquer efeito — o servidor não inventa chave', async () => {
+    const bling = fakeBling();
+    const store = fakeStore();
+    const handler = createDespesaHandler(deps({ bling, store }));
+
+    const { status, corpo } = await enviar(handler, corpoValido({ chaveIdempotencia: undefined }));
+
+    expect(status).toBe(400);
+    expect(corpo.error).toContain('chave da operação');
+    expect(corpo.operacao).toBeUndefined();
+    expect(store.tentativas).toHaveLength(0);
+    expect(bling.contatosResolvidos()).toBe(0);
+    expect(bling.posts).toHaveLength(0);
+    expect(bling.contasCriadasNoBling()).toBe(0);
+  });
+
+  it('interno sem chave continua válido: não há efeito externo a proteger', async () => {
     const store = fakeStore();
     const handler = createDespesaHandler(deps({ store }));
 
-    const { corpo } = await enviar(handler, corpoValido());
+    const { status } = await enviar(handler, corpoValido({ modo: 'interno', chaveIdempotencia: undefined }));
 
-    expect(corpo.operacao?.ref).toBe('77777777-7777-4777-8777-000000000001');
-    expect(store.tentativas[0]!.chave).toBe(corpo.operacao?.ref);
+    expect(status).toBe(200);
+    expect(store.salvos).toHaveLength(1);
+    expect(store.tentativas).toHaveLength(0);
   });
 
   it('não chama o Bling quando não consegue registrar a intenção (falha fechada)', async () => {
@@ -835,5 +641,85 @@ describe('PRE-001 — organização e capacidade', () => {
     expect(resposta.status).toBe(403);
     expect(store.tentativas).toHaveLength(0);
     expect(bling.posts).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Texto do provedor nunca vai à resposta pública (CWE-209).
+// ---------------------------------------------------------------------------
+
+describe('PRE-001 — mensagem do Bling na resposta', () => {
+  const HOSTIL = ['<html', 'proxy-interno.bling.local', '10.0.0.5', 'sk_live_FICTICIO', 'Authorization'];
+  // Corpo que o Bling (ou um proxy na frente dele) poderia devolver: envelope
+  // v3 válido, com texto hostil em `description` e `fields`, que é exatamente o
+  // que `parseBlingFailure` copia para `message`.
+  const recusaHostil = parseBlingFailure(400, JSON.stringify({
+    error: {
+      type: 'VALIDATION_ERROR',
+      message: 'Não foi possível salvar',
+      description: '<html><body>proxy-interno.bling.local 10.0.0.5 Authorization: Bearer sk_live_FICTICIO</body></html>',
+      fields: [{ code: 1, msg: 'token=sk_live_FICTICIO host 10.0.0.5', element: 'contato' }],
+    },
+  }));
+  const corpoCruHostil = parseBlingFailure(502, '<html>proxy-interno.bling.local 10.0.0.5 sk_live_FICTICIO</html>');
+
+  function semTextoHostil(corpo: DespesaResponseBody) {
+    const publico = JSON.stringify(corpo);
+    for (const trecho of HOSTIL) expect(publico).not.toContain(trecho);
+  }
+
+  it('a premissa vale: o parser coloca o texto hostil em `message`', () => {
+    expect(recusaHostil.message).toContain('sk_live_FICTICIO');
+    expect(corpoCruHostil.message).toContain('10.0.0.5');
+  });
+
+  it('recusa definitiva: frase do ORBITA, com status, sem o corpo do provedor', async () => {
+    const bling = fakeBling({ falhaCriar: recusaHostil });
+    const store = fakeStore();
+    const { status, corpo } = await enviar(createDespesaHandler(deps({ bling, store })), corpoValido());
+
+    expect(status).toBe(400);
+    expect(corpo.operacao?.estado).toBe('recusada');
+    expect(corpo.error).toBe(
+      'O Bling recusou os dados para criar a conta a pagar (HTTP 400). Confira fornecedor, categoria, valor e vencimento.',
+    );
+    expect(store.tentativa(ORG, CHAVE)?.estado).toBe('recusada');
+    semTextoHostil(corpo);
+  });
+
+  it('fornecedor padrão não resolvido', async () => {
+    const { corpo } = await enviar(
+      createDespesaHandler(deps({ bling: fakeBling({ falhaContato: corpoCruHostil }) })),
+      corpoValido(),
+    );
+
+    expect(corpo.operacao?.estado).toBe('nao_enviada');
+    semTextoHostil(corpo);
+  });
+
+  it('conta financeira para quitar e quitação recusada ou sem resposta', async () => {
+    for (const bling of [
+      fakeBling({ falhaPortador: corpoCruHostil }),
+      fakeBling({ falhaBaixa: recusaHostil }),
+      fakeBling({ falhaBaixa: corpoCruHostil }),
+    ]) {
+      const { status, corpo } = await enviar(createDespesaHandler(deps({ bling })), corpoValido({ pago: true }));
+
+      expect(status).toBe(200);
+      expect(corpo.avisos?.length).toBe(1);
+      semTextoHostil(corpo);
+    }
+  });
+
+  it('falha ao gravar o título: a causa do banco vai para o log, não para a resposta', async () => {
+    const erroDoBanco = new Error('duplicate key value violates unique constraint "x" DETAIL: Key (bling_id)=(88123) already exists');
+    const { status, corpo } = await enviar(
+      createDespesaHandler(deps({ store: fakeStore({ erro: erroDoBanco }) })),
+      corpoValido(),
+    );
+
+    expect(status).toBe(500);
+    expect(JSON.stringify(corpo)).not.toContain('DETAIL');
+    expect(JSON.stringify(corpo)).not.toContain('duplicate key');
   });
 });

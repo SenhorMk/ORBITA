@@ -132,8 +132,6 @@ export interface DespesaDependencies {
   readonly store: DespesaStorePort;
   /** Data de hoje em `America/Sao_Paulo`, no formato AAAA-MM-DD. */
   readonly hoje: () => string;
-  /** Chave para um cliente que não mandou a sua. */
-  readonly novaChave: () => string;
 }
 
 export interface DespesaResponseBody {
@@ -173,10 +171,6 @@ export function createDespesaHandler(deps: DespesaDependencies) {
     }
     const body = parsed.data;
 
-    const categoriaBlingId = body.categoriaId
-      ? await deps.store.resolverCategoriaBling(scope, body.categoriaId)
-      : null;
-
     if (body.modo === 'interno') {
       const data = await deps.store.salvarTitulo(scope, {
         blingId: null,
@@ -193,6 +187,19 @@ export function createDespesaHandler(deps: DespesaDependencies) {
       );
     }
 
-    return lancarNoBling(scope, body, categoriaBlingId, deps);
+    // Lançamento contábil sem a chave da operação não começa: o servidor não
+    // inventa uma, porque uma chave nascida aqui é nova a cada repetição e não
+    // protege nada. Recusado antes de qualquer leitura, reivindicação ou
+    // chamada ao Bling — é o caso do bundle antigo em cache.
+    const ref = body.chaveIdempotencia;
+    if (ref === undefined) {
+      return fail('Lançamento contábil sem a chave da operação. Recarregue a página e envie de novo. Nada foi enviado ao Bling.', 400);
+    }
+
+    const categoriaBlingId = body.categoriaId
+      ? await deps.store.resolverCategoriaBling(scope, body.categoriaId)
+      : null;
+
+    return lancarNoBling(scope, body, ref, categoriaBlingId, deps);
   };
 }

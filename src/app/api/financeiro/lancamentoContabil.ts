@@ -7,8 +7,8 @@ import type {
 } from '@/lib/config/despesaContract';
 import { classificarFalhaDeCriacaoNoBling } from '@/lib/integrations/bling/classificacaoDeFalhaDeCriacao';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
-import { descreverErro } from '@/lib/erroLegivel';
 import { logger } from '@/lib/observability/logger';
+import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 
 import type {
   DespesaDependencies,
@@ -18,6 +18,7 @@ import type {
   ReivindicacaoDeTentativa,
   TituloPersistido,
 } from './despesaHandler';
+import { mensagemPublicaDaFalhaDoBling } from './mensagemPublicaDoBling';
 import { classificarEnvio, digestDaDespesa } from './tentativaDeContaPagar';
 
 /**
@@ -96,7 +97,7 @@ async function quitar(
   if (portador._tag === 'BlingFailed') {
     return {
       quitada: false,
-      avisos: [`A despesa ${blingId} foi lançada no Bling, mas continua em aberto lá: ${portador.failure.message}`],
+      avisos: [`A despesa ${blingId} foi lançada no Bling, mas continua em aberto lá: a conta financeira para quitar não foi obtida. ${mensagemPublicaDaFalhaDoBling(portador.failure, 'obter a conta financeira')}`],
     };
   }
 
@@ -112,12 +113,12 @@ async function quitar(
   if (classificarFalhaDeCriacaoNoBling(baixa.failure) === 'Definitiva') {
     return {
       quitada: false,
-      avisos: [`A despesa ${blingId} foi lançada no Bling, mas a quitação falhou: ${baixa.failure.message}. Ela continua em aberto no ERP.`],
+      avisos: [`A despesa ${blingId} foi lançada no Bling, mas a quitação falhou: ${mensagemPublicaDaFalhaDoBling(baixa.failure, 'quitar a conta a pagar')} Ela continua em aberto no ERP.`],
     };
   }
   return {
     quitada: false,
-    avisos: [`A despesa ${blingId} foi lançada no Bling, mas a quitação não foi confirmada: ${baixa.failure.message}. Confira no Bling antes de quitar de novo.`],
+    avisos: [`A despesa ${blingId} foi lançada no Bling, mas a quitação não foi confirmada: ${mensagemPublicaDaFalhaDoBling(baixa.failure, 'quitar a conta a pagar')} Confira no Bling antes de quitar de novo.`],
   };
 }
 
@@ -161,9 +162,11 @@ async function gravarTituloConfirmado(
   try {
     data = await deps.store.salvarTitulo(scope, titulo);
   } catch (error: unknown) {
-    const causa = descreverErro(error);
+    // A causa vai para o log, não para a resposta: um erro do Postgres traz
+    // `details` e `hint` com valor de linha (CWE-209).
+    registrarFalhaInterna('financeiro.despesa.titulo.salvar', error);
     return fail(
-      `Despesa lançada no Bling (id ${titulo.blingId}), mas falhou ao gravar no ORBITA: ${causa}. `
+      `Despesa lançada no Bling (id ${titulo.blingId}), mas falhou ao gravar no ORBITA. `
         + 'Envie de novo o mesmo lançamento para concluir a gravação — nada será enviado de novo ao Bling.',
       500,
       { ref, estado: 'confirmada' },
@@ -240,6 +243,7 @@ async function responderRepeticao(
  *
  * @param scope - Organização e ator verificados no servidor.
  * @param body - O pedido de despesa já validado.
+ * @param ref - A chave da operação, enviada pelo cliente.
  * @param categoriaBlingId - A categoria local traduzida para o Bling, se houver.
  * @param deps - Portas da rota.
  * @returns A resposta HTTP, com a operação.
@@ -247,10 +251,10 @@ async function responderRepeticao(
 export async function lancarNoBling(
   scope: VerifiedOrganizationScope,
   body: DespesaRequest,
+  ref: string,
   categoriaBlingId: number | null,
   deps: DespesaDependencies,
 ): Promise<NextResponse> {
-  const ref = body.chaveIdempotencia ?? deps.novaChave();
   const hoje = deps.hoje();
 
   const reivindicacao = await deps.store.reivindicarTentativa(scope, {
@@ -291,7 +295,7 @@ export async function lancarNoBling(
       registrarDesfecho(scope, ref, 'nao_enviada', { motivo: 'contato_nao_resolvido', gravacao });
       if (gravacao === 'NaoGravado') return naoConfirmado(ref, 'em_voo', MENSAGEM_EM_VOO);
       return fail(
-        `Não foi possível resolver o fornecedor no Bling: ${padrao.failure.message}. Nada foi enviado ao Bling.`,
+        `Não foi possível resolver o fornecedor padrão. ${mensagemPublicaDaFalhaDoBling(padrao.failure, 'resolver o fornecedor')} Nada foi enviado ao Bling.`,
         400,
         { ref, estado: 'nao_enviada' },
       );
@@ -329,7 +333,11 @@ export async function lancarNoBling(
       });
       registrarDesfecho(scope, ref, 'recusada', { motivo: 'recusa_definitiva', gravacao });
       if (gravacao === 'NaoGravado') return naoConfirmado(ref, 'em_voo', MENSAGEM_EM_VOO);
-      return fail(`O Bling recusou o lançamento: ${desfecho.failure.message}`, 400, { ref, estado: 'recusada' });
+      return fail(
+        mensagemPublicaDaFalhaDoBling(desfecho.failure, 'criar a conta a pagar'),
+        400,
+        { ref, estado: 'recusada' },
+      );
     }
     case 'Indeterminada': {
       const gravacao = await deps.store.concluirTentativa(scope, tentativa, {

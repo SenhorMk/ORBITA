@@ -413,8 +413,12 @@ cabeçalho nem campo de idempotência em `POST /contas/pagar`, e
 `GET /contas/pagar` não filtra por `numeroDocumento`. Repetir o POST cria uma
 segunda conta. Por isso:
 
-- o navegador gera `chaveIdempotencia` (UUID) antes da rede e a reenvia em toda
-  retentativa do mesmo lançamento; a rota a devolve como `operacao.ref`;
+- o navegador gera `chaveIdempotencia` (UUID) antes da rede e a guarda no
+  `sessionStorage` (organização + SHA-256 do conteúdo → UUID, sem o conteúdo),
+  para reenviar a MESMA chave depois de reload; só a esquece diante de um
+  desfecho definitivo. No modo contábil a chave é obrigatória: sem ela a rota
+  recusa (`400`) antes de qualquer efeito, e o servidor nunca gera uma. A rota a
+  devolve como `operacao.ref`;
 - antes do POST, `reivindicar_tentativa_conta_pagar` (migration 73) grava a
   intenção em `tentativas_conta_pagar`, por organização, com o SHA-256 do pedido;
 - mesma chave + mesmo digest devolve o estado gravado sem reenviar; mesma chave
@@ -426,6 +430,10 @@ segunda conta. Por isso:
   confirmado"), que não reabre nem reenvia. Recusa definitiva exige `error.type`
   de recusa da requisição **e** status `4xx` (`classificarFalhaDeCriacaoNoBling`);
 - a quitação só roda na requisição que confirmou a criação, nunca numa repetição.
+- nenhuma resposta pública carrega `failure.message`: `parseBlingFailure` a monta
+  com `description`, `fields` ou o corpo cru do provedor. As frases saem de
+  `mensagemPublicaDaFalhaDoBling` (status + categoria do `type`, vocabulário
+  fechado).
 
 A saída de `indeterminada` (consultar o Bling e concluir) é o PRE-002. Para essa
 busca, a tentativa guarda contato, valor, vencimento e emissão — nunca o texto

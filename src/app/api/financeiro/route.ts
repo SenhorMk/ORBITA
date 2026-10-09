@@ -228,7 +228,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     bling: blingDespesaAdapter(bling.forVerifiedOrganization(authorization.scope)),
     store: despesaStore,
     hoje: hojeEmSaoPaulo,
-    novaChave: () => crypto.randomUUID(),
   });
 
   return handler(request);

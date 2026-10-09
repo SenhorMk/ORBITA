@@ -10,6 +10,12 @@ import {
 import { descreverErro } from '@/lib/erroLegivel';
 
 import { NovaDespesaModal, type Fornecedor } from './NovaDespesaModal';
+import {
+  criarOperacoesDeDespesa,
+  impressaoDoLancamento,
+  sessaoDoNavegador,
+  type OperacoesDeDespesa,
+} from './operacoesDeDespesa';
 import { NovoFornecedorModal, type DadosCNPJ } from './NovoFornecedorModal';
 import type { BuscaAutenticada, CategoriaFinanceira } from './useLeituraFinanceira';
 
@@ -144,25 +150,20 @@ async function loadFornecedores(
   }
 }
 
-/**
- * A operação contábil em curso neste diálogo: a chave nasce aqui, antes da
- * rede, e é reenviada enquanto o conteúdo for o mesmo. É o que faz uma
- * retentativa — inclusive depois de a resposta se perder no caminho — ser
- * reconhecida pelo servidor como a MESMA operação, sem uma segunda conta a
- * pagar no Bling.
- */
-interface OperacaoEmCurso {
-  readonly chave: string;
-  /** O corpo enviado, sem a chave: conteúdo diferente é operação nova. */
-  readonly corpo: string;
-}
-
 interface NovaDespesaSubmitInput {
   fetchWithAuth: BuscaAutenticada;
   modoLancamento: 'contabil' | 'interno';
   fornecedorSelecionado: Fornecedor | null;
   onSaved: () => void;
-  operacao: { current: OperacaoEmCurso | null };
+  /**
+   * Onde a chave de cada lançamento contábil sobrevive a reload e remontagem.
+   * A chave nasce antes da rede e volta igual enquanto o conteúdo for o mesmo:
+   * é o que faz uma retentativa — inclusive depois de o servidor confirmar e a
+   * resposta se perder — ser a MESMA operação, sem segunda conta no Bling.
+   */
+  operacoes: OperacoesDeDespesa;
+  /** Organização ativa na tela: só separa as operações guardadas. */
+  organizacaoId: string | null;
   /** O resultado não foi confirmado: o diálogo deixa de permitir reenvio. */
   onNaoConfirmado: (mensagem: string) => void;
 }
@@ -211,13 +212,15 @@ async function submitNovaDespesa(
     return;
   }
 
+  let impressao: string | null = null;
   if (payload.modo === 'contabil') {
-    const corpo = JSON.stringify(payload);
-    const anterior = input.operacao.current;
-    const chave = anterior !== null && anterior.corpo === corpo ? anterior.chave : crypto.randomUUID();
-    input.operacao.current = { chave, corpo };
-    payload = { ...payload, chaveIdempotencia: chave };
+    impressao = await impressaoDoLancamento(JSON.stringify(payload));
+    payload = { ...payload, chaveIdempotencia: input.operacoes.chavePara(input.organizacaoId, impressao) };
   }
+  /** O navegador conhece um desfecho definitivo: o mesmo conteúdo, depois, é operação nova. */
+  const encerrarOperacao = () => {
+    if (impressao !== null) input.operacoes.esquecer(input.organizacaoId, impressao);
+  };
 
   let res: Response;
   try {
@@ -247,7 +250,7 @@ async function submitNovaDespesa(
   }
   // Recusa definitiva e conflito encerram a operação: a próxima submissão,
   // corrigida, é uma operação nova. `nao_enviada` mantém a chave — nada saiu.
-  if (estado === 'recusada' || res.status === 409) input.operacao.current = null;
+  if (estado === 'recusada' || res.status === 409) encerrarOperacao();
 
   if (!res.ok) {
     alert('Erro: ' + (resposta?.error || 'Falha ao salvar despesa'));
@@ -258,7 +261,7 @@ async function submitNovaDespesa(
   if (resposta?.avisos && resposta.avisos.length > 0) {
     alert(resposta.avisos.join('\n'));
   }
-  input.operacao.current = null;
+  encerrarOperacao();
   input.onSaved();
 }
 
@@ -282,6 +285,7 @@ export function LancamentoDeDespesa({
   syncing,
   setSyncing,
   categorias,
+  organizacaoId = null,
 }: {
   fetchWithAuth: BuscaAutenticada;
   categorias: readonly CategoriaFinanceira[];
@@ -290,11 +294,14 @@ export function LancamentoDeDespesa({
   onSalvo: () => void;
   syncing: boolean;
   setSyncing: (valor: boolean) => void;
+  /** Organização ativa na tela; separa as operações guardadas nesta aba. */
+  organizacaoId?: string | null;
 }) {
   const [isNovoFornecedorModalOpen, setIsNovoFornecedorModalOpen] = useState(false);
   // Modo de Lançamento (contabil = Bling+Orbita, interno = Apenas Orbita)
   const [modoLancamento, setModoLancamento] = useState<'contabil' | 'interno'>('contabil');
-  const operacao = useRef<OperacaoEmCurso | null>(null);
+  // Uma vez por montagem; o que importa sobrevive no `sessionStorage`.
+  const [operacoes] = useState(() => criarOperacoesDeDespesa(sessaoDoNavegador()));
   const [naoConfirmado, setNaoConfirmado] = useState<string | null>(null);
 
   const [fornecedores, setFornecedores] = useState<Fornecedor[]>([]);
@@ -353,8 +360,9 @@ export function LancamentoDeDespesa({
    * pode herdar o modo nem o fornecedor da despesa anterior, e zerar aqui evita
    * um efeito que escreve estado no meio da renderização.
    */
+  // Fechar não esquece a operação: reabrir com o mesmo lançamento depois de
+  // uma resposta perdida tem de reenviar a MESMA chave.
   const fechar = () => {
-    operacao.current = null;
     setNaoConfirmado(null);
     setModoLancamento('contabil');
     setFornecedorSelecionado(null);
@@ -373,7 +381,8 @@ export function LancamentoDeDespesa({
           onSalvo();
           fechar();
         },
-        operacao,
+        operacoes,
+        organizacaoId,
         onNaoConfirmado: setNaoConfirmado,
       });
     } finally {

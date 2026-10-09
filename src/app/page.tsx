@@ -704,7 +704,7 @@ export default function Home() {
 
         {/* TAB FINANCEIRO */}
         <div className={activeTab === 'finance' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
-          <FinanceiroTab fetchWithAuth={fetchWithAuth} ativo={activeTab === 'finance'} pedidos={data?.pedidos ?? null} />
+          <FinanceiroTab fetchWithAuth={fetchWithAuth} ativo={activeTab === 'finance'} pedidos={data?.pedidos ?? null} organizacaoId={activeOrganizacaoId} />
         </div>
 
         {/* TAB ORGANIZAÇÃO & MEMBROS */}

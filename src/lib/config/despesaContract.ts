@@ -51,9 +51,10 @@ export const despesaRequestSchema = z.object({
    * reconhecer "esta é a MESMA operação" e não criar uma segunda conta a pagar
    * no Bling — que não oferece chave de idempotência própria.
    *
-   * Opcional por compatibilidade: sem ela, o servidor gera uma por requisição.
-   * A intenção continua durável antes do POST, mas uma retentativa sem a chave
-   * só é reconhecida pela pendência idêntica (mesmo conteúdo).
+   * Obrigatória no modo `contabil`: sem ela a rota recusa antes de qualquer
+   * efeito, e o servidor nunca gera uma. Opcional no modo `interno`, que não
+   * tem efeito externo. Opcional no schema porque o formulário monta o corpo
+   * antes de saber a chave (ela depende do digest do conteúdo).
    */
   chaveIdempotencia: z.string().uuid().optional(),
 });
