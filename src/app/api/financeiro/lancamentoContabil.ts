@@ -5,7 +5,6 @@ import type {
   EstadoDaOperacaoDeDespesa,
   OperacaoDeDespesa,
 } from '@/lib/config/despesaContract';
-import { classificarFalhaDeCriacaoNoBling } from '@/lib/integrations/bling/classificacaoDeFalhaDeCriacao';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { logger } from '@/lib/observability/logger';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
@@ -19,7 +18,8 @@ import type {
   TituloPersistido,
 } from './despesaHandler';
 import { mensagemPublicaDaFalhaDoBling } from './mensagemPublicaDoBling';
-import { classificarEnvio, digestDaDespesa } from './tentativaDeContaPagar';
+import { quitar } from './quitacaoDaConta';
+import { classificarEnvio, digestDaDespesa, referenciaNoBling } from './tentativaDeContaPagar';
 
 /**
  * Lançamento contábil de despesa (`modo: 'contabil'`): a intenção de criar a
@@ -73,53 +73,6 @@ function registrarDesfecho(
     estado,
     ...detalhes,
   });
-}
-
-/**
- * Quita a conta recém-criada. Só roda na requisição que confirmou a criação:
- * uma repetição da operação nunca quita de novo, porque `POST .../baixar`
- * também não é idempotente.
- */
-async function quitar(
-  blingId: string,
-  body: DespesaRequest,
-  categoriaBlingId: number | null,
-  deps: DespesaDependencies,
-): Promise<{ readonly quitada: boolean; readonly avisos: readonly string[] }> {
-  if (!categoriaBlingId) {
-    return {
-      quitada: false,
-      avisos: [`A despesa ${blingId} foi lançada no Bling, mas não pôde ser quitada: a quitação exige uma categoria sincronizada com o Bling.`],
-    };
-  }
-
-  const portador = await deps.bling.obterPortadorPadrao();
-  if (portador._tag === 'BlingFailed') {
-    return {
-      quitada: false,
-      avisos: [`A despesa ${blingId} foi lançada no Bling, mas continua em aberto lá: a conta financeira para quitar não foi obtida. ${mensagemPublicaDaFalhaDoBling(portador.failure, 'obter a conta financeira')}`],
-    };
-  }
-
-  const baixa = await deps.bling.baixarContaPagar(blingId, {
-    data: deps.hoje(),
-    historico: body.descricao,
-    portadorId: portador.value,
-    categoriaId: categoriaBlingId,
-  });
-
-  if (baixa._tag === 'BlingOk') return { quitada: true, avisos: [] };
-
-  if (classificarFalhaDeCriacaoNoBling(baixa.failure) === 'Definitiva') {
-    return {
-      quitada: false,
-      avisos: [`A despesa ${blingId} foi lançada no Bling, mas a quitação falhou: ${mensagemPublicaDaFalhaDoBling(baixa.failure, 'quitar a conta a pagar')} Ela continua em aberto no ERP.`],
-    };
-  }
-  return {
-    quitada: false,
-    avisos: [`A despesa ${blingId} foi lançada no Bling, mas a quitação não foi confirmada: ${mensagemPublicaDaFalhaDoBling(baixa.failure, 'quitar a conta a pagar')} Confira no Bling antes de quitar de novo.`],
-  };
 }
 
 type TituloParaSalvar = Parameters<DespesaStorePort['salvarTitulo']>[1];
@@ -264,6 +217,7 @@ export async function lancarNoBling(
     dataVencimento: body.dataVencimento,
     dataEmissao: hoje,
     contatoBlingId: body.contatoBlingId ?? null,
+    numeroDocumento: referenciaNoBling(ref),
   });
 
   switch (reivindicacao._tag) {
@@ -311,6 +265,9 @@ export async function lancarNoBling(
     dataEmissao: hoje,
     competencia: hoje,
     ...(categoriaBlingId ? { categoriaId: categoriaBlingId } : {}),
+    // Só a referência gravada na tentativa vai ao Bling: uma tentativa antiga
+    // reaberta, sem referência, continua sem.
+    ...(reivindicacao.numeroDocumento ? { numeroDocumento: reivindicacao.numeroDocumento } : {}),
   });
 
   const desfecho = classificarEnvio(envio);
@@ -352,7 +309,7 @@ export async function lancarNoBling(
       break;
   }
 
-  const { blingContaId } = desfecho;
+  const blingContaId = desfecho.valor.id;
   const gravacao = await deps.store.concluirTentativa(scope, tentativa, {
     estado: 'confirmada', blingContaId, contatoBlingId: contatoId,
   });
@@ -367,7 +324,9 @@ export async function lancarNoBling(
     );
   }
 
-  const quitacao = body.pago ? await quitar(blingContaId, body, categoriaBlingId, deps) : { quitada: false, avisos: [] };
+  const quitacao = body.pago
+    ? await quitar(scope, { ref, tentativaId: tentativa.tentativaId, blingContaId }, body, categoriaBlingId, deps)
+    : { quitada: false, avisos: [] };
   return gravarTituloConfirmado(
     scope,
     ref,

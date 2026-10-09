@@ -6,6 +6,10 @@ import { descreverErro } from '../lib/erroLegivel';
 import type {
   BlingPort,
   ContaPagarBlingEntrada,
+  ContaPagarDetalhada,
+  ContaPagarResumida,
+  FiltroDeContasPagar,
+  ListagemDeContasPagar,
   ContaPagarRemota,
   ContatoBlingEntrada,
   ProdutoBlingEntrada,
@@ -207,6 +211,40 @@ const contaPagarCriadaSchema = z.union([
   z.object({ id: idDeContaPagarSchema }),
 ]);
 
+/** Resposta `200` de `POST /contas/pagar/{id}/baixar`: `{ bordero: { id } }`, com ou sem `data`. */
+const borderoSchema = z.object({ id: idDeContaPagarSchema });
+const baixaCriadaSchema = z.union([
+  z.object({ data: z.object({ bordero: borderoSchema }) }),
+  z.object({ bordero: borderoSchema }),
+]);
+
+const dataDoBlingSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
+
+/** Item de `GET /contas/pagar` (`ContasDadosBaseDTO`): só o que a listagem traz. */
+const contaPagarResumidaSchema = z.object({
+  id: idDeContaPagarSchema,
+  situacao: codigoDaSituacaoDaContaSchema,
+  valor: z.number(),
+  vencimento: dataDoBlingSchema,
+  contato: z.object({ id: z.number().int().positive() }),
+});
+const contasPagarListadasSchema = z.object({ data: z.array(contaPagarResumidaSchema) });
+
+/** `GET /contas/pagar/{id}`, com os campos que a reconciliação compara. */
+const contaPagarDetalhadaSchema = z.object({
+  data: contaPagarResumidaSchema.extend({
+    dataEmissao: dataDoBlingSchema.optional(),
+    numeroDocumento: z.string().optional(),
+    saldo: z.number().optional(),
+    historico: z.string().optional(),
+    categoria: z.object({ id: z.number().int().positive() }).optional(),
+    borderos: z.array(z.number().int().positive()).optional(),
+  }),
+});
+
+/** Linhas por página na listagem de reconciliação (o máximo que o Bling aceita). */
+const LIMITE_DA_PAGINA_DE_RECONCILIACAO = 100;
+
 const contaPagarLidaSchema = z.object({
   data: z.object({
     id: z.union([z.number().int().positive(), z.string().regex(/^\d+$/u)]),
@@ -275,6 +313,8 @@ export class BlingClient implements BlingPort {
    * uma requisição HTTP do navegador espera sem desistir.
    */
   static readonly TEMPO_LIMITE_CORRECAO_MS = 12_000;
+  /** Teto de páginas da listagem de reconciliação; atingido, a listagem é incompleta. */
+  static readonly PAGINAS_MAXIMAS_DE_RECONCILIACAO = 5;
 
   private baseUrl = process.env.BLING_API_BASE_URL || 'https://api.bling.com.br/Api/v3';
 
@@ -1579,6 +1619,9 @@ export class BlingClient implements BlingPort {
       competencia: payload.competencia,
     };
     if (payload.categoriaId) corpo.categoria = { id: payload.categoriaId };
+    // Referência opaca do ORBITA no campo de controle interno do contrato: é o
+    // que permite à reconciliação reconhecer esta conta sem heurística.
+    if (payload.numeroDocumento) corpo.numeroDocumento = payload.numeroDocumento;
 
     const response = await this.fetchWithAuth(`${this.baseUrl}/contas/pagar`, {
       method: 'POST',
@@ -1613,8 +1656,15 @@ export class BlingClient implements BlingPort {
     historico: string;
     portadorId: number;
     categoriaId: number;
-  }): Promise<BlingCallResult<void>> {
-    return this.comOrcamento('bling.conta-pagar.baixar', 'quitar a conta a pagar', async (prazo) => {
+  }): Promise<EnvioDeCriacaoAoBling<{ borderoId: string | null }>> {
+    try {
+      await this.getAccessToken();
+    } catch {
+      // `getAccessToken` já registrou a causa. Nenhuma requisição saiu.
+      return { _tag: 'NaoEnviado', motivo: 'credencial_indisponivel' };
+    }
+
+    const resultado = await this.comOrcamento<{ borderoId: string | null }>('bling.conta-pagar.baixar', 'quitar a conta a pagar', async (prazo) => {
       const response = await this.fetchWithAuth(`${this.baseUrl}/contas/pagar/${encodeURIComponent(idConta)}/baixar`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1632,8 +1682,84 @@ export class BlingClient implements BlingPort {
         return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
       }
 
-      return { _tag: 'BlingOk', value: undefined };
+      // `200` com o borderô é a confirmação do contrato. Sucesso sem o corpo
+      // esperado não prova nada: a reconciliação lê a conta por id.
+      const baixa = baixaCriadaSchema.safeParse(await response.json());
+      if (!baixa.success) {
+        return blingFailure('INVALID_RESPONSE', response.status, 'O Bling respondeu sucesso sem o borderô da quitação.');
+      }
+      const bordero = 'data' in baixa.data ? baixa.data.data.bordero : baixa.data.bordero;
+      return { _tag: 'BlingOk', value: { borderoId: String(bordero.id) } };
     });
+    return { _tag: 'Despachado', resultado };
+  }
+
+  /**
+   * `GET /contas/pagar/{id}` com o que a reconciliação compara: referência,
+   * contato, valor, datas, saldo e borderôs. `404` é ausência provada pela
+   * leitura — mas não prova que um POST anterior não criou a conta.
+   */
+  async lerContaPagarParaReconciliacao(id: string): Promise<LeituraRemota<ContaPagarDetalhada>> {
+    const resposta = await this.requisicaoDeCorrecao(
+      'bling.conta-pagar.reconciliar.ler',
+      `/contas/pagar/${encodeURIComponent(id)}`,
+      'GET',
+    );
+    if (resposta._tag !== 'Resposta') return resposta;
+    return this.lerRecursoConfirmado(resposta.response, contaPagarDetalhadaSchema, (data) => ({
+      id: String(data.id),
+      situacao: data.situacao,
+      valor: data.valor,
+      vencimento: data.vencimento,
+      contatoId: data.contato.id,
+      dataEmissao: data.dataEmissao ?? null,
+      numeroDocumento: data.numeroDocumento ?? null,
+      saldo: data.saldo ?? null,
+      historico: data.historico ?? null,
+      categoriaId: data.categoria?.id ?? null,
+      borderos: (data.borderos ?? []).map(String),
+    }));
+  }
+
+  /**
+   * `GET /contas/pagar` com os únicos filtros que o OpenAPI declara e que
+   * estreitam a busca: emissão, vencimento e contato. Lê todas as páginas até
+   * uma não cheia; se o teto de páginas for atingido, a listagem é declarada
+   * incompleta — e listagem incompleta não prova nada.
+   */
+  async listarContasPagarParaReconciliacao(filtro: FiltroDeContasPagar): Promise<ListagemDeContasPagar> {
+    const contas: ContaPagarResumida[] = [];
+    for (let pagina = 1; pagina <= BlingClient.PAGINAS_MAXIMAS_DE_RECONCILIACAO; pagina++) {
+      const consulta = new URLSearchParams({
+        pagina: String(pagina),
+        limite: String(LIMITE_DA_PAGINA_DE_RECONCILIACAO),
+        dataEmissaoInicial: filtro.dataEmissao,
+        dataEmissaoFinal: filtro.dataEmissao,
+        dataVencimentoInicial: filtro.dataVencimento,
+        dataVencimentoFinal: filtro.dataVencimento,
+        ...(filtro.contatoId === null ? {} : { idContato: String(filtro.contatoId) }),
+      });
+      const resposta = await this.requisicaoDeCorrecao('bling.conta-pagar.reconciliar.listar', `/contas/pagar?${consulta}`, 'GET');
+      if (resposta._tag !== 'Resposta') return resposta;
+      const { response } = resposta;
+      if (!response.ok) {
+        void response.body?.cancel().catch(() => {});
+        return falhaPorStatus(response.status);
+      }
+      const lida = contasPagarListadasSchema.safeParse(await this.lerCorpoJson(response));
+      if (!lida.success) return { _tag: 'RemotoIndeterminado', causa: 'resposta_invalida' };
+      for (const conta of lida.data.data) {
+        contas.push({
+          id: String(conta.id),
+          situacao: conta.situacao,
+          valor: conta.valor,
+          vencimento: conta.vencimento,
+          contatoId: conta.contato.id,
+        });
+      }
+      if (lida.data.data.length < LIMITE_DA_PAGINA_DE_RECONCILIACAO) return { _tag: 'Listada', contas };
+    }
+    return { _tag: 'ListagemIncompleta' };
   }
 
   /** `GET /contas/pagar/{id}`: a conta existe, e em que situação (1..7)? */

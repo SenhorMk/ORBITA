@@ -165,6 +165,6 @@ describe('baixarContaPagar', () => {
 
     const baixa = await cliente.baixarContaPagar('88123', { data: '2026-08-29', historico: 'x', portadorId: 55, categoriaId: 900 });
 
-    expect(baixa._tag).toBe('BlingFailed');
+    expect(baixa).toMatchObject({ _tag: 'Despachado', resultado: { _tag: 'BlingFailed', failure: { status: 0 } } });
   });
 });

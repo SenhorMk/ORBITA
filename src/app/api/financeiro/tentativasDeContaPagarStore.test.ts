@@ -24,7 +24,7 @@ describe('lerReivindicacao — a linha da migration 73 decide se o Bling é cham
   it('nova e reaberta: a tentativa é de quem chamou, com a época', () => {
     for (const desfecho of ['nova', 'reaberta']) {
       expect(lerReivindicacao({ ...vazia, desfecho, tentativa_id: 't1', estado: 'em_voo', epoca: 2 }))
-        .toEqual({ _tag: 'TentativaPropria', tentativaId: 't1', epoca: 2 });
+        .toEqual({ _tag: 'TentativaPropria', tentativaId: 't1', epoca: 2, numeroDocumento: null });
     }
   });
 

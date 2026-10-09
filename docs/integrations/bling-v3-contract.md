@@ -435,9 +435,37 @@ segunda conta. Por isso:
   `mensagemPublicaDaFalhaDoBling` (status + categoria do `type`, vocabulário
   fechado).
 
-A saída de `indeterminada` (consultar o Bling e concluir) é o PRE-002. Para essa
-busca, a tentativa guarda contato, valor, vencimento e emissão — nunca o texto
-da descrição.
+### Reconciliação: sair de `indeterminada` só com prova (PRE-002)
+
+Contrato oficial usado (`openapi-Dw6cY8yQ.json`, conferido em 09/10/2026):
+
+| Operação | O que o contrato oferece | Uso |
+|---|---|---|
+| `POST /contas/pagar` | `numeroDocumento` (string, "controle interno da empresa"), sem tamanho máximo declarado | recebe a referência opaca `ORB-` + 16 hex, derivada da chave da operação |
+| `GET /contas/pagar` | filtros `dataEmissaoInicial/Final`, `dataVencimentoInicial/Final`, `idContato`, `situacao`, `pagina`, `limite`; item com `id`, `situacao`, `valor`, `vencimento`, `contato.id` | estreita os candidatos — **não filtra nem devolve `numeroDocumento`** |
+| `GET /contas/pagar/{id}` | `numeroDocumento`, `dataEmissao`, `saldo`, `borderos`, `historico`, `categoria` | prova (ou não) cada candidato |
+| `POST /contas/pagar/{id}/baixar` | `200 { bordero: { id } }`; sem idempotência | intenção de baixa antes do POST |
+
+O que é prova:
+
+- **criação**: exatamente uma conta, entre as listadas com o mesmo valor,
+  vencimento, emissão e contato, traz a referência da tentativa em
+  `numeroDocumento` e os campos batem na leitura por id. Tentativas anteriores à
+  migration 74 não têm referência: para elas nada é prova, e o resultado é
+  revisão manual;
+- **baixa**: a leitura por id da própria conta mostra `situacao = 2` (Pago) e,
+  quando informado, `saldo = 0`.
+
+Todo o resto é `revisao_manual`, com recibo: busca vazia, candidatos múltiplos,
+candidato divergente, listagem incompleta (teto de 5 páginas de 100), timeout,
+`429`, `5xx`, corpo inválido, conta que some entre leituras, conta aberta ou
+parcial. Nenhum desfecho da reconciliação autoriza um novo POST: o serviço só
+recebe a porta de leitura do Bling.
+
+A migration 74 impõe isso no banco: `indeterminada → confirmada` (criação e
+baixa) só com recibo `confirmada` da mesma conta remota na mesma transação; não
+existe `indeterminada → nao_enviada`, `recusada` ou `em_voo`. Recibos são
+append-only. Ver `docs/operations/reconciliacao-financeira.md`.
 
 ### O portador vem de `GET /contas-contabeis`
 

@@ -15,6 +15,8 @@ export interface ContaPagarPayload {
   readonly dataEmissao: string;
   readonly competencia: string;
   readonly categoriaId?: number;
+  /** Referência opaca do ORBITA em `numeroDocumento` (PRE-002). */
+  readonly numeroDocumento?: string;
 }
 
 export interface DespesaBlingPort {
@@ -32,7 +34,7 @@ export interface DespesaBlingPort {
     historico: string;
     portadorId: number;
     categoriaId: number;
-  }): Promise<BlingCallResult<void>>;
+  }): Promise<EnvioDeCriacaoAoBling<{ borderoId: string | null }>>;
 }
 
 export interface TituloPersistido {
@@ -60,6 +62,8 @@ export interface IntencaoDeContaPagar {
   readonly dataEmissao: string;
   /** O contato informado pelo cliente; `null` quando o servidor vai resolver. */
   readonly contatoBlingId: number | null;
+  /** Referência opaca que vai em `numeroDocumento` (PRE-002). */
+  readonly numeroDocumento: string;
 }
 
 /**
@@ -67,7 +71,13 @@ export interface IntencaoDeContaPagar {
  * o POST; todos os outros casos respondem sem chamar o Bling.
  */
 export type ReivindicacaoDeTentativa =
-  | { readonly _tag: 'TentativaPropria'; readonly tentativaId: string; readonly epoca: number }
+  | {
+      readonly _tag: 'TentativaPropria';
+      readonly tentativaId: string;
+      readonly epoca: number;
+      /** A referência gravada; `null` numa tentativa anterior à migration 74 reaberta. */
+      readonly numeroDocumento: string | null;
+    }
   | {
       readonly _tag: 'TentativaRepetida';
       readonly tentativaId: string;
@@ -90,6 +100,17 @@ export type DesfechoDaTentativa =
     }
   | { readonly estado: 'confirmada'; readonly blingContaId: string; readonly contatoBlingId: number };
 
+/** Resultado de reivindicar a baixa. Só `BaixaPropria` autoriza o POST. */
+export type ReivindicacaoDeBaixa =
+  | { readonly _tag: 'BaixaPropria'; readonly baixaId: string; readonly epoca: number }
+  | { readonly _tag: 'BaixaRepetida'; readonly estado: 'em_voo' | 'confirmada' | 'recusada' | 'indeterminada' }
+  | { readonly _tag: 'BaixaIndisponivel' };
+
+/** O desfecho da baixa gravado por quem a reivindicou. */
+export type DesfechoDaBaixa =
+  | { readonly estado: 'nao_enviada' | 'recusada' | 'indeterminada'; readonly motivo: string }
+  | { readonly estado: 'confirmada'; readonly borderoId: string | null };
+
 /** `NaoGravado` cobre falha de banco e época vencida: nos dois, nada mudou. */
 export type GravacaoDeTentativa = 'Gravado' | 'NaoGravado';
 
@@ -104,7 +125,7 @@ export interface DespesaStorePort {
     readonly titulo?: string;
     readonly descricao: string;
     readonly categoriaId?: string;
-    readonly situacao: 'aberto' | 'pago';
+    readonly situacao: 'aberto' | 'pago' | 'cancelado';
     /** O contato do ERP a quem a despesa foi lançada, e o nome dele na hora. */
     readonly fornecedorBlingId?: number;
     readonly fornecedorNome?: string;
@@ -117,6 +138,17 @@ export interface DespesaStorePort {
     desfecho: DesfechoDaTentativa,
   ): Promise<GravacaoDeTentativa>;
   vincularTitulo(scope: VerifiedOrganizationScope, tentativaId: string, tituloId: string): Promise<GravacaoDeTentativa>;
+  /** Intenção de baixa durável antes do `POST .../baixar` (PRE-002). */
+  reivindicarBaixa(
+    scope: VerifiedOrganizationScope,
+    baixa: { readonly tentativaId: string; readonly blingContaId: string; readonly dataBaixa: string },
+  ): Promise<ReivindicacaoDeBaixa>;
+  /** Compare-and-set: só grava se a baixa ainda está `em_voo` nesta época. */
+  concluirBaixa(
+    scope: VerifiedOrganizationScope,
+    baixa: { readonly baixaId: string; readonly epoca: number },
+    desfecho: DesfechoDaBaixa,
+  ): Promise<GravacaoDeTentativa>;
 }
 
 export interface DespesaAuthPort {

@@ -137,7 +137,8 @@ schema_paths = [
   "../database/70_foto_personalizada_do_produto.sql",
   "../database/71_eventos_de_auditoria_da_foto_do_produto.sql",
   "../database/72_estado_de_sincronizacao_da_foto_com_bling.sql",
-  "../database/73_tentativas_de_conta_a_pagar.sql"
+  "../database/73_tentativas_de_conta_a_pagar.sql",
+  "../database/74_reconciliacao_de_conta_a_pagar.sql"
 ]
 
 [db.seed]

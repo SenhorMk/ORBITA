@@ -1,133 +1,36 @@
 import type {
-  ContaPagarPayload,
-  DespesaBlingPort,
   DespesaDependencies,
   DespesaStorePort,
   GravacaoDeTentativa,
   IntencaoDeContaPagar,
+  ReivindicacaoDeBaixa,
 } from '../despesaHandler';
-import type { EnvioDeCriacaoAoBling } from '@/lib/integrations/bling/classificacaoDeFalhaDeCriacao';
-import type { BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaContract';
+import type { OperacaoRegistrada, OperacoesStorePort, ReconciliacaoDependencies } from '../reconciliacaoDaOperacao';
+import type { MotivoDeRevisaoManual } from '../reconciliacaoDeContaPagar';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
+import { fakeBling, type FakeBling } from './blingContasPagarFake';
+
 /**
- * Fakes da rota de despesa, compartilhados pelos testes do handler e pelo
- * teste do formulário que atravessa até o handler real.
+ * Store em memória com as MESMAS regras das migrations 73 e 74: chave por
+ * organização, digest, pendência idêntica, CAS por estado+época, baixa só de
+ * conta confirmada, recibo antes da transição e a decisão da reconciliação
+ * (`confirmada`/`ja_confirmada`/`divergente`). As migrations em si são provadas
+ * no pgTAP e na corrida contra Postgres real.
  */
 
-// Bling fake. Separa o que ACONTECEU no Bling (`contasCriadasNoBling`) do que a
-// resposta diz — é isso que deixa um teste de ACK perdido falhar com dois POSTs.
-
-type ModoDeCriacao =
-  | 'confirma'
-  | 'perde-ack' // cria no Bling e a resposta se perde (prazo/conexão)
-  | 'timeout-sem-criar' // nada criado, mas também nada voltou
-  | 'sem-credencial' // nenhuma requisição sai
-  | 'erro-5xx' // o Bling responde 500 — e pode ter criado
-  | 'sucesso-sem-id' // cria e responde 2xx sem id
-  | 'recusa'; // VALIDATION_ERROR 400
-
-export interface FakeBling extends DespesaBlingPort {
-  /** Payloads que CHEGARAM ao Bling, criando ou não. */
-  readonly posts: ContaPagarPayload[];
-  /** Contas que EXISTEM no Bling. A contraprova principal conta isto. */
-  readonly contasCriadasNoBling: () => number;
-  readonly baixadas: Array<{ id: string; portadorId: number; categoriaId: number }>;
-  /** Quantas vezes o fornecedor padrão foi procurado no Bling. */
-  readonly contatosResolvidos: () => number;
-}
-
-/** Uma falha do Bling: texto vira `VALIDATION_ERROR 400`; uma falha pronta passa como está. */
-type FalhaProgramada = string | BlingProviderFailure;
-
-function falhaBling(type: string, status: number, message: string) {
-  return {
-    _tag: 'BlingFailed' as const,
-    failure: { _tag: 'BlingProviderFailure' as const, type, status, message, duplicateSale: false },
-  };
-}
-
-function falhaProgramada(falha: FalhaProgramada) {
-  return typeof falha === 'string' ? falhaBling('VALIDATION_ERROR', 400, falha) : { _tag: 'BlingFailed' as const, failure: falha };
-}
-
-export function fakeBling(options: {
-  modo?: ModoDeCriacao;
-  falhaCriar?: FalhaProgramada;
-  falhaPortador?: FalhaProgramada;
-  falhaBaixa?: FalhaProgramada;
-  baixaAmbigua?: boolean;
-  falhaContato?: FalhaProgramada;
-  /** Chamado no instante do POST — antes de qualquer resposta. */
-  aoReceberPost?: () => void;
-  /** Segura a resposta até a promessa resolver (corrida). */
-  segurarResposta?: Promise<void>;
-} = {}): FakeBling {
-  const posts: ContaPagarPayload[] = [];
-  const baixadas: Array<{ id: string; portadorId: number; categoriaId: number }> = [];
-  let criadas = 0;
-  let contatos = 0;
-  const modo: ModoDeCriacao = options.falhaCriar ? 'recusa' : options.modo ?? 'confirma';
-
-  return {
-    posts,
-    baixadas,
-    contasCriadasNoBling: () => criadas,
-    contatosResolvidos: () => contatos,
-    async resolverContatoPadrao() {
-      contatos++;
-      if (options.falhaContato) return falhaProgramada(options.falhaContato);
-      return { _tag: 'BlingOk' as const, value: 7001 };
-    },
-    async criarContaPagar(payload): Promise<EnvioDeCriacaoAoBling<{ id: string }>> {
-      if (modo === 'sem-credencial') return { _tag: 'NaoEnviado', motivo: 'credencial_indisponivel' };
-      posts.push(payload);
-      options.aoReceberPost?.();
-      if (options.segurarResposta) await options.segurarResposta;
-      switch (modo) {
-        case 'confirma':
-          criadas++;
-          return { _tag: 'Despachado', resultado: { _tag: 'BlingOk', value: { id: String(88122 + criadas) } } };
-        case 'perde-ack':
-          criadas++;
-          return { _tag: 'Despachado', resultado: falhaBling('UNKNOWN_ERROR', 0, 'prazo esgotado') };
-        case 'timeout-sem-criar':
-          return { _tag: 'Despachado', resultado: falhaBling('UNKNOWN_ERROR', 0, 'prazo esgotado') };
-        case 'erro-5xx':
-          criadas++;
-          return { _tag: 'Despachado', resultado: falhaBling('SERVER_ERROR', 500, 'Erro interno') };
-        case 'sucesso-sem-id':
-          criadas++;
-          return { _tag: 'Despachado', resultado: falhaBling('INVALID_RESPONSE', 201, 'sem id') };
-        case 'recusa':
-          return { _tag: 'Despachado', resultado: falhaProgramada(options.falhaCriar ?? 'contato.id inválido') };
-      }
-    },
-    async obterPortadorPadrao() {
-      if (options.falhaPortador) return falhaProgramada(options.falhaPortador);
-      return { _tag: 'BlingOk' as const, value: 55 };
-    },
-    async baixarContaPagar(id, payload) {
-      if (options.baixaAmbigua) return falhaBling('UNKNOWN_ERROR', 0, 'prazo esgotado');
-      if (options.falhaBaixa) return falhaProgramada(options.falhaBaixa);
-      baixadas.push({ id, portadorId: payload.portadorId, categoriaId: payload.categoriaId });
-      return { _tag: 'BlingOk' as const, value: undefined };
-    },
-  };
-}
-
-// Store em memória com as MESMAS regras da migration 73: chave por
-// organização, digest, pendência idêntica (em_voo/indeterminada) e CAS por
-// estado+época. A própria migration é provada no pgTAP e na corrida real.
-
-type EstadoTentativa = 'em_voo' | 'nao_enviada' | 'confirmada' | 'recusada' | 'indeterminada';
+type Estado = 'em_voo' | 'nao_enviada' | 'confirmada' | 'recusada' | 'indeterminada';
 
 interface TentativaFake {
   readonly id: string;
   readonly org: string;
   readonly chave: string;
   readonly digest: string;
-  estado: EstadoTentativa;
+  readonly valor: number;
+  readonly dataVencimento: string;
+  dataEmissao: string;
+  readonly numeroDocumento: string | null;
+  estado: Estado;
   epoca: number;
   blingContaId: string | null;
   tituloId: string | null;
@@ -135,10 +38,36 @@ interface TentativaFake {
   motivo: string | null;
 }
 
+interface BaixaFake {
+  readonly id: string;
+  readonly org: string;
+  readonly tentativaId: string;
+  readonly blingContaId: string;
+  estado: Estado;
+  epoca: number;
+  borderoId: string | null;
+  motivo: string | null;
+}
+
+interface ReciboFake {
+  readonly org: string;
+  readonly tentativaId: string;
+  readonly alvo: 'criacao' | 'baixa';
+  readonly resultado: 'confirmada' | 'ja_confirmada' | 'revisao_manual' | 'divergente';
+  readonly motivo: MotivoDeRevisaoManual | null;
+  readonly blingContaId: string | null;
+  readonly atorId: string;
+  readonly em: string;
+}
+
 export interface FakeStore extends DespesaStorePort {
-  readonly salvos: Array<Record<string, unknown>>;
+  readonly salvos: Array<Record<string, unknown> & { id: string }>;
   readonly tentativas: TentativaFake[];
+  readonly baixas: BaixaFake[];
+  readonly recibos: ReciboFake[];
   tentativa(org: string, chave: string): TentativaFake | undefined;
+  /** A porta de operações da reconciliação, sobre o mesmo estado. */
+  operacoes(): OperacoesStorePort;
 }
 
 export function fakeStore(options: {
@@ -148,19 +77,94 @@ export function fakeStore(options: {
   falhasDeTitulo?: number;
   reivindicacaoIndisponivel?: boolean;
   concluirFalha?: boolean;
+  /** Simula a queda antes do commit da reconciliação: nada é gravado. */
+  registroDeReconciliacaoFalha?: boolean;
 } = {}): FakeStore {
-  const salvos: Array<Record<string, unknown>> = [];
+  const salvos: Array<Record<string, unknown> & { id: string }> = [];
   const tentativas: TentativaFake[] = [];
+  const baixas: BaixaFake[] = [];
+  const recibos: ReciboFake[] = [];
   let falhasDeTitulo = options.falhasDeTitulo ?? 0;
   let seq = 0;
 
   const pendente = (org: string, digest: string) =>
     tentativas.find((t) => t.org === org && t.digest === digest && (t.estado === 'em_voo' || t.estado === 'indeterminada'));
 
+  const projetar = (t: TentativaFake): OperacaoRegistrada => {
+    const baixa = baixas.find((b) => b.tentativaId === t.id) ?? null;
+    const recibo = [...recibos].reverse().find((r) => r.tentativaId === t.id) ?? null;
+    return {
+      tentativaId: t.id, ref: t.chave, estado: t.estado, valor: t.valor, dataVencimento: t.dataVencimento,
+      dataEmissao: t.dataEmissao, contatoBlingId: t.contatoBlingId, numeroDocumento: t.numeroDocumento,
+      blingContaId: t.blingContaId, tituloId: t.tituloId,
+      baixa: baixa ? { estado: baixa.estado, blingContaId: baixa.blingContaId } : null,
+      ultimaReconciliacao: recibo
+        ? { alvo: recibo.alvo, resultado: recibo.resultado, motivo: recibo.motivo, em: recibo.em }
+        : null,
+    };
+  };
+
+  const operacoes: OperacoesStorePort = {
+    async lerOperacao(s, ref) {
+      const t = tentativas.find((x) => x.org === s.organizationId && x.chave === ref);
+      return t ? { _tag: 'Encontrada', operacao: projetar(t) } : { _tag: 'NaoEncontrada' };
+    },
+    async listarPendentes(s) {
+      const pendentes = tentativas.filter((t) => t.org === s.organizationId && (
+        t.estado === 'em_voo' || t.estado === 'indeterminada'
+        || baixas.some((b) => b.tentativaId === t.id && (b.estado === 'em_voo' || b.estado === 'indeterminada'))));
+      return { _tag: 'Listadas', operacoes: pendentes.map(projetar) };
+    },
+    async registrarReconciliacao(s, registro) {
+      if (options.registroDeReconciliacaoFalha) return { _tag: 'Indisponivel' };
+      const t = tentativas.find((x) => x.org === s.organizationId && x.chave === registro.ref);
+      if (!t) return { _tag: 'Indisponivel' };
+      const conta = registro.prova._tag === 'Comprovada' ? registro.prova.conta : null;
+      const motivo = registro.prova._tag === 'RevisaoManual' ? registro.prova.motivo : null;
+      const alvo = registro.alvo;
+      const b = alvo === 'baixa' ? baixas.find((x) => x.tentativaId === t.id) : undefined;
+      if (alvo === 'baixa' && !b) return { _tag: 'Indisponivel' };
+      const estadoAtual = alvo === 'criacao' ? t.estado : (b?.estado ?? 'em_voo');
+      const idAtual = alvo === 'criacao' ? t.blingContaId : (b?.blingContaId ?? null);
+
+      let resultado: ReciboFake['resultado'];
+      if (conta === null) resultado = 'revisao_manual';
+      else if (alvo === 'baixa' && conta.id !== idAtual) resultado = 'divergente';
+      else if (estadoAtual === 'em_voo' || estadoAtual === 'indeterminada') resultado = 'confirmada';
+      else if (estadoAtual === 'confirmada' && idAtual === conta.id) resultado = 'ja_confirmada';
+      else resultado = 'divergente';
+
+      recibos.push({ org: s.organizationId, tentativaId: t.id, alvo, resultado, motivo, blingContaId: conta?.id ?? null,
+        atorId: s.actorId, em: new Date(recibos.length * 1000).toISOString() });
+      if (resultado === 'confirmada' && conta) {
+        if (alvo === 'criacao') {
+          t.estado = 'confirmada';
+          t.blingContaId = conta.id;
+        } else if (b) {
+          b.estado = 'confirmada';
+          b.borderoId = conta.borderos.length === 1 ? (conta.borderos[0] ?? null) : null;
+        }
+      }
+      return { _tag: 'Registrada', resultado, tituloId: t.tituloId };
+    },
+    async categoriaLocalPorBlingId() {
+      return null;
+    },
+    async marcarTituloPago(s, tituloId): Promise<GravacaoDeTentativa> {
+      const titulo = salvos.find((x) => x.id === tituloId && x.situacao === 'aberto');
+      if (!titulo) return 'NaoGravado';
+      titulo.situacao = 'pago';
+      return 'Gravado';
+    },
+  };
+
   return {
     salvos,
     tentativas,
+    baixas,
+    recibos,
     tentativa: (org, chave) => tentativas.find((t) => t.org === org && t.chave === chave),
+    operacoes: () => operacoes,
     async resolverCategoriaBling() {
       return options.categoriaBlingId === undefined ? 900 : options.categoriaBlingId;
     },
@@ -170,8 +174,15 @@ export function fakeStore(options: {
         falhasDeTitulo--;
         throw new Error('conexão perdida');
       }
-      salvos.push({ ...titulo });
-      return { id: `titulo-${salvos.length}`, blingId: titulo.blingId, situacao: titulo.situacao };
+      // Upsert por conta remota, como `upsertTitulo` (organização + bling_id).
+      const existente = titulo.blingId === null ? undefined : salvos.find((x) => x.blingId === titulo.blingId);
+      if (existente) {
+        Object.assign(existente, titulo);
+        return { id: existente.id, blingId: titulo.blingId, situacao: titulo.situacao };
+      }
+      const id = `titulo-${salvos.length + 1}`;
+      salvos.push({ ...titulo, id });
+      return { id, blingId: titulo.blingId, situacao: titulo.situacao };
     },
     async reivindicarTentativa(s, intencao: IntencaoDeContaPagar) {
       if (options.reivindicacaoIndisponivel) return { _tag: 'TentativaIndisponivel' as const };
@@ -181,11 +192,13 @@ export function fakeStore(options: {
         const outra = pendente(org, intencao.digest);
         if (outra) return { _tag: 'PendenciaIdentica' as const, chavePendente: outra.chave };
         const nova: TentativaFake = {
-          id: `tentativa-${++seq}`, org, chave: intencao.chave, digest: intencao.digest, estado: 'em_voo', epoca: 1,
+          id: `tentativa-${++seq}`, org, chave: intencao.chave, digest: intencao.digest, valor: intencao.valor,
+          dataVencimento: intencao.dataVencimento, dataEmissao: intencao.dataEmissao,
+          numeroDocumento: intencao.numeroDocumento, estado: 'em_voo', epoca: 1,
           blingContaId: null, tituloId: null, contatoBlingId: intencao.contatoBlingId, motivo: null,
         };
         tentativas.push(nova);
-        return { _tag: 'TentativaPropria' as const, tentativaId: nova.id, epoca: 1 };
+        return { _tag: 'TentativaPropria' as const, tentativaId: nova.id, epoca: 1, numeroDocumento: nova.numeroDocumento };
       }
       if (existente.digest !== intencao.digest) return { _tag: 'ConflitoDeConteudo' as const };
       if (existente.estado === 'nao_enviada') {
@@ -193,7 +206,11 @@ export function fakeStore(options: {
         if (outra) return { _tag: 'PendenciaIdentica' as const, chavePendente: outra.chave };
         existente.estado = 'em_voo';
         existente.epoca++;
-        return { _tag: 'TentativaPropria' as const, tentativaId: existente.id, epoca: existente.epoca };
+        existente.dataEmissao = intencao.dataEmissao;
+        return {
+          _tag: 'TentativaPropria' as const, tentativaId: existente.id, epoca: existente.epoca,
+          numeroDocumento: existente.numeroDocumento,
+        };
       }
       return {
         _tag: 'TentativaRepetida' as const,
@@ -220,11 +237,37 @@ export function fakeStore(options: {
       t.tituloId = tituloId;
       return 'Gravado';
     },
+    async reivindicarBaixa(s, baixa): Promise<ReivindicacaoDeBaixa> {
+      const t = tentativas.find((x) => x.id === baixa.tentativaId && x.org === s.organizationId);
+      // O gatilho da migration 74 recusa a baixa de conta não confirmada.
+      if (!t || t.estado !== 'confirmada' || t.blingContaId !== baixa.blingContaId) return { _tag: 'BaixaIndisponivel' };
+      const existente = baixas.find((b) => b.tentativaId === t.id);
+      if (!existente) {
+        const nova: BaixaFake = { id: `baixa-${++seq}`, org: s.organizationId, tentativaId: t.id, blingContaId: baixa.blingContaId,
+          estado: 'em_voo', epoca: 1, borderoId: null, motivo: null };
+        baixas.push(nova);
+        return { _tag: 'BaixaPropria', baixaId: nova.id, epoca: 1 };
+      }
+      if (existente.estado === 'nao_enviada') {
+        existente.estado = 'em_voo';
+        existente.epoca++;
+        return { _tag: 'BaixaPropria', baixaId: existente.id, epoca: existente.epoca };
+      }
+      return { _tag: 'BaixaRepetida', estado: existente.estado };
+    },
+    async concluirBaixa(s, { baixaId, epoca }, desfecho): Promise<GravacaoDeTentativa> {
+      const b = baixas.find((x) => x.id === baixaId && x.org === s.organizationId);
+      if (!b || b.estado !== 'em_voo' || b.epoca !== epoca) return 'NaoGravado';
+      b.estado = desfecho.estado;
+      if (desfecho.estado === 'confirmada') b.borderoId = desfecho.borderoId;
+      else b.motivo = desfecho.motivo;
+      return 'Gravado';
+    },
   };
 }
 
 /**
- * Dependências da rota com os fakes acima.
+ * Dependências da rota de despesa com os fakes.
  *
  * @param scope - O escopo verificado que a autorização devolve.
  * @param overrides - Portas a substituir.
@@ -241,4 +284,16 @@ export function depsDeTeste(
     hoje: () => '2026-08-29',
     ...overrides,
   };
+}
+
+/**
+ * Dependências da reconciliação sobre o MESMO Bling e o MESMO store da rota de
+ * despesa — é o que permite a jornada inteira num teste.
+ *
+ * @param bling - O Bling fake.
+ * @param store - O store fake.
+ * @returns As dependências da reconciliação.
+ */
+export function reconciliacaoDeTeste(bling: FakeBling, store: FakeStore): ReconciliacaoDependencies {
+  return { operacoes: store.operacoes(), titulos: store, bling: () => bling };
 }

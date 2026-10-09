@@ -16,6 +16,7 @@ import {
 } from './derivacoesDoFinanceiro';
 import { DetalhesDaMovimentacao } from './DetalheDaMovimentacao';
 import { LancamentoDeDespesa } from './LancamentoDeDespesa';
+import { OperacoesPendentes } from './OperacoesPendentes';
 import { FiltroDeMovimentacoes, FiltroDePeriodo } from './Movimentacoes';
 import { useLeituraFinanceira, type BuscaAutenticada, type TituloFinanceiro } from './useLeituraFinanceira';
 
@@ -93,6 +94,8 @@ export function FinanceiroTab({ fetchWithAuth, ativo = true, pedidos = null, org
   const barras = useMemo(() => barrasDeEntradaESaida(elegiveis), [elegiveis]);
 
   const [despesaAberta, setDespesaAberta] = useState(false);
+  // Fechar o diálogo de despesa pode ter deixado uma operação pendente.
+  const [versaoDasPendencias, setVersaoDasPendencias] = useState(0);
   const [detalhe, setDetalhe] = useState<TituloFinanceiro | null>(null);
 
   /**
@@ -125,6 +128,13 @@ export function FinanceiroTab({ fetchWithAuth, ativo = true, pedidos = null, org
 
       <AvisoSincronizacao mensagem={avisoSync} />
 
+      <OperacoesPendentes
+        fetchWithAuth={fetchWithAuth}
+        ativo={ativo}
+        versao={versaoDasPendencias}
+        onConfirmada={() => { void fetchFinanceiro(); }}
+      />
+
       <CorpoDoFinanceiro
         estado={{ nuncaCarregou, erroDeLeitura, carregando }}
         titulos={noPeriodo}
@@ -151,7 +161,7 @@ export function FinanceiroTab({ fetchWithAuth, ativo = true, pedidos = null, org
       <LancamentoDeDespesa
         fetchWithAuth={fetchWithAuth}
         aberto={despesaAberta}
-        onFechar={() => setDespesaAberta(false)}
+        onFechar={() => { setDespesaAberta(false); setVersaoDasPendencias((v) => v + 1); }}
         onSalvo={() => { void fetchFinanceiro(); }}
         syncing={syncing}
         setSyncing={setSyncing}

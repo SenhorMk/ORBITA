@@ -91,13 +91,14 @@ describe('caminho e corpo enviados ao Bling', () => {
   });
 
   it('quita a conta a pagar no endpoint próprio, com portador e categoria', async () => {
-    fake.programar({ status: 200, body: JSON.stringify({ data: {} }) });
+    // Resposta 200 do OpenAPI oficial: o borderô criado pela baixa.
+    fake.programar({ status: 200, body: JSON.stringify({ data: { bordero: { id: 555 } } }) });
 
     const resultado = await adapter().baixarContaPagar('88123', {
       data: '2026-08-29', historico: 'Aluguel', portadorId: 55, categoriaId: 900,
     });
 
-    expect(resultado._tag).toBe('BlingOk');
+    expect(resultado).toEqual({ _tag: 'Despachado', resultado: { _tag: 'BlingOk', value: { borderoId: '555' } } });
     const requisicao = fake.recebidas.at(-1)!;
     expect(requisicao.url).toBe('/contas/pagar/88123/baixar');
     expect(JSON.parse(requisicao.body)).toMatchObject({ portador: { id: 55 }, categoria: { id: 900 } });

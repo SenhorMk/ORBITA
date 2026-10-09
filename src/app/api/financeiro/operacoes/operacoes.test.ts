@@ -1,0 +1,111 @@
+import { describe, expect, it } from 'vitest';
+import { NextResponse } from 'next/server';
+
+import { buildDespesaRequest, type DespesaRequest } from '@/lib/config/despesaContract';
+import { listaDeOperacoesSchema, respostaDaReconciliacaoSchema } from '@/lib/config/operacaoFinanceiraContract';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+
+import { fakeBling, type FakeBling } from '../__testkit__/blingContasPagarFake';
+import { depsDeTeste, fakeStore, reconciliacaoDeTeste, type FakeStore } from '../__testkit__/despesaFakes';
+import { createDespesaHandler } from '../despesaHandler';
+import { createOperacoesHandlers } from './operacoesHandler';
+
+const ORG = '11111111-1111-4111-8111-111111111111';
+const ORG_B = '44444444-4444-4444-8444-444444444444';
+const CHAVE = '55555555-5555-4555-8555-555555555555';
+/** SAFETY: o escopo é entrada do teste, não o que está sob teste. */
+const scopeA = { organizationId: ORG, actorId: '22222222-2222-4222-8222-222222222222', role: 'owner' } as unknown as VerifiedOrganizationScope;
+/** SAFETY: idem, organização B. */
+const scopeB = { organizationId: ORG_B, actorId: '22222222-2222-4222-8222-222222222222', role: 'owner' } as unknown as VerifiedOrganizationScope;
+
+async function comOperacaoPendente(): Promise<{ bling: FakeBling; store: FakeStore }> {
+  const bling = fakeBling({ modo: 'perde-ack' });
+  const store = fakeStore();
+  const corpo: DespesaRequest = buildDespesaRequest({
+    descricao: 'Aluguel', valor: 1200, dataVencimento: '2026-10-20', chaveIdempotencia: CHAVE,
+  });
+  await createDespesaHandler(depsDeTeste(scopeA, { bling, store, hoje: () => '2026-10-09' }))(
+    new Request('https://orbita.test/api/financeiro', { method: 'POST', body: JSON.stringify(corpo) }),
+  );
+  return { bling, store };
+}
+
+function handlers(bling: FakeBling, store: FakeStore, autorizacao: 'A' | 'B' | 'negado' = 'A') {
+  return createOperacoesHandlers({
+    ...reconciliacaoDeTeste(bling, store),
+    correlationId: () => 'corr-teste',
+    async autorizar() {
+      if (autorizacao === 'negado') {
+        return { _tag: 'Negado', response: NextResponse.json({ success: false, error: 'Acesso negado' }, { status: 403 }) };
+      }
+      return { _tag: 'Autorizado', scope: autorizacao === 'A' ? scopeA : scopeB };
+    },
+  });
+}
+
+const req = (corpo?: unknown) => new Request('https://orbita.test/api/financeiro/operacoes', {
+  method: corpo === undefined ? 'GET' : 'POST',
+  ...(corpo === undefined ? {} : { body: JSON.stringify(corpo) }),
+});
+
+describe('rotas de operações financeiras', () => {
+  it('lista a operação pendente pelo contrato público, sem ids internos nem referência do Bling', async () => {
+    const { bling, store } = await comOperacaoPendente();
+
+    const corpo = await (await handlers(bling, store).listar(req())).json();
+
+    const lido = listaDeOperacoesSchema.parse(corpo);
+    expect(lido.operacoes).toEqual([expect.objectContaining({ ref: CHAVE, criacao: 'indeterminada', baixa: null })]);
+    expect(JSON.stringify(corpo)).not.toMatch(/tentativa-|ORB-/u);
+  });
+
+  it('reconciliar confirma e devolve o desfecho', async () => {
+    const { bling, store } = await comOperacaoPendente();
+
+    const resposta = await handlers(bling, store).reconciliar(req({}), CHAVE);
+
+    expect(resposta.status).toBe(200);
+    expect(respostaDaReconciliacaoSchema.parse(await resposta.json())).toMatchObject({
+      resultado: 'confirmada', operacao: { criacao: 'confirmada', blingContaId: '88123' },
+    });
+    expect(bling.posts).toHaveLength(1);
+  });
+
+  it('sem capacidade: negado antes de qualquer leitura no banco ou no Bling', async () => {
+    const { bling, store } = await comOperacaoPendente();
+    const negado = handlers(bling, store, 'negado');
+
+    expect((await negado.listar(req())).status).toBe(403);
+    expect((await negado.consultar(req(), CHAVE)).status).toBe(403);
+    expect((await negado.reconciliar(req({}), CHAVE)).status).toBe(403);
+    expect(store.recibos).toHaveLength(0);
+    expect(store.tentativa(ORG, CHAVE)?.estado).toBe('indeterminada');
+  });
+
+  it('organização B: a operação de A é 404, igual a uma inexistente, e nada é gravado', async () => {
+    const { bling, store } = await comOperacaoPendente();
+    const deB = handlers(bling, store, 'B');
+
+    expect((await deB.consultar(req(), CHAVE)).status).toBe(404);
+    expect((await deB.reconciliar(req({}), CHAVE)).status).toBe(404);
+    expect(listaDeOperacoesSchema.parse(await (await deB.listar(req())).json()).operacoes).toEqual([]);
+    expect(store.recibos).toHaveLength(0);
+  });
+
+  it('organizacao_id no corpo não muda de quem é a operação', async () => {
+    const { bling, store } = await comOperacaoPendente();
+
+    const resposta = await handlers(bling, store, 'B').reconciliar(req({ organizacao_id: ORG }), CHAVE);
+
+    expect(resposta.status).toBe(404);
+    expect(store.recibos).toHaveLength(0);
+  });
+
+  it('ref inválida: 400; ref aleatória: 404', async () => {
+    const { bling, store } = await comOperacaoPendente();
+    const h = handlers(bling, store);
+
+    expect((await h.reconciliar(req({}), 'nao-e-uuid')).status).toBe(400);
+    expect((await h.consultar(req(), '99999999-9999-4999-8999-999999999999')).status).toBe(404);
+  });
+});
