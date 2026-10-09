@@ -1,8 +1,9 @@
-import type { BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaContract';
+import type { BlingCallResult, BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaContract';
 
 /**
- * A falha de `POST /pedidos/vendas` (ou do `PATCH` de cancelamento) **prova**
- * que o efeito não aconteceu, ou deixa isso em aberto?
+ * A falha de `POST /pedidos/vendas` (ou do `PATCH` de cancelamento), ou de
+ * `POST /contas/pagar`, **prova** que o efeito não aconteceu, ou deixa isso em
+ * aberto?
  *
  * ## Por que a pergunta importa
  *
@@ -36,7 +37,8 @@ import type { BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaC
  *
  * Uma exceção LANÇADA pela chamada (timeout de rede, conexão perdida, abort)
  * nem chega aqui — não há `BlingProviderFailure` para classificar — e é
- * tratada como ambígua na origem, em `handler.ts`.
+ * tratada como ambígua na origem: no handler da venda manual, e em
+ * `EnvioDeCriacaoAoBling` para a conta a pagar.
  *
  * ## O custo de errar para cada lado, que é o que justifica a assimetria
  *
@@ -106,3 +108,20 @@ export function classificarFalhaDeCriacaoNoBling(failure: BlingProviderFailure):
   if (!ehStatusDeRecusaDoCliente(failure.status)) return 'Ambigua';
   return 'Definitiva';
 }
+
+/**
+ * O que o adapter sabe, como fato, sobre um `POST` de criação no Bling.
+ *
+ * - `NaoEnviado`: **provado** que nenhuma requisição saiu — a credencial não
+ *   foi obtida antes da rede. É o único caso em que repetir a MESMA intenção é
+ *   seguro sem consultar o Bling.
+ * - `Despachado`: a requisição pode ter saído. O `resultado` diz o que voltou;
+ *   uma falha com `status` `0` é "nenhuma resposta legível" (timeout, conexão
+ *   perdida, corpo ilegível), e não prova nada sobre o efeito.
+ *
+ * O adapter relata fatos; quem decide se uma falha despachada é recusa
+ * definitiva é `classificarFalhaDeCriacaoNoBling`.
+ */
+export type EnvioDeCriacaoAoBling<T> =
+  | { readonly _tag: 'NaoEnviado'; readonly motivo: 'credencial_indisponivel' }
+  | { readonly _tag: 'Despachado'; readonly resultado: BlingCallResult<T> };

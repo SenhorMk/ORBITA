@@ -1,6 +1,7 @@
 import type { BlingCategoria, BlingCliente, BlingPedido, BlingProduto } from '../types';
 import type { BlingCallResult, BuscaDePedidoPorNumeroLoja, PedidoVendaPayload } from '../lib/integrations/bling/pedidoVendaContract';
 import type { Situacao } from '../lib/integrations/bling/situacoesContract';
+import type { EnvioDeCriacaoAoBling } from '../lib/integrations/bling/classificacaoDeFalhaDeCriacao';
 import type { ContatoRemoto, EscritaRemota, ExclusaoRemota, LeituraRemota, ProdutoRemoto } from '../lib/integrations/bling/operacaoRemotaContract';
 import type { CodigoDaSituacaoDaConta } from '../lib/integrations/bling/situacaoDaContaBling';
 
@@ -117,7 +118,7 @@ export interface BlingPort {
   getContasReceber(pagina?: number, limite?: number, dataInicial?: string, dataFinal?: string): Promise<unknown[]>;
   getCategorias(): Promise<unknown[]>;
   /** Conferidos contra o schema oficial; quitar é uma chamada separada da criação. */
-  criarContaPagar(payload: ContaPagarBlingEntrada): Promise<BlingCallResult<{ id: string }>>;
+  criarContaPagar(payload: ContaPagarBlingEntrada): Promise<EnvioDeCriacaoAoBling<{ id: string }>>;
   baixarContaPagar(idConta: string, payload: BaixaContaPagarEntrada): Promise<BlingCallResult<void>>;
   /** Situação real (1..7) de uma conta a pagar, lida por id. */
   consultarContaPagar(id: string): Promise<LeituraRemota<ContaPagarRemota>>;

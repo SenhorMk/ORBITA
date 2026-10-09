@@ -21,6 +21,7 @@ import {
   type DespesaBlingPort,
   type DespesaStorePort,
 } from './despesaHandler';
+import { tentativasDeContaPagarStore } from './tentativasDeContaPagarStore';
 
 export type { DespesaBlingPort, DespesaDependencies, DespesaStorePort } from './despesaHandler';
 
@@ -123,6 +124,8 @@ function blingDespesaAdapter(client: BlingPort): DespesaBlingPort {
 }
 
 const despesaStore: DespesaStorePort = {
+  ...tentativasDeContaPagarStore,
+
   async resolverCategoriaBling(scope, categoriaId) {
     const { data } = await supabaseServer
       .from('categorias_financeiras')
@@ -225,6 +228,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     bling: blingDespesaAdapter(bling.forVerifiedOrganization(authorization.scope)),
     store: despesaStore,
     hoje: hojeEmSaoPaulo,
+    novaChave: () => crypto.randomUUID(),
   });
 
   return handler(request);

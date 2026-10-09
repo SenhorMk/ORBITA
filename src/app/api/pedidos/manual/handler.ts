@@ -53,7 +53,7 @@ import {
   respostaCriacaoNoBlingIndeterminada,
   respostaVendaJaRegistrada,
 } from './compensacao';
-import { classificarFalhaDeCriacaoNoBling } from './classificacaoDeFalhaBling';
+import { classificarFalhaDeCriacaoNoBling } from '@/lib/integrations/bling/classificacaoDeFalhaDeCriacao';
 import { decidirSobreTentativa } from './decisaoDeTentativa';
 import { prepararEnvioAoBling, toBlingDate, type EntradaDoEnvio } from './envioAoBling';
 import { prepararPedido } from './preparacao';

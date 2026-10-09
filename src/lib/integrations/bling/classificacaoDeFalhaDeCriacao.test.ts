@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaContract';
 
-import { classificarFalhaDeCriacaoNoBling } from './classificacaoDeFalhaBling';
+import { classificarFalhaDeCriacaoNoBling } from './classificacaoDeFalhaDeCriacao';
 
 function falha(overrides: Partial<BlingProviderFailure>): BlingProviderFailure {
   return {
