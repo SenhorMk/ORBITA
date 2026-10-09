@@ -215,7 +215,18 @@ async function submitNovaDespesa(
   let impressao: string | null = null;
   if (payload.modo === 'contabil') {
     impressao = await impressaoDoLancamento(JSON.stringify(payload));
-    payload = { ...payload, chaveIdempotencia: input.operacoes.chavePara(input.organizacaoId, impressao) };
+    const operacao = input.operacoes.chavePara(input.organizacaoId, impressao);
+    if (operacao._tag === 'StorageIndisponivel') {
+      // Falha fechada: uma chave que não sobrevive a um reload não protege
+      // contra a segunda conta a pagar. Nada é enviado.
+      alert(
+        'O navegador não conseguiu guardar a identidade segura desta operação, e por isso nada foi enviado ao Bling. '
+          + 'Verifique se o armazenamento do site está permitido (janela anônima ou bloqueio de dados podem impedir) '
+          + 'e tente de novo.',
+      );
+      return;
+    }
+    payload = { ...payload, chaveIdempotencia: operacao.chave };
   }
   /** O navegador conhece um desfecho definitivo: o mesmo conteúdo, depois, é operação nova. */
   const encerrarOperacao = () => {
@@ -254,6 +265,16 @@ async function submitNovaDespesa(
 
   if (!res.ok) {
     alert('Erro: ' + (resposta?.error || 'Falha ao salvar despesa'));
+    return;
+  }
+  // Sucesso HTTP sem uma confirmação legível (corpo truncado ou inválido): o
+  // servidor pode ter concluído. A chave fica, e o mesmo conteúdo reenviado é a
+  // mesma operação — nunca uma nova.
+  if (impressao !== null && estado !== 'confirmada') {
+    alert(
+      'A resposta do servidor chegou incompleta e a confirmação desta operação não pôde ser interpretada. '
+        + 'Enviar de novo o mesmo lançamento reutiliza a mesma operação e não cria outra no Bling.',
+    );
     return;
   }
   // Avisos são falhas parciais reais — por exemplo, a despesa foi lançada
@@ -301,7 +322,7 @@ export function LancamentoDeDespesa({
   // Modo de Lançamento (contabil = Bling+Orbita, interno = Apenas Orbita)
   const [modoLancamento, setModoLancamento] = useState<'contabil' | 'interno'>('contabil');
   // Uma vez por montagem; o que importa sobrevive no `sessionStorage`.
-  const [operacoes] = useState(() => criarOperacoesDeDespesa(sessaoDoNavegador()));
+  const [operacoes] = useState(() => criarOperacoesDeDespesa(sessaoDoNavegador));
   const [naoConfirmado, setNaoConfirmado] = useState<string | null>(null);
 
   const [fornecedores, setFornecedores] = useState<Fornecedor[]>([]);

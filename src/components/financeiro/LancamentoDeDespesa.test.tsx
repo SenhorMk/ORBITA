@@ -265,3 +265,84 @@ describe('PRE-001 — a chave sobrevive a reload', () => {
     expect(posts[2]!.chaveIdempotencia).toBe(posts[0]!.chaveIdempotencia);
   });
 });
+
+/**
+ * O formulário real falando com o handler real (Bling e banco fakes), com a
+ * entrega da próxima resposta ao navegador programável.
+ */
+function servidorReal() {
+  const bling = fakeBling();
+  const store = fakeStore();
+  const handler = createDespesaHandler(depsDeTeste(scopeA, { bling, store }));
+  const chamadasDaApi: unknown[] = [];
+  let entregar: (resposta: Response) => Response = (resposta) => resposta;
+  const busca: BuscaAutenticada = async (url, options) => {
+    if (url === '/api/financeiro/fornecedores') return json(200, { success: true, data: [] });
+    chamadasDaApi.push((JSON.parse(String(options?.body)) as Record<string, unknown>).chaveIdempotencia);
+    const resposta = await handler(new Request('https://orbita.test/api/financeiro', {
+      method: 'POST', headers: options?.headers, body: options?.body,
+    }));
+    const entrega = entregar;
+    entregar = (r) => r;
+    return entrega(resposta);
+  };
+  return {
+    busca, bling, store, chamadasDaApi,
+    aoEntregarAProxima: (f: (resposta: Response) => Response) => { entregar = f; },
+  };
+}
+
+describe('PRE-001 — sem storage persistente, o lançamento contábil não sai (falha fechada)', () => {
+  it.each([
+    ['setItem lança (cota cheia, aba privada)', () => vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('cota esgotada', 'QuotaExceededError');
+    })],
+    ['sessionStorage inacessível', () => vi.spyOn(window, 'sessionStorage', 'get').mockImplementation(() => {
+      throw new DOMException('bloqueado', 'SecurityError');
+    })],
+    ['grava sem erro mas não relê o mesmo UUID', () => vi.spyOn(Storage.prototype, 'getItem').mockReturnValue(null)],
+  ])('%s: zero chamadas à API, zero POST no Bling, nenhuma tentativa — e volta a funcionar com o storage', async (_caso, quebrar) => {
+    const { busca, bling, store, chamadasDaApi } = servidorReal();
+    const onSalvo = vi.fn();
+    render(<Montado busca={busca} onSalvo={onSalvo} />);
+
+    const espiao = quebrar();
+    await preencherEEnviar();
+    await esperarAlerta('não conseguiu guardar a identidade segura');
+
+    expect(chamadasDaApi).toHaveLength(0);
+    expect(bling.posts).toHaveLength(0);
+    expect(bling.contasCriadasNoBling()).toBe(0);
+    expect(store.tentativas).toHaveLength(0);
+    expect(onSalvo).not.toHaveBeenCalled();
+
+    espiao.mockRestore();
+    await preencherEEnviar();
+
+    await waitFor(() => expect(onSalvo).toHaveBeenCalled());
+    expect(chamadasDaApi).toHaveLength(1);
+    expect(bling.contasCriadasNoBling()).toBe(1);
+  });
+});
+
+describe('PRE-001 — 200 com corpo ilegível não encerra a operação', () => {
+  it('servidor conclui, o navegador recebe 200 truncado, a retentativa usa a mesma chave: uma única conta', async () => {
+    const { busca, bling, store, chamadasDaApi, aoEntregarAProxima } = servidorReal();
+    aoEntregarAProxima(() => new Response('{"success":tr', { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const onSalvo = vi.fn();
+    render(<Montado busca={busca} onSalvo={onSalvo} />);
+
+    await preencherEEnviar();
+    await esperarAlerta('não pôde ser interpretada');
+    expect(onSalvo).not.toHaveBeenCalled();
+    expect(store.tentativas.map((t) => t.estado)).toEqual(['confirmada']);
+
+    await preencherEEnviar();
+    await waitFor(() => expect(onSalvo).toHaveBeenCalled());
+
+    expect(chamadasDaApi).toHaveLength(2);
+    expect(chamadasDaApi[1]).toBe(chamadasDaApi[0]);
+    expect(bling.contasCriadasNoBling()).toBe(1);
+    expect(bling.posts).toHaveLength(1);
+  });
+});
