@@ -21,6 +21,8 @@ import { useLeituraFinanceira, type BuscaAutenticada, type TituloFinanceiro } fr
 
 interface FinanceiroTabProps {
   fetchWithAuth: BuscaAutenticada;
+  /** Organização ativa na tela; o lançamento de despesa separa suas operações por ela. */
+  organizacaoId?: string | null;
   /**
    * A aba está visível?
    *
@@ -64,7 +66,7 @@ interface FinanceiroTabProps {
  * Os dois gráficos partem da **mesma** lista elegível, no mesmo período; a
  * tabela mostra também os terminais, porque o histórico é deles.
  */
-export function FinanceiroTab({ fetchWithAuth, ativo = true, pedidos = null }: FinanceiroTabProps) {
+export function FinanceiroTab({ fetchWithAuth, ativo = true, pedidos = null, organizacaoId = null }: FinanceiroTabProps) {
   const {
     titulos, categorias, resumo, nuncaCarregou, erroDeLeitura, carregando,
     syncing, setSyncing, avisoSync, filtroTipo, setFiltroTipo,
@@ -154,6 +156,7 @@ export function FinanceiroTab({ fetchWithAuth, ativo = true, pedidos = null }: F
         syncing={syncing}
         setSyncing={setSyncing}
         categorias={categorias}
+        organizacaoId={organizacaoId}
       />
     </div>
   );

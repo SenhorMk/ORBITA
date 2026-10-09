@@ -38,6 +38,7 @@ import { codigoDaSituacaoDaContaSchema } from '../lib/integrations/bling/situaca
 import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 import { FilaDeRequisicoes, esperar, type Dormir } from './filaDeRequisicoes';
 import type { TokenDoBling } from './blingToken';
+import type { EnvioDeCriacaoAoBling } from '../lib/integrations/bling/classificacaoDeFalhaDeCriacao';
 import { tokenDoBlingReal } from './blingCredenciaisSupabase';
 
 /**
@@ -193,6 +194,18 @@ const produtoLidoSchema = z.object({
     }).partial().optional(),
   }),
 });
+
+/**
+ * Resposta `201` de `POST /contas/pagar`. O OpenAPI oficial declara `{ id }`;
+ * a implementação anterior lia também `{ data: { id } }`, o envelope das
+ * demais respostas da v3. As duas formas são aceitas — e qualquer outra é
+ * resposta inválida, nunca sucesso.
+ */
+const idDeContaPagarSchema = z.union([z.number().int().positive(), z.string().regex(/^\d+$/u)]);
+const contaPagarCriadaSchema = z.union([
+  z.object({ data: z.object({ id: idDeContaPagarSchema }) }),
+  z.object({ id: idDeContaPagarSchema }),
+]);
 
 const contaPagarLidaSchema = z.object({
   data: z.object({
@@ -1531,8 +1544,32 @@ export class BlingClient implements BlingPort {
    *
    * **Não envia `situacao`**: no schema oficial ela é `readOnly` e seria
    * descartada pelo Bling. Quitar exige `POST /contas/pagar/{id}/baixar`.
+   *
+   * O OpenAPI oficial não oferece chave de idempotência para este `POST`: uma
+   * repetição cega cria uma SEGUNDA conta. Por isso o desfecho separa o que é
+   * fato do que é inferência. `NaoEnviado` só quando a credencial falhou antes
+   * de qualquer requisição; todo o resto é `Despachado`, com o que voltou — e
+   * "nada voltou" (prazo, conexão perdida, corpo ilegível) é falha de status
+   * `0`, nunca recusa.
    */
-  async criarContaPagar(payload: ContaPagarBlingEntrada): Promise<BlingCallResult<{ id: string }>> {
+  async criarContaPagar(payload: ContaPagarBlingEntrada): Promise<EnvioDeCriacaoAoBling<{ id: string }>> {
+    try {
+      await this.getAccessToken();
+    } catch {
+      // `getAccessToken` já registrou a causa. Nenhuma requisição saiu.
+      return { _tag: 'NaoEnviado', motivo: 'credencial_indisponivel' };
+    }
+
+    const resultado = await this.comOrcamento('bling.conta-pagar.criar', 'criar a conta a pagar', (prazo) =>
+      this.postarContaPagar(payload, prazo),
+    );
+    return { _tag: 'Despachado', resultado };
+  }
+
+  private async postarContaPagar(
+    payload: ContaPagarBlingEntrada,
+    prazo: AbortSignal,
+  ): Promise<BlingCallResult<{ id: string }>> {
     const corpo: Record<string, unknown> = {
       contato: { id: payload.contatoId },
       vencimento: payload.vencimento,
@@ -1547,25 +1584,29 @@ export class BlingClient implements BlingPort {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(corpo),
+      signal: prazo,
     });
 
     if (!response.ok) {
       return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
     }
 
-    const body = (await response.json()) as { data?: { id?: number | string }; id?: number | string };
-    const id = body?.data?.id ?? body?.id;
-    if (id === undefined || id === null || String(id).trim() === '') {
+    const criada = contaPagarCriadaSchema.safeParse(await response.json());
+    if (!criada.success) {
       return blingFailure('INVALID_RESPONSE', response.status, 'O Bling respondeu sucesso sem informar o ID da conta a pagar.');
     }
 
-    return { _tag: 'BlingOk', value: { id: String(id) } };
+    return { _tag: 'BlingOk', value: { id: String('data' in criada.data ? criada.data.data.id : criada.data.id) } };
   }
 
   /**
    * Quita a conta a pagar. Obrigatorios: `categoria.id`, `data`, `historico`,
    * `portador.id` e `usarDataVencimento` — `portador` e a conta financeira da
    * conta Bling, que so existe se o proprietario tiver uma cadastrada.
+   *
+   * Sob `comOrcamento`: a quitação roda depois de a conta já existir no ERP, e
+   * uma exceção aqui derrubaria a requisição inteira antes de o título ser
+   * gravado no ORBITA.
    */
   async baixarContaPagar(idConta: string, payload: {
     data: string;
@@ -1573,23 +1614,26 @@ export class BlingClient implements BlingPort {
     portadorId: number;
     categoriaId: number;
   }): Promise<BlingCallResult<void>> {
-    const response = await this.fetchWithAuth(`${this.baseUrl}/contas/pagar/${encodeURIComponent(idConta)}/baixar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        data: payload.data,
-        historico: payload.historico,
-        portador: { id: payload.portadorId },
-        categoria: { id: payload.categoriaId },
-        usarDataVencimento: false,
-      }),
+    return this.comOrcamento('bling.conta-pagar.baixar', 'quitar a conta a pagar', async (prazo) => {
+      const response = await this.fetchWithAuth(`${this.baseUrl}/contas/pagar/${encodeURIComponent(idConta)}/baixar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: payload.data,
+          historico: payload.historico,
+          portador: { id: payload.portadorId },
+          categoria: { id: payload.categoriaId },
+          usarDataVencimento: false,
+        }),
+        signal: prazo,
+      });
+
+      if (!response.ok) {
+        return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+      }
+
+      return { _tag: 'BlingOk', value: undefined };
     });
-
-    if (!response.ok) {
-      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
-    }
-
-    return { _tag: 'BlingOk', value: undefined };
   }
 
   /** `GET /contas/pagar/{id}`: a conta existe, e em que situação (1..7)? */

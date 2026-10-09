@@ -1,7 +1,7 @@
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 
-import { classificarFalhaDeCriacaoNoBling } from './classificacaoDeFalhaBling';
+import { classificarFalhaDeCriacaoNoBling } from '@/lib/integrations/bling/classificacaoDeFalhaDeCriacao';
 import type { ReconciliacaoDeps, ResultadoDaReconciliacao } from './reconciliacao';
 import type { TentativaRegistrada } from './ports';
 

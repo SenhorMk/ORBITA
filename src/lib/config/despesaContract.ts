@@ -45,6 +45,18 @@ export const despesaRequestSchema = z.object({
    * Quitar exige `POST /contas/pagar/{id}/baixar`.
    */
   pago: z.boolean().default(false),
+  /**
+   * Identidade da operação, gerada pelo navegador ANTES da rede e reenviada em
+   * toda retentativa da mesma submissão. É ela que permite ao servidor
+   * reconhecer "esta é a MESMA operação" e não criar uma segunda conta a pagar
+   * no Bling — que não oferece chave de idempotência própria.
+   *
+   * Obrigatória no modo `contabil`: sem ela a rota recusa antes de qualquer
+   * efeito, e o servidor nunca gera uma. Opcional no modo `interno`, que não
+   * tem efeito externo. Opcional no schema porque o formulário monta o corpo
+   * antes de saber a chave (ela depende do digest do conteúdo).
+   */
+  chaveIdempotencia: z.string().uuid().optional(),
 });
 
 export type DespesaRequest = z.infer<typeof despesaRequestSchema>;
@@ -53,4 +65,49 @@ export type DespesaRequestInput = z.input<typeof despesaRequestSchema>;
 /** Monta o corpo de `POST /api/financeiro`, validado pelo schema da rota. */
 export function buildDespesaRequest(input: DespesaRequestInput): DespesaRequest {
   return despesaRequestSchema.parse(input);
+}
+
+/**
+ * Estado da operação de lançamento contábil, como a API o devolve.
+ *
+ * `em_voo` e `indeterminada` significam "o resultado ainda não foi
+ * confirmado": a conta a pagar pode existir no Bling, e lançar de novo pode
+ * duplicá-la. Nenhum dos dois é recusa.
+ */
+export const estadoDaOperacaoDeDespesaSchema = z.enum([
+  'em_voo',
+  'nao_enviada',
+  'confirmada',
+  'recusada',
+  'indeterminada',
+]);
+
+export type EstadoDaOperacaoDeDespesa = z.infer<typeof estadoDaOperacaoDeDespesaSchema>;
+
+/** A operação devolvida por `POST /api/financeiro` no modo contábil. */
+export const operacaoDeDespesaSchema = z.object({
+  /** A `chaveIdempotencia` da operação: a referência para conferir depois. */
+  ref: z.string().uuid(),
+  estado: estadoDaOperacaoDeDespesaSchema,
+});
+
+export type OperacaoDeDespesa = z.infer<typeof operacaoDeDespesaSchema>;
+
+/** Corpo de resposta de `POST /api/financeiro`, lido pelo formulário. */
+export const despesaRespostaSchema = z.object({
+  success: z.boolean(),
+  error: z.string().optional(),
+  avisos: z.array(z.string()).optional(),
+  operacao: operacaoDeDespesaSchema.optional(),
+});
+
+/**
+ * O resultado desta operação ainda não foi confirmado?
+ *
+ * @param estado - Estado devolvido pela API.
+ * @returns `true` para `em_voo` e `indeterminada`: lançar de novo pode criar
+ *   uma segunda conta a pagar no Bling.
+ */
+export function resultadoNaoConfirmado(estado: EstadoDaOperacaoDeDespesa): boolean {
+  return estado === 'em_voo' || estado === 'indeterminada';
 }

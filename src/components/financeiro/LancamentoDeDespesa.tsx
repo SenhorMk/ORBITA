@@ -2,10 +2,20 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 
-import { buildDespesaRequest } from '@/lib/config/despesaContract';
+import {
+  buildDespesaRequest,
+  despesaRespostaSchema,
+  resultadoNaoConfirmado,
+} from '@/lib/config/despesaContract';
 import { descreverErro } from '@/lib/erroLegivel';
 
 import { NovaDespesaModal, type Fornecedor } from './NovaDespesaModal';
+import {
+  criarOperacoesDeDespesa,
+  impressaoDoLancamento,
+  sessaoDoNavegador,
+  type OperacoesDeDespesa,
+} from './operacoesDeDespesa';
 import { NovoFornecedorModal, type DadosCNPJ } from './NovoFornecedorModal';
 import type { BuscaAutenticada, CategoriaFinanceira } from './useLeituraFinanceira';
 
@@ -145,6 +155,17 @@ interface NovaDespesaSubmitInput {
   modoLancamento: 'contabil' | 'interno';
   fornecedorSelecionado: Fornecedor | null;
   onSaved: () => void;
+  /**
+   * Onde a chave de cada lançamento contábil sobrevive a reload e remontagem.
+   * A chave nasce antes da rede e volta igual enquanto o conteúdo for o mesmo:
+   * é o que faz uma retentativa — inclusive depois de o servidor confirmar e a
+   * resposta se perder — ser a MESMA operação, sem segunda conta no Bling.
+   */
+  operacoes: OperacoesDeDespesa;
+  /** Organização ativa na tela: só separa as operações guardadas. */
+  organizacaoId: string | null;
+  /** O resultado não foi confirmado: o diálogo deixa de permitir reenvio. */
+  onNaoConfirmado: (mensagem: string) => void;
 }
 
 /** Envia o formulário de nova despesa (`/api/financeiro`) e trata o resultado. */
@@ -191,28 +212,78 @@ async function submitNovaDespesa(
     return;
   }
 
+  let impressao: string | null = null;
+  if (payload.modo === 'contabil') {
+    impressao = await impressaoDoLancamento(JSON.stringify(payload));
+    const operacao = input.operacoes.chavePara(input.organizacaoId, impressao);
+    if (operacao._tag === 'StorageIndisponivel') {
+      // Falha fechada: uma chave que não sobrevive a um reload não protege
+      // contra a segunda conta a pagar. Nada é enviado.
+      alert(
+        'O navegador não conseguiu guardar a identidade segura desta operação, e por isso nada foi enviado ao Bling. '
+          + 'Verifique se o armazenamento do site está permitido (janela anônima ou bloqueio de dados podem impedir) '
+          + 'e tente de novo.',
+      );
+      return;
+    }
+    payload = { ...payload, chaveIdempotencia: operacao.chave };
+  }
+  /** O navegador conhece um desfecho definitivo: o mesmo conteúdo, depois, é operação nova. */
+  const encerrarOperacao = () => {
+    if (impressao !== null) input.operacoes.esquecer(input.organizacaoId, impressao);
+  };
+
+  let res: Response;
   try {
-    const res = await input.fetchWithAuth('/api/financeiro', {
+    res = await input.fetchWithAuth('/api/financeiro', {
       method: 'POST',
       body: JSON.stringify(payload),
       headers: { 'Content-Type': 'application/json' },
     });
-    if (!res.ok) {
-      const err = await res.json();
-      alert('Erro: ' + (err.error || 'Falha ao salvar despesa'));
-      return;
-    }
-    // Avisos são falhas parciais reais — por exemplo, a despesa foi lançada
-    // no Bling mas continua em aberto lá porque a quitação falhou.
-    const corpo = (await res.json()) as { avisos?: string[] };
-    if (corpo.avisos && corpo.avisos.length > 0) {
-      alert(corpo.avisos.join('\n'));
-    }
-    input.onSaved();
   } catch (err: unknown) {
+    // A resposta se perdeu: o servidor pode ter lançado. A chave fica, e enviar
+    // de novo o mesmo conteúdo é reconhecido como a mesma operação.
     console.error(err);
-    alert('Erro inesperado: ' + (descreverErro(err)));
+    alert(
+      'Não foi possível confirmar se a despesa foi lançada (' + descreverErro(err) + '). '
+        + 'Enviar de novo o mesmo lançamento reutiliza a mesma operação e não cria outra no Bling.',
+    );
+    return;
   }
+
+  const lida = despesaRespostaSchema.safeParse(await res.json().catch(() => null));
+  const resposta = lida.success ? lida.data : null;
+  const estado = resposta?.operacao?.estado;
+
+  if (estado !== undefined && resultadoNaoConfirmado(estado)) {
+    input.onNaoConfirmado(resposta?.error ?? 'O resultado deste lançamento ainda não foi confirmado.');
+    return;
+  }
+  // Recusa definitiva e conflito encerram a operação: a próxima submissão,
+  // corrigida, é uma operação nova. `nao_enviada` mantém a chave — nada saiu.
+  if (estado === 'recusada' || res.status === 409) encerrarOperacao();
+
+  if (!res.ok) {
+    alert('Erro: ' + (resposta?.error || 'Falha ao salvar despesa'));
+    return;
+  }
+  // Sucesso HTTP sem uma confirmação legível (corpo truncado ou inválido): o
+  // servidor pode ter concluído. A chave fica, e o mesmo conteúdo reenviado é a
+  // mesma operação — nunca uma nova.
+  if (impressao !== null && estado !== 'confirmada') {
+    alert(
+      'A resposta do servidor chegou incompleta e a confirmação desta operação não pôde ser interpretada. '
+        + 'Enviar de novo o mesmo lançamento reutiliza a mesma operação e não cria outra no Bling.',
+    );
+    return;
+  }
+  // Avisos são falhas parciais reais — por exemplo, a despesa foi lançada
+  // no Bling mas continua em aberto lá porque a quitação falhou.
+  if (resposta?.avisos && resposta.avisos.length > 0) {
+    alert(resposta.avisos.join('\n'));
+  }
+  encerrarOperacao();
+  input.onSaved();
 }
 
 
@@ -235,6 +306,7 @@ export function LancamentoDeDespesa({
   syncing,
   setSyncing,
   categorias,
+  organizacaoId = null,
 }: {
   fetchWithAuth: BuscaAutenticada;
   categorias: readonly CategoriaFinanceira[];
@@ -243,10 +315,15 @@ export function LancamentoDeDespesa({
   onSalvo: () => void;
   syncing: boolean;
   setSyncing: (valor: boolean) => void;
+  /** Organização ativa na tela; separa as operações guardadas nesta aba. */
+  organizacaoId?: string | null;
 }) {
   const [isNovoFornecedorModalOpen, setIsNovoFornecedorModalOpen] = useState(false);
   // Modo de Lançamento (contabil = Bling+Orbita, interno = Apenas Orbita)
   const [modoLancamento, setModoLancamento] = useState<'contabil' | 'interno'>('contabil');
+  // Uma vez por montagem; o que importa sobrevive no `sessionStorage`.
+  const [operacoes] = useState(() => criarOperacoesDeDespesa(sessaoDoNavegador));
+  const [naoConfirmado, setNaoConfirmado] = useState<string | null>(null);
 
   const [fornecedores, setFornecedores] = useState<Fornecedor[]>([]);
   const [fornecedorSelecionado, setFornecedorSelecionado] = useState<Fornecedor | null>(null);
@@ -304,7 +381,10 @@ export function LancamentoDeDespesa({
    * pode herdar o modo nem o fornecedor da despesa anterior, e zerar aqui evita
    * um efeito que escreve estado no meio da renderização.
    */
+  // Fechar não esquece a operação: reabrir com o mesmo lançamento depois de
+  // uma resposta perdida tem de reenviar a MESMA chave.
   const fechar = () => {
+    setNaoConfirmado(null);
     setModoLancamento('contabil');
     setFornecedorSelecionado(null);
     setSearchFornecedor('');
@@ -322,6 +402,9 @@ export function LancamentoDeDespesa({
           onSalvo();
           fechar();
         },
+        operacoes,
+        organizacaoId,
+        onNaoConfirmado: setNaoConfirmado,
       });
     } finally {
       setSyncing(false);
@@ -338,6 +421,7 @@ export function LancamentoDeDespesa({
         modoLancamento={modoLancamento}
         setModoLancamento={setModoLancamento}
         syncing={syncing}
+        naoConfirmado={naoConfirmado}
         onSubmit={handleSubmit}
         categorias={categorias}
         fornecedorPicker={{

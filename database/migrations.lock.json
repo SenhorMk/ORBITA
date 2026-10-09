@@ -375,6 +375,11 @@
       "order": 75,
       "path": "../database/72_estado_de_sincronizacao_da_foto_com_bling.sql",
       "sha256": "475352262a443d9e3faad68b75dc22893944cbb257afd0e3623b3dd41c4baea4"
+    },
+    {
+      "order": 76,
+      "path": "../database/73_tentativas_de_conta_a_pagar.sql",
+      "sha256": "94684056d1631d87417393b011cab008aca9c764e513245e92532447536037b4"
     }
   ],
   "references": [

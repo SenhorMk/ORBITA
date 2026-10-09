@@ -154,6 +154,11 @@ interface NovaDespesaModalProps {
   modoLancamento: 'contabil' | 'interno';
   setModoLancamento: (modo: 'contabil' | 'interno') => void;
   syncing: boolean;
+  /**
+   * O resultado do último envio não foi confirmado pelo Bling. Enquanto isso,
+   * o diálogo não envia de novo: a conta pode existir lá.
+   */
+  naoConfirmado?: string | null;
   onSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
   fornecedorPicker: FornecedorPickerProps;
   /** As categorias reais da organização, vindas da leitura do Financeiro. */
@@ -174,7 +179,7 @@ interface NovaDespesaModalProps {
  * sumir por um clique errado.
  */
 export function NovaDespesaModal({
-  isOpen, onClose, modoLancamento, setModoLancamento, syncing, onSubmit, fornecedorPicker, categorias,
+  isOpen, onClose, modoLancamento, setModoLancamento, syncing, naoConfirmado = null, onSubmit, fornecedorPicker, categorias,
 }: NovaDespesaModalProps) {
   return (
     <Modal
@@ -197,7 +202,7 @@ export function NovaDespesaModal({
             <button
               type="submit"
               form={ID_DO_FORMULARIO}
-              disabled={syncing}
+              disabled={syncing || naoConfirmado !== null}
               className="orbita-chip cursor-pointer"
               style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
             >
@@ -207,6 +212,12 @@ export function NovaDespesaModal({
         />
       }
     >
+      {naoConfirmado !== null && (
+        <output className="block mb-4 text-sm" style={{ color: 'var(--warning)' }}>
+          {naoConfirmado}
+        </output>
+      )}
+
       {/* Seletor de modo: contábil (Bling + Orbita) ou somente interno (Orbita). */}
       <div
         className="grid grid-cols-2 mb-5"
