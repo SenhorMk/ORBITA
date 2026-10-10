@@ -41,7 +41,7 @@ describe('quitação — uma intenção, uma baixa', () => {
       return baixarOriginal(...args);
     } };
 
-    await quitar(scope, conta, corpo, 900, { ...deps, bling });
+    await quitar(scope, conta, 'Aluguel', 900, { ...deps, bling });
 
     expect(noInstante).toBe('em_voo');
   });
@@ -49,8 +49,8 @@ describe('quitação — uma intenção, uma baixa', () => {
   it('segundo executor da mesma quitação (baixa ambígua): nenhum segundo POST', async () => {
     const { bling, store, deps, conta } = await contaConfirmada();
 
-    const primeira = await quitar(scope, conta, corpo, 900, deps);
-    const segunda = await quitar(scope, conta, corpo, 900, deps);
+    const primeira = await quitar(scope, conta, 'Aluguel', 900, deps);
+    const segunda = await quitar(scope, conta, 'Aluguel', 900, deps);
 
     expect(bling.baixasEnviadas()).toBe(1);
     expect(store.baixas).toHaveLength(1);
@@ -61,11 +61,11 @@ describe('quitação — uma intenção, uma baixa', () => {
 
   it('quitação comprovadamente não enviada reabre a MESMA intenção', async () => {
     const { store, deps, conta } = await contaConfirmada('sem-credencial');
-    await quitar(scope, conta, corpo, 900, deps);
+    await quitar(scope, conta, 'Aluguel', 900, deps);
     expect(store.baixas[0]).toMatchObject({ estado: 'nao_enviada', epoca: 1 });
 
     const bling = fakeBling({ baixa: 'confirma' });
-    const resultado = await quitar(scope, conta, corpo, 900, { ...deps, bling: { ...deps.bling, baixarContaPagar: bling.baixarContaPagar } });
+    const resultado = await quitar(scope, conta, 'Aluguel', 900, { ...deps, bling: { ...deps.bling, baixarContaPagar: bling.baixarContaPagar } });
 
     expect(resultado.quitada).toBe(true);
     expect(store.baixas).toHaveLength(1);
@@ -75,7 +75,7 @@ describe('quitação — uma intenção, uma baixa', () => {
   it('conta não confirmada não tem baixa: nada é enviado', async () => {
     const { bling, deps, conta } = await contaConfirmada();
 
-    const resultado = await quitar(scope, { ...conta, blingContaId: '999' }, corpo, 900, deps);
+    const resultado = await quitar(scope, { ...conta, blingContaId: '999' }, 'Aluguel', 900, deps);
 
     expect(bling.baixasEnviadas()).toBe(0);
     expect(resultado.quitada).toBe(false);

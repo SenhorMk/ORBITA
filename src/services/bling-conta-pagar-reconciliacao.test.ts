@@ -120,6 +120,34 @@ describe('lerContaPagarParaReconciliacao', () => {
   });
 });
 
+describe('lerBorderoParaReconciliacao', () => {
+  it('lê data e histórico do borderô — é o que prova a autoria da baixa', async () => {
+    fake.programar({ status: 200, body: JSON.stringify({ data: {
+      id: 7001, data: '2026-10-09', historico: 'Aluguel [ORBQ-0123456789ABCDEF]', portador: { id: 55 }, pagamentos: [],
+    } }) });
+
+    expect(await adapter().lerBorderoParaReconciliacao('7001')).toEqual({
+      _tag: 'RemotoPresente', valor: { id: '7001', data: '2026-10-09', historico: 'Aluguel [ORBQ-0123456789ABCDEF]' },
+    });
+    expect(fake.recebidas.at(-1)!.url).toBe('/borderos/7001');
+    expect(fake.recebidas.at(-1)!.method).toBe('GET');
+  });
+
+  it('borderô sem histórico: lido como null, nunca inventado', async () => {
+    fake.programar({ status: 200, body: JSON.stringify({ data: { id: 7001, data: '2026-10-09' } }) });
+
+    expect(await adapter().lerBorderoParaReconciliacao('7001')).toMatchObject({ valor: { historico: null } });
+  });
+
+  it('404: ausente; corpo sem data: indeterminado', async () => {
+    fake.programar({ status: 404, body: '{}' });
+    expect(await adapter().lerBorderoParaReconciliacao('1')).toEqual({ _tag: 'RemotoAusente' });
+
+    fake.programar({ status: 200, body: JSON.stringify({ data: { id: 1 } }) });
+    expect(await adapter().lerBorderoParaReconciliacao('1')).toEqual({ _tag: 'RemotoIndeterminado', causa: 'resposta_invalida' });
+  });
+});
+
 describe('criação e baixa', () => {
   it('a referência opaca vai em numeroDocumento', async () => {
     fake.programar({ status: 201, body: JSON.stringify({ id: 1 }) });

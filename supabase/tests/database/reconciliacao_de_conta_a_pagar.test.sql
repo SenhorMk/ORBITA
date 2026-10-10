@@ -6,7 +6,10 @@
 -- `indeterminada → confirmada` sem o `exists (...)` do recibo: 6 falha. Aceite
 -- `indeterminada → nao_enviada`: 7 falha. Remova o gatilho
 -- `tg_reconciliacoes_conta_pagar_imutavel`: 16-17 falham. Remova a verificação
--- de `fn_baixa_conta_pagar_nasce_de_confirmada`: 20-21 falham.
+-- de `fn_baixa_conta_pagar_nasce_de_confirmada`: 20-21 falham. Tire
+-- `quitacao_solicitada` da identidade imutável: 31 falha. Remova o `exists` de
+-- `conta_de_outra_operacao` no registro: 32-33 falham. Remova o índice
+-- `uq_tentativas_conta_pagar_conta_remota`: 34 falha.
 
 begin;
 
@@ -27,7 +30,7 @@ insert into public.organizacoes (id, nome, slug)
 values ('74100000-0000-4000-8000-000000000001', 'Org T74 A', 'org-t74-a'),
        ('74100000-0000-4000-8000-000000000002', 'Org T74 B', 'org-t74-b');
 
-select plan(36);
+select plan(42);
 
 create temp table ids as select
     '74100000-0000-4000-8000-000000000001'::uuid as org_a,
@@ -212,19 +215,51 @@ select is((select estado from public.baixas_conta_pagar where id = (select baixa
           '29. e continua confirmada pela conta certa');
 
 -- ----------------------------------------------------------------------------
--- 30-36. Privilégios e RLS.
+-- 30-35. A quitação pedida é durável; uma conta remota, uma operação.
 -- ----------------------------------------------------------------------------
-select ok(not has_table_privilege('authenticated', 'public.reconciliacoes_conta_pagar', 'select'), '30. navegador não lê recibos');
-select ok(not has_table_privilege('service_role', 'public.reconciliacoes_conta_pagar', 'update'), '31. nem o servidor altera recibos');
-select ok(not has_table_privilege('service_role', 'public.reconciliacoes_conta_pagar', 'delete'), '32. nem apaga');
-select ok(not has_table_privilege('authenticated', 'public.baixas_conta_pagar', 'select'), '33. navegador não lê baixas');
-select ok(not has_table_privilege('service_role', 'public.baixas_conta_pagar', 'delete'), '34. baixa não é apagada');
+create temp table r_quita as select * from public.reivindicar_tentativa_conta_pagar(
+    (select org_a from ids), '74200000-0000-4000-8000-000000000005', repeat('e', 64),
+    50.00, '2026-10-20', '2026-10-09', 7001, 'ORB-5555555555555555', true);
+select is((select quitacao_solicitada from public.tentativas_conta_pagar where id = (select tentativa_id from r_quita)), true,
+          '30. o pedido de quitação é gravado com a intenção, antes do POST');
+-- Junto de uma transição permitida (em_voo → confirmada): só a identidade recusa.
+select throws_ok(
+    $$update public.tentativas_conta_pagar
+         set estado = 'confirmada', bling_conta_id = '556', quitacao_solicitada = false
+       where chave = '74200000-0000-4000-8000-000000000005'$$,
+    '23514', 'A identidade de uma tentativa de conta a pagar e imutavel.', '31. e não pode ser apagado depois');
+
+create temp table de_outra as select * from public.registrar_reconciliacao_conta_pagar(
+    (select org_a from ids), '74200000-0000-4000-8000-000000000003', 'criacao', (select ator from ids),
+    'corr-9', 'confirmacao_manual', 'confirmada', null, '880', null, 1, 1);
+select is((select resultado || '/' || motivo || '/' || estado from de_outra), 'divergente/conta_de_outra_operacao/indeterminada',
+          '32. a conta remota de outra operação não confirma esta');
+select is((select motivo from public.reconciliacoes_conta_pagar where correlation_id = 'corr-9'), 'conta_de_outra_operacao',
+          '33. e o recibo diz por quê');
+select throws_ok(
+    $$update public.tentativas_conta_pagar set estado = 'confirmada', bling_conta_id = '880'
+       where chave = '74200000-0000-4000-8000-000000000005'$$,
+    '23505', null, '34. o banco recusa duas operações na mesma conta remota, mesmo fora da função');
+select is((select motivo from manual), 'nenhum_candidato', '35. o motivo volta na resposta do registro');
+
+-- ----------------------------------------------------------------------------
+-- 36-42. Privilégios e RLS.
+-- ----------------------------------------------------------------------------
+select ok(not has_table_privilege('authenticated', 'public.reconciliacoes_conta_pagar', 'select'), '36. navegador não lê recibos');
+select ok(not has_table_privilege('service_role', 'public.reconciliacoes_conta_pagar', 'update'), '37. nem o servidor altera recibos');
+select ok(not has_table_privilege('service_role', 'public.reconciliacoes_conta_pagar', 'delete'), '38. nem apaga');
+select ok(not has_table_privilege('authenticated', 'public.baixas_conta_pagar', 'select'), '39. navegador não lê baixas');
+select ok(not has_table_privilege('service_role', 'public.baixas_conta_pagar', 'delete'), '40. baixa não é apagada');
 select ok(not has_function_privilege('authenticated',
     'public.registrar_reconciliacao_conta_pagar(uuid, uuid, text, uuid, text, text, text, text, text, text, integer, integer)',
-    'execute'), '35. só o servidor registra reconciliação');
+    'execute')
+    and not has_function_privilege('authenticated',
+    'public.reivindicar_tentativa_conta_pagar(uuid, uuid, text, numeric, date, date, bigint, text, boolean)', 'execute')
+    and to_regprocedure('public.reivindicar_tentativa_conta_pagar(uuid, uuid, text, numeric, date, date, bigint)') is null,
+    '41. só o servidor registra e reivindica; a assinatura antiga não sobra');
 select is((select bool_and(relrowsecurity) from pg_class
             where oid in ('public.reconciliacoes_conta_pagar'::regclass, 'public.baixas_conta_pagar'::regclass)),
-          true, '36. RLS ligada nas tabelas novas');
+          true, '42. RLS ligada nas tabelas novas');
 
 select * from finish();
 rollback;

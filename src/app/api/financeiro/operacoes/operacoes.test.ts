@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { NextResponse } from 'next/server';
 
 import { buildDespesaRequest, type DespesaRequest } from '@/lib/config/despesaContract';
-import { listaDeOperacoesSchema, respostaDaReconciliacaoSchema } from '@/lib/config/operacaoFinanceiraContract';
+import { listaDeOperacoesSchema, respostaDaQuitacaoSchema, respostaDaReconciliacaoSchema } from '@/lib/config/operacaoFinanceiraContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 import { fakeBling, type FakeBling } from '../__testkit__/blingContasPagarFake';
-import { depsDeTeste, fakeStore, reconciliacaoDeTeste, type FakeStore } from '../__testkit__/despesaFakes';
+import { depsDeTeste, fakeStore, quitacaoDeTeste, type FakeStore } from '../__testkit__/despesaFakes';
 import { createDespesaHandler } from '../despesaHandler';
 import { createOperacoesHandlers } from './operacoesHandler';
 
@@ -32,7 +32,7 @@ async function comOperacaoPendente(): Promise<{ bling: FakeBling; store: FakeSto
 
 function handlers(bling: FakeBling, store: FakeStore, autorizacao: 'A' | 'B' | 'negado' = 'A') {
   return createOperacoesHandlers({
-    ...reconciliacaoDeTeste(bling, store),
+    ...quitacaoDeTeste(bling, store),
     correlationId: () => 'corr-teste',
     async autorizar() {
       if (autorizacao === 'negado') {
@@ -78,7 +78,10 @@ describe('rotas de operações financeiras', () => {
     expect((await negado.listar(req())).status).toBe(403);
     expect((await negado.consultar(req(), CHAVE)).status).toBe(403);
     expect((await negado.reconciliar(req({}), CHAVE)).status).toBe(403);
+    expect((await negado.confirmarManual(req({ blingContaId: '88123' }), CHAVE)).status).toBe(403);
+    expect((await negado.quitar(req({}), CHAVE)).status).toBe(403);
     expect(store.recibos).toHaveLength(0);
+    expect(bling.baixasEnviadas()).toBe(0);
     expect(store.tentativa(ORG, CHAVE)?.estado).toBe('indeterminada');
   });
 
@@ -88,6 +91,8 @@ describe('rotas de operações financeiras', () => {
 
     expect((await deB.consultar(req(), CHAVE)).status).toBe(404);
     expect((await deB.reconciliar(req({}), CHAVE)).status).toBe(404);
+    expect((await deB.confirmarManual(req({ blingContaId: '88123' }), CHAVE)).status).toBe(404);
+    expect((await deB.quitar(req({}), CHAVE)).status).toBe(404);
     expect(listaDeOperacoesSchema.parse(await (await deB.listar(req())).json()).operacoes).toEqual([]);
     expect(store.recibos).toHaveLength(0);
   });
@@ -107,5 +112,37 @@ describe('rotas de operações financeiras', () => {
 
     expect((await h.reconciliar(req({}), 'nao-e-uuid')).status).toBe(400);
     expect((await h.consultar(req(), '99999999-9999-4999-8999-999999999999')).status).toBe(404);
+  });
+
+  it('confirmação manual: corpo inválido é 400 e nada é lido ou gravado', async () => {
+    const { bling, store } = await comOperacaoPendente();
+    const h = handlers(bling, store);
+
+    expect((await h.confirmarManual(req({ blingContaId: '88 123' }), CHAVE)).status).toBe(400);
+    expect((await h.confirmarManual(req({}), CHAVE)).status).toBe(400);
+    expect((await h.confirmarManual(req({ blingContaId: '88123' }), 'nao-e-uuid')).status).toBe(400);
+    expect(store.recibos).toHaveLength(0);
+  });
+
+  it('confirmação manual válida: o recibo leva o ator verificado, e a resposta segue o contrato', async () => {
+    const { bling, store } = await comOperacaoPendente();
+
+    const resposta = await handlers(bling, store).confirmarManual(req({ blingContaId: '88123' }), CHAVE);
+
+    expect(respostaDaReconciliacaoSchema.parse(await resposta.json())).toMatchObject({
+      resultado: 'confirmada', projecaoLocal: 'consistente', operacao: { pendencia: null },
+    });
+    expect(store.recibos.at(-1)).toMatchObject({ metodo: 'confirmacao_manual', atorId: scopeA.actorId });
+    expect(bling.posts).toHaveLength(1);
+  });
+
+  it('quitação: sem quitação pedida, nada é enviado', async () => {
+    const { bling, store } = await comOperacaoPendente();
+    await handlers(bling, store).reconciliar(req({}), CHAVE);
+
+    const resposta = await handlers(bling, store).quitar(req({}), CHAVE);
+
+    expect(respostaDaQuitacaoSchema.parse(await resposta.json())).toMatchObject({ resultado: 'nada_pendente' });
+    expect(bling.baixasEnviadas()).toBe(0);
   });
 });

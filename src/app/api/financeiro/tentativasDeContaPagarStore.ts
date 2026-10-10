@@ -82,6 +82,7 @@ async function reivindicarTentativa(
     p_data_emissao: intencao.dataEmissao,
     p_contato_bling_id: intencao.contatoBlingId,
     p_numero_documento: intencao.numeroDocumento,
+    p_quitacao_solicitada: intencao.quitacaoSolicitada,
   });
 
   // Toda falha, inclusive tabela ou função ausente (`42883`/`42P01` num banco

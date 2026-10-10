@@ -64,6 +64,8 @@ export interface IntencaoDeContaPagar {
   readonly contatoBlingId: number | null;
   /** Referência opaca que vai em `numeroDocumento` (PRE-002). */
   readonly numeroDocumento: string;
+  /** A quitação pedida no lançamento: sobrevive a um ACK perdido da criação. */
+  readonly quitacaoSolicitada: boolean;
 }
 
 /**

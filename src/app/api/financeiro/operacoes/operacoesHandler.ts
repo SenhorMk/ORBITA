@@ -1,17 +1,21 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import type { OperacaoFinanceira } from '@/lib/config/operacaoFinanceiraContract';
+import { confirmacaoManualSchema, type OperacaoFinanceira } from '@/lib/config/operacaoFinanceiraContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 import {
+  confirmarManualmente,
+  quitarOperacao,
   reconciliarOperacao,
   type OperacaoRegistrada,
-  type ReconciliacaoDependencies,
+  type QuitacaoDaOperacaoDependencies,
+  type ResultadoDaReconciliacao,
 } from '../reconciliacaoDaOperacao';
+import { pendenciaDaOperacao } from '../reconciliacaoDeContaPagar';
 
 /** Composição das rotas de operações financeiras. */
-export interface OperacoesDependencies extends ReconciliacaoDependencies {
+export interface OperacoesDependencies extends QuitacaoDaOperacaoDependencies {
   /** Autentica e exige a capacidade de administrar a organização. */
   readonly autorizar: (request: Request) => Promise<
     | { readonly _tag: 'Autorizado'; readonly scope: VerifiedOrganizationScope }
@@ -35,20 +39,35 @@ function publica(operacao: OperacaoRegistrada): OperacaoFinanceira {
     valor: operacao.valor,
     dataVencimento: operacao.dataVencimento,
     blingContaId: operacao.blingContaId,
+    quitacaoSolicitada: operacao.quitacaoSolicitada,
+    pendencia: pendenciaDaOperacao(operacao),
     ultimaReconciliacao: operacao.ultimaReconciliacao,
   };
 }
 
+function respostaDaReconciliacao(resultado: ResultadoDaReconciliacao): NextResponse {
+  if (resultado._tag === 'NaoEncontrada') return NAO_ENCONTRADA();
+  if (resultado._tag !== 'Reconciliada') return INDISPONIVEL();
+  return NextResponse.json({
+    success: true,
+    resultado: resultado.resultado,
+    motivo: resultado.motivo,
+    projecaoLocal: resultado.projecaoLocal,
+    operacao: publica(resultado.operacao),
+  });
+}
+
 /**
- * Handlers de `GET /api/financeiro/operacoes`, `GET .../{ref}` e
- * `POST .../{ref}/reconciliar`.
+ * Handlers de `GET /api/financeiro/operacoes`, `GET .../{ref}`,
+ * `POST .../{ref}/reconciliar`, `POST .../{ref}/confirmacao-manual` e
+ * `POST .../{ref}/quitacao`.
  *
  * A autorização vem antes de qualquer leitura. A `operation_ref` não dá acesso
  * por si: toda leitura filtra a organização do escopo verificado, e a operação
  * de outra organização é indistinguível de uma inexistente (404).
  *
  * @param deps - Composição real ou de teste.
- * @returns Os três handlers.
+ * @returns Os handlers.
  */
 export function createOperacoesHandlers(deps: OperacoesDependencies) {
   return {
@@ -74,13 +93,31 @@ export function createOperacoesHandlers(deps: OperacoesDependencies) {
       const autorizacao = await deps.autorizar(request);
       if (autorizacao._tag === 'Negado') return autorizacao.response;
       if (!refSchema.safeParse(ref).success) return falha('Operação inválida.', 400);
-      const resultado = await reconciliarOperacao(autorizacao.scope, ref, deps.correlationId(request), deps);
+      return respostaDaReconciliacao(await reconciliarOperacao(autorizacao.scope, ref, deps.correlationId(request), deps));
+    },
+
+    async confirmarManual(request: Request, ref: string): Promise<NextResponse> {
+      const autorizacao = await deps.autorizar(request);
+      if (autorizacao._tag === 'Negado') return autorizacao.response;
+      if (!refSchema.safeParse(ref).success) return falha('Operação inválida.', 400);
+      const corpo = confirmacaoManualSchema.safeParse(await request.json().catch(() => null));
+      if (!corpo.success) return falha('Informe o número da conta no Bling.', 400);
+      return respostaDaReconciliacao(await confirmarManualmente(
+        autorizacao.scope, ref, corpo.data.blingContaId, deps.correlationId(request), deps,
+      ));
+    },
+
+    async quitar(request: Request, ref: string): Promise<NextResponse> {
+      const autorizacao = await deps.autorizar(request);
+      if (autorizacao._tag === 'Negado') return autorizacao.response;
+      if (!refSchema.safeParse(ref).success) return falha('Operação inválida.', 400);
+      const resultado = await quitarOperacao(autorizacao.scope, ref, deps.correlationId(request), deps);
       if (resultado._tag === 'NaoEncontrada') return NAO_ENCONTRADA();
       if (resultado._tag !== 'Reconciliada') return INDISPONIVEL();
       return NextResponse.json({
         success: true,
         resultado: resultado.resultado,
-        motivo: resultado.motivo,
+        projecaoLocal: resultado.projecaoLocal,
         operacao: publica(resultado.operacao),
       });
     },

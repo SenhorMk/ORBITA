@@ -444,7 +444,8 @@ Contrato oficial usado (`openapi-Dw6cY8yQ.json`, conferido em 09/10/2026):
 | `POST /contas/pagar` | `numeroDocumento` (string, "controle interno da empresa"), sem tamanho máximo declarado | recebe a referência opaca `ORB-` + 16 hex, derivada da chave da operação |
 | `GET /contas/pagar` | filtros `dataEmissaoInicial/Final`, `dataVencimentoInicial/Final`, `idContato`, `situacao`, `pagina`, `limite`; item com `id`, `situacao`, `valor`, `vencimento`, `contato.id` | estreita os candidatos — **não filtra nem devolve `numeroDocumento`** |
 | `GET /contas/pagar/{id}` | `numeroDocumento`, `dataEmissao`, `saldo`, `borderos`, `historico`, `categoria` | prova (ou não) cada candidato |
-| `POST /contas/pagar/{id}/baixar` | `200 { bordero: { id } }`; sem idempotência | intenção de baixa antes do POST |
+| `POST /contas/pagar/{id}/baixar` | `200 { bordero: { id } }`; sem idempotência; aceita `historico` | intenção de baixa antes do POST; o histórico leva `[ORBQ-` + 16 hex da intenção`]` |
+| `GET /borderos/{id}` | `id`, `data`, `historico`, `portador`, `categoria`, `pagamentos` | prova de AUTORIA da baixa |
 
 O que é prova:
 
@@ -453,8 +454,40 @@ O que é prova:
   `numeroDocumento` e os campos batem na leitura por id. Tentativas anteriores à
   migration 74 não têm referência: para elas nada é prova, e o resultado é
   revisão manual;
-- **baixa**: a leitura por id da própria conta mostra `situacao = 2` (Pago) e,
-  quando informado, `saldo = 0`.
+- **baixa**, em duas metades: (1) a leitura por id da própria conta mostra
+  `situacao = 2` (Pago), `saldo` INFORMADO e zero, e de 1 a 10 borderôs; (2)
+  exatamente um desses borderôs traz no `historico` a referência `ORBQ-` da
+  intenção de baixa e tem a `data` dela. Conta paga não basta: um pagamento
+  lançado por terceiro na mesma conta deixa a conta paga sem que a baixa do
+  ORBITA tenha acontecido (`quitada_sem_autoria`). Saldo ausente, borderô
+  ausente, borderôs demais ou mais de um borderô com a referência também são
+  revisão manual.
+
+A referência da baixa só existe nas baixas enviadas a partir desta versão. Uma
+baixa anterior sem desfecho não tem como ser provada: fica em revisão manual.
+
+Uma operação confirmada no Bling com a projeção local incompleta (título não
+gravado ou não vinculado; título não marcado pago depois da baixa confirmada) é
+reparada pela própria conferência, que só LÊ a conta por id e grava o título por
+upsert da conta remota — chamar de novo não cria outro título. A resposta diz
+`projecaoLocal: 'pendente'` enquanto o reparo não fechar, e a operação continua
+listada.
+
+A quitação pedida no lançamento (`pago: true`) é gravada com a intenção
+(`quitacao_solicitada`, imutável) antes do POST de criação. Se a criação só se
+confirma depois (ACK perdido), a conferência NÃO quita sozinha: a operação fica
+com a pendência `quitacao_solicitada`, e quitar é uma ação explícita do operador
+(`POST /api/financeiro/operacoes/{ref}/quitacao`), que lê a conta antes (já paga
+ou não aberta → nada é enviado) e passa pela intenção durável de baixa.
+
+A confirmação manual (`POST .../{ref}/confirmacao-manual`, corpo
+`{ blingContaId }`) é a saída auditável de uma criação em revisão manual: o
+servidor lê a conta apontada por id e só aceita se valor, vencimento, emissão e
+contato baterem e se ela não tiver a referência de outra operação; o recibo leva
+o ator verificado e o método `confirmacao_manual`. Uma conta remota já ligada a
+outra operação da organização nunca é confirmada para uma segunda
+(`conta_de_outra_operacao`, índice único `uq_tentativas_conta_pagar_conta_remota`
+e trava consultiva por conta na função de registro).
 
 Todo o resto é `revisao_manual`, com recibo: busca vazia, candidatos múltiplos,
 candidato divergente, listagem incompleta (teto de 5 páginas de 100), timeout,

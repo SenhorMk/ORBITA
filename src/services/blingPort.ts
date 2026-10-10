@@ -129,6 +129,8 @@ export interface BlingPort {
   baixarContaPagar(idConta: string, payload: BaixaContaPagarEntrada): Promise<EnvioDeCriacaoAoBling<{ borderoId: string | null }>>;
   /** Leitura por id para a reconciliação (PRE-002). */
   lerContaPagarParaReconciliacao(id: string): Promise<LeituraRemota<ContaPagarDetalhada>>;
+  /** Borderô lido por id, para provar de quem é a baixa (PRE-002). */
+  lerBorderoParaReconciliacao(id: string): Promise<LeituraRemota<BorderoLido>>;
   /** Listagem filtrada e paginada para a reconciliação (PRE-002). */
   listarContasPagarParaReconciliacao(filtro: FiltroDeContasPagar): Promise<ListagemDeContasPagar>;
   /** Situação real (1..7) de uma conta a pagar, lida por id. */
@@ -244,6 +246,13 @@ export interface ContaPagarDetalhada extends ContaPagarResumida {
   readonly historico: string | null;
   readonly categoriaId: number | null;
   readonly borderos: readonly string[];
+}
+
+/** Borderô como `GET /borderos/{id}` o devolve, no que prova a autoria da baixa. */
+export interface BorderoLido {
+  readonly id: string;
+  readonly data: string;
+  readonly historico: string | null;
 }
 
 /** Os filtros oficiais que a reconciliação usa em `GET /contas/pagar`. */

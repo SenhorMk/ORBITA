@@ -5,6 +5,7 @@ import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope
 import { descreverErro } from '../lib/erroLegivel';
 import type {
   BlingPort,
+  BorderoLido,
   ContaPagarBlingEntrada,
   ContaPagarDetalhada,
   ContaPagarResumida,
@@ -239,6 +240,15 @@ const contaPagarDetalhadaSchema = z.object({
     historico: z.string().optional(),
     categoria: z.object({ id: z.number().int().positive() }).optional(),
     borderos: z.array(z.number().int().positive()).optional(),
+  }),
+});
+
+/** `GET /borderos/{id}`: o que prova de quem é a baixa — data e histórico. */
+const borderoLidoSchema = z.object({
+  data: z.object({
+    id: idDeContaPagarSchema,
+    data: dataDoBlingSchema,
+    historico: z.string().optional(),
   }),
 });
 
@@ -1718,6 +1728,21 @@ export class BlingClient implements BlingPort {
       historico: data.historico ?? null,
       categoriaId: data.categoria?.id ?? null,
       borderos: (data.borderos ?? []).map(String),
+    }));
+  }
+
+  /**
+   * `GET /borderos/{id}`: data e histórico do borderô. O histórico de uma baixa
+   * do ORBITA carrega a referência dela; é o que distingue a quitação do ORBITA
+   * de um pagamento lançado por terceiro na mesma conta.
+   */
+  async lerBorderoParaReconciliacao(id: string): Promise<LeituraRemota<BorderoLido>> {
+    const resposta = await this.requisicaoDeCorrecao('bling.bordero.reconciliar.ler', `/borderos/${encodeURIComponent(id)}`, 'GET');
+    if (resposta._tag !== 'Resposta') return resposta;
+    return this.lerRecursoConfirmado(resposta.response, borderoLidoSchema, (data) => ({
+      id: String(data.id),
+      data: data.data,
+      historico: data.historico ?? null,
     }));
   }
 

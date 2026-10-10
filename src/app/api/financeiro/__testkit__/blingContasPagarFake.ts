@@ -3,7 +3,7 @@ import type { EnvioDeCriacaoAoBling } from '@/lib/integrations/bling/classificac
 import type { FalhaDeOperacaoRemota } from '@/lib/integrations/bling/operacaoRemotaContract';
 import type { BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { CodigoDaSituacaoDaConta } from '@/lib/integrations/bling/situacaoDaContaBling';
-import type { BlingPort, ContaPagarDetalhada } from '@/services/blingPort';
+import type { BlingPort, BorderoLido, ContaPagarDetalhada } from '@/services/blingPort';
 
 /**
  * Bling fake das contas a pagar. Separa o que EXISTE no Bling (`remotas`, e os
@@ -44,7 +44,9 @@ export interface ContaRemotaFake {
   borderos: string[];
 }
 
-export interface FakeBling extends DespesaBlingPort, Pick<BlingPort, 'lerContaPagarParaReconciliacao' | 'listarContasPagarParaReconciliacao'> {
+export interface FakeBling
+  extends DespesaBlingPort,
+    Pick<BlingPort, 'lerContaPagarParaReconciliacao' | 'listarContasPagarParaReconciliacao' | 'lerBorderoParaReconciliacao'> {
   /** Payloads de `POST /contas/pagar` que CHEGARAM ao Bling, criando ou não. */
   readonly posts: ContaPagarPayload[];
   /** Contas criadas por POST do ORBITA. A contraprova principal conta isto. */
@@ -56,6 +58,11 @@ export interface FakeBling extends DespesaBlingPort, Pick<BlingPort, 'lerContaPa
   readonly contatosResolvidos: () => number;
   /** O estado do Bling. Contas de terceiros entram por `semear`. */
   readonly remotas: Map<string, ContaRemotaFake>;
+  /**
+   * Borderôs do Bling. Um id ausente daqui, mas citado numa conta, é lido como
+   * pagamento de terceiro (histórico sem a referência do ORBITA).
+   */
+  readonly borderos: Map<string, BorderoLido>;
   semear(conta: Partial<ContaRemotaFake> & Pick<ContaRemotaFake, 'id' | 'valor' | 'vencimento' | 'contatoId'>): void;
 }
 
@@ -94,10 +101,13 @@ export function fakeBling(options: {
   aoReceberPost?: () => void;
   /** Segura a resposta até a promessa resolver (corrida). */
   segurarResposta?: Promise<void>;
+  /** A leitura de borderô falha assim. */
+  falhaDeBordero?: FalhaDeLeitura;
 } = {}): FakeBling {
   const posts: ContaPagarPayload[] = [];
   const baixadas: Array<{ id: string; portadorId: number; categoriaId: number }> = [];
   const remotas = new Map<string, ContaRemotaFake>();
+  const borderos = new Map<string, BorderoLido>();
   let criadas = 0;
   let baixasEnviadas = 0;
   let contatos = 0;
@@ -129,6 +139,7 @@ export function fakeBling(options: {
     posts,
     baixadas,
     remotas,
+    borderos,
     contasCriadasNoBling: () => criadas,
     baixasEnviadas: () => baixasEnviadas,
     contatosResolvidos: () => contatos,
@@ -184,6 +195,7 @@ export function fakeBling(options: {
         conta.saldo = 0;
         conta.borderos.push(borderoId);
       }
+      borderos.set(borderoId, { id: borderoId, data: payload.data, historico: payload.historico ?? null });
       baixadas.push({ id, portadorId: payload.portadorId, categoriaId: payload.categoriaId });
       return modoDeBaixa === 'perde-ack'
         ? { _tag: 'Despachado', resultado: falhaBling('UNKNOWN_ERROR', 0, 'prazo esgotado') }
@@ -196,6 +208,11 @@ export function fakeBling(options: {
       if (!conta) return { _tag: 'RemotoAusente' };
       const copia: ContaPagarDetalhada = { ...conta, borderos: [...conta.borderos] };
       return { _tag: 'RemotoPresente', valor: copia };
+    },
+    async lerBorderoParaReconciliacao(id) {
+      if (options.falhaDeBordero) return falhaRemota(options.falhaDeBordero);
+      const bordero = borderos.get(id) ?? { id, data: '2026-08-29', historico: 'Pagamento lançado no Bling' };
+      return { _tag: 'RemotoPresente', valor: { ...bordero } };
     },
     async listarContasPagarParaReconciliacao(filtro) {
       if (options.falhaDeListagem === 'incompleta') return { _tag: 'ListagemIncompleta' };

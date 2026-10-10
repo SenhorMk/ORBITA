@@ -25,9 +25,27 @@ export const motivoDeRevisaoSchema = z.enum([
   'leitura_inconsistente',
   'conta_ausente',
   'conta_nao_quitada',
+  'saldo_ausente',
+  'bordero_ausente',
+  'borderos_demais',
+  'quitada_sem_autoria',
+  'multiplos_borderos',
+  'conta_de_outra_operacao',
+  'referencia_de_outra_operacao',
 ]);
 
 export type MotivoDeRevisao = z.infer<typeof motivoDeRevisaoSchema>;
+
+/** O que falta resolver na operação, ou `null` quando ela está concluída. */
+export const pendenciaSchema = z.enum([
+  'conferir_criacao',
+  'reparo_titulo',
+  'conferir_baixa',
+  'reparo_titulo_pago',
+  'quitacao_solicitada',
+]);
+
+export type Pendencia = z.infer<typeof pendenciaSchema>;
 
 /** Uma operação de conta a pagar, como o operador a vê. */
 export const operacaoFinanceiraSchema = z.object({
@@ -37,6 +55,9 @@ export const operacaoFinanceiraSchema = z.object({
   valor: z.number(),
   dataVencimento: z.string(),
   blingContaId: z.string().nullable(),
+  /** A quitação foi pedida no lançamento ("pago: true"). */
+  quitacaoSolicitada: z.boolean(),
+  pendencia: pendenciaSchema.nullable(),
   ultimaReconciliacao: z.object({
     alvo: z.enum(['criacao', 'baixa']),
     resultado: resultadoDoReciboSchema,
@@ -47,38 +68,77 @@ export const operacaoFinanceiraSchema = z.object({
 
 export type OperacaoFinanceira = z.infer<typeof operacaoFinanceiraSchema>;
 
-/** `GET /api/financeiro/operacoes` — as operações com resultado ainda não confirmado. */
+/** `GET /api/financeiro/operacoes` — as operações com algo a resolver. */
 export const listaDeOperacoesSchema = z.object({
   success: z.literal(true),
   operacoes: z.array(operacaoFinanceiraSchema),
 });
 
-/** `POST /api/financeiro/operacoes/{ref}/reconciliar`. */
+/**
+ * Se o ORBITA conta a mesma história que o Bling depois da chamada. `pendente`
+ * quando o Bling está resolvido mas o título local ainda não (vínculo, título
+ * pago): a operação não é apresentada como concluída.
+ */
+export const projecaoLocalSchema = z.enum(['consistente', 'pendente']);
+
+/** `POST .../{ref}/reconciliar` e `POST .../{ref}/confirmacao-manual`. */
 export const respostaDaReconciliacaoSchema = z.object({
   success: z.literal(true),
-  resultado: z.union([resultadoDoReciboSchema, z.literal('nada_pendente')]),
+  resultado: z.union([resultadoDoReciboSchema, z.literal('nada_pendente'), z.literal('reparo_local')]),
   motivo: motivoDeRevisaoSchema.nullable(),
+  projecaoLocal: projecaoLocalSchema,
   operacao: operacaoFinanceiraSchema,
 });
 
 export type RespostaDaReconciliacao = z.infer<typeof respostaDaReconciliacaoSchema>;
 
+/** Corpo de `POST .../{ref}/confirmacao-manual`: a conta que o operador conferiu no Bling. */
+export const confirmacaoManualSchema = z.object({
+  blingContaId: z.string().regex(/^\d{1,20}$/u, 'Informe o número da conta no Bling.'),
+});
+
+/** Desfecho de `POST .../{ref}/quitacao`. */
+export const resultadoDaQuitacaoSchema = z.enum([
+  'quitada',
+  'quitacao_nao_confirmada',
+  'quitacao_recusada',
+  'quitacao_nao_enviada',
+  'ja_quitada_no_bling',
+  'conta_nao_quitavel',
+  'sem_categoria',
+  'consulta_incompleta',
+  'nada_pendente',
+]);
+
+/** `POST /api/financeiro/operacoes/{ref}/quitacao`. */
+export const respostaDaQuitacaoSchema = z.object({
+  success: z.literal(true),
+  resultado: resultadoDaQuitacaoSchema,
+  projecaoLocal: projecaoLocalSchema,
+  operacao: operacaoFinanceiraSchema,
+});
+
 /** O que o operador lê depois de "Conferir no Bling". */
-export type SituacaoParaOOperador = 'confirmada' | 'ainda_pendente' | 'revisao_manual' | 'sem_pendencia';
+export type SituacaoParaOOperador = 'confirmada' | 'registro_local_pendente' | 'ainda_pendente' | 'revisao_manual' | 'sem_pendencia';
 
 /**
  * Traduz o desfecho da reconciliação para o operador.
  *
  * "Ainda pendente" é só quando o Bling não respondeu de forma completa — vale
- * tentar a conferência de novo. Todo o resto que não confirmou é revisão
+ * tentar a conferência de novo. Uma confirmação com a projeção local pendente
+ * não é apresentada como conclusão. Todo o resto que não confirmou é revisão
  * manual: busca vazia, candidatos múltiplos ou divergentes não se resolvem
  * conferindo de novo, e nenhum deles autoriza lançar outra vez.
  *
  * @param resposta - O desfecho devolvido pela rota.
  * @returns A situação a mostrar.
  */
-export function situacaoParaOOperador(resposta: Pick<RespostaDaReconciliacao, 'resultado' | 'motivo'>): SituacaoParaOOperador {
-  if (resposta.resultado === 'confirmada' || resposta.resultado === 'ja_confirmada') return 'confirmada';
+export function situacaoParaOOperador(
+  resposta: Pick<RespostaDaReconciliacao, 'resultado' | 'motivo' | 'projecaoLocal'>,
+): SituacaoParaOOperador {
+  const confirmou = resposta.resultado === 'confirmada' || resposta.resultado === 'ja_confirmada'
+    || resposta.resultado === 'reparo_local';
+  if (confirmou) return resposta.projecaoLocal === 'consistente' ? 'confirmada' : 'registro_local_pendente';
   if (resposta.resultado === 'nada_pendente') return 'sem_pendencia';
   if (resposta.motivo === 'consulta_incompleta' || resposta.motivo === 'listagem_incompleta') return 'ainda_pendente';
   return 'revisao_manual';

@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import type { LeituraRemota } from '@/lib/integrations/bling/operacaoRemotaContract';
-import type { ContaPagarDetalhada } from '@/services/blingPort';
+import type { BorderoLido, ContaPagarDetalhada } from '@/services/blingPort';
 
 import {
+  MAXIMO_DE_BORDEROS,
   MAXIMO_DE_CANDIDATOS,
-  decidirBaixa,
+  decidirAutoriaDaBaixa,
+  decidirConfirmacaoManual,
   decidirCriacao,
+  pendenciaDaOperacao,
+  triarContaDaBaixa,
   triarListagem,
   type TentativaParaReconciliar,
 } from './reconciliacaoDeContaPagar';
@@ -93,19 +97,22 @@ describe('triarListagem', () => {
   });
 });
 
-describe('decidirBaixa — só conta quitada prova a baixa', () => {
-  it('Pago com saldo zero: comprovada', () => {
-    expect(decidirBaixa('88123', presente(conta({ situacao: 2, saldo: 0, borderos: ['7001'] }))))
-      .toMatchObject({ _tag: 'Comprovada' });
+describe('triarContaDaBaixa — a conta precisa estar quitada, com saldo e borderô informados', () => {
+  it('Pago, saldo zero e borderôs: segue para a autoria', () => {
+    expect(triarContaDaBaixa('88123', presente(conta({ situacao: 2, saldo: 0, borderos: ['7001'] }))))
+      .toMatchObject({ _tag: 'LerBorderos', conta: { id: '88123' } });
   });
 
   it.each([
     ['em aberto: não prova que a baixa não aconteceu, e não autoriza outra', conta(), 'conta_nao_quitada'],
     ['parcial', conta({ situacao: 3, saldo: 600 }), 'conta_nao_quitada'],
-    ['Pago com saldo restante (inconsistente)', conta({ situacao: 2, saldo: 10 }), 'conta_nao_quitada'],
-    ['outra conta lida', conta({ id: '999', situacao: 2, saldo: 0 }), 'leitura_inconsistente'],
+    ['Pago com saldo restante (inconsistente)', conta({ situacao: 2, saldo: 10, borderos: ['7001'] }), 'conta_nao_quitada'],
+    ['Pago sem saldo informado', conta({ situacao: 2, saldo: null, borderos: ['7001'] }), 'saldo_ausente'],
+    ['Pago sem borderô', conta({ situacao: 2, saldo: 0 }), 'bordero_ausente'],
+    ['borderôs demais para ler', conta({ situacao: 2, saldo: 0, borderos: Array.from({ length: MAXIMO_DE_BORDEROS + 1 }, (_, i) => String(i)) }), 'borderos_demais'],
+    ['outra conta lida', conta({ id: '999', situacao: 2, saldo: 0, borderos: ['7001'] }), 'leitura_inconsistente'],
   ])('%s → revisão manual', (_caso, lida, motivo) => {
-    expect(decidirBaixa('88123', presente(lida))).toMatchObject({ _tag: 'RevisaoManual', motivo });
+    expect(triarContaDaBaixa('88123', presente(lida))).toMatchObject({ _tag: 'RevisaoManual', motivo });
   });
 
   it.each([
@@ -113,6 +120,68 @@ describe('decidirBaixa — só conta quitada prova a baixa', () => {
     [{ _tag: 'RemotoIndeterminado', causa: 'prazo_esgotado' } as const, 'consulta_incompleta'],
     [{ _tag: 'RemotoLimitado' } as const, 'consulta_incompleta'],
   ])('leitura %o → revisão manual', (leitura, motivo) => {
-    expect(decidirBaixa('88123', leitura)).toMatchObject({ _tag: 'RevisaoManual', motivo });
+    expect(triarContaDaBaixa('88123', leitura)).toMatchObject({ _tag: 'RevisaoManual', motivo });
+  });
+});
+
+describe('decidirAutoriaDaBaixa — conta paga não prova que foi o ORBITA quem pagou', () => {
+  const BAIXA = { referencia: 'ORBQ-0123456789ABCDEF', dataBaixa: '2026-10-09' };
+  const paga = conta({ situacao: 2, saldo: 0, borderos: ['7001', '7002'] });
+  const bordero = (b: Partial<BorderoLido>): LeituraRemota<BorderoLido> => ({
+    _tag: 'RemotoPresente', valor: { id: '7001', data: '2026-10-09', historico: 'Aluguel [ORBQ-0123456789ABCDEF]', ...b },
+  });
+
+  it('exatamente um borderô com a referência e a data da baixa: comprovada, com o borderô', () => {
+    expect(decidirAutoriaDaBaixa(BAIXA, paga, [bordero({}), bordero({ id: '7002', historico: 'Pagamento manual' })]))
+      .toMatchObject({ _tag: 'Comprovada', borderoId: '7001' });
+  });
+
+  it.each([
+    ['pagamento de terceiro: borderô sem a referência', [bordero({ historico: 'Pagamento manual' })], 'quitada_sem_autoria'],
+    ['borderô sem histórico', [bordero({ historico: null })], 'quitada_sem_autoria'],
+    ['referência certa em outra data', [bordero({ data: '2026-10-10' })], 'quitada_sem_autoria'],
+    ['referência de OUTRA baixa', [bordero({ historico: 'Aluguel [ORBQ-FFFFFFFFFFFFFFFF]' })], 'quitada_sem_autoria'],
+    ['dois borderôs com a referência: ambíguo', [bordero({}), bordero({ id: '7002' })], 'multiplos_borderos'],
+    ['borderô some na leitura', [{ _tag: 'RemotoAusente' } as const], 'leitura_inconsistente'],
+    ['timeout na leitura do borderô', [{ _tag: 'RemotoIndeterminado', causa: 'prazo_esgotado' } as const], 'consulta_incompleta'],
+  ] as const)('%s → revisão manual (%s)', (_caso, leituras, motivo) => {
+    expect(decidirAutoriaDaBaixa(BAIXA, paga, leituras)).toMatchObject({ _tag: 'RevisaoManual', motivo });
+  });
+});
+
+describe('decidirConfirmacaoManual — evidência humana, nunca contra os fatos', () => {
+  it('conta compatível com a intenção: comprovada', () => {
+    expect(decidirConfirmacaoManual(tentativa, '88123', presente(conta()))).toMatchObject({ _tag: 'Comprovada' });
+  });
+
+  it.each([
+    ['referência de outra operação', conta({ numeroDocumento: 'ORB-FFFFFFFFFFFFFFFF' }), 'referencia_de_outra_operacao'],
+    ['valor divergente', conta({ valor: 1 }), 'candidato_divergente'],
+    ['conta diferente da apontada', conta({ id: '777' }), 'leitura_inconsistente'],
+  ])('%s → recusada (%s)', (_caso, lida, motivo) => {
+    expect(decidirConfirmacaoManual(tentativa, '88123', presente(lida))).toMatchObject({ _tag: 'RevisaoManual', motivo });
+  });
+
+  it('conta inexistente ou leitura falha: recusada', () => {
+    expect(decidirConfirmacaoManual(tentativa, '88123', { _tag: 'RemotoAusente' })).toMatchObject({ motivo: 'conta_ausente' });
+    expect(decidirConfirmacaoManual(tentativa, '88123', { _tag: 'RemotoLimitado' })).toMatchObject({ motivo: 'consulta_incompleta' });
+  });
+});
+
+describe('pendenciaDaOperacao — concluída só quando Bling e projeção local batem', () => {
+  const base = { estado: 'confirmada', tituloId: 't', tituloSituacao: 'aberto', quitacaoSolicitada: false, baixa: null };
+  it.each([
+    ['criação sem desfecho', { ...base, estado: 'indeterminada', tituloId: null }, 'conferir_criacao'],
+    ['confirmada sem título', { ...base, tituloId: null, tituloSituacao: null }, 'reparo_titulo'],
+    ['baixa sem desfecho', { ...base, quitacaoSolicitada: true, baixa: { estado: 'indeterminada' } }, 'conferir_baixa'],
+    ['baixa confirmada e título aberto', { ...base, quitacaoSolicitada: true, baixa: { estado: 'confirmada' } }, 'reparo_titulo_pago'],
+    ['quitação pedida e nunca enviada', { ...base, quitacaoSolicitada: true }, 'quitacao_solicitada'],
+    ['quitação pedida e baixa não enviada', { ...base, quitacaoSolicitada: true, baixa: { estado: 'nao_enviada' } }, 'quitacao_solicitada'],
+    ['concluída sem quitação', base, null],
+    ['quitação pedida, título já pago', { ...base, quitacaoSolicitada: true, tituloSituacao: 'pago' }, null],
+    ['baixa recusada: decisão do operador, não pendência automática', { ...base, quitacaoSolicitada: true, baixa: { estado: 'recusada' } }, null],
+    ['criação recusada', { ...base, estado: 'recusada', tituloId: null }, null],
+  ] as const)('%s → %s', (_caso, operacao, esperada) => {
+    expect(pendenciaDaOperacao(operacao)).toBe(esperada);
   });
 });

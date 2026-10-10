@@ -100,3 +100,15 @@ export function classificarEnvio<T>(envio: EnvioDeCriacaoAoBling<T>): DesfechoDo
 export function referenciaNoBling(chave: string): string {
   return `ORB-${chave.replace(/-/gu, '').slice(0, 16).toUpperCase()}`;
 }
+
+/**
+ * A referência da baixa, que vai no histórico do `POST .../baixar` e volta no
+ * borderô (`GET /borderos/{id}`). É o que prova que a quitação foi do ORBITA, e
+ * não de um pagamento lançado por terceiro na mesma conta.
+ *
+ * @param baixaId - O id (UUID) da intenção de baixa.
+ * @returns `ORBQ-` seguido de 16 dígitos hexadecimais maiúsculos.
+ */
+export function referenciaDaBaixa(baixaId: string): string {
+  return `ORBQ-${baixaId.replace(/-/gu, '').slice(0, 16).toUpperCase()}`;
+}

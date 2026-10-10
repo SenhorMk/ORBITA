@@ -7,6 +7,7 @@ import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope'
 
 import type { GravacaoDeTentativa } from './despesaHandler';
 import type { OperacaoRegistrada, OperacoesStorePort, RegistroDeReconciliacao } from './reconciliacaoDaOperacao';
+import { pendenciaDaOperacao } from './reconciliacaoDeContaPagar';
 
 const estado = z.enum(['em_voo', 'nao_enviada', 'confirmada', 'recusada', 'indeterminada']);
 
@@ -19,11 +20,20 @@ const tentativaSchema = z.object({
   data_emissao: z.string(),
   contato_bling_id: z.number().int().positive().nullable(),
   numero_documento: z.string().nullable(),
+  quitacao_solicitada: z.boolean(),
   bling_conta_id: z.string().nullable(),
   titulo_id: z.string().nullable(),
 });
 
-const baixaSchema = z.object({ tentativa_id: z.string().min(1), estado, bling_conta_id: z.string() });
+const baixaSchema = z.object({
+  id: z.string().min(1),
+  tentativa_id: z.string().min(1),
+  estado,
+  bling_conta_id: z.string(),
+  data_baixa: z.string(),
+});
+
+const tituloSchema = z.object({ id: z.string().min(1), situacao: z.string() });
 
 const reciboSchema = z.object({
   tentativa_id: z.string().min(1),
@@ -34,10 +44,10 @@ const reciboSchema = z.object({
 });
 
 const COLUNAS_DA_TENTATIVA =
-  'id, chave, estado, valor, data_vencimento, data_emissao, contato_bling_id, numero_documento, bling_conta_id, titulo_id';
+  'id, chave, estado, valor, data_vencimento, data_emissao, contato_bling_id, numero_documento, quitacao_solicitada, bling_conta_id, titulo_id';
 
 /**
- * Monta as operações a partir das três tabelas. Três leituras simples, sem
+ * Monta as operações a partir das quatro tabelas. Leituras simples, sem
  * join do PostgREST: um join sobre relação recém-criada derruba a consulta
  * inteira quando o cache de esquema está atrasado.
  */
@@ -47,19 +57,25 @@ async function montar(
 ): Promise<readonly OperacaoRegistrada[] | null> {
   if (tentativas.length === 0) return [];
   const ids = tentativas.map((t) => t.id);
-  const [baixas, recibos] = await Promise.all([
-    supabaseServer.from('baixas_conta_pagar').select('tentativa_id, estado, bling_conta_id')
+  const idsDeTitulo = tentativas.flatMap((t) => (t.titulo_id === null ? [] : [t.titulo_id]));
+  const [baixas, recibos, titulos] = await Promise.all([
+    supabaseServer.from('baixas_conta_pagar').select('id, tentativa_id, estado, bling_conta_id, data_baixa')
       .eq('organizacao_id', scope.organizationId).in('tentativa_id', ids),
     supabaseServer.from('reconciliacoes_conta_pagar').select('tentativa_id, alvo, resultado, motivo, created_at')
       .eq('organizacao_id', scope.organizationId).in('tentativa_id', ids).order('created_at', { ascending: false }),
+    idsDeTitulo.length === 0
+      ? Promise.resolve({ data: [], error: null })
+      : supabaseServer.from('titulos_financeiros').select('id, situacao')
+          .eq('organizacao_id', scope.organizationId).in('id', idsDeTitulo),
   ]);
-  if (baixas.error || recibos.error) {
-    registrarFalhaInterna('financeiro.operacoes.ler', baixas.error ?? recibos.error);
+  if (baixas.error || recibos.error || titulos.error) {
+    registrarFalhaInterna('financeiro.operacoes.ler', baixas.error ?? recibos.error ?? titulos.error);
     return null;
   }
   const baixasLidas = z.array(baixaSchema).safeParse(baixas.data);
   const recibosLidos = z.array(reciboSchema).safeParse(recibos.data);
-  if (!baixasLidas.success || !recibosLidos.success) return null;
+  const titulosLidos = z.array(tituloSchema).safeParse(titulos.data);
+  if (!baixasLidas.success || !recibosLidos.success || !titulosLidos.success) return null;
 
   return tentativas.map((t) => {
     const baixa = baixasLidas.data.find((b) => b.tentativa_id === t.id) ?? null;
@@ -73,9 +89,13 @@ async function montar(
       dataEmissao: t.data_emissao,
       contatoBlingId: t.contato_bling_id,
       numeroDocumento: t.numero_documento,
+      quitacaoSolicitada: t.quitacao_solicitada,
       blingContaId: t.bling_conta_id,
       tituloId: t.titulo_id,
-      baixa: baixa ? { estado: baixa.estado, blingContaId: baixa.bling_conta_id } : null,
+      tituloSituacao: titulosLidos.data.find((titulo) => titulo.id === t.titulo_id)?.situacao ?? null,
+      baixa: baixa
+        ? { id: baixa.id, estado: baixa.estado, blingContaId: baixa.bling_conta_id, dataBaixa: baixa.data_baixa }
+        : null,
       ultimaReconciliacao: recibo
         ? { alvo: recibo.alvo, resultado: recibo.resultado, motivo: recibo.motivo, em: recibo.created_at }
         : null,
@@ -98,24 +118,16 @@ const lerOperacao: OperacoesStorePort['lerOperacao'] = async (scope, ref) => {
   return operacao ? { _tag: 'Encontrada', operacao } : { _tag: 'Indisponivel' };
 };
 
-const listarPendentes: OperacoesStorePort['listarPendentes'] = async (scope) => {
-  const baixasPendentes = await supabaseServer.from('baixas_conta_pagar').select('tentativa_id')
-    .eq('organizacao_id', scope.organizationId).in('estado', ['em_voo', 'indeterminada']);
-  if (baixasPendentes.error) {
-    registrarFalhaInterna('financeiro.operacoes.listar', baixasPendentes.error);
-    return { _tag: 'Indisponivel' };
-  }
-  // Só ids no formato UUID entram no filtro `.or()`, que é texto.
-  const idsComBaixaPendente = z.array(z.object({ tentativa_id: z.string().regex(/^[0-9a-f-]{36}$/u) }))
-    .safeParse(baixasPendentes.data);
-  if (!idsComBaixaPendente.success) return { _tag: 'Indisponivel' };
-  const ids = idsComBaixaPendente.data.map((b) => b.tentativa_id);
+/** Janela de candidatas lidas; a pendência é decidida em memória pela MESMA regra do domínio. */
+const JANELA_DE_CANDIDATAS = 500;
 
-  const filtro = ids.length === 0
-    ? 'estado.in.(em_voo,indeterminada)'
-    : `estado.in.(em_voo,indeterminada),id.in.(${ids.join(',')})`;
+const listarPendentes: OperacoesStorePort['listarPendentes'] = async (scope) => {
+  // Toda baixa nasce de uma quitação pedida, então `quitacao_solicitada` cobre
+  // as baixas pendentes e os títulos ainda não marcados pagos.
   const { data, error } = await supabaseServer.from('tentativas_conta_pagar').select(COLUNAS_DA_TENTATIVA)
-    .eq('organizacao_id', scope.organizationId).or(filtro).order('created_at', { ascending: false }).limit(100);
+    .eq('organizacao_id', scope.organizationId)
+    .or('estado.in.(em_voo,indeterminada),and(estado.eq.confirmada,titulo_id.is.null),and(estado.eq.confirmada,quitacao_solicitada.is.true)')
+    .order('created_at', { ascending: false }).limit(JANELA_DE_CANDIDATAS);
   if (error) {
     registrarFalhaInterna('financeiro.operacoes.listar', error);
     return { _tag: 'Indisponivel' };
@@ -123,12 +135,14 @@ const listarPendentes: OperacoesStorePort['listarPendentes'] = async (scope) => 
   const tentativas = z.array(tentativaSchema).safeParse(data);
   if (!tentativas.success) return { _tag: 'Indisponivel' };
   const operacoes = await montar(scope, tentativas.data);
-  return operacoes === null ? { _tag: 'Indisponivel' } : { _tag: 'Listadas', operacoes };
+  return operacoes === null
+    ? { _tag: 'Indisponivel' }
+    : { _tag: 'Listadas', operacoes: operacoes.filter((o) => pendenciaDaOperacao(o) !== null).slice(0, 100) };
 };
 
 const linhaDoRegistroSchema = z.object({
   resultado: z.enum(['confirmada', 'ja_confirmada', 'revisao_manual', 'divergente']),
-  titulo_id: z.string().nullable(),
+  motivo: motivoDeRevisaoSchema.nullable(),
 });
 
 async function registrarReconciliacao(scope: VerifiedOrganizationScope, registro: RegistroDeReconciliacao) {
@@ -145,7 +159,7 @@ async function registrarReconciliacao(scope: VerifiedOrganizationScope, registro
     p_resultado: prova._tag === 'Comprovada' ? 'confirmada' : 'revisao_manual',
     p_motivo: prova._tag === 'RevisaoManual' ? prova.motivo : null,
     p_bling_conta_id: conta?.id ?? null,
-    p_bordero_id: registro.alvo === 'baixa' && conta?.borderos.length === 1 ? conta.borderos[0] : null,
+    p_bordero_id: prova._tag === 'Comprovada' ? prova.borderoId : null,
     p_situacao_remota: conta?.situacao ?? null,
     p_candidatos: prova.candidatos,
   });
@@ -155,7 +169,7 @@ async function registrarReconciliacao(scope: VerifiedOrganizationScope, registro
   }
   const linha = linhaDoRegistroSchema.safeParse(Array.isArray(data) ? data[0] : data);
   if (!linha.success) return { _tag: 'Indisponivel' } as const;
-  return { _tag: 'Registrada', resultado: linha.data.resultado, tituloId: linha.data.titulo_id } as const;
+  return { _tag: 'Registrada', resultado: linha.data.resultado, motivo: linha.data.motivo } as const;
 }
 
 async function categoriaLocalPorBlingId(scope: VerifiedOrganizationScope, categoriaBlingId: number): Promise<string | null> {

@@ -218,6 +218,7 @@ export async function lancarNoBling(
     dataEmissao: hoje,
     contatoBlingId: body.contatoBlingId ?? null,
     numeroDocumento: referenciaNoBling(ref),
+    quitacaoSolicitada: body.pago,
   });
 
   switch (reivindicacao._tag) {
@@ -325,7 +326,7 @@ export async function lancarNoBling(
   }
 
   const quitacao = body.pago
-    ? await quitar(scope, { ref, tentativaId: tentativa.tentativaId, blingContaId }, body, categoriaBlingId, deps)
+    ? await quitar(scope, { ref, tentativaId: tentativa.tentativaId, blingContaId }, body.descricao, categoriaBlingId, deps)
     : { quitada: false, avisos: [] };
   return gravarTituloConfirmado(
     scope,

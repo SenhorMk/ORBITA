@@ -5,29 +5,42 @@ import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope'
 import type { BlingPort, ContaPagarDetalhada } from '@/services/blingPort';
 
 import type { DespesaStorePort, GravacaoDeTentativa } from './despesaHandler';
+import { quitar, type QuitacaoDependencies } from './quitacaoDaConta';
 import {
-  decidirBaixa,
+  decidirAutoriaDaBaixa,
+  decidirConfirmacaoManual,
   decidirCriacao,
+  pendenciaDaOperacao,
+  triarContaDaBaixa,
   triarListagem,
   type MotivoDeRevisaoManual,
+  type PendenciaDaOperacao,
   type ProvaRemota,
 } from './reconciliacaoDeContaPagar';
+import { referenciaDaBaixa } from './tentativaDeContaPagar';
 
-/** Uma operação de conta a pagar, com a baixa e o último recibo. */
+type Estado = 'em_voo' | 'nao_enviada' | 'confirmada' | 'recusada' | 'indeterminada';
+
+/** Uma operação de conta a pagar, com a baixa, o título e o último recibo. */
 export interface OperacaoRegistrada {
   readonly tentativaId: string;
   readonly ref: string;
-  readonly estado: 'em_voo' | 'nao_enviada' | 'confirmada' | 'recusada' | 'indeterminada';
+  readonly estado: Estado;
   readonly valor: number;
   readonly dataVencimento: string;
   readonly dataEmissao: string;
   readonly contatoBlingId: number | null;
   readonly numeroDocumento: string | null;
+  readonly quitacaoSolicitada: boolean;
   readonly blingContaId: string | null;
   readonly tituloId: string | null;
+  /** Situação do título local (`aberto`, `pago`, ...), ou `null` sem título. */
+  readonly tituloSituacao: string | null;
   readonly baixa: {
-    readonly estado: 'em_voo' | 'nao_enviada' | 'confirmada' | 'recusada' | 'indeterminada';
+    readonly id: string;
+    readonly estado: Estado;
     readonly blingContaId: string;
+    readonly dataBaixa: string;
   } | null;
   readonly ultimaReconciliacao: {
     readonly alvo: 'criacao' | 'baixa';
@@ -42,7 +55,7 @@ export interface RegistroDeReconciliacao {
   readonly ref: string;
   readonly alvo: 'criacao' | 'baixa';
   readonly correlationId: string;
-  readonly metodo: 'referencia_no_numero_documento' | 'leitura_por_id' | 'sem_metodo_seguro';
+  readonly metodo: 'referencia_no_numero_documento' | 'leitura_por_id' | 'leitura_de_borderos' | 'confirmacao_manual' | 'sem_metodo_seguro';
   readonly prova: ProvaRemota;
 }
 
@@ -53,6 +66,7 @@ export interface OperacoesStorePort {
     | { readonly _tag: 'NaoEncontrada' }
     | { readonly _tag: 'Indisponivel' }
   >;
+  /** Operações com alguma pendência (ver `pendenciaDaOperacao`). */
   listarPendentes(scope: VerifiedOrganizationScope): Promise<
     | { readonly _tag: 'Listadas'; readonly operacoes: readonly OperacaoRegistrada[] }
     | { readonly _tag: 'Indisponivel' }
@@ -61,7 +75,7 @@ export interface OperacoesStorePort {
     | {
         readonly _tag: 'Registrada';
         readonly resultado: 'confirmada' | 'ja_confirmada' | 'revisao_manual' | 'divergente';
-        readonly tituloId: string | null;
+        readonly motivo: MotivoDeRevisaoManual | null;
       }
     | { readonly _tag: 'Indisponivel' }
   >;
@@ -69,31 +83,54 @@ export interface OperacoesStorePort {
   marcarTituloPago(scope: VerifiedOrganizationScope, tituloId: string): Promise<GravacaoDeTentativa>;
 }
 
+type LeiturasDoBling = Pick<BlingPort, 'listarContasPagarParaReconciliacao' | 'lerContaPagarParaReconciliacao' | 'lerBorderoParaReconciliacao'>;
+
 /** Dependências da reconciliação. Do Bling, só leitura: nenhum POST é possível daqui. */
 export interface ReconciliacaoDependencies {
   readonly operacoes: OperacoesStorePort;
   readonly titulos: Pick<DespesaStorePort, 'salvarTitulo' | 'vincularTitulo'>;
-  readonly bling: (scope: VerifiedOrganizationScope) => Pick<BlingPort, 'listarContasPagarParaReconciliacao' | 'lerContaPagarParaReconciliacao'>;
+  readonly bling: (scope: VerifiedOrganizationScope) => LeiturasDoBling;
 }
 
-/** Resultado de pedir a reconciliação de uma operação. */
-export type ResultadoDaReconciliacao =
+/** A quitação explícita é o único caminho daqui que escreve no Bling. */
+export interface QuitacaoDaOperacaoDependencies extends ReconciliacaoDependencies {
+  readonly escrita: (scope: VerifiedOrganizationScope) => QuitacaoDependencies;
+}
+
+type ResultadoComOperacao<R> =
   | { readonly _tag: 'NaoEncontrada' }
   | { readonly _tag: 'Indisponivel' }
-  | {
-      readonly _tag: 'Reconciliada';
-      readonly resultado: 'confirmada' | 'ja_confirmada' | 'revisao_manual' | 'divergente' | 'nada_pendente';
-      readonly motivo: MotivoDeRevisaoManual | null;
-      readonly operacao: OperacaoRegistrada;
-    };
+  | ({ readonly _tag: 'Reconciliada'; readonly operacao: OperacaoRegistrada; readonly projecaoLocal: 'consistente' | 'pendente' } & R);
 
-const PENDENTE = new Set(['em_voo', 'indeterminada']);
+/** Resultado de pedir a reconciliação (ou a confirmação manual) de uma operação. */
+export type ResultadoDaReconciliacao = ResultadoComOperacao<{
+  readonly resultado: 'confirmada' | 'ja_confirmada' | 'revisao_manual' | 'divergente' | 'nada_pendente' | 'reparo_local';
+  readonly motivo: MotivoDeRevisaoManual | null;
+}>;
+
+/** Resultado da quitação explícita. */
+export type ResultadoDaQuitacaoDaOperacao = ResultadoComOperacao<{
+  readonly resultado:
+    | 'quitada' | 'quitacao_nao_confirmada' | 'quitacao_recusada' | 'quitacao_nao_enviada'
+    | 'ja_quitada_no_bling' | 'conta_nao_quitavel' | 'sem_categoria' | 'consulta_incompleta' | 'nada_pendente';
+}>;
+
+const REPAROS: ReadonlySet<PendenciaDaOperacao | null> = new Set(['reparo_titulo', 'reparo_titulo_pago']);
+
+/** Relê a operação e diz se a projeção local ficou consistente — o estado gravado decide, não o retorno de cada passo. */
+async function fechar(
+  scope: VerifiedOrganizationScope,
+  ref: string,
+  original: OperacaoRegistrada,
+  deps: ReconciliacaoDependencies,
+): Promise<{ readonly operacao: OperacaoRegistrada; readonly projecaoLocal: 'consistente' | 'pendente' }> {
+  const relida = await deps.operacoes.lerOperacao(scope, ref);
+  if (relida._tag !== 'Encontrada') return { operacao: original, projecaoLocal: 'pendente' };
+  return { operacao: relida.operacao, projecaoLocal: REPAROS.has(pendenciaDaOperacao(relida.operacao)) ? 'pendente' : 'consistente' };
+}
 
 /** Lê a listagem e os candidatos por id; decide a criação. Só leitura. */
-async function provarCriacao(
-  operacao: OperacaoRegistrada,
-  bling: Pick<BlingPort, 'listarContasPagarParaReconciliacao' | 'lerContaPagarParaReconciliacao'>,
-): Promise<ProvaRemota> {
+async function provarCriacao(operacao: OperacaoRegistrada, bling: LeiturasDoBling): Promise<ProvaRemota> {
   const listagem = await bling.listarContasPagarParaReconciliacao({
     dataEmissao: operacao.dataEmissao,
     dataVencimento: operacao.dataVencimento,
@@ -102,15 +139,23 @@ async function provarCriacao(
   const triagem = triarListagem(operacao, listagem);
   if (triagem._tag !== 'LerCandidatos') return triagem;
   const leituras = [];
-  for (const candidato of triagem.candidatos) {
-    leituras.push(await bling.lerContaPagarParaReconciliacao(candidato.id));
-  }
+  for (const candidato of triagem.candidatos) leituras.push(await bling.lerContaPagarParaReconciliacao(candidato.id));
   return decidirCriacao(operacao, leituras);
 }
 
+/** Lê a conta e seus borderôs; decide se a baixa do ORBITA quitou a conta. Só leitura. */
+async function provarBaixa(baixa: NonNullable<OperacaoRegistrada['baixa']>, bling: LeiturasDoBling): Promise<ProvaRemota> {
+  const triagem = triarContaDaBaixa(baixa.blingContaId, await bling.lerContaPagarParaReconciliacao(baixa.blingContaId));
+  if (triagem._tag !== 'LerBorderos') return triagem;
+  const leituras = [];
+  for (const id of triagem.conta.borderos) leituras.push(await bling.lerBorderoParaReconciliacao(id));
+  return decidirAutoriaDaBaixa({ referencia: referenciaDaBaixa(baixa.id), dataBaixa: baixa.dataBaixa }, triagem.conta, leituras);
+}
+
 /**
- * Título local de uma conta confirmada por reconciliação, a partir do que o
- * Bling tem: o pedido original não é guardado (só o digest dele).
+ * Título local de uma conta confirmada, a partir do que o Bling tem. Upsert pela
+ * conta remota e vínculo por CAS: chamar de novo grava o MESMO título e não cria
+ * outro. Falha não é engolida em silêncio: o estado relido decide a projeção.
  */
 async function gravarTituloDaConta(
   scope: VerifiedOrganizationScope,
@@ -119,9 +164,7 @@ async function gravarTituloDaConta(
   deps: ReconciliacaoDependencies,
 ): Promise<void> {
   try {
-    const categoriaId = conta.categoriaId === null
-      ? null
-      : await deps.operacoes.categoriaLocalPorBlingId(scope, conta.categoriaId);
+    const categoriaId = conta.categoriaId === null ? null : await deps.operacoes.categoriaLocalPorBlingId(scope, conta.categoriaId);
     const titulo = await deps.titulos.salvarTitulo(scope, {
       blingId: conta.id,
       valor: conta.valor,
@@ -131,11 +174,10 @@ async function gravarTituloDaConta(
       fornecedorBlingId: conta.contatoId,
       situacao: projetarSituacaoDaConta(conta.situacao),
     });
-    // Compare-and-set: duas reconciliações gravam o mesmo título (upsert por
-    // conta remota) e só uma vincula.
-    await deps.titulos.vincularTitulo(scope, operacao.tentativaId, titulo.id);
+    if (await deps.titulos.vincularTitulo(scope, operacao.tentativaId, titulo.id) === 'NaoGravado') {
+      registrarFalhaInterna('financeiro.reconciliacao.titulo.vincular', new Error('vínculo não gravado'));
+    }
   } catch (erro: unknown) {
-    // A confirmação já está gravada; a próxima conferência refaz só o título.
     registrarFalhaInterna('financeiro.reconciliacao.titulo', erro);
   }
 }
@@ -147,26 +189,47 @@ function registrarEvento(
   correlationId: string,
   detalhes: Readonly<Record<string, string | number | null>>,
 ): void {
-  logger[evento.endsWith('manual_review') ? 'warn' : 'info'](evento, {
-    subsystem: 'app',
-    correlationId,
-    organizacaoId: scope.organizationId,
-    actorId: scope.actorId,
-    operacao: operacao.ref,
-    ...detalhes,
+  logger[evento.endsWith('manual_review') || evento.endsWith('pendente') ? 'warn' : 'info'](evento, {
+    subsystem: 'app', correlationId, organizacaoId: scope.organizationId, actorId: scope.actorId, operacao: operacao.ref, ...detalhes,
   });
 }
 
+/** Grava o recibo, faz a projeção local que a prova permite e relê. */
+async function registrarEFechar(
+  scope: VerifiedOrganizationScope,
+  operacao: OperacaoRegistrada,
+  registro: RegistroDeReconciliacao,
+  deps: ReconciliacaoDependencies,
+): Promise<ResultadoDaReconciliacao> {
+  const gravado = await deps.operacoes.registrarReconciliacao(scope, registro);
+  if (gravado._tag !== 'Registrada') return { _tag: 'Indisponivel' };
+  const { prova } = registro;
+  const confirmou = (gravado.resultado === 'confirmada' || gravado.resultado === 'ja_confirmada') && prova._tag === 'Comprovada';
+  if (confirmou && registro.alvo === 'criacao') await gravarTituloDaConta(scope, operacao, prova.conta, deps);
+  if (confirmou && registro.alvo === 'baixa' && operacao.tituloId !== null) await deps.operacoes.marcarTituloPago(scope, operacao.tituloId);
+
+  const motivo = prova._tag === 'RevisaoManual' ? prova.motivo : gravado.motivo;
+  const fechada = await fechar(scope, registro.ref, operacao, deps);
+  const evento = prova._tag === 'RevisaoManual' || !confirmou ? 'financeiro.reconciliacao.manual_review'
+    : registro.alvo === 'baixa' ? 'financeiro.baixa.reconciliada' : 'financeiro.reconciliacao.confirmada';
+  registrarEvento(evento, scope, operacao, registro.correlationId, {
+    alvo: registro.alvo, metodo: registro.metodo, resultado: gravado.resultado, motivo, projecao: fechada.projecaoLocal,
+  });
+  return { _tag: 'Reconciliada', resultado: gravado.resultado, motivo, ...fechada };
+}
+
 /**
- * Concilia uma operação pendente com o Bling, sem nunca repetir criação ou
- * baixa: o Bling só é lido. Prova inequívoca confirma; todo o resto vira
- * revisão manual, com recibo.
+ * Concilia uma operação com o Bling, sem nunca repetir criação ou baixa: o
+ * Bling só é lido. Prova inequívoca confirma; todo o resto vira revisão manual,
+ * com recibo. Uma operação confirmada com a projeção local incompleta (título
+ * não gravado/vinculado, título não marcado pago) é reparada aqui, de forma
+ * idempotente.
  *
  * @param scope - Organização e ator verificados no servidor.
  * @param ref - A `operation_ref`; sozinha não dá acesso — a leitura filtra a organização.
  * @param correlationId - Correlação da requisição.
  * @param deps - Portas.
- * @returns O desfecho e a operação como ficou.
+ * @returns O desfecho, a projeção local e a operação como ficou.
  */
 export async function reconciliarOperacao(
   scope: VerifiedOrganizationScope,
@@ -177,50 +240,133 @@ export async function reconciliarOperacao(
   const lida = await deps.operacoes.lerOperacao(scope, ref);
   if (lida._tag !== 'Encontrada') return lida;
   const { operacao } = lida;
-
-  const alvo = PENDENTE.has(operacao.estado)
-    ? 'criacao'
-    : operacao.estado === 'confirmada' && operacao.baixa !== null && PENDENTE.has(operacao.baixa.estado)
-      ? 'baixa'
-      : null;
-  if (alvo === null) return { _tag: 'Reconciliada', resultado: 'nada_pendente', motivo: null, operacao };
-
-  registrarEvento('financeiro.reconciliacao.iniciada', scope, operacao, correlationId, { alvo });
+  const pendencia = pendenciaDaOperacao(operacao);
   const bling = deps.bling(scope);
-  const prova = alvo === 'criacao'
-    ? await provarCriacao(operacao, bling)
-    : decidirBaixa(operacao.baixa?.blingContaId ?? '', await bling.lerContaPagarParaReconciliacao(operacao.baixa?.blingContaId ?? ''));
+  registrarEvento('financeiro.reconciliacao.iniciada', scope, operacao, correlationId, { pendencia });
 
-  const registro = await deps.operacoes.registrarReconciliacao(scope, {
-    ref,
-    alvo,
-    correlationId,
-    metodo: alvo === 'baixa' ? 'leitura_por_id' : operacao.numeroDocumento ? 'referencia_no_numero_documento' : 'sem_metodo_seguro',
-    prova,
-  });
-  if (registro._tag !== 'Registrada') return { _tag: 'Indisponivel' };
+  switch (pendencia) {
+    case 'conferir_criacao':
+      return registrarEFechar(scope, operacao, {
+        ref, alvo: 'criacao', correlationId,
+        metodo: operacao.numeroDocumento ? 'referencia_no_numero_documento' : 'sem_metodo_seguro',
+        prova: await provarCriacao(operacao, bling),
+      }, deps);
+    case 'conferir_baixa':
+      return operacao.baixa
+        ? registrarEFechar(scope, operacao, {
+            ref, alvo: 'baixa', correlationId, metodo: 'leitura_de_borderos', prova: await provarBaixa(operacao.baixa, bling),
+          }, deps)
+        : { _tag: 'Indisponivel' };
+    case 'reparo_titulo': {
+      // A criação já está provada; o Bling só é LIDO para montar o título.
+      const leitura = operacao.blingContaId ? await bling.lerContaPagarParaReconciliacao(operacao.blingContaId) : null;
+      if (leitura?._tag === 'RemotoPresente') await gravarTituloDaConta(scope, operacao, leitura.valor, deps);
+      const fechada = await fechar(scope, ref, operacao, deps);
+      registrarEvento(fechada.projecaoLocal === 'consistente' ? 'financeiro.reconciliacao.reparada' : 'financeiro.reconciliacao.reparo_pendente',
+        scope, operacao, correlationId, { pendencia });
+      return { _tag: 'Reconciliada', resultado: 'reparo_local', motivo: leitura?._tag === 'RemotoPresente' ? null : 'consulta_incompleta', ...fechada };
+    }
+    case 'reparo_titulo_pago': {
+      if (operacao.tituloId !== null) await deps.operacoes.marcarTituloPago(scope, operacao.tituloId);
+      const fechada = await fechar(scope, ref, operacao, deps);
+      registrarEvento(fechada.projecaoLocal === 'consistente' ? 'financeiro.reconciliacao.reparada' : 'financeiro.reconciliacao.reparo_pendente',
+        scope, operacao, correlationId, { pendencia });
+      return { _tag: 'Reconciliada', resultado: 'reparo_local', motivo: null, ...fechada };
+    }
+    case 'quitacao_solicitada':
+    case null:
+      // A quitação pedida no lançamento NÃO é feita aqui: ela é uma ação
+      // explícita do operador (`quitarOperacao`).
+      return { _tag: 'Reconciliada', resultado: 'nada_pendente', motivo: null, operacao, projecaoLocal: 'consistente' };
+  }
+}
 
-  const confirmou = registro.resultado === 'confirmada' || registro.resultado === 'ja_confirmada';
-  if (confirmou && prova._tag === 'Comprovada') {
-    if (alvo === 'criacao' && registro.tituloId === null) await gravarTituloDaConta(scope, operacao, prova.conta, deps);
-    if (alvo === 'baixa' && registro.tituloId !== null) await deps.operacoes.marcarTituloPago(scope, registro.tituloId);
+/**
+ * Confirmação manual: o operador aponta a conta que conferiu no Bling. O
+ * servidor a lê por id, só aceita se ela for compatível com a intenção, e grava
+ * o recibo com o ator e o método `confirmacao_manual`. Nunca cria nada no Bling.
+ *
+ * @param scope - Organização e ator verificados.
+ * @param ref - A `operation_ref`.
+ * @param blingContaId - A conta apontada pelo operador.
+ * @param correlationId - Correlação da requisição.
+ * @param deps - Portas.
+ * @returns O desfecho.
+ */
+export async function confirmarManualmente(
+  scope: VerifiedOrganizationScope,
+  ref: string,
+  blingContaId: string,
+  correlationId: string,
+  deps: ReconciliacaoDependencies,
+): Promise<ResultadoDaReconciliacao> {
+  const lida = await deps.operacoes.lerOperacao(scope, ref);
+  if (lida._tag !== 'Encontrada') return lida;
+  const { operacao } = lida;
+  if (pendenciaDaOperacao(operacao) !== 'conferir_criacao') {
+    return { _tag: 'Reconciliada', resultado: 'nada_pendente', motivo: null, ...(await fechar(scope, ref, operacao, deps)) };
+  }
+  const leitura = await deps.bling(scope).lerContaPagarParaReconciliacao(blingContaId);
+  return registrarEFechar(scope, operacao, {
+    ref, alvo: 'criacao', correlationId, metodo: 'confirmacao_manual', prova: decidirConfirmacaoManual(operacao, blingContaId, leitura),
+  }, deps);
+}
+
+/**
+ * Quita a conta de uma operação cujo lançamento pediu a quitação, quando a
+ * criação foi confirmada sem ela (ACK perdido). Ação EXPLÍCITA do operador:
+ * a conta é lida antes (já paga ou não quitável → nada é enviado), e a baixa
+ * passa pela intenção durável de `quitar` — repetir não envia outra.
+ *
+ * @param scope - Organização e ator verificados.
+ * @param ref - A `operation_ref`.
+ * @param correlationId - Correlação da requisição.
+ * @param deps - Portas, inclusive a de escrita no Bling.
+ * @returns O desfecho.
+ */
+export async function quitarOperacao(
+  scope: VerifiedOrganizationScope,
+  ref: string,
+  correlationId: string,
+  deps: QuitacaoDaOperacaoDependencies,
+): Promise<ResultadoDaQuitacaoDaOperacao> {
+  const lida = await deps.operacoes.lerOperacao(scope, ref);
+  if (lida._tag !== 'Encontrada') return lida;
+  const { operacao } = lida;
+  const responder = async (resultado: Extract<ResultadoDaQuitacaoDaOperacao, { _tag: 'Reconciliada' }>['resultado']) => {
+    registrarEvento('financeiro.quitacao.solicitada', scope, operacao, correlationId, { resultado });
+    return { _tag: 'Reconciliada' as const, resultado, ...(await fechar(scope, ref, operacao, deps)) };
+  };
+  if (pendenciaDaOperacao(operacao) !== 'quitacao_solicitada' || operacao.blingContaId === null || operacao.tituloId === null) {
+    return responder('nada_pendente');
   }
 
-  const evento = prova._tag === 'RevisaoManual'
-    ? 'financeiro.reconciliacao.manual_review'
-    : alvo === 'baixa' ? 'financeiro.baixa.reconciliada' : 'financeiro.reconciliacao.confirmada';
-  registrarEvento(evento, scope, operacao, correlationId, {
-    alvo,
-    resultado: registro.resultado,
-    motivo: prova._tag === 'RevisaoManual' ? prova.motivo : null,
-    candidatos: prova.candidatos,
-  });
+  const leitura = await deps.bling(scope).lerContaPagarParaReconciliacao(operacao.blingContaId);
+  if (leitura._tag !== 'RemotoPresente') return responder('consulta_incompleta');
+  const conta = leitura.valor;
+  if (projetarSituacaoDaConta(conta.situacao) === 'pago') {
+    // Paga por alguém, fora desta operação: nada é enviado, e o título local
+    // passa a contar o que o ERP tem — sem atribuir a quitação ao ORBITA.
+    await deps.operacoes.marcarTituloPago(scope, operacao.tituloId);
+    return responder('ja_quitada_no_bling');
+  }
+  if (conta.situacao !== 1) return responder('conta_nao_quitavel');
+  if (conta.categoriaId === null) return responder('sem_categoria');
 
-  const relida = await deps.operacoes.lerOperacao(scope, ref);
-  return {
-    _tag: 'Reconciliada',
-    resultado: registro.resultado,
-    motivo: prova._tag === 'RevisaoManual' ? prova.motivo : null,
-    operacao: relida._tag === 'Encontrada' ? relida.operacao : operacao,
-  };
+  const quitacao = await quitar(
+    scope,
+    { ref, tentativaId: operacao.tentativaId, blingContaId: operacao.blingContaId },
+    conta.historico?.trim() || 'Quitação de despesa',
+    conta.categoriaId,
+    deps.escrita(scope),
+  );
+  if (quitacao.quitada) await deps.operacoes.marcarTituloPago(scope, operacao.tituloId);
+  switch (quitacao.desfecho) {
+    case 'confirmada': return responder('quitada');
+    case 'recusada': return responder('quitacao_recusada');
+    case 'nao_enviada':
+    case 'pre_requisito': return responder('quitacao_nao_enviada');
+    case 'indeterminada': return responder('quitacao_nao_confirmada');
+    case 'nao_reivindicada': return responder(quitacao.quitada ? 'quitada' : 'nada_pendente');
+  }
 }

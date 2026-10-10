@@ -19,6 +19,7 @@ import {
   type DespesaBlingPort,
 } from './despesaHandler';
 import { despesaStore } from './despesaStoreSupabase';
+import { hojeEmSaoPaulo } from './hojeEmSaoPaulo';
 
 export type { DespesaBlingPort, DespesaDependencies, DespesaStorePort } from './despesaHandler';
 
@@ -96,19 +97,6 @@ async function resolverContatoPadrao(blingClient: BlingPort): Promise<BlingCallR
   });
   if (criado._tag === 'BlingFailed') return criado;
   return { _tag: 'BlingOk', value: Number(criado.value.id) };
-}
-
-/** Data de hoje em `America/Sao_Paulo`, no formato `AAAA-MM-DD`. */
-function hojeEmSaoPaulo(): string {
-  // `Intl` com `en-CA` já devolve AAAA-MM-DD. A versão anterior fazia
-  // `toLocaleString('en-US', {timeZone})` → `new Date(...)` → `toISOString()`,
-  // que reinterpreta a hora local como UTC e erra o dia perto da meia-noite.
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Sao_Paulo',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date());
 }
 
 function blingDespesaAdapter(client: BlingPort): DespesaBlingPort {

@@ -2,6 +2,10 @@
 -- Forward-only. PRE-002: sair de `indeterminada` só com prova, e dar à baixa
 -- (quitação) a mesma identidade durável que a criação ganhou na migration 73.
 --
+-- NUNCA APLICADA REMOTAMENTE: a revisão independente do PR #109 a corrigiu no
+-- lugar (quitação solicitada durável, conta remota única por operação,
+-- confirmação manual auditável), como a migration 59 em situação igual.
+--
 -- A REGRA
 -- Ausência de confirmação não é ausência do efeito, e busca vazia não prova que
 -- a conta não foi criada. Por isso esta migration NÃO abre nenhuma saída de
@@ -31,6 +35,18 @@ create unique index if not exists uq_tentativas_conta_pagar_numero_documento
     on public.tentativas_conta_pagar (organizacao_id, numero_documento)
     where numero_documento is not null;
 
+-- A quitação pedida no lançamento ("pago: true"). Sem isto, uma criação com ACK
+-- perdido, confirmada depois por reconciliação, esquecia que a despesa devia ser
+-- quitada: o digest não permite reconstruir o pedido.
+alter table public.tentativas_conta_pagar
+    add column if not exists quitacao_solicitada boolean not null default false;
+
+-- Uma conta remota nunca serve a duas operações da organização — nem por
+-- reconciliação automática, nem por confirmação manual.
+create unique index if not exists uq_tentativas_conta_pagar_conta_remota
+    on public.tentativas_conta_pagar (organizacao_id, bling_conta_id)
+    where bling_conta_id is not null;
+
 -- ---------------------------------------------------------------------------
 -- 2. Recibos de reconciliação — append-only.
 --
@@ -44,7 +60,9 @@ create table if not exists public.reconciliacoes_conta_pagar (
     alvo             text not null check (alvo in ('criacao', 'baixa')),
     ator_id          uuid not null,
     correlation_id   text not null check (correlation_id ~ '^[A-Za-z0-9._:-]{1,128}$'),
-    metodo           text not null check (metodo in ('referencia_no_numero_documento', 'leitura_por_id', 'sem_metodo_seguro')),
+    metodo           text not null check (metodo in (
+                         'referencia_no_numero_documento', 'leitura_por_id', 'leitura_de_borderos',
+                         'confirmacao_manual', 'sem_metodo_seguro')),
     resultado        text not null check (resultado in ('confirmada', 'ja_confirmada', 'revisao_manual', 'divergente')),
     motivo           text check (motivo ~ '^[a-z0-9_]{1,64}$'),
     bling_conta_id   text check (bling_conta_id ~ '^[0-9]+$'),
@@ -104,6 +122,7 @@ begin
        or new.valor is distinct from old.valor
        or new.data_vencimento is distinct from old.data_vencimento
        or new.numero_documento is distinct from old.numero_documento
+       or new.quitacao_solicitada is distinct from old.quitacao_solicitada
        or new.created_at is distinct from old.created_at then
         raise exception 'A identidade de uma tentativa de conta a pagar e imutavel.' using errcode = '23514';
     end if;
@@ -144,7 +163,7 @@ $$;
 -- ---------------------------------------------------------------------------
 -- 4. A reivindicação passa a gravar a referência enviada ao Bling.
 --
--- O parâmetro novo tem default: a chamada da versão anterior (sete argumentos
+-- Os parâmetros novos têm default: a chamada da versão anterior (sete argumentos
 -- nomeados) continua resolvendo para esta função durante o deploy.
 -- ---------------------------------------------------------------------------
 drop function if exists public.reivindicar_tentativa_conta_pagar(uuid, uuid, text, numeric, date, date, bigint);
@@ -157,7 +176,8 @@ create or replace function public.reivindicar_tentativa_conta_pagar(
     p_data_vencimento date,
     p_data_emissao date,
     p_contato_bling_id bigint,
-    p_numero_documento text default null
+    p_numero_documento text default null,
+    p_quitacao_solicitada boolean default false
 )
 returns table (
     tentativa_id uuid,
@@ -168,7 +188,8 @@ returns table (
     contato_bling_id bigint,
     desfecho text,
     chave_pendente uuid,
-    numero_documento text
+    numero_documento text,
+    quitacao_solicitada boolean
 )
 language plpgsql
 security invoker
@@ -187,10 +208,11 @@ begin
 
     begin
         insert into public.tentativas_conta_pagar
-            (organizacao_id, chave, digest, valor, data_vencimento, data_emissao, contato_bling_id, numero_documento)
+            (organizacao_id, chave, digest, valor, data_vencimento, data_emissao, contato_bling_id, numero_documento,
+             quitacao_solicitada)
         values
             (p_organizacao_id, p_chave, p_digest, p_valor, p_data_vencimento, p_data_emissao, p_contato_bling_id,
-             p_numero_documento)
+             p_numero_documento, coalesce(p_quitacao_solicitada, false))
         on conflict on constraint uq_tentativas_conta_pagar_org_chave do nothing
         returning id into v_id;
     exception
@@ -204,17 +226,18 @@ begin
               and t.estado in ('em_voo', 'indeterminada')
             limit 1;
             return query select null::uuid, null::text, null::integer, null::text, null::uuid, null::bigint,
-                                'pendencia_identica'::text, v_chave_pendente, null::text;
+                                'pendencia_identica'::text, v_chave_pendente, null::text, null::boolean;
             return;
     end;
 
     if v_id is not null then
         return query select v_id, 'em_voo'::text, 1, null::text, null::uuid, p_contato_bling_id,
-                            'nova'::text, null::uuid, p_numero_documento;
+                            'nova'::text, null::uuid, p_numero_documento, coalesce(p_quitacao_solicitada, false);
         return;
     end if;
 
-    select t.id, t.estado, t.epoca, t.digest, t.bling_conta_id, t.titulo_id, t.contato_bling_id, t.numero_documento
+    select t.id, t.estado, t.epoca, t.digest, t.bling_conta_id, t.titulo_id, t.contato_bling_id, t.numero_documento,
+           t.quitacao_solicitada
     into v_existente
     from public.tentativas_conta_pagar t
     where t.organizacao_id = p_organizacao_id
@@ -223,7 +246,7 @@ begin
 
     if v_existente.digest is distinct from p_digest then
         return query select null::uuid, null::text, null::integer, null::text, null::uuid, null::bigint,
-                            'conflito_de_conteudo'::text, null::uuid, null::text;
+                            'conflito_de_conteudo'::text, null::uuid, null::text, null::boolean;
         return;
     end if;
 
@@ -242,24 +265,25 @@ begin
                   and t.estado in ('em_voo', 'indeterminada')
                 limit 1;
                 return query select null::uuid, null::text, null::integer, null::text, null::uuid, null::bigint,
-                                    'pendencia_identica'::text, v_chave_pendente, null::text;
+                                    'pendencia_identica'::text, v_chave_pendente, null::text, null::boolean;
                 return;
         end;
         -- A referência é a gravada na primeira reivindicação: reabrir não a troca.
         return query select v_existente.id, 'em_voo'::text, v_epoca, null::text, null::uuid,
-                            v_existente.contato_bling_id, 'reaberta'::text, null::uuid, v_existente.numero_documento;
+                            v_existente.contato_bling_id, 'reaberta'::text, null::uuid, v_existente.numero_documento,
+                            v_existente.quitacao_solicitada;
         return;
     end if;
 
     return query select v_existente.id, v_existente.estado, v_existente.epoca, v_existente.bling_conta_id,
                         v_existente.titulo_id, v_existente.contato_bling_id, 'repetida'::text, null::uuid,
-                        v_existente.numero_documento;
+                        v_existente.numero_documento, v_existente.quitacao_solicitada;
 end;
 $$;
 
-revoke all on function public.reivindicar_tentativa_conta_pagar(uuid, uuid, text, numeric, date, date, bigint, text)
+revoke all on function public.reivindicar_tentativa_conta_pagar(uuid, uuid, text, numeric, date, date, bigint, text, boolean)
     from public, anon, authenticated;
-grant execute on function public.reivindicar_tentativa_conta_pagar(uuid, uuid, text, numeric, date, date, bigint, text)
+grant execute on function public.reivindicar_tentativa_conta_pagar(uuid, uuid, text, numeric, date, date, bigint, text, boolean)
     to service_role;
 
 -- ---------------------------------------------------------------------------
@@ -449,7 +473,7 @@ create or replace function public.registrar_reconciliacao_conta_pagar(
     p_situacao_remota integer,
     p_candidatos integer
 )
-returns table (resultado text, estado text, tentativa_id uuid, bling_conta_id text, titulo_id uuid)
+returns table (resultado text, motivo text, estado text, tentativa_id uuid, bling_conta_id text, titulo_id uuid)
 language plpgsql
 security invoker
 set search_path = public
@@ -477,8 +501,23 @@ begin
     end if;
 
     if p_alvo = 'criacao' then
+        if p_resultado = 'confirmada' then
+            -- Serializa as confirmações da MESMA conta remota em operações
+            -- diferentes: a segunda espera e vê a primeira já gravada.
+            perform pg_advisory_xact_lock(hashtextextended(p_organizacao_id::text || ':conta:' || p_bling_conta_id, 0));
+        end if;
         if p_resultado = 'revisao_manual' then
             v_resultado := 'revisao_manual';
+        elsif exists (
+            select 1 from public.tentativas_conta_pagar o
+             where o.organizacao_id = p_organizacao_id
+               and o.bling_conta_id = p_bling_conta_id
+               and o.id <> v_t.id
+        ) then
+            -- A conta remota já é de outra operação: confirmar aqui ligaria
+            -- duas operações à mesma conta.
+            v_resultado := 'divergente';
+            p_motivo := 'conta_de_outra_operacao';
         elsif v_t.estado in ('em_voo', 'indeterminada') then
             v_resultado := 'confirmada';
         elsif v_t.estado = 'confirmada' and v_t.bling_conta_id = p_bling_conta_id then
@@ -498,10 +537,10 @@ begin
             update public.tentativas_conta_pagar t
             set estado = 'confirmada', bling_conta_id = p_bling_conta_id
             where t.id = v_t.id;
-            return query select v_resultado, 'confirmada'::text, v_t.id, p_bling_conta_id, v_t.titulo_id;
+            return query select v_resultado, p_motivo, 'confirmada'::text, v_t.id, p_bling_conta_id, v_t.titulo_id;
             return;
         end if;
-        return query select v_resultado, v_t.estado, v_t.id, v_t.bling_conta_id, v_t.titulo_id;
+        return query select v_resultado, p_motivo, v_t.estado, v_t.id, v_t.bling_conta_id, v_t.titulo_id;
         return;
     end if;
 
@@ -537,10 +576,10 @@ begin
         update public.baixas_conta_pagar b
         set estado = 'confirmada', bordero_id = coalesce(p_bordero_id, b.bordero_id)
         where b.id = v_b.id;
-        return query select v_resultado, 'confirmada'::text, v_t.id, v_b.bling_conta_id, v_t.titulo_id;
+        return query select v_resultado, p_motivo, 'confirmada'::text, v_t.id, v_b.bling_conta_id, v_t.titulo_id;
         return;
     end if;
-    return query select v_resultado, v_b.estado, v_t.id, v_b.bling_conta_id, v_t.titulo_id;
+    return query select v_resultado, p_motivo, v_b.estado, v_t.id, v_b.bling_conta_id, v_t.titulo_id;
 end;
 $$;
 
