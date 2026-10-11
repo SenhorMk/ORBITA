@@ -65,6 +65,7 @@ const EFEITOS: Record<Pendencia, string> = {
   conferir_baixa: 'quitação não confirmada',
   reparo_titulo_pago: 'quitada no Bling, registro no ORBITA pendente',
   quitacao_recusada: 'quitação recusada pelo Bling; a conta continua em aberto',
+  pagamento_nao_comprovado: 'o Bling indica pago, sem saldo zerado; o título segue em aberto',
   quitacao_solicitada: 'quitação pedida no lançamento ainda não feita',
   titulo_inconsistente: 'registro local inconsistente — requer correção administrativa',
 };
@@ -112,6 +113,7 @@ export function OperacoesPendentes({
   const [total, setTotal] = useState(0);
   const [proximoCursor, setProximoCursor] = useState<string | null>(null);
   const [paginas, setPaginas] = useState(1);
+  const [falhaDaLista, setFalhaDaLista] = useState(false);
 
   /** Lê as `quantas` primeiras páginas pelo cursor estável e troca a lista inteira. */
   const carregar = useCallback(async (quantas = 1) => {
@@ -122,7 +124,10 @@ export function OperacoesPendentes({
       for (let pagina = 0; pagina < quantas; pagina++) {
         const url: string = cursor === null ? '/api/financeiro/operacoes' : `/api/financeiro/operacoes?cursor=${encodeURIComponent(cursor)}`;
         const lida = listaDeOperacoesSchema.safeParse(await (await fetchWithAuth(url)).json());
-        if (!lida.success) return;
+        if (!lida.success) {
+          setFalhaDaLista(true);
+          return;
+        }
         lidas.push(...lida.data.operacoes.filter((o) => !lidas.some((j) => j.ref === o.ref)));
         ultimoTotal = lida.data.total;
         cursor = lida.data.proximoCursor;
@@ -131,8 +136,10 @@ export function OperacoesPendentes({
       setOperacoes(lidas);
       setTotal(ultimoTotal);
       setProximoCursor(cursor);
+      setFalhaDaLista(false);
     } catch {
-      // Lista auxiliar: sem ela a tela continua, e a próxima abertura tenta de novo.
+      // A tela continua, mas diz que a lista pode estar desatualizada.
+      setFalhaDaLista(true);
     }
   }, [fetchWithAuth]);
 
@@ -183,7 +190,7 @@ export function OperacoesPendentes({
   });
 
   const soResultados = Object.keys(resultados).filter((ref) => !operacoes.some((o) => o.ref === ref));
-  if (operacoes.length === 0 && soResultados.length === 0) return null;
+  if (operacoes.length === 0 && soResultados.length === 0 && !falhaDaLista) return null;
 
   return (
     <section
@@ -195,6 +202,9 @@ export function OperacoesPendentes({
         <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden />
         Operações com resultado ainda não concluído. Não lance de novo: confira primeiro.
       </p>
+      {falhaDaLista && (
+        <output>Não foi possível carregar as pendências agora; a lista pode estar incompleta. Abra a aba de novo para tentar.</output>
+      )}
       {proximoCursor !== null && (
         <output>Mostrando {operacoes.length} de {total} pendências.</output>
       )}

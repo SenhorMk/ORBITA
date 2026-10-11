@@ -384,7 +384,7 @@
     {
       "order": 77,
       "path": "../database/74_reconciliacao_de_conta_a_pagar.sql",
-      "sha256": "f0355f2398d079bf942f08d1c7e25f9c1898b54882de551b82e085dea383f1fc"
+      "sha256": "34f881a5589c235ae29592b47257c6263fda0ccde8649c7b7e0eb1be492a0296"
     }
   ],
   "references": [

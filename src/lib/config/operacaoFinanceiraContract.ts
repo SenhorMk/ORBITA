@@ -46,6 +46,7 @@ export const pendenciaSchema = z.enum([
   'conferir_baixa',
   'reparo_titulo_pago',
   'quitacao_recusada',
+  'pagamento_nao_comprovado',
   'quitacao_solicitada',
 ]);
 

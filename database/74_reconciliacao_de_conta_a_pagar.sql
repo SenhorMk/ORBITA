@@ -504,6 +504,11 @@ begin
        and (p_bordero_id is null or p_metodo is distinct from 'leitura_de_borderos') then
         raise exception 'Baixa so se confirma pelo borderô que a prova.' using errcode = '22023';
     end if;
+    -- O banco não conhece o Bling: confere só que o registrado é coerente
+    -- (a conta lida estava `Pago`). A autoria é decidida antes, no servidor.
+    if p_resultado = 'confirmada' and p_alvo = 'baixa' and p_situacao_remota is distinct from 2 then
+        raise exception 'Baixa so se confirma com a conta registrada como paga.' using errcode = '22023';
+    end if;
     if p_resultado = 'confirmada' and p_alvo = 'criacao'
        and p_metodo not in ('referencia_no_numero_documento', 'confirmacao_manual', 'declaracao_do_operador') then
         raise exception 'Metodo incompativel com a confirmacao da criacao.' using errcode = '22023';
@@ -652,6 +657,8 @@ begin
                     t.titulo_id is null
                  or tf.id is null
                  or tf.situacao not in ('aberto', 'pago', 'cancelado', 'estornado')
+                 -- O Bling diz `Pago` e o saldo não comprovou: o título ficou aberto.
+                 or (tf.situacao = 'aberto' and tf.situacao_bling = 2)
                  or (tf.situacao in ('cancelado', 'estornado') and (t.quitacao_solicitada or b.id is not null))
                  or b.estado in ('em_voo', 'indeterminada')
                  or (tf.situacao = 'aberto' and (

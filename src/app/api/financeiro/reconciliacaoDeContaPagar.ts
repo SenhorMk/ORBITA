@@ -354,6 +354,7 @@ export type PendenciaDaOperacao =
   | 'conferir_baixa'
   | 'reparo_titulo_pago'
   | 'quitacao_recusada'
+  | 'pagamento_nao_comprovado'
   | 'quitacao_solicitada';
 
 const SITUACOES_LOCAIS: ReadonlySet<string> = new Set(['aberto', 'pago', 'cancelado', 'estornado']);
@@ -376,6 +377,8 @@ export function pendenciaDaOperacao(operacao: {
   readonly estado: string;
   readonly tituloId: string | null;
   readonly tituloSituacao: string | null;
+  /** A situação do Bling gravada no título (`situacao_bling`), quando conhecida. */
+  readonly tituloSituacaoBling?: number | null;
   readonly quitacaoSolicitada: boolean;
   readonly baixa: { readonly estado: string } | null;
 }): PendenciaDaOperacao | null {
@@ -392,6 +395,9 @@ export function pendenciaDaOperacao(operacao: {
   if (situacao !== 'aberto') return null;
   if (baixa === 'confirmada') return 'reparo_titulo_pago';
   if (baixa === 'recusada') return 'quitacao_recusada';
+  // O Bling diz `Pago` e o saldo não comprovou: o título ficou aberto, e a
+  // divergência fica na fila até uma leitura completa resolvê-la.
+  if (operacao.tituloSituacaoBling === SITUACAO_DA_CONTA_BLING.pago) return 'pagamento_nao_comprovado';
   if (operacao.quitacaoSolicitada && (baixa === null || baixa === 'nao_enviada')) return 'quitacao_solicitada';
   return null;
 }

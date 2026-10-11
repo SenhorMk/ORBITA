@@ -14,14 +14,17 @@
 -- 46 falham. Tire `declaracao_do_operador` do check do método: 47 falha. Tire
 -- da função de registro as exigências de borderô/método/motivo e os checks
 -- `ck_baixas_conta_pagar_confirmada_tem_bordero` e
--- `ck_reconciliacoes_conta_pagar_baixa_tem_bordero`: 48-57 falham.
+-- `ck_reconciliacoes_conta_pagar_baixa_tem_bordero`: 48-57 falham. Tire a
+-- exigência de situação remota `Pago` na baixa confirmada: 58-60 falham. Tire
+-- `situacao_bling = 2` do predicado da listagem: 44 e 46 falham.
 
 begin;
 
 create table public.titulos_financeiros (
     id uuid primary key default gen_random_uuid(),
     organizacao_id uuid not null,
-    situacao text not null default 'aberto'
+    situacao text not null default 'aberto',
+    situacao_bling smallint
 );
 
 insert into auth.users (id, email)
@@ -37,7 +40,7 @@ insert into public.organizacoes (id, nome, slug)
 values ('74100000-0000-4000-8000-000000000001', 'Org T74 A', 'org-t74-a'),
        ('74100000-0000-4000-8000-000000000002', 'Org T74 B', 'org-t74-b');
 
-select plan(64);
+select plan(67);
 
 create temp table ids as select
     '74100000-0000-4000-8000-000000000001'::uuid as org_a,
@@ -321,8 +324,9 @@ select is((select count(*)::int || '/' || max(total) from public.listar_pendenci
           '1/1', '43. e devolve só as pendências, com o total');
 
 -- Pendências que dependem do título e da baixa.
-create temp table casos (chave uuid, conta text, titulo_org text, situacao text, quitacao boolean, baixa text);
-insert into casos values
+create temp table casos (chave uuid, conta text, titulo_org text, situacao text, quitacao boolean, baixa text,
+                         situacao_bling smallint default null);
+insert into casos (chave, conta, titulo_org, situacao, quitacao, baixa) values
     ('74200000-0000-4000-8000-0000000000b2', '910001', 'b', 'aberto', true, 'recusada'),
     ('74200000-0000-4000-8000-0000000000b3', '910002', 'b', 'cancelado', true, 'confirmada'),
     ('74200000-0000-4000-8000-0000000000b4', '910003', 'a', 'aberto', false, null),
@@ -331,13 +335,16 @@ insert into casos values
     ('74200000-0000-4000-8000-0000000000b7', '910006', 'b', 'misterioso', false, null),
     ('74200000-0000-4000-8000-0000000000b8', '910007', 'b', 'aberto', false, null),
     ('74200000-0000-4000-8000-0000000000b9', '910008', 'b', 'pago', true, 'recusada');
+-- O Bling diz "Pago" e o título ficou aberto (saldo não comprovado): pendência.
+insert into casos values ('74200000-0000-4000-8000-0000000000ba', '910009', 'b', 'aberto', false, null, 2),
+                         ('74200000-0000-4000-8000-0000000000bb', '910010', 'b', 'aberto', false, null, 1);
 do $$
 declare c record; v_titulo uuid; v_t uuid;
 begin
     for c in select * from casos loop
-        insert into public.titulos_financeiros (organizacao_id, situacao)
+        insert into public.titulos_financeiros (organizacao_id, situacao, situacao_bling)
         values (case c.titulo_org when 'a' then '74100000-0000-4000-8000-000000000001'::uuid
-                                 else '74100000-0000-4000-8000-000000000002'::uuid end, c.situacao)
+                                 else '74100000-0000-4000-8000-000000000002'::uuid end, c.situacao, c.situacao_bling)
         returning id into v_titulo;
         insert into public.tentativas_conta_pagar
             (organizacao_id, chave, digest, valor, data_vencimento, data_emissao, estado, bling_conta_id, titulo_id, quitacao_solicitada)
@@ -354,14 +361,14 @@ end $$;
 select is((select string_agg(right(t.chave::text, 2), ',' order by t.chave)
              from public.listar_pendencias_conta_pagar((select org_b from ids), 100) l
              join public.tentativas_conta_pagar t on t.id = l.tentativa_id),
-          'b1,b2,b3,b4,b5,b6,b7',
-          '44. recusada, título cancelado com baixa, título de outra organização, quitação não feita, situação desconhecida: todas listadas; concluídas não');
+          'b1,b2,b3,b4,b5,b6,b7,ba',
+          '44. recusada, título cancelado com baixa, título de outra organização, quitação não feita, situação desconhecida, Bling "Pago" com título aberto: todas listadas; concluídas não');
 select ok(not exists (select 1 from public.listar_pendencias_conta_pagar((select org_a from ids), 500) l
                         join public.tentativas_conta_pagar t on t.id = l.tentativa_id
                        where t.organizacao_id <> (select org_a from ids)),
           '45. a organização A só vê as dela');
 select is((select count(*)::int || '/' || max(total) from public.listar_pendencias_conta_pagar((select org_b from ids), 2)),
-          '2/7', '46. com limite, o total diz quantas ficaram de fora');
+          '2/8', '46. com limite, o total diz quantas ficaram de fora');
 select lives_ok(
     $$select * from public.registrar_reconciliacao_conta_pagar(
         '74100000-0000-4000-8000-000000000001', '74200000-0000-4000-8000-000000000003', 'criacao',
@@ -434,13 +441,40 @@ select is((select resultado || '/' || estado from rb7) || '/' || (select bordero
           'confirmada/confirmada/562', '57. com borderô e método de borderô, a conferência confirma');
 
 -- ----------------------------------------------------------------------------
--- 58-64. Privilégios e RLS.
+-- 58-60. Baixa confirmada só com a situação remota registrada como Pago.
 -- ----------------------------------------------------------------------------
-select ok(not has_table_privilege('authenticated', 'public.reconciliacoes_conta_pagar', 'select'), '58. navegador não lê recibos');
-select ok(not has_table_privilege('service_role', 'public.reconciliacoes_conta_pagar', 'update'), '59. nem o servidor altera recibos');
-select ok(not has_table_privilege('service_role', 'public.reconciliacoes_conta_pagar', 'delete'), '60. nem apaga');
-select ok(not has_table_privilege('authenticated', 'public.baixas_conta_pagar', 'select'), '61. navegador não lê baixas');
-select ok(not has_table_privilege('service_role', 'public.baixas_conta_pagar', 'delete'), '62. baixa não é apagada');
+select * from public.reivindicar_tentativa_conta_pagar(
+    (select org_a from ids), '74200000-0000-4000-8000-000000000009', repeat('9', 64),
+    100.00, '2026-10-20', '2026-10-09', 7001, 'ORB-9999999999999999', true);
+update public.tentativas_conta_pagar set estado = 'confirmada', bling_conta_id = '563'
+ where chave = '74200000-0000-4000-8000-000000000009';
+create temp table b9 as select * from public.reivindicar_baixa_conta_pagar(
+    (select org_a from ids), (select id from public.tentativas_conta_pagar where chave = '74200000-0000-4000-8000-000000000009'),
+    '563', '2026-10-10');
+update public.baixas_conta_pagar set estado = 'indeterminada', motivo = 'sem_resposta' where id = (select baixa_id from b9);
+
+select throws_ok(
+    $$select * from public.registrar_reconciliacao_conta_pagar(
+        '74100000-0000-4000-8000-000000000001', '74200000-0000-4000-8000-000000000009', 'baixa',
+        '74000000-0000-4000-8000-000000000001', 'corr-18', 'leitura_de_borderos', 'confirmada', null, '563', '564', null, 1)$$,
+    '22023', null, '58. baixa confirmada sem a situação remota registrada é recusada');
+select throws_ok(
+    $$select * from public.registrar_reconciliacao_conta_pagar(
+        '74100000-0000-4000-8000-000000000001', '74200000-0000-4000-8000-000000000009', 'baixa',
+        '74000000-0000-4000-8000-000000000001', 'corr-19', 'leitura_de_borderos', 'confirmada', null, '563', '564', 1, 1)$$,
+    '22023', null, '59. baixa confirmada com a conta registrada Em aberto é recusada');
+select is((select count(*)::int from public.reconciliacoes_conta_pagar where correlation_id in ('corr-18', 'corr-19'))
+          || '/' || (select estado from public.baixas_conta_pagar where id = (select baixa_id from b9)),
+          '0/indeterminada', '60. nada é gravado e a baixa continua sem desfecho');
+
+-- ----------------------------------------------------------------------------
+-- 61-67. Privilégios e RLS.
+-- ----------------------------------------------------------------------------
+select ok(not has_table_privilege('authenticated', 'public.reconciliacoes_conta_pagar', 'select'), '61. navegador não lê recibos');
+select ok(not has_table_privilege('service_role', 'public.reconciliacoes_conta_pagar', 'update'), '62. nem o servidor altera recibos');
+select ok(not has_table_privilege('service_role', 'public.reconciliacoes_conta_pagar', 'delete'), '63. nem apaga');
+select ok(not has_table_privilege('authenticated', 'public.baixas_conta_pagar', 'select'), '64. navegador não lê baixas');
+select ok(not has_table_privilege('service_role', 'public.baixas_conta_pagar', 'delete'), '65. baixa não é apagada');
 select ok(not has_function_privilege('authenticated',
     'public.registrar_reconciliacao_conta_pagar(uuid, uuid, text, uuid, text, text, text, text, text, text, integer, integer)',
     'execute')
@@ -449,10 +483,10 @@ select ok(not has_function_privilege('authenticated',
     and not has_function_privilege('authenticated', 'public.listar_pendencias_conta_pagar(uuid, integer, timestamptz, uuid)', 'execute')
     and has_function_privilege('service_role', 'public.listar_pendencias_conta_pagar(uuid, integer, timestamptz, uuid)', 'execute')
     and to_regprocedure('public.reivindicar_tentativa_conta_pagar(uuid, uuid, text, numeric, date, date, bigint)') is null,
-    '63. só o servidor registra, reivindica e lista; a assinatura antiga não sobra');
+    '66. só o servidor registra, reivindica e lista; a assinatura antiga não sobra');
 select is((select bool_and(relrowsecurity) from pg_class
             where oid in ('public.reconciliacoes_conta_pagar'::regclass, 'public.baixas_conta_pagar'::regclass)),
-          true, '64. RLS ligada nas tabelas novas');
+          true, '67. RLS ligada nas tabelas novas');
 
 select * from finish();
 rollback;

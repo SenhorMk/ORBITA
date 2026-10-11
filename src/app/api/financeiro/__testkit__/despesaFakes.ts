@@ -118,6 +118,8 @@ export function fakeStore(options: {
       blingContaId: t.blingContaId, tituloId: t.tituloId,
       // Como o adaptador: título não encontrado na organização é `null`.
       tituloSituacao: t.tituloId === null ? null : (salvos.find((x) => x.id === t.tituloId)?.situacao as string | undefined) ?? null,
+      tituloSituacaoBling: t.tituloId === null ? null
+        : (salvos.find((x) => x.id === t.tituloId)?.situacaoBling as number | undefined) ?? null,
       baixa: baixa
         ? { id: baixa.id, estado: baixa.estado, blingContaId: baixa.blingContaId, dataBaixa: baixa.dataBaixa }
         : null,
@@ -155,7 +157,8 @@ export function fakeStore(options: {
       // Como `registrar_reconciliacao_conta_pagar`: baixa só se confirma pelo
       // borderô, e a criação só por um método de criação (a RPC lança 22023).
       if (registro.prova._tag === 'Comprovada' && registro.alvo === 'baixa'
-          && (registro.prova.borderoId === null || registro.metodo !== 'leitura_de_borderos')) return { _tag: 'Indisponivel' };
+          && (registro.prova.borderoId === null || registro.metodo !== 'leitura_de_borderos'
+            || registro.prova.conta.situacao !== 2)) return { _tag: 'Indisponivel' };
       if (registro.prova._tag === 'Comprovada' && registro.alvo === 'criacao'
           && !['referencia_no_numero_documento', 'confirmacao_manual', 'declaracao_do_operador'].includes(registro.metodo)) {
         return { _tag: 'Indisponivel' };

@@ -11,7 +11,8 @@ begin;
 create table public.titulos_financeiros (
     id uuid primary key default gen_random_uuid(),
     organizacao_id uuid not null,
-    situacao text not null default 'aberto'
+    situacao text not null default 'aberto',
+    situacao_bling smallint
 );
 
 \ir ../../../database/20_organizacao_membership_ativa.sql

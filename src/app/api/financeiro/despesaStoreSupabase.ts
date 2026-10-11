@@ -37,6 +37,7 @@ export const despesaStore: DespesaStorePort = {
       titulo: titulo.titulo,
       fornecedor_bling_id: titulo.fornecedorBlingId,
       fornecedor_nome: titulo.fornecedorNome,
+      situacao_bling: titulo.situacaoBling,
     } as TituloFinanceiro;
 
     let salvo: TituloFinanceiro;

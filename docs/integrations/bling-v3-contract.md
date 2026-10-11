@@ -495,9 +495,11 @@ outra operação da organização nunca é confirmada para uma segunda
 e trava consultiva por conta na função de registro).
 
 O banco impõe o mesmo: `registrar_reconciliacao_conta_pagar` recusa (22023)
-baixa confirmada sem borderô ou por método que não seja `leitura_de_borderos`,
-criação confirmada por método de baixa, confirmação com motivo e revisão sem
-motivo; `baixas_conta_pagar` e `reconciliacoes_conta_pagar` têm checks que
+baixa confirmada sem borderô, por método que não seja `leitura_de_borderos` ou
+com a conta registrada fora de `Pago` (`p_situacao_remota`), criação confirmada
+por método de baixa, confirmação com motivo e revisão sem motivo — o banco
+confere a coerência do registrado, não a autoria, que o servidor decide pelo
+borderô; `baixas_conta_pagar` e `reconciliacoes_conta_pagar` têm checks que
 impedem baixa confirmada sem borderô por qualquer caminho.
 
 Antes de quitar, a conta é relida e validada contra a intenção (mesmo id, valor,
@@ -505,6 +507,12 @@ vencimento, emissão e fornecedor) e precisa estar em aberto com o saldo
 integral; divergente ou contraditória, nada é enviado (`conta_divergente`,
 `conta_inconsistente`). Uma mudança no Bling entre essa leitura e o POST não é
 controlável: a intenção durável e a referência no histórico cobrem o intervalo.
+
+O título guarda o código cru do Bling (`situacao_bling`): `Pago` com o título
+aberto (saldo não comprovado) é a pendência `pagamento_nao_comprovado`, visível
+até uma leitura completa — saldo zero marca pago; a conta reaberta fecha a
+divergência. A página de pendências falha explicitamente se uma operação
+escolhida pela listagem não puder ser carregada: nunca sai parcial.
 
 Pagamento confirmado ≠ autoria: `Pago` com saldo INFORMADO e zero confirma que
 a conta foi paga; só o borderô com a referência `ORBQ-` atribui a baixa ao

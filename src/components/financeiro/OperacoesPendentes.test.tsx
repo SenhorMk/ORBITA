@@ -213,4 +213,19 @@ describe('operações pendentes', () => {
     expect(screen.queryByRole('button', { name: 'Carregar mais' })).not.toBeInTheDocument();
     expect(urls).toContain('/api/financeiro/operacoes?cursor=abc');
   });
+
+  it('falha ao carregar a lista: a tela diz, em vez de sumir', async () => {
+    const busca: BuscaAutenticada = async () => json({ success: false, error: 'indisponível' }, 503);
+    render(<OperacoesPendentes fetchWithAuth={busca} ativo versao={0} onConfirmada={vi.fn()} />);
+
+    expect(await screen.findByText(/Não foi possível carregar as pendências agora/u)).toBeInTheDocument();
+  });
+
+  it('Bling "Pago" sem saldo comprovado: aparece como divergência, com conferência', async () => {
+    const divergente = { ...operacaoConfirmada, pendencia: 'pagamento_nao_comprovado' };
+    render(<OperacoesPendentes fetchWithAuth={servidor(confirmada, [divergente], divergente).busca} ativo versao={0} onConfirmada={vi.fn()} />);
+
+    expect(await screen.findByText(/o Bling indica pago, sem saldo zerado/u)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Conferir no Bling' })).toBeInTheDocument();
+  });
 });

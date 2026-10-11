@@ -38,7 +38,7 @@ const baixaSchema = z.object({
   data_baixa: z.string(),
 });
 
-const tituloSchema = z.object({ id: z.string().min(1), situacao: z.string() });
+const tituloSchema = z.object({ id: z.string().min(1), situacao: z.string(), situacao_bling: z.number().int().nullable() });
 
 const reciboSchema = z.object({
   tentativa_id: z.string().min(1),
@@ -71,7 +71,7 @@ async function montar(
       .eq('organizacao_id', scope.organizationId).in('tentativa_id', ids).order('created_at', { ascending: false }),
     idsDeTitulo.length === 0
       ? Promise.resolve({ data: [], error: null })
-      : supabaseServer.from('titulos_financeiros').select('id, situacao')
+      : supabaseServer.from('titulos_financeiros').select('id, situacao, situacao_bling')
           .eq('organizacao_id', scope.organizationId).in('id', idsDeTitulo),
   ]);
   if (baixas.error || recibos.error || titulos.error) {
@@ -99,6 +99,7 @@ async function montar(
       blingContaId: t.bling_conta_id,
       tituloId: t.titulo_id,
       tituloSituacao: titulosLidos.data.find((titulo) => titulo.id === t.titulo_id)?.situacao ?? null,
+      tituloSituacaoBling: titulosLidos.data.find((titulo) => titulo.id === t.titulo_id)?.situacao_bling ?? null,
       baixa: baixa
         ? { id: baixa.id, estado: baixa.estado, blingContaId: baixa.bling_conta_id, dataBaixa: baixa.data_baixa }
         : null,
@@ -170,7 +171,14 @@ const listarPendentes: OperacoesStorePort['listarPendentes'] = async (scope, apo
   const tentativas = z.array(tentativaSchema).safeParse(data);
   if (!tentativas.success) return { _tag: 'Indisponivel' };
   const porId = new Map(tentativas.data.map((t) => [t.id, t]));
-  const operacoes = await montar(scope, ids.flatMap((id) => porId.get(id) ?? []));
+  const escolhidas = ids.flatMap((id) => porId.get(id) ?? []);
+  if (escolhidas.length !== ids.length) {
+    // A RPC escolheu uma operação que a leitura seguinte não trouxe: a página
+    // estaria incompleta e o cursor pularia a que faltou. Falha explícita.
+    registrarFalhaInterna('financeiro.operacoes.listar', new Error('pagina de pendencias incompleta'));
+    return { _tag: 'Indisponivel' };
+  }
+  const operacoes = await montar(scope, escolhidas);
   // Uma operação listada pelo banco é mostrada mesmo se esta camada discordar:
   // nunca some em silêncio.
   return operacoes === null

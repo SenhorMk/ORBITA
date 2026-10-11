@@ -128,6 +128,8 @@ export interface DespesaStorePort {
     readonly descricao: string;
     readonly categoriaId?: string;
     readonly situacao: 'aberto' | 'pago' | 'cancelado';
+    /** O código cru da situação no Bling, quando o título vem de uma leitura dele. */
+    readonly situacaoBling?: number;
     /** O contato do ERP a quem a despesa foi lançada, e o nome dele na hora. */
     readonly fornecedorBlingId?: number;
     readonly fornecedorNome?: string;
