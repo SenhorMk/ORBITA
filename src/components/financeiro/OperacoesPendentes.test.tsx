@@ -13,7 +13,9 @@ const pendente = {
 };
 const emRevisao = {
   ...pendente,
-  ultimaReconciliacao: { alvo: 'criacao', resultado: 'revisao_manual', motivo: 'sem_referencia', em: '2026-10-09T12:00:00Z' },
+  ultimaReconciliacao: {
+    alvo: 'criacao', metodo: 'sem_metodo_seguro', resultado: 'revisao_manual', motivo: 'sem_referencia', em: '2026-10-09T12:00:00Z',
+  },
 };
 const quitacaoPedida = { ...pendente, criacao: 'confirmada', blingContaId: '88123', quitacaoSolicitada: true, pendencia: 'quitacao_solicitada' };
 
@@ -28,7 +30,8 @@ function servidor(resposta: unknown, listaDepois: unknown[] = [], primeira: unkn
     chamadas.push({ url, method: options?.method ?? 'GET', body: options?.body ?? null });
     if (url === '/api/financeiro/operacoes') {
       listas++;
-      return json({ success: true, operacoes: listas === 1 ? [primeira] : listaDepois });
+      const operacoes = listas === 1 ? [primeira] : listaDepois;
+      return json({ success: true, operacoes, total: operacoes.length, incompleta: false });
     }
     return json(resposta);
   };
@@ -105,7 +108,9 @@ describe('operações pendentes', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Confirmar esta conta' }));
 
     expect(await screen.findByText('Confirmada no Bling e registrada no ORBITA.')).toBeInTheDocument();
-    expect(posts()).toEqual([{ url: `/api/financeiro/operacoes/${REF}/confirmacao-manual`, method: 'POST', body: '{"blingContaId":"88123"}' }]);
+    expect(posts()).toEqual([{
+      url: `/api/financeiro/operacoes/${REF}/confirmacao-manual`, method: 'POST', body: '{"blingContaId":"88123","declaracaoDoOperador":false}',
+    }]);
   });
 
   it('quitação pedida no lançamento: a ação é quitar, explícita, e o desfecho é mostrado', async () => {
@@ -137,9 +142,62 @@ describe('operações pendentes', () => {
   });
 
   it('sem pendências, nada é mostrado', async () => {
-    const busca: BuscaAutenticada = async () => json({ success: true, operacoes: [] });
+    const busca: BuscaAutenticada = async () => json({ success: true, operacoes: [], total: 0, incompleta: false });
     const { container } = render(<OperacoesPendentes fetchWithAuth={busca} ativo versao={0} onConfirmada={vi.fn()} />);
 
     await waitFor(() => expect(container).toBeEmptyDOMElement());
+  });
+
+  it('sem referência na conta: pede a declaração; com ela marcada, vincula e diz que foi por declaração', async () => {
+    const semEvidencia = { success: true, resultado: 'revisao_manual', motivo: 'sem_evidencia_positiva', projecaoLocal: 'consistente', operacao: emRevisao };
+    const declarada = {
+      ...confirmada,
+      operacao: { ...operacaoConfirmada, ultimaReconciliacao: { ...emRevisao.ultimaReconciliacao, metodo: 'declaracao_do_operador', resultado: 'confirmada', motivo: null } },
+    };
+    const respostas = [semEvidencia, declarada];
+    const corpos: unknown[] = [];
+    const busca: BuscaAutenticada = async (url, options) => {
+      if (url === '/api/financeiro/operacoes') return json({ success: true, operacoes: [emRevisao], total: 1, incompleta: false });
+      corpos.push(JSON.parse(String(options?.body)));
+      return json(respostas.shift());
+    };
+    render(<OperacoesPendentes fetchWithAuth={busca} ativo versao={0} onConfirmada={vi.fn()} />);
+
+    await userEvent.type(await screen.findByRole('textbox', { name: 'Número da conta no Bling' }), '88123');
+    await userEvent.click(screen.getByRole('button', { name: 'Confirmar esta conta' }));
+    expect(await screen.findByText(/campos iguais não provam/u)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /Declaro que conferi no Bling/u }));
+    await userEvent.click(screen.getByRole('button', { name: 'Confirmar esta conta' }));
+
+    expect(await screen.findByText(/Vinculada pela sua declaração/u)).toBeInTheDocument();
+    expect(corpos).toEqual([
+      { blingContaId: '88123', declaracaoDoOperador: false },
+      { blingContaId: '88123', declaracaoDoOperador: true },
+    ]);
+  });
+
+  it('quitação recusada: aparece, e a ação é conferir — nunca quitar de novo sozinho', async () => {
+    const recusada = { ...quitacaoPedida, baixa: 'recusada', pendencia: 'quitacao_recusada' };
+    render(<OperacoesPendentes fetchWithAuth={servidor(confirmada, [recusada], recusada).busca} ativo versao={0} onConfirmada={vi.fn()} />);
+
+    expect(await screen.findByText(/quitação recusada pelo Bling/u)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Conferir no Bling' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Quitar no Bling' })).not.toBeInTheDocument();
+  });
+
+  it('registro local inconsistente: visível, sem ação automática', async () => {
+    const inconsistente = { ...operacaoConfirmada, pendencia: 'titulo_inconsistente' };
+    render(<OperacoesPendentes fetchWithAuth={servidor(confirmada, [inconsistente], inconsistente).busca} ativo versao={0} onConfirmada={vi.fn()} />);
+
+    expect(await screen.findByText(/requer correção administrativa/u)).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('lista incompleta: diz quantas pendências ficaram de fora', async () => {
+    const busca: BuscaAutenticada = async () => json({ success: true, operacoes: [pendente], total: 140, incompleta: true });
+    render(<OperacoesPendentes fetchWithAuth={busca} ativo versao={0} onConfirmada={vi.fn()} />);
+
+    expect(await screen.findByText(/há mais 139 pendência\(s\)/u)).toBeInTheDocument();
   });
 });

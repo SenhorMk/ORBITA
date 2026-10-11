@@ -483,11 +483,20 @@ ou não aberta → nada é enviado) e passa pela intenção durável de baixa.
 A confirmação manual (`POST .../{ref}/confirmacao-manual`, corpo
 `{ blingContaId }`) é a saída auditável de uma criação em revisão manual: o
 servidor lê a conta apontada por id e só aceita se valor, vencimento, emissão e
-contato baterem e se ela não tiver a referência de outra operação; o recibo leva
-o ator verificado e o método `confirmacao_manual`. Uma conta remota já ligada a
+contato baterem e se ela não tiver a referência de outra operação. Com a
+referência desta operação em `numeroDocumento`, é evidência (`confirmacao_manual`).
+Sem ela, coincidência de campos não prova nada: só a declaração explícita do
+operador (`declaracaoDoOperador: true`) vincula, e o recibo grava o ator e o
+método `declaracao_do_operador`, distinto de prova. Uma conta remota já ligada a
 outra operação da organização nunca é confirmada para uma segunda
 (`conta_de_outra_operacao`, índice único `uq_tentativas_conta_pagar_conta_remota`
 e trava consultiva por conta na função de registro).
+
+Pagamento confirmado ≠ autoria: `Pago` com saldo INFORMADO e zero confirma que
+a conta foi paga; só o borderô com a referência `ORBQ-` atribui a baixa ao
+ORBITA. Sem saldo zerado, nenhum caminho marca o título como pago (nem a
+quitação explícita, nem o reparo do título, nem a conferência de uma quitação
+recusada).
 
 Todo o resto é `revisao_manual`, com recibo: busca vazia, candidatos múltiplos,
 candidato divergente, listagem incompleta (teto de 5 páginas de 100), timeout,

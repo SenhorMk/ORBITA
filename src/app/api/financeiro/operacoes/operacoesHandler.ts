@@ -76,7 +76,12 @@ export function createOperacoesHandlers(deps: OperacoesDependencies) {
       if (autorizacao._tag === 'Negado') return autorizacao.response;
       const lidas = await deps.operacoes.listarPendentes(autorizacao.scope);
       if (lidas._tag !== 'Listadas') return INDISPONIVEL();
-      return NextResponse.json({ success: true, operacoes: lidas.operacoes.map(publica) });
+      return NextResponse.json({
+        success: true,
+        operacoes: lidas.operacoes.map(publica),
+        total: lidas.total,
+        incompleta: lidas.total > lidas.operacoes.length,
+      });
     },
 
     async consultar(request: Request, ref: string): Promise<NextResponse> {
@@ -104,6 +109,7 @@ export function createOperacoesHandlers(deps: OperacoesDependencies) {
       if (!corpo.success) return falha('Informe o número da conta no Bling.', 400);
       return respostaDaReconciliacao(await confirmarManualmente(
         autorizacao.scope, ref, corpo.data.blingContaId, deps.correlationId(request), deps,
+        { declaracaoDoOperador: corpo.data.declaracaoDoOperador },
       ));
     },
 

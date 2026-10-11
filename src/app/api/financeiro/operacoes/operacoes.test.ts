@@ -145,4 +145,42 @@ describe('rotas de operações financeiras', () => {
     expect(respostaDaQuitacaoSchema.parse(await resposta.json())).toMatchObject({ resultado: 'nada_pendente' });
     expect(bling.baixasEnviadas()).toBe(0);
   });
+
+  it('a lista diz o total e se está incompleta', async () => {
+    const { bling, store } = await comOperacaoPendente();
+    const operacoes = store.operacoes();
+    const h = createOperacoesHandlers({
+      ...quitacaoDeTeste(bling, store),
+      operacoes: {
+        ...operacoes,
+        async listarPendentes(s) {
+          const lidas = await operacoes.listarPendentes(s);
+          return lidas._tag === 'Listadas' ? { ...lidas, total: 140 } : lidas;
+        },
+      },
+      correlationId: () => 'corr-teste',
+      async autorizar() { return { _tag: 'Autorizado', scope: scopeA }; },
+    });
+
+    expect(listaDeOperacoesSchema.parse(await (await h.listar(req())).json())).toMatchObject({ total: 140, incompleta: true });
+    expect(listaDeOperacoesSchema.parse(await (await handlers(bling, store).listar(req())).json()))
+      .toMatchObject({ total: 1, incompleta: false });
+  });
+
+  it('confirmação manual: a declaração viaja no corpo e só vale como booleano', async () => {
+    const { bling, store } = await comOperacaoPendente();
+    const t = store.tentativa(ORG, CHAVE);
+    if (t) store.tentativas[store.tentativas.indexOf(t)] = { ...t, numeroDocumento: null };
+    const remota = bling.remotas.get('88123');
+    if (remota) remota.numeroDocumento = null;
+    const h = handlers(bling, store);
+
+    expect((await h.confirmarManual(req({ blingContaId: '88123', declaracaoDoOperador: 'sim' }), CHAVE)).status).toBe(400);
+    expect(respostaDaReconciliacaoSchema.parse(await (await h.confirmarManual(req({ blingContaId: '88123' }), CHAVE)).json()))
+      .toMatchObject({ resultado: 'revisao_manual', motivo: 'sem_evidencia_positiva' });
+    expect(respostaDaReconciliacaoSchema.parse(await (await h.confirmarManual(req({ blingContaId: '88123', declaracaoDoOperador: true }), CHAVE)).json()))
+      .toMatchObject({ resultado: 'confirmada', operacao: { ultimaReconciliacao: { metodo: 'declaracao_do_operador' } } });
+    expect(store.recibos.at(-1)).toMatchObject({ metodo: 'declaracao_do_operador', atorId: scopeA.actorId });
+  });
 });
+

@@ -133,10 +133,13 @@ describe('defeito 4 — revisão manual tem saída auditável', () => {
     if (remota) remota.numeroDocumento = null;
     expect(await reconciliar(bling, store)).toMatchObject({ resultado: 'revisao_manual', motivo: 'sem_referencia' });
 
-    const manual = await Reconciliacao.confirmarManualmente(scope, CHAVE, '88123', 'corr', reconciliacaoDeTeste(bling, store));
+    // Sem referência na conta, só a declaração explícita do operador vincula.
+    const manual = await Reconciliacao.confirmarManualmente(
+      scope, CHAVE, '88123', 'corr', reconciliacaoDeTeste(bling, store), { declaracaoDoOperador: true },
+    );
 
     expect(manual).toMatchObject({ resultado: 'confirmada' });
-    expect(store.recibos.at(-1)).toMatchObject({ resultado: 'confirmada', metodo: 'confirmacao_manual', atorId: ATOR });
+    expect(store.recibos.at(-1)).toMatchObject({ resultado: 'confirmada', metodo: 'declaracao_do_operador', atorId: ATOR });
     expect(store.salvos).toHaveLength(1);
     expect(bling.posts).toHaveLength(1);
   });
@@ -186,7 +189,7 @@ describe('proteções em volta das recuperações', () => {
     await reconciliar(bling, store);
     bling.remotas.delete('88123');
 
-    expect(await reconciliar(bling, store)).toMatchObject({ resultado: 'reparo_local', motivo: 'consulta_incompleta', projecaoLocal: 'pendente' });
+    expect(await reconciliar(bling, store)).toMatchObject({ resultado: 'reparo_local', motivo: 'conta_ausente', projecaoLocal: 'pendente' });
     expect(store.salvos).toHaveLength(0);
     expect(bling.posts).toHaveLength(1);
   });
@@ -245,7 +248,9 @@ describe('proteções em volta das recuperações', () => {
     const remota = bling.remotas.get('88123');
     if (remota) remota.numeroDocumento = null;
 
-    const manual = await Reconciliacao.confirmarManualmente(scope, CHAVE_2, '88123', 'corr', reconciliacaoDeTeste(bling, store));
+    const manual = await Reconciliacao.confirmarManualmente(
+      scope, CHAVE_2, '88123', 'corr', reconciliacaoDeTeste(bling, store), { declaracaoDoOperador: true },
+    );
 
     expect(manual).toMatchObject({ resultado: 'divergente', motivo: 'conta_de_outra_operacao' });
     expect(store.tentativa(ORG, CHAVE_2)?.estado).toBe('indeterminada');

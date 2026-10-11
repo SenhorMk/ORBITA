@@ -1,6 +1,10 @@
 import type { BorderoLido, ContaPagarDetalhada, ContaPagarResumida, ListagemDeContasPagar } from '@/services/blingPort';
 import type { LeituraRemota } from '@/lib/integrations/bling/operacaoRemotaContract';
-import { SITUACAO_DA_CONTA_BLING } from '@/lib/integrations/bling/situacaoDaContaBling';
+import {
+  SITUACAO_DA_CONTA_BLING,
+  projetarSituacaoDaConta,
+  type SituacaoLocalDoTitulo,
+} from '@/lib/integrations/bling/situacaoDaContaBling';
 
 /**
  * Decisões da reconciliação (PRE-002), sem I/O.
@@ -29,7 +33,9 @@ export type MotivoDeRevisaoManual =
   | 'quitada_sem_autoria'
   | 'multiplos_borderos'
   | 'conta_de_outra_operacao'
-  | 'referencia_de_outra_operacao';
+  | 'referencia_de_outra_operacao'
+  | 'sem_evidencia_positiva'
+  | 'titulo_inconsistente';
 
 /** Teto de leituras por id numa reconciliação: acima disso, revisão manual. */
 export const MAXIMO_DE_CANDIDATOS = 20;
@@ -158,13 +164,9 @@ export function triarContaDaBaixa(
   blingContaId: string,
   leitura: LeituraRemota<ContaPagarDetalhada>,
 ): ProvaRemota | { readonly _tag: 'LerBorderos'; readonly conta: ContaPagarDetalhada } {
-  if (leitura._tag === 'RemotoAusente') return revisao('conta_ausente', 1);
-  if (leitura._tag !== 'RemotoPresente') return revisao('consulta_incompleta', 1);
-  const conta = leitura.valor;
-  if (conta.id !== blingContaId) return revisao('leitura_inconsistente', 1);
-  if (conta.situacao !== SITUACAO_DA_CONTA_BLING.pago) return revisao('conta_nao_quitada', 1);
-  if (conta.saldo === null) return revisao('saldo_ausente', 1);
-  if (emCentavos(conta.saldo) !== 0) return revisao('conta_nao_quitada', 1);
+  const pagamento = decidirPagamentoConfirmado(blingContaId, leitura);
+  if (pagamento._tag !== 'PagamentoConfirmado') return pagamento;
+  const { conta } = pagamento;
   if (conta.borderos.length === 0) return revisao('bordero_ausente', 1);
   if (conta.borderos.length > MAXIMO_DE_BORDEROS) return revisao('borderos_demais', 1);
   return { _tag: 'LerBorderos', conta };
@@ -200,50 +202,126 @@ export function decidirAutoriaDaBaixa(
   return { _tag: 'Comprovada', conta, candidatos: 1, borderoId: bordero.id };
 }
 
+/** Como a confirmação manual se apoia: na referência da operação, ou na palavra do operador. */
+export type MetodoDaConfirmacaoManual = 'confirmacao_manual' | 'declaracao_do_operador';
+
 /**
  * Confirmação manual: o operador aponta a conta no Bling; o servidor a lê por
  * id e só aceita se ela for compatível com a intenção gravada.
  *
- * É evidência humana — por isso o recibo leva o ator e o método
- * `confirmacao_manual` —, mas nunca contra os fatos: valor, vencimento,
- * emissão e contato precisam bater, e uma conta com a referência de OUTRA
- * operação é recusada.
+ * Valor, vencimento, emissão e contato iguais NÃO provam que a conta é desta
+ * operação: uma conta independente pode ter exatamente esses atributos. Só a
+ * referência da operação em `numeroDocumento` é evidência positiva. Sem ela, a
+ * conta só é vinculada com a declaração explícita do operador, gravada no
+ * recibo com o ator e o método `declaracao_do_operador` — nunca como prova.
+ * Uma conta com a referência de OUTRA operação é sempre recusada.
  *
  * @param tentativa - A intenção gravada.
  * @param blingContaId - A conta apontada pelo operador.
  * @param leitura - `GET /contas/pagar/{id}` dessa conta.
- * @returns `Comprovada` ou `RevisaoManual` com o motivo da recusa.
+ * @param declaracaoDoOperador - O operador declarou que conferiu que a conta é desta operação.
+ * @returns A prova (ou a recusa) e o método que a sustenta.
  */
 export function decidirConfirmacaoManual(
   tentativa: TentativaParaReconciliar,
   blingContaId: string,
   leitura: LeituraRemota<ContaPagarDetalhada>,
-): ProvaRemota {
+  declaracaoDoOperador: boolean,
+): { readonly prova: ProvaRemota; readonly metodo: MetodoDaConfirmacaoManual } {
+  const recusa = (motivo: MotivoDeRevisaoManual) => ({ prova: revisao(motivo, 1), metodo: 'confirmacao_manual' as const });
+  if (leitura._tag === 'RemotoAusente') return recusa('conta_ausente');
+  if (leitura._tag !== 'RemotoPresente') return recusa('consulta_incompleta');
+  const conta = leitura.valor;
+  if (conta.id !== blingContaId) return recusa('leitura_inconsistente');
+  if (conta.numeroDocumento !== null && conta.numeroDocumento !== tentativa.numeroDocumento) {
+    return recusa('referencia_de_outra_operacao');
+  }
+  if (!confere(tentativa, conta)) return recusa('candidato_divergente');
+  const comprovada = { _tag: 'Comprovada' as const, conta, candidatos: 1, borderoId: null };
+  if (conta.numeroDocumento !== null) return { prova: comprovada, metodo: 'confirmacao_manual' };
+  if (!declaracaoDoOperador) return recusa('sem_evidencia_positiva');
+  return { prova: comprovada, metodo: 'declaracao_do_operador' };
+}
+
+/**
+ * A conta lida por id é a que a criação confirmou, e ainda corresponde à
+ * intenção? Só então ela serve para reconstruir o título local.
+ *
+ * @param tentativa - A intenção gravada.
+ * @param blingContaId - A conta remota confirmada na tentativa.
+ * @param leitura - `GET /contas/pagar/{id}`.
+ * @returns A conta, ou a revisão manual com o motivo.
+ */
+export function validarContaConfirmada(
+  tentativa: TentativaParaReconciliar,
+  blingContaId: string,
+  leitura: LeituraRemota<ContaPagarDetalhada>,
+): { readonly _tag: 'ContaValida'; readonly conta: ContaPagarDetalhada } | ProvaRemota {
+  if (leitura._tag === 'RemotoAusente') return revisao('conta_ausente', 1);
+  if (leitura._tag !== 'RemotoPresente') return revisao('consulta_incompleta', 1);
+  if (leitura.valor.id !== blingContaId) return revisao('leitura_inconsistente', 1);
+  if (!confere(tentativa, leitura.valor)) return revisao('candidato_divergente', 1);
+  return { _tag: 'ContaValida', conta: leitura.valor };
+}
+
+/**
+ * A conta está paga, de forma completa? `Pago` com saldo INFORMADO e zero.
+ * Diz que houve pagamento — não diz de quem: autoria é `decidirAutoriaDaBaixa`.
+ *
+ * @param blingContaId - A conta esperada.
+ * @param leitura - `GET /contas/pagar/{id}`.
+ * @returns O pagamento confirmado, ou a revisão manual com o motivo.
+ */
+export function decidirPagamentoConfirmado(
+  blingContaId: string,
+  leitura: LeituraRemota<ContaPagarDetalhada>,
+): { readonly _tag: 'PagamentoConfirmado'; readonly conta: ContaPagarDetalhada } | ProvaRemota {
   if (leitura._tag === 'RemotoAusente') return revisao('conta_ausente', 1);
   if (leitura._tag !== 'RemotoPresente') return revisao('consulta_incompleta', 1);
   const conta = leitura.valor;
   if (conta.id !== blingContaId) return revisao('leitura_inconsistente', 1);
-  if (conta.numeroDocumento !== null && conta.numeroDocumento !== tentativa.numeroDocumento) {
-    return revisao('referencia_de_outra_operacao', 1);
-  }
-  if (!confere(tentativa, conta)) return revisao('candidato_divergente', 1);
-  return { _tag: 'Comprovada', conta, candidatos: 1, borderoId: null };
+  if (conta.situacao !== SITUACAO_DA_CONTA_BLING.pago) return revisao('conta_nao_quitada', 1);
+  if (conta.saldo === null) return revisao('saldo_ausente', 1);
+  if (emCentavos(conta.saldo) !== 0) return revisao('conta_nao_quitada', 1);
+  return { _tag: 'PagamentoConfirmado', conta };
+}
+
+/**
+ * A situação do título local a partir da conta lida. `pago` só com pagamento
+ * confirmado (saldo informado e zero): uma leitura incompleta nunca marca
+ * pagamento — o título fica aberto.
+ *
+ * @param conta - A conta lida por id.
+ * @returns A situação local.
+ */
+export function situacaoLocalComprovada(conta: ContaPagarDetalhada): SituacaoLocalDoTitulo {
+  const projetada = projetarSituacaoDaConta(conta.situacao);
+  if (projetada !== 'pago') return projetada;
+  return conta.saldo !== null && emCentavos(conta.saldo) === 0 ? 'pago' : 'aberto';
 }
 
 /** O que falta resolver numa operação, na ordem em que precisa ser resolvido. */
 export type PendenciaDaOperacao =
   | 'conferir_criacao'
   | 'reparo_titulo'
+  | 'titulo_inconsistente'
   | 'conferir_baixa'
   | 'reparo_titulo_pago'
+  | 'quitacao_recusada'
   | 'quitacao_solicitada';
 
+const SITUACOES_LOCAIS: ReadonlySet<string> = new Set(['aberto', 'pago', 'cancelado', 'estornado']);
+
 /**
- * A pendência de uma operação, a partir do estado durável.
+ * A pendência de uma operação, a partir do estado durável. É a MESMA regra de
+ * `listar_pendencias_conta_pagar` (migration 74), que lista no banco.
  *
  * Uma operação só está concluída quando o Bling e a projeção local contam a
- * mesma história: criação confirmada COM título vinculado; baixa confirmada
- * COM título pago; quitação pedida no lançamento COM baixa ou título pago.
+ * mesma história: criação confirmada COM título encontrado na organização;
+ * baixa confirmada COM título pago; quitação pedida COM título pago. Um
+ * `tituloId` sem título encontrado (ou com situação desconhecida, ou cancelado
+ * com quitação em jogo) é inconsistência local: fica visível e bloqueada, sem
+ * reparo automático. Quitação recusada com o título aberto continua pendente.
  *
  * @param operacao - O estado gravado.
  * @returns A pendência, ou `null` quando não há nada a fazer.
@@ -258,11 +336,16 @@ export function pendenciaDaOperacao(operacao: {
   if (operacao.estado === 'em_voo' || operacao.estado === 'indeterminada') return 'conferir_criacao';
   if (operacao.estado !== 'confirmada') return null;
   if (operacao.tituloId === null) return 'reparo_titulo';
+  const situacao = operacao.tituloSituacao;
   const baixa = operacao.baixa?.estado ?? null;
-  if (baixa === 'em_voo' || baixa === 'indeterminada') return 'conferir_baixa';
-  if (baixa === 'confirmada' && operacao.tituloSituacao === 'aberto') return 'reparo_titulo_pago';
-  if (operacao.quitacaoSolicitada && (baixa === null || baixa === 'nao_enviada') && operacao.tituloSituacao === 'aberto') {
-    return 'quitacao_solicitada';
+  if (situacao === null || !SITUACOES_LOCAIS.has(situacao)) return 'titulo_inconsistente';
+  if ((situacao === 'cancelado' || situacao === 'estornado') && (operacao.quitacaoSolicitada || baixa !== null)) {
+    return 'titulo_inconsistente';
   }
+  if (baixa === 'em_voo' || baixa === 'indeterminada') return 'conferir_baixa';
+  if (situacao !== 'aberto') return null;
+  if (baixa === 'confirmada') return 'reparo_titulo_pago';
+  if (baixa === 'recusada') return 'quitacao_recusada';
+  if (operacao.quitacaoSolicitada && (baixa === null || baixa === 'nao_enviada')) return 'quitacao_solicitada';
   return null;
 }

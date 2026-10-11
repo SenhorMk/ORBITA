@@ -63,6 +63,8 @@ export interface FakeBling
    * pagamento de terceiro (histórico sem a referência do ORBITA).
    */
   readonly borderos: Map<string, BorderoLido>;
+  /** Muda como o Bling responde às próximas baixas (outro dia, outra rede). */
+  mudarModoDeBaixa(modo: ModoDeBaixa): void;
   semear(conta: Partial<ContaRemotaFake> & Pick<ContaRemotaFake, 'id' | 'valor' | 'vencimento' | 'contatoId'>): void;
 }
 
@@ -112,7 +114,7 @@ export function fakeBling(options: {
   let baixasEnviadas = 0;
   let contatos = 0;
   const modo: ModoDeCriacao = options.falhaCriar ? 'recusa' : options.modo ?? 'confirma';
-  const modoDeBaixa: ModoDeBaixa = options.falhaBaixa
+  let modoDeBaixa: ModoDeBaixa = options.falhaBaixa
     ? 'recusa'
     : options.baixaAmbigua ? 'ambigua-sem-efeito' : options.baixa ?? 'confirma';
 
@@ -143,6 +145,9 @@ export function fakeBling(options: {
     contasCriadasNoBling: () => criadas,
     baixasEnviadas: () => baixasEnviadas,
     contatosResolvidos: () => contatos,
+    mudarModoDeBaixa(modo) {
+      modoDeBaixa = modo;
+    },
     semear(conta) {
       remotas.set(conta.id, {
         situacao: 1, dataEmissao: null, numeroDocumento: null, saldo: conta.valor, historico: null,

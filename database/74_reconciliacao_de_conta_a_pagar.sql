@@ -62,7 +62,7 @@ create table if not exists public.reconciliacoes_conta_pagar (
     correlation_id   text not null check (correlation_id ~ '^[A-Za-z0-9._:-]{1,128}$'),
     metodo           text not null check (metodo in (
                          'referencia_no_numero_documento', 'leitura_por_id', 'leitura_de_borderos',
-                         'confirmacao_manual', 'sem_metodo_seguro')),
+                         'confirmacao_manual', 'declaracao_do_operador', 'sem_metodo_seguro')),
     resultado        text not null check (resultado in ('confirmada', 'ja_confirmada', 'revisao_manual', 'divergente')),
     motivo           text check (motivo ~ '^[a-z0-9_]{1,64}$'),
     bling_conta_id   text check (bling_conta_id ~ '^[0-9]+$'),
@@ -589,3 +589,49 @@ revoke all on function public.registrar_reconciliacao_conta_pagar(
 grant execute on function public.registrar_reconciliacao_conta_pagar(
     uuid, uuid, text, uuid, text, text, text, text, text, text, integer, integer
 ) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 7. Listar as pendências NO BANCO, sobre todas as operações da organização.
+--
+-- Mesma regra de `pendenciaDaOperacao` (reconciliacaoDeContaPagar.ts). Uma
+-- janela de "mais recentes" filtrada depois esconderia uma pendência antiga;
+-- aqui o filtro vem antes do limite, e `total` conta todas — a tela diz quando
+-- mostra só parte. O título é procurado NA MESMA organização: um vínculo que
+-- não o encontra é inconsistência e aparece.
+-- ---------------------------------------------------------------------------
+create or replace function public.listar_pendencias_conta_pagar(
+    p_organizacao_id uuid,
+    p_limite integer default 100
+)
+returns table (tentativa_id uuid, total bigint)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+    select t.id, count(*) over ()
+      from public.tentativas_conta_pagar t
+      left join public.titulos_financeiros tf
+        on tf.id = t.titulo_id and tf.organizacao_id = t.organizacao_id
+      left join public.baixas_conta_pagar b
+        on b.tentativa_id = t.id and b.organizacao_id = t.organizacao_id
+     where t.organizacao_id = p_organizacao_id
+       and (
+            t.estado in ('em_voo', 'indeterminada')
+         or (t.estado = 'confirmada' and (
+                t.titulo_id is null
+             or tf.id is null
+             or tf.situacao not in ('aberto', 'pago', 'cancelado', 'estornado')
+             or (tf.situacao in ('cancelado', 'estornado') and (t.quitacao_solicitada or b.id is not null))
+             or b.estado in ('em_voo', 'indeterminada')
+             or (tf.situacao = 'aberto' and (
+                    b.estado in ('confirmada', 'recusada')
+                 or (t.quitacao_solicitada and (b.id is null or b.estado = 'nao_enviada'))))
+         ))
+       )
+     order by t.created_at desc, t.id
+     limit greatest(1, least(coalesce(p_limite, 100), 500));
+$$;
+
+revoke all on function public.listar_pendencias_conta_pagar(uuid, integer) from public, anon, authenticated;
+grant execute on function public.listar_pendencias_conta_pagar(uuid, integer) to service_role;

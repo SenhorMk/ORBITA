@@ -32,6 +32,8 @@ export const motivoDeRevisaoSchema = z.enum([
   'multiplos_borderos',
   'conta_de_outra_operacao',
   'referencia_de_outra_operacao',
+  'sem_evidencia_positiva',
+  'titulo_inconsistente',
 ]);
 
 export type MotivoDeRevisao = z.infer<typeof motivoDeRevisaoSchema>;
@@ -40,9 +42,21 @@ export type MotivoDeRevisao = z.infer<typeof motivoDeRevisaoSchema>;
 export const pendenciaSchema = z.enum([
   'conferir_criacao',
   'reparo_titulo',
+  'titulo_inconsistente',
   'conferir_baixa',
   'reparo_titulo_pago',
+  'quitacao_recusada',
   'quitacao_solicitada',
+]);
+
+/** Em que se apoia o recibo: prova lida no Bling, ou a declaração do operador. */
+export const metodoDoReciboSchema = z.enum([
+  'referencia_no_numero_documento',
+  'leitura_por_id',
+  'leitura_de_borderos',
+  'confirmacao_manual',
+  'declaracao_do_operador',
+  'sem_metodo_seguro',
 ]);
 
 export type Pendencia = z.infer<typeof pendenciaSchema>;
@@ -60,6 +74,7 @@ export const operacaoFinanceiraSchema = z.object({
   pendencia: pendenciaSchema.nullable(),
   ultimaReconciliacao: z.object({
     alvo: z.enum(['criacao', 'baixa']),
+    metodo: metodoDoReciboSchema,
     resultado: resultadoDoReciboSchema,
     motivo: motivoDeRevisaoSchema.nullable(),
     em: z.string(),
@@ -68,10 +83,16 @@ export const operacaoFinanceiraSchema = z.object({
 
 export type OperacaoFinanceira = z.infer<typeof operacaoFinanceiraSchema>;
 
-/** `GET /api/financeiro/operacoes` — as operações com algo a resolver. */
+/**
+ * `GET /api/financeiro/operacoes` — as operações com algo a resolver. `total`
+ * conta todas as pendências da organização; `incompleta` diz que a lista
+ * mostra só parte delas.
+ */
 export const listaDeOperacoesSchema = z.object({
   success: z.literal(true),
   operacoes: z.array(operacaoFinanceiraSchema),
+  total: z.number().int().nonnegative(),
+  incompleta: z.boolean(),
 });
 
 /**
@@ -92,9 +113,14 @@ export const respostaDaReconciliacaoSchema = z.object({
 
 export type RespostaDaReconciliacao = z.infer<typeof respostaDaReconciliacaoSchema>;
 
-/** Corpo de `POST .../{ref}/confirmacao-manual`: a conta que o operador conferiu no Bling. */
+/**
+ * Corpo de `POST .../{ref}/confirmacao-manual`: a conta que o operador conferiu
+ * no Bling e, quando ela não traz a referência da operação, a declaração
+ * explícita de que é ela.
+ */
 export const confirmacaoManualSchema = z.object({
   blingContaId: z.string().regex(/^\d{1,20}$/u, 'Informe o número da conta no Bling.'),
+  declaracaoDoOperador: z.boolean().default(false),
 });
 
 /** Desfecho de `POST .../{ref}/quitacao`. */
@@ -104,6 +130,7 @@ export const resultadoDaQuitacaoSchema = z.enum([
   'quitacao_recusada',
   'quitacao_nao_enviada',
   'ja_quitada_no_bling',
+  'conta_inconsistente',
   'conta_nao_quitavel',
   'sem_categoria',
   'consulta_incompleta',

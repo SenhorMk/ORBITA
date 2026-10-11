@@ -34,6 +34,8 @@ const MOTIVOS: Record<MotivoDeRevisao, string> = {
   multiplos_borderos: 'mais de um borderô corresponde a esta quitação',
   conta_de_outra_operacao: 'esta conta já pertence a outra operação',
   referencia_de_outra_operacao: 'esta conta tem a referência de outra operação',
+  sem_evidencia_positiva: 'a conta não traz a referência desta operação — campos iguais não provam que seja ela. Só vincule se você conferiu no Bling: marque a declaração e confirme de novo',
+  titulo_inconsistente: 'o registro local desta operação está inconsistente e precisa de correção administrativa',
 };
 
 const SITUACOES: Record<SituacaoParaOOperador, string> = {
@@ -49,7 +51,8 @@ const QUITACOES: Record<string, string> = {
   quitacao_nao_confirmada: 'A quitação foi enviada e não confirmada. Confira no Bling antes de qualquer outra ação.',
   quitacao_recusada: 'O Bling recusou a quitação. A conta continua em aberto.',
   quitacao_nao_enviada: 'A quitação não foi enviada. A conta continua em aberto.',
-  ja_quitada_no_bling: 'A conta já estava paga no Bling. Nada foi enviado.',
+  ja_quitada_no_bling: 'A conta já estava paga no Bling. Nada foi enviado, e a quitação não foi atribuída ao ORBITA.',
+  conta_inconsistente: 'O Bling mostra a conta como paga, mas sem saldo zerado. Nada foi enviado nem marcado como pago.',
   conta_nao_quitavel: 'A conta não está em aberto no Bling. Nada foi enviado.',
   sem_categoria: 'A conta não tem categoria no Bling. Nada foi enviado.',
   consulta_incompleta: 'O Bling não respondeu. Nada foi enviado.',
@@ -61,7 +64,9 @@ const EFEITOS: Record<Pendencia, string> = {
   reparo_titulo: 'confirmada no Bling, registro no ORBITA pendente',
   conferir_baixa: 'quitação não confirmada',
   reparo_titulo_pago: 'quitada no Bling, registro no ORBITA pendente',
+  quitacao_recusada: 'quitação recusada pelo Bling; a conta continua em aberto',
   quitacao_solicitada: 'quitação pedida no lançamento ainda não feita',
+  titulo_inconsistente: 'registro local inconsistente — requer correção administrativa',
 };
 
 const FALHA = 'Não foi possível concluir agora. Nada foi enviado ao Bling.';
@@ -103,12 +108,17 @@ export function OperacoesPendentes({
   const [ocupado, setOcupado] = useState<string | null>(null);
   const [resultados, setResultados] = useState<Readonly<Record<string, string>>>({});
   const [contas, setContas] = useState<Readonly<Record<string, string>>>({});
+  const [declaracoes, setDeclaracoes] = useState<Readonly<Record<string, boolean>>>({});
+  const [faltam, setFaltam] = useState(0);
 
   const carregar = useCallback(async () => {
     try {
       const res = await fetchWithAuth('/api/financeiro/operacoes');
       const lida = listaDeOperacoesSchema.safeParse(await res.json());
-      if (lida.success) setOperacoes(lida.data.operacoes);
+      if (lida.success) {
+        setOperacoes(lida.data.operacoes);
+        setFaltam(lida.data.incompleta ? lida.data.total - lida.data.operacoes.length : 0);
+      }
     } catch {
       // Lista auxiliar: sem ela a tela continua, e a próxima abertura tenta de novo.
     }
@@ -144,6 +154,9 @@ export function OperacoesPendentes({
     if (!lida.success) return FALHA;
     const situacao = situacaoParaOOperador(lida.data);
     if (situacao === 'confirmada') onConfirmada();
+    if (situacao === 'confirmada' && lida.data.operacao.ultimaReconciliacao?.metodo === 'declaracao_do_operador') {
+      return 'Vinculada pela sua declaração, registrada em seu nome — não houve prova automática.';
+    }
     const motivo = lida.data.motivo ? `: ${MOTIVOS[lida.data.motivo]}.` : '';
     return situacao === 'revisao_manual' ? SITUACOES[situacao] + motivo : SITUACOES[situacao];
   });
@@ -169,11 +182,16 @@ export function OperacoesPendentes({
         <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden />
         Operações com resultado ainda não concluído. Não lance de novo: confira primeiro.
       </p>
+      {faltam > 0 && (
+        <output>
+          Mostrando as {operacoes.length} mais recentes; há mais {faltam} pendência(s) nesta organização. Resolva estas para ver as demais.
+        </output>
+      )}
       <ul className="flex flex-col gap-2">
         {operacoes.map((operacao) => (
           <li key={operacao.ref} className="flex flex-wrap items-center gap-2">
             <span>{descricao(operacao)}</span>
-            {operacao.pendencia === 'quitacao_solicitada' ? (
+            {operacao.pendencia === 'titulo_inconsistente' ? null : operacao.pendencia === 'quitacao_solicitada' ? (
               <button
                 type="button"
                 className="orbita-chip cursor-pointer"
@@ -205,11 +223,26 @@ export function OperacoesPendentes({
                     setContas((c) => ({ ...c, [operacao.ref]: valor }));
                   }}
                 />
+                <label className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={declaracoes[operacao.ref] === true}
+                    onChange={(e) => {
+                      const marcada = e.target.checked;
+                      setDeclaracoes((d) => ({ ...d, [operacao.ref]: marcada }));
+                    }}
+                  />
+                  Declaro que conferi no Bling que esta conta é a desta operação
+                </label>
                 <button
                   type="button"
                   className="orbita-chip cursor-pointer"
                   disabled={ocupado !== null || !contas[operacao.ref]}
-                  onClick={() => { void reconciliar(operacao.ref, 'confirmacao-manual', { blingContaId: contas[operacao.ref] }); }}
+                  onClick={() => {
+                    void reconciliar(operacao.ref, 'confirmacao-manual', {
+                      blingContaId: contas[operacao.ref], declaracaoDoOperador: declaracoes[operacao.ref] === true,
+                    });
+                  }}
                 >
                   Confirmar esta conta
                 </button>

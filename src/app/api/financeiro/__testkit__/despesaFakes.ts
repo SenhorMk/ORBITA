@@ -10,6 +10,7 @@ import type {
   OperacoesStorePort,
   QuitacaoDaOperacaoDependencies,
   ReconciliacaoDependencies,
+  RegistroDeReconciliacao,
 } from '../reconciliacaoDaOperacao';
 import { pendenciaDaOperacao, type MotivoDeRevisaoManual } from '../reconciliacaoDeContaPagar';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
@@ -64,7 +65,7 @@ interface ReciboFake {
   readonly motivo: MotivoDeRevisaoManual | null;
   readonly blingContaId: string | null;
   readonly atorId: string;
-  readonly metodo: string;
+  readonly metodo: RegistroDeReconciliacao['metodo'];
   readonly borderoId: string | null;
   readonly em: string;
 }
@@ -112,12 +113,13 @@ export function fakeStore(options: {
       tentativaId: t.id, ref: t.chave, estado: t.estado, valor: t.valor, dataVencimento: t.dataVencimento,
       dataEmissao: t.dataEmissao, contatoBlingId: t.contatoBlingId, numeroDocumento: t.numeroDocumento, quitacaoSolicitada: t.quitacaoSolicitada,
       blingContaId: t.blingContaId, tituloId: t.tituloId,
-      tituloSituacao: t.tituloId === null ? null : String(salvos.find((x) => x.id === t.tituloId)?.situacao ?? ''),
+      // Como o adaptador: título não encontrado na organização é `null`.
+      tituloSituacao: t.tituloId === null ? null : (salvos.find((x) => x.id === t.tituloId)?.situacao as string | undefined) ?? null,
       baixa: baixa
         ? { id: baixa.id, estado: baixa.estado, blingContaId: baixa.blingContaId, dataBaixa: baixa.dataBaixa }
         : null,
       ultimaReconciliacao: recibo
-        ? { alvo: recibo.alvo, resultado: recibo.resultado, motivo: recibo.motivo, em: recibo.em }
+        ? { alvo: recibo.alvo, metodo: recibo.metodo, resultado: recibo.resultado, motivo: recibo.motivo, em: recibo.em }
         : null,
     };
   };
@@ -129,7 +131,8 @@ export function fakeStore(options: {
     },
     async listarPendentes(s) {
       const operacoesDaOrg = tentativas.filter((t) => t.org === s.organizationId).map(projetar);
-      return { _tag: 'Listadas', operacoes: operacoesDaOrg.filter((o) => pendenciaDaOperacao(o) !== null) };
+      const pendentes = operacoesDaOrg.filter((o) => pendenciaDaOperacao(o) !== null);
+      return { _tag: 'Listadas', operacoes: pendentes, total: pendentes.length };
     },
     async registrarReconciliacao(s, registro) {
       if (options.registroDeReconciliacaoFalha) return { _tag: 'Indisponivel' };

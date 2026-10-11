@@ -16,6 +16,11 @@ lista cada operação com uma pendência:
 | quitação não confirmada | a baixa no Bling não teve resposta conclusiva | **Conferir no Bling** |
 | quitada no Bling, registro no ORBITA pendente | a baixa foi confirmada, o título local continua aberto | **Conferir no Bling** (marca pago) |
 | quitação pedida no lançamento ainda não feita | o lançamento pediu "pago", a criação só se confirmou depois | **Quitar no Bling** |
+| quitação recusada pelo Bling | a baixa do ORBITA foi recusada; a conta continua em aberto | quitar pelo próprio Bling e **Conferir no Bling** |
+| registro local inconsistente | o título vinculado não está na organização, tem situação desconhecida ou foi cancelado com quitação em jogo | correção administrativa; nenhuma ação automática |
+
+A lista é decidida no banco sobre todas as operações da organização. Quando há
+mais pendências do que a tela mostra (100), ela diz quantas ficaram de fora.
 
 Não existe botão de lançar de novo: o efeito pode ter acontecido.
 
@@ -39,19 +44,30 @@ a quitação do ORBITA aconteceu: pode ter sido paga por outra pessoa.
 
 - **A conta existe no Bling** (criação): informe o número dela em "Nº no Bling" e
   clique **Confirmar esta conta**. O servidor lê a conta e só aceita se valor,
-  vencimento, emissão e fornecedor baterem com a operação e se ela não pertencer
-  a outra operação. O recibo registra você como autor (`confirmacao_manual`).
-  Se a conta divergir, o recibo registra a recusa e a operação continua pendente.
+  vencimento, emissão e fornecedor baterem e se ela não pertencer a outra
+  operação. Se a conta traz a referência desta operação, isso é evidência
+  (`confirmacao_manual`). Se não traz, campos iguais NÃO provam que seja ela —
+  uma conta independente pode ser idêntica: a tela pede que você marque
+  **"Declaro que conferi no Bling que esta conta é a desta operação"** e confirme
+  de novo. O vínculo é gravado como declaração sua (`declaracao_do_operador`),
+  nunca como prova automática. Conta divergente é recusada mesmo com a
+  declaração.
 - **Conta paga sem prova de autoria** (baixa): confira no Bling quem lançou o
   pagamento. O ORBITA não atribui a quitação a si mesmo nem envia outra baixa.
+- **Quitação recusada**: a recusa do Bling é definitiva e o ORBITA não reenvia.
+  Quite pelo próprio Bling e clique **Conferir no Bling**: com a conta paga e
+  saldo zerado, o título passa a pago e o recibo registra `quitada_sem_autoria`
+  (pagamento confirmado, sem atribuí-lo ao ORBITA). Paga sem saldo informado
+  não marca nada.
 - **Nenhuma conta encontrada**: a operação continua pendente. Ver limite abaixo.
 
 ## Quitar no Bling
 
 Só aparece quando o lançamento pediu a quitação e ela nunca foi enviada. O
-servidor lê a conta antes: se já estiver paga, nada é enviado e o título local
-passa a pago (sem atribuir a quitação ao ORBITA); se não estiver em aberto ou
-não tiver categoria, nada é enviado. Uma quitação sem resposta conclusiva vira
+servidor lê a conta antes: se já estiver paga com saldo zerado, nada é enviado e
+o título local passa a pago (sem atribuir a quitação ao ORBITA); se aparecer
+paga sem saldo zerado, nada é enviado nem marcado ("conta inconsistente"); se
+não estiver em aberto ou não tiver categoria, nada é enviado. Uma quitação sem resposta conclusiva vira
 "quitação não confirmada" e só a conferência resolve — clicar de novo não envia
 outra.
 
@@ -73,7 +89,13 @@ outra.
   encerrar a pendência exige decisão de produto fora do PRE-002.
 - Baixas enviadas antes desta versão não têm a referência `ORBQ-` no histórico;
   se ficaram sem desfecho, só a revisão manual as resolve.
-- A lista lê as 500 operações candidatas mais recentes da organização.
+- O reparo do título só usa a conta confirmada e ainda compatível com a
+  intenção (mesmo id, valor, vencimento, emissão e fornecedor). Se a conta foi
+  editada no Bling depois, o reparo fica pendente com "dados diferentes" e
+  exige correção administrativa.
+- Um título vinculado não pode ser apagado (o banco recusa): o vínculo nunca
+  fica órfão. Corrigir um vínculo inconsistente é ação administrativa fora da
+  tela.
 
 ## Rollback
 

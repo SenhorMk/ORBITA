@@ -1,13 +1,12 @@
 import { z } from 'zod';
 
-import { motivoDeRevisaoSchema } from '@/lib/config/operacaoFinanceiraContract';
+import { metodoDoReciboSchema, motivoDeRevisaoSchema } from '@/lib/config/operacaoFinanceiraContract';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import { supabaseServer } from '@/lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 import type { GravacaoDeTentativa } from './despesaHandler';
 import type { OperacaoRegistrada, OperacoesStorePort, RegistroDeReconciliacao } from './reconciliacaoDaOperacao';
-import { pendenciaDaOperacao } from './reconciliacaoDeContaPagar';
 
 const estado = z.enum(['em_voo', 'nao_enviada', 'confirmada', 'recusada', 'indeterminada']);
 
@@ -38,6 +37,7 @@ const tituloSchema = z.object({ id: z.string().min(1), situacao: z.string() });
 const reciboSchema = z.object({
   tentativa_id: z.string().min(1),
   alvo: z.enum(['criacao', 'baixa']),
+  metodo: metodoDoReciboSchema,
   resultado: z.enum(['confirmada', 'ja_confirmada', 'revisao_manual', 'divergente']),
   motivo: motivoDeRevisaoSchema.nullable(),
   created_at: z.string(),
@@ -61,7 +61,7 @@ async function montar(
   const [baixas, recibos, titulos] = await Promise.all([
     supabaseServer.from('baixas_conta_pagar').select('id, tentativa_id, estado, bling_conta_id, data_baixa')
       .eq('organizacao_id', scope.organizationId).in('tentativa_id', ids),
-    supabaseServer.from('reconciliacoes_conta_pagar').select('tentativa_id, alvo, resultado, motivo, created_at')
+    supabaseServer.from('reconciliacoes_conta_pagar').select('tentativa_id, alvo, metodo, resultado, motivo, created_at')
       .eq('organizacao_id', scope.organizationId).in('tentativa_id', ids).order('created_at', { ascending: false }),
     idsDeTitulo.length === 0
       ? Promise.resolve({ data: [], error: null })
@@ -97,7 +97,7 @@ async function montar(
         ? { id: baixa.id, estado: baixa.estado, blingContaId: baixa.bling_conta_id, dataBaixa: baixa.data_baixa }
         : null,
       ultimaReconciliacao: recibo
-        ? { alvo: recibo.alvo, resultado: recibo.resultado, motivo: recibo.motivo, em: recibo.created_at }
+        ? { alvo: recibo.alvo, metodo: recibo.metodo, resultado: recibo.resultado, motivo: recibo.motivo, em: recibo.created_at }
         : null,
     };
   });
@@ -118,26 +118,42 @@ const lerOperacao: OperacoesStorePort['lerOperacao'] = async (scope, ref) => {
   return operacao ? { _tag: 'Encontrada', operacao } : { _tag: 'Indisponivel' };
 };
 
-/** Janela de candidatas lidas; a pendência é decidida em memória pela MESMA regra do domínio. */
-const JANELA_DE_CANDIDATAS = 500;
+/** Quantas pendências a tela recebe; `total` diz quantas existem. */
+const LIMITE_DA_LISTA = 100;
+
+const pendenciaListadaSchema = z.object({ tentativa_id: z.string().min(1), total: z.coerce.number().int().nonnegative() });
 
 const listarPendentes: OperacoesStorePort['listarPendentes'] = async (scope) => {
-  // Toda baixa nasce de uma quitação pedida, então `quitacao_solicitada` cobre
-  // as baixas pendentes e os títulos ainda não marcados pagos.
+  // A pendência é decidida no banco, sobre todas as operações da organização:
+  // nenhuma janela de "mais recentes" esconde uma pendência antiga.
+  const listadas = await supabaseServer.rpc('listar_pendencias_conta_pagar', {
+    p_organizacao_id: scope.organizationId,
+    p_limite: LIMITE_DA_LISTA,
+  });
+  if (listadas.error) {
+    registrarFalhaInterna('financeiro.operacoes.listar', listadas.error);
+    return { _tag: 'Indisponivel' };
+  }
+  const linhas = z.array(pendenciaListadaSchema).safeParse(listadas.data);
+  if (!linhas.success) return { _tag: 'Indisponivel' };
+  if (linhas.data.length === 0) return { _tag: 'Listadas', operacoes: [], total: 0 };
+
+  const ids = linhas.data.map((l) => l.tentativa_id);
   const { data, error } = await supabaseServer.from('tentativas_conta_pagar').select(COLUNAS_DA_TENTATIVA)
-    .eq('organizacao_id', scope.organizationId)
-    .or('estado.in.(em_voo,indeterminada),and(estado.eq.confirmada,titulo_id.is.null),and(estado.eq.confirmada,quitacao_solicitada.is.true)')
-    .order('created_at', { ascending: false }).limit(JANELA_DE_CANDIDATAS);
+    .eq('organizacao_id', scope.organizationId).in('id', ids);
   if (error) {
     registrarFalhaInterna('financeiro.operacoes.listar', error);
     return { _tag: 'Indisponivel' };
   }
   const tentativas = z.array(tentativaSchema).safeParse(data);
   if (!tentativas.success) return { _tag: 'Indisponivel' };
-  const operacoes = await montar(scope, tentativas.data);
+  const porId = new Map(tentativas.data.map((t) => [t.id, t]));
+  const operacoes = await montar(scope, ids.flatMap((id) => porId.get(id) ?? []));
+  // Uma operação listada pelo banco é mostrada mesmo se esta camada discordar:
+  // nunca some em silêncio.
   return operacoes === null
     ? { _tag: 'Indisponivel' }
-    : { _tag: 'Listadas', operacoes: operacoes.filter((o) => pendenciaDaOperacao(o) !== null).slice(0, 100) };
+    : { _tag: 'Listadas', operacoes, total: Math.max(linhas.data[0]?.total ?? 0, operacoes.length) };
 };
 
 const linhaDoRegistroSchema = z.object({

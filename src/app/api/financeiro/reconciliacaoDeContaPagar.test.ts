@@ -9,9 +9,12 @@ import {
   decidirAutoriaDaBaixa,
   decidirConfirmacaoManual,
   decidirCriacao,
+  decidirPagamentoConfirmado,
   pendenciaDaOperacao,
+  situacaoLocalComprovada,
   triarContaDaBaixa,
   triarListagem,
+  validarContaConfirmada,
   type TentativaParaReconciliar,
 } from './reconciliacaoDeContaPagar';
 
@@ -150,21 +153,60 @@ describe('decidirAutoriaDaBaixa — conta paga não prova que foi o ORBITA quem 
 });
 
 describe('decidirConfirmacaoManual — evidência humana, nunca contra os fatos', () => {
-  it('conta compatível com a intenção: comprovada', () => {
-    expect(decidirConfirmacaoManual(tentativa, '88123', presente(conta()))).toMatchObject({ _tag: 'Comprovada' });
+  const decidir = (lida: LeituraRemota<ContaPagarDetalhada>, declaracao = false) =>
+    decidirConfirmacaoManual(tentativa, '88123', lida, declaracao);
+
+  it('conta com a referência da operação: evidência positiva, sem declaração', () => {
+    expect(decidir(presente(conta()))).toMatchObject({ prova: { _tag: 'Comprovada' }, metodo: 'confirmacao_manual' });
+  });
+
+  it('conta sem referência e com os campos batendo: NÃO é prova', () => {
+    expect(decidir(presente(conta({ numeroDocumento: null }))))
+      .toMatchObject({ prova: { _tag: 'RevisaoManual', motivo: 'sem_evidencia_positiva' } });
+  });
+
+  it('conta sem referência, com a declaração explícita: vinculada como declaração', () => {
+    expect(decidir(presente(conta({ numeroDocumento: null })), true))
+      .toMatchObject({ prova: { _tag: 'Comprovada' }, metodo: 'declaracao_do_operador' });
   });
 
   it.each([
     ['referência de outra operação', conta({ numeroDocumento: 'ORB-FFFFFFFFFFFFFFFF' }), 'referencia_de_outra_operacao'],
     ['valor divergente', conta({ valor: 1 }), 'candidato_divergente'],
+    ['valor divergente, mesmo declarada', conta({ valor: 1, numeroDocumento: null }), 'candidato_divergente'],
     ['conta diferente da apontada', conta({ id: '777' }), 'leitura_inconsistente'],
-  ])('%s → recusada (%s)', (_caso, lida, motivo) => {
-    expect(decidirConfirmacaoManual(tentativa, '88123', presente(lida))).toMatchObject({ _tag: 'RevisaoManual', motivo });
+  ])('%s → recusada (%s), com ou sem declaração', (_caso, lida, motivo) => {
+    expect(decidir(presente(lida), true)).toMatchObject({ prova: { _tag: 'RevisaoManual', motivo } });
   });
 
   it('conta inexistente ou leitura falha: recusada', () => {
-    expect(decidirConfirmacaoManual(tentativa, '88123', { _tag: 'RemotoAusente' })).toMatchObject({ motivo: 'conta_ausente' });
-    expect(decidirConfirmacaoManual(tentativa, '88123', { _tag: 'RemotoLimitado' })).toMatchObject({ motivo: 'consulta_incompleta' });
+    expect(decidir({ _tag: 'RemotoAusente' }, true)).toMatchObject({ prova: { motivo: 'conta_ausente' } });
+    expect(decidir({ _tag: 'RemotoLimitado' }, true)).toMatchObject({ prova: { motivo: 'consulta_incompleta' } });
+  });
+});
+
+describe('decidirPagamentoConfirmado / situacaoLocalComprovada — pago só com saldo informado e zero', () => {
+  it.each([
+    ['Pago, saldo zero', conta({ situacao: 2, saldo: 0 }), 'PagamentoConfirmado', 'pago'],
+    ['Pago, saldo ausente', conta({ situacao: 2, saldo: null }), 'RevisaoManual', 'aberto'],
+    ['Pago, saldo restante', conta({ situacao: 2, saldo: 10 }), 'RevisaoManual', 'aberto'],
+    ['Em aberto', conta(), 'RevisaoManual', 'aberto'],
+  ])('%s → %s; título %s', (_caso, lida, tag, situacao) => {
+    expect(decidirPagamentoConfirmado('88123', presente(lida))).toMatchObject({ _tag: tag });
+    expect(situacaoLocalComprovada(lida)).toBe(situacao);
+  });
+});
+
+describe('validarContaConfirmada — o reparo só usa a conta confirmada, ainda compatível', () => {
+  it.each([
+    ['a mesma conta, compatível', presente(conta()), 'ContaValida'],
+    ['outra conta', presente(conta({ id: '777' })), 'leitura_inconsistente'],
+    ['valor mudou', presente(conta({ valor: 1300 })), 'candidato_divergente'],
+    ['sumiu', { _tag: 'RemotoAusente' } as const, 'conta_ausente'],
+    ['timeout', { _tag: 'RemotoIndeterminado', causa: 'prazo_esgotado' } as const, 'consulta_incompleta'],
+  ] as const)('%s → %s', (_caso, leitura, esperado) => {
+    const r = validarContaConfirmada(tentativa, '88123', leitura);
+    expect(r._tag === 'ContaValida' ? 'ContaValida' : r._tag === 'RevisaoManual' ? r.motivo : r._tag).toBe(esperado);
   });
 });
 
@@ -173,13 +215,20 @@ describe('pendenciaDaOperacao — concluída só quando Bling e projeção local
   it.each([
     ['criação sem desfecho', { ...base, estado: 'indeterminada', tituloId: null }, 'conferir_criacao'],
     ['confirmada sem título', { ...base, tituloId: null, tituloSituacao: null }, 'reparo_titulo'],
+    ['título vinculado não encontrado', { ...base, tituloSituacao: null }, 'titulo_inconsistente'],
+    ['situação local desconhecida', { ...base, tituloSituacao: 'x' }, 'titulo_inconsistente'],
+    ['título cancelado com quitação pedida', { ...base, tituloSituacao: 'cancelado', quitacaoSolicitada: true }, 'titulo_inconsistente'],
+    ['título estornado com baixa', { ...base, tituloSituacao: 'estornado', baixa: { estado: 'confirmada' } }, 'titulo_inconsistente'],
     ['baixa sem desfecho', { ...base, quitacaoSolicitada: true, baixa: { estado: 'indeterminada' } }, 'conferir_baixa'],
+    ['baixa em voo', { ...base, quitacaoSolicitada: true, baixa: { estado: 'em_voo' } }, 'conferir_baixa'],
     ['baixa confirmada e título aberto', { ...base, quitacaoSolicitada: true, baixa: { estado: 'confirmada' } }, 'reparo_titulo_pago'],
+    ['baixa recusada e título aberto', { ...base, quitacaoSolicitada: true, baixa: { estado: 'recusada' } }, 'quitacao_recusada'],
     ['quitação pedida e nunca enviada', { ...base, quitacaoSolicitada: true }, 'quitacao_solicitada'],
     ['quitação pedida e baixa não enviada', { ...base, quitacaoSolicitada: true, baixa: { estado: 'nao_enviada' } }, 'quitacao_solicitada'],
     ['concluída sem quitação', base, null],
+    ['título cancelado sem quitação em jogo', { ...base, tituloSituacao: 'cancelado' }, null],
     ['quitação pedida, título já pago', { ...base, quitacaoSolicitada: true, tituloSituacao: 'pago' }, null],
-    ['baixa recusada: decisão do operador, não pendência automática', { ...base, quitacaoSolicitada: true, baixa: { estado: 'recusada' } }, null],
+    ['baixa recusada, título pago por fora', { ...base, quitacaoSolicitada: true, tituloSituacao: 'pago', baixa: { estado: 'recusada' } }, null],
     ['criação recusada', { ...base, estado: 'recusada', tituloId: null }, null],
   ] as const)('%s → %s', (_caso, operacao, esperada) => {
     expect(pendenciaDaOperacao(operacao)).toBe(esperada);
