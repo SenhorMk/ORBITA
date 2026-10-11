@@ -6,7 +6,13 @@ import { supabaseServer } from '@/lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 import type { GravacaoDeTentativa } from './despesaHandler';
-import type { OperacaoRegistrada, OperacoesStorePort, RegistroDeReconciliacao } from './reconciliacaoDaOperacao';
+import {
+  PENDENCIAS_POR_PAGINA,
+  type CursorDePendencias,
+  type OperacaoRegistrada,
+  type OperacoesStorePort,
+  type RegistroDeReconciliacao,
+} from './reconciliacaoDaOperacao';
 
 const estado = z.enum(['em_voo', 'nao_enviada', 'confirmada', 'recusada', 'indeterminada']);
 
@@ -118,27 +124,43 @@ const lerOperacao: OperacoesStorePort['lerOperacao'] = async (scope, ref) => {
   return operacao ? { _tag: 'Encontrada', operacao } : { _tag: 'Indisponivel' };
 };
 
-/** Quantas pendências a tela recebe; `total` diz quantas existem. */
-const LIMITE_DA_LISTA = 100;
+const pendenciaListadaSchema = z.object({
+  tentativa_id: z.string().min(1),
+  chave: z.string().min(1),
+  created_at: z.string().min(1),
+  total: z.coerce.number().int().nonnegative(),
+});
 
-const pendenciaListadaSchema = z.object({ tentativa_id: z.string().min(1), total: z.coerce.number().int().nonnegative() });
-
-const listarPendentes: OperacoesStorePort['listarPendentes'] = async (scope) => {
-  // A pendência é decidida no banco, sobre todas as operações da organização:
-  // nenhuma janela de "mais recentes" esconde uma pendência antiga.
-  const listadas = await supabaseServer.rpc('listar_pendencias_conta_pagar', {
+async function paginaDePendencias(scope: VerifiedOrganizationScope, limite: number, apos: CursorDePendencias | undefined) {
+  const { data, error } = await supabaseServer.rpc('listar_pendencias_conta_pagar', {
     p_organizacao_id: scope.organizationId,
-    p_limite: LIMITE_DA_LISTA,
+    p_limite: limite,
+    p_apos_criada_em: apos?.criadaEm ?? null,
+    p_apos_chave: apos?.ref ?? null,
   });
-  if (listadas.error) {
-    registrarFalhaInterna('financeiro.operacoes.listar', listadas.error);
-    return { _tag: 'Indisponivel' };
+  if (error) {
+    registrarFalhaInterna('financeiro.operacoes.listar', error);
+    return null;
   }
-  const linhas = z.array(pendenciaListadaSchema).safeParse(listadas.data);
-  if (!linhas.success) return { _tag: 'Indisponivel' };
-  if (linhas.data.length === 0) return { _tag: 'Listadas', operacoes: [], total: 0 };
+  const linhas = z.array(pendenciaListadaSchema).safeParse(data);
+  return linhas.success ? linhas.data : null;
+}
 
-  const ids = linhas.data.map((l) => l.tentativa_id);
+const listarPendentes: OperacoesStorePort['listarPendentes'] = async (scope, apos) => {
+  // A pendência é decidida no banco, sobre todas as operações da organização,
+  // e o cursor alcança cada uma. Uma linha a mais diz se há outra página.
+  const linhas = await paginaDePendencias(scope, PENDENCIAS_POR_PAGINA + 1, apos);
+  if (linhas === null) return { _tag: 'Indisponivel' };
+  const pagina = linhas.slice(0, PENDENCIAS_POR_PAGINA);
+  const ultima = pagina.at(-1);
+  const proximo = linhas.length > PENDENCIAS_POR_PAGINA && ultima ? { criadaEm: ultima.created_at, ref: ultima.chave } : null;
+  if (pagina.length === 0) {
+    // Depois da última página, o total ainda é o da organização inteira.
+    const total = apos ? (await paginaDePendencias(scope, 1, undefined))?.[0]?.total ?? 0 : 0;
+    return { _tag: 'Listadas', operacoes: [], total, proximo: null };
+  }
+
+  const ids = pagina.map((l) => l.tentativa_id);
   const { data, error } = await supabaseServer.from('tentativas_conta_pagar').select(COLUNAS_DA_TENTATIVA)
     .eq('organizacao_id', scope.organizationId).in('id', ids);
   if (error) {
@@ -153,7 +175,7 @@ const listarPendentes: OperacoesStorePort['listarPendentes'] = async (scope) => 
   // nunca some em silêncio.
   return operacoes === null
     ? { _tag: 'Indisponivel' }
-    : { _tag: 'Listadas', operacoes, total: Math.max(linhas.data[0]?.total ?? 0, operacoes.length) };
+    : { _tag: 'Listadas', operacoes, total: Math.max(pagina[0]?.total ?? 0, operacoes.length), proximo };
 };
 
 const linhaDoRegistroSchema = z.object({

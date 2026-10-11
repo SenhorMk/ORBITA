@@ -5,12 +5,13 @@ import type {
   IntencaoDeContaPagar,
   ReivindicacaoDeBaixa,
 } from '../despesaHandler';
-import type {
-  OperacaoRegistrada,
+import {
+  PENDENCIAS_POR_PAGINA,
+  type OperacaoRegistrada,
   OperacoesStorePort,
-  QuitacaoDaOperacaoDependencies,
-  ReconciliacaoDependencies,
-  RegistroDeReconciliacao,
+  type QuitacaoDaOperacaoDependencies,
+  type ReconciliacaoDependencies,
+  type RegistroDeReconciliacao,
 } from '../reconciliacaoDaOperacao';
 import { pendenciaDaOperacao, type MotivoDeRevisaoManual } from '../reconciliacaoDeContaPagar';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
@@ -43,6 +44,8 @@ interface TentativaFake {
   tituloId: string | null;
   contatoBlingId: number | null;
   motivo: string | null;
+  /** `created_at`, como o banco o devolve: a ordem da lista de pendências. */
+  readonly criadaEm: string;
 }
 
 interface BaixaFake {
@@ -129,13 +132,34 @@ export function fakeStore(options: {
       const t = tentativas.find((x) => x.org === s.organizationId && x.chave === ref);
       return t ? { _tag: 'Encontrada', operacao: projetar(t) } : { _tag: 'NaoEncontrada' };
     },
-    async listarPendentes(s) {
-      const operacoesDaOrg = tentativas.filter((t) => t.org === s.organizationId).map(projetar);
-      const pendentes = operacoesDaOrg.filter((o) => pendenciaDaOperacao(o) !== null);
-      return { _tag: 'Listadas', operacoes: pendentes, total: pendentes.length };
+    async listarPendentes(s, apos) {
+      // Mesma ordem e mesmo cursor de `listar_pendencias_conta_pagar`.
+      const depois = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+      const pendentes = tentativas
+        .filter((t) => t.org === s.organizationId && pendenciaDaOperacao(projetar(t)) !== null)
+        .sort((a, b) => depois(b.criadaEm, a.criadaEm) || depois(b.chave, a.chave));
+      const restantes = apos
+        ? pendentes.filter((t) => t.criadaEm < apos.criadaEm || (t.criadaEm === apos.criadaEm && t.chave < apos.ref))
+        : pendentes;
+      const pagina = restantes.slice(0, PENDENCIAS_POR_PAGINA);
+      const ultima = pagina.at(-1);
+      return {
+        _tag: 'Listadas',
+        operacoes: pagina.map(projetar),
+        total: pendentes.length,
+        proximo: restantes.length > PENDENCIAS_POR_PAGINA && ultima ? { criadaEm: ultima.criadaEm, ref: ultima.chave } : null,
+      };
     },
     async registrarReconciliacao(s, registro) {
       if (options.registroDeReconciliacaoFalha) return { _tag: 'Indisponivel' };
+      // Como `registrar_reconciliacao_conta_pagar`: baixa só se confirma pelo
+      // borderô, e a criação só por um método de criação (a RPC lança 22023).
+      if (registro.prova._tag === 'Comprovada' && registro.alvo === 'baixa'
+          && (registro.prova.borderoId === null || registro.metodo !== 'leitura_de_borderos')) return { _tag: 'Indisponivel' };
+      if (registro.prova._tag === 'Comprovada' && registro.alvo === 'criacao'
+          && !['referencia_no_numero_documento', 'confirmacao_manual', 'declaracao_do_operador'].includes(registro.metodo)) {
+        return { _tag: 'Indisponivel' };
+      }
       const t = tentativas.find((x) => x.org === s.organizationId && x.chave === registro.ref);
       if (!t) return { _tag: 'Indisponivel' };
       const conta = registro.prova._tag === 'Comprovada' ? registro.prova.conta : null;
@@ -228,6 +252,7 @@ export function fakeStore(options: {
           numeroDocumento: intencao.numeroDocumento, quitacaoSolicitada: intencao.quitacaoSolicitada,
           estado: 'em_voo', epoca: 1,
           blingContaId: null, tituloId: null, contatoBlingId: intencao.contatoBlingId, motivo: null,
+          criadaEm: `2026-01-01T00:00:00.${String(seq).padStart(6, '0')}+00:00`,
         };
         tentativas.push(nova);
         return { _tag: 'TentativaPropria' as const, tentativaId: nova.id, epoca: 1, numeroDocumento: nova.numeroDocumento };

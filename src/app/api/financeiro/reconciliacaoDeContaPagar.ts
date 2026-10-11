@@ -176,12 +176,15 @@ export function triarContaDaBaixa(
  * Segunda metade: foi a baixa do ORBITA que quitou a conta?
  *
  * Prova de autoria: exatamente um borderô da conta traz no histórico a
- * referência desta baixa e tem a data dela. Conta paga sem esse borderô foi
- * paga por outra pessoa — a baixa do ORBITA continua sem desfecho.
+ * referência desta baixa COMPLETA e delimitada (`[ORBQ-…]`, como o ORBITA a
+ * envia) e tem a data dela. A referência como parte de outra sequência não
+ * vale. Cada leitura tem de ser do borderô pedido, na ordem da conta: um id
+ * devolvido diferente do pedido é leitura inconsistente. Conta paga sem esse
+ * borderô foi paga por outra pessoa — a baixa do ORBITA continua sem desfecho.
  *
  * @param baixa - A referência e a data da intenção de baixa.
  * @param conta - A conta já triada como quitada.
- * @param leituras - A leitura de cada borderô da conta.
+ * @param leituras - A leitura de cada borderô de `conta.borderos`, na mesma ordem.
  * @returns `Comprovada` (com o borderô) ou `RevisaoManual`.
  */
 export function decidirAutoriaDaBaixa(
@@ -189,13 +192,16 @@ export function decidirAutoriaDaBaixa(
   conta: ContaPagarDetalhada,
   leituras: readonly LeituraRemota<BorderoLido>[],
 ): ProvaRemota {
+  if (leituras.length !== conta.borderos.length) return revisao('leitura_inconsistente', 1);
   const borderos: BorderoLido[] = [];
-  for (const leitura of leituras) {
+  for (const [i, leitura] of leituras.entries()) {
     if (leitura._tag === 'RemotoAusente') return revisao('leitura_inconsistente', 1);
     if (leitura._tag !== 'RemotoPresente') return revisao('consulta_incompleta', 1);
+    if (leitura.valor.id !== conta.borderos[i]) return revisao('leitura_inconsistente', 1);
     borderos.push(leitura.valor);
   }
-  const doOrbita = borderos.filter((b) => b.historico?.includes(baixa.referencia) === true && b.data === baixa.dataBaixa);
+  const marca = `[${baixa.referencia}]`;
+  const doOrbita = borderos.filter((b) => b.historico?.includes(marca) === true && b.data === baixa.dataBaixa);
   if (doOrbita.length > 1) return revisao('multiplos_borderos', 1);
   const [bordero] = doOrbita;
   if (!bordero) return revisao('quitada_sem_autoria', 1);
@@ -262,6 +268,46 @@ export function validarContaConfirmada(
   if (leitura.valor.id !== blingContaId) return revisao('leitura_inconsistente', 1);
   if (!confere(tentativa, leitura.valor)) return revisao('candidato_divergente', 1);
   return { _tag: 'ContaValida', conta: leitura.valor };
+}
+
+/** A conta lida, vista como pré-condição para quitar. */
+export type ContaParaQuitar =
+  | { readonly _tag: 'Quitavel' | 'JaPaga' | 'NaoQuitavel'; readonly conta: ContaPagarDetalhada }
+  /** Outra conta, ou a conta não corresponde mais à intenção (id, valor, datas, fornecedor). */
+  | { readonly _tag: 'Divergente' }
+  /** Situação e saldo se contradizem: nada a afirmar, nada a enviar. */
+  | { readonly _tag: 'Inconsistente' }
+  | { readonly _tag: 'Indisponivel' };
+
+/**
+ * As pré-condições verificáveis antes de quitar: a leitura é da conta
+ * confirmada, ainda compatível com a intenção, e situação e saldo contam a
+ * mesma história — em aberto com o saldo integral, ou paga com saldo zero.
+ * Uma mudança no Bling DEPOIS desta leitura não é controlável daqui; a
+ * intenção durável e a referência no histórico cobrem esse intervalo.
+ *
+ * @param tentativa - A intenção gravada.
+ * @param blingContaId - A conta remota confirmada.
+ * @param leitura - `GET /contas/pagar/{id}`, imediatamente antes de quitar.
+ * @returns Se a conta pode ser quitada, já está paga, ou por que não.
+ */
+export function decidirContaQuitavel(
+  tentativa: TentativaParaReconciliar,
+  blingContaId: string,
+  leitura: LeituraRemota<ContaPagarDetalhada>,
+): ContaParaQuitar {
+  if (leitura._tag === 'RemotoAusente') return { _tag: 'Divergente' };
+  if (leitura._tag !== 'RemotoPresente') return { _tag: 'Indisponivel' };
+  if (validarContaConfirmada(tentativa, blingContaId, leitura)._tag !== 'ContaValida') return { _tag: 'Divergente' };
+  const conta = leitura.valor;
+  if (conta.situacao === SITUACAO_DA_CONTA_BLING.pago) {
+    return decidirPagamentoConfirmado(blingContaId, leitura)._tag === 'PagamentoConfirmado'
+      ? { _tag: 'JaPaga', conta }
+      : { _tag: 'Inconsistente' };
+  }
+  if (conta.situacao !== SITUACAO_DA_CONTA_BLING.aberto) return { _tag: 'NaoQuitavel', conta };
+  if (conta.saldo === null || emCentavos(conta.saldo) !== emCentavos(conta.valor)) return { _tag: 'Inconsistente' };
+  return { _tag: 'Quitavel', conta };
 }
 
 /**

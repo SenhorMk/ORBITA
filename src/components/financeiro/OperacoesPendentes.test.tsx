@@ -31,7 +31,7 @@ function servidor(resposta: unknown, listaDepois: unknown[] = [], primeira: unkn
     if (url === '/api/financeiro/operacoes') {
       listas++;
       const operacoes = listas === 1 ? [primeira] : listaDepois;
-      return json({ success: true, operacoes, total: operacoes.length, incompleta: false });
+      return json({ success: true, operacoes, total: operacoes.length, incompleta: false, proximoCursor: null });
     }
     return json(resposta);
   };
@@ -142,7 +142,7 @@ describe('operações pendentes', () => {
   });
 
   it('sem pendências, nada é mostrado', async () => {
-    const busca: BuscaAutenticada = async () => json({ success: true, operacoes: [], total: 0, incompleta: false });
+    const busca: BuscaAutenticada = async () => json({ success: true, operacoes: [], total: 0, incompleta: false, proximoCursor: null });
     const { container } = render(<OperacoesPendentes fetchWithAuth={busca} ativo versao={0} onConfirmada={vi.fn()} />);
 
     await waitFor(() => expect(container).toBeEmptyDOMElement());
@@ -157,7 +157,7 @@ describe('operações pendentes', () => {
     const respostas = [semEvidencia, declarada];
     const corpos: unknown[] = [];
     const busca: BuscaAutenticada = async (url, options) => {
-      if (url === '/api/financeiro/operacoes') return json({ success: true, operacoes: [emRevisao], total: 1, incompleta: false });
+      if (url === '/api/financeiro/operacoes') return json({ success: true, operacoes: [emRevisao], total: 1, incompleta: false, proximoCursor: null });
       corpos.push(JSON.parse(String(options?.body)));
       return json(respostas.shift());
     };
@@ -194,10 +194,23 @@ describe('operações pendentes', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('lista incompleta: diz quantas pendências ficaram de fora', async () => {
-    const busca: BuscaAutenticada = async () => json({ success: true, operacoes: [pendente], total: 140, incompleta: true });
+  it('mais de uma página: diz quantas há e alcança as demais pelo cursor', async () => {
+    const segunda = { ...pendente, ref: '66666666-6666-4666-8666-666666666666', valor: 900 };
+    const urls: string[] = [];
+    const busca: BuscaAutenticada = async (url) => {
+      urls.push(url);
+      return url.includes('cursor=')
+        ? json({ success: true, operacoes: [segunda], total: 2, incompleta: false, proximoCursor: null })
+        : json({ success: true, operacoes: [pendente], total: 2, incompleta: true, proximoCursor: 'abc' });
+    };
     render(<OperacoesPendentes fetchWithAuth={busca} ativo versao={0} onConfirmada={vi.fn()} />);
 
-    expect(await screen.findByText(/há mais 139 pendência\(s\)/u)).toBeInTheDocument();
+    expect(await screen.findByText('Mostrando 1 de 2 pendências.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Carregar mais' }));
+
+    expect(await screen.findByText(/R\$\s?900,00/u)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Conferir no Bling' })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Carregar mais' })).not.toBeInTheDocument();
+    expect(urls).toContain('/api/financeiro/operacoes?cursor=abc');
   });
 });

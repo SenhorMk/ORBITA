@@ -148,7 +148,9 @@ describe('decidirAutoriaDaBaixa — conta paga não prova que foi o ORBITA quem 
     ['borderô some na leitura', [{ _tag: 'RemotoAusente' } as const], 'leitura_inconsistente'],
     ['timeout na leitura do borderô', [{ _tag: 'RemotoIndeterminado', causa: 'prazo_esgotado' } as const], 'consulta_incompleta'],
   ] as const)('%s → revisão manual (%s)', (_caso, leituras, motivo) => {
-    expect(decidirAutoriaDaBaixa(BAIXA, paga, leituras)).toMatchObject({ _tag: 'RevisaoManual', motivo });
+    // Uma leitura por borderô da conta, na mesma ordem.
+    const daConta = conta({ situacao: 2, saldo: 0, borderos: leituras.map((_, i) => String(7001 + i)) });
+    expect(decidirAutoriaDaBaixa(BAIXA, daConta, leituras)).toMatchObject({ _tag: 'RevisaoManual', motivo });
   });
 });
 

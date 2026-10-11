@@ -19,8 +19,10 @@ lista cada operação com uma pendência:
 | quitação recusada pelo Bling | a baixa do ORBITA foi recusada; a conta continua em aberto | quitar pelo próprio Bling e **Conferir no Bling** |
 | registro local inconsistente | o título vinculado não está na organização, tem situação desconhecida ou foi cancelado com quitação em jogo | correção administrativa; nenhuma ação automática |
 
-A lista é decidida no banco sobre todas as operações da organização. Quando há
-mais pendências do que a tela mostra (100), ela diz quantas ficaram de fora.
+A lista é decidida no banco sobre todas as operações da organização, 100 por
+página, das mais recentes para as mais antigas. A tela diz quantas há e
+**Carregar mais** traz as seguintes por um cursor estável: nenhuma se repete ou
+é pulada, mesmo que outras se resolvam ou nasçam entre as páginas.
 
 Não existe botão de lançar de novo: o efeito pode ter acontecido.
 

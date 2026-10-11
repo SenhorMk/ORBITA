@@ -155,14 +155,18 @@ describe('rotas de operações financeiras', () => {
         ...operacoes,
         async listarPendentes(s) {
           const lidas = await operacoes.listarPendentes(s);
-          return lidas._tag === 'Listadas' ? { ...lidas, total: 140 } : lidas;
+          return lidas._tag === 'Listadas'
+            ? { ...lidas, total: 140, proximo: { criadaEm: '2026-01-01T00:00:00.000001+00:00', ref: CHAVE } }
+            : lidas;
         },
       },
       correlationId: () => 'corr-teste',
       async autorizar() { return { _tag: 'Autorizado', scope: scopeA }; },
     });
 
-    expect(listaDeOperacoesSchema.parse(await (await h.listar(req())).json())).toMatchObject({ total: 140, incompleta: true });
+    const comMais = listaDeOperacoesSchema.parse(await (await h.listar(req())).json());
+    expect(comMais).toMatchObject({ total: 140, incompleta: true });
+    expect(comMais.proximoCursor).toEqual(expect.any(String));
     expect(listaDeOperacoesSchema.parse(await (await handlers(bling, store).listar(req())).json()))
       .toMatchObject({ total: 1, incompleta: false });
   });

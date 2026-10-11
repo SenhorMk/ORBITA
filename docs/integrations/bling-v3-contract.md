@@ -456,8 +456,10 @@ O que é prova:
   revisão manual;
 - **baixa**, em duas metades: (1) a leitura por id da própria conta mostra
   `situacao = 2` (Pago), `saldo` INFORMADO e zero, e de 1 a 10 borderôs; (2)
-  exatamente um desses borderôs traz no `historico` a referência `ORBQ-` da
-  intenção de baixa e tem a `data` dela. Conta paga não basta: um pagamento
+  exatamente um desses borderôs traz no `historico` a referência completa e
+  delimitada `[ORBQ-…]` da intenção de baixa e tem a `data` dela; cada
+  `GET /borderos/{id}` precisa devolver o borderô pedido (mesmo `id`), na ordem
+  dos borderôs da conta, ou a leitura é inconsistente. Conta paga não basta: um pagamento
   lançado por terceiro na mesma conta deixa a conta paga sem que a baixa do
   ORBITA tenha acontecido (`quitada_sem_autoria`). Saldo ausente, borderô
   ausente, borderôs demais ou mais de um borderô com a referência também são
@@ -491,6 +493,18 @@ método `declaracao_do_operador`, distinto de prova. Uma conta remota já ligada
 outra operação da organização nunca é confirmada para uma segunda
 (`conta_de_outra_operacao`, índice único `uq_tentativas_conta_pagar_conta_remota`
 e trava consultiva por conta na função de registro).
+
+O banco impõe o mesmo: `registrar_reconciliacao_conta_pagar` recusa (22023)
+baixa confirmada sem borderô ou por método que não seja `leitura_de_borderos`,
+criação confirmada por método de baixa, confirmação com motivo e revisão sem
+motivo; `baixas_conta_pagar` e `reconciliacoes_conta_pagar` têm checks que
+impedem baixa confirmada sem borderô por qualquer caminho.
+
+Antes de quitar, a conta é relida e validada contra a intenção (mesmo id, valor,
+vencimento, emissão e fornecedor) e precisa estar em aberto com o saldo
+integral; divergente ou contraditória, nada é enviado (`conta_divergente`,
+`conta_inconsistente`). Uma mudança no Bling entre essa leitura e o POST não é
+controlável: a intenção durável e a referência no histórico cobrem o intervalo.
 
 Pagamento confirmado ≠ autoria: `Pago` com saldo INFORMADO e zero confirma que
 a conta foi paga; só o borderô com a referência `ORBQ-` atribui a baixa ao

@@ -84,15 +84,16 @@ export const operacaoFinanceiraSchema = z.object({
 export type OperacaoFinanceira = z.infer<typeof operacaoFinanceiraSchema>;
 
 /**
- * `GET /api/financeiro/operacoes` — as operações com algo a resolver. `total`
- * conta todas as pendências da organização; `incompleta` diz que a lista
- * mostra só parte delas.
+ * `GET /api/financeiro/operacoes[?cursor=…]` — uma página das operações com algo
+ * a resolver. `total` conta todas as pendências da organização; `proximoCursor`
+ * (opaco) busca a página seguinte, e `incompleta` diz que ela existe.
  */
 export const listaDeOperacoesSchema = z.object({
   success: z.literal(true),
   operacoes: z.array(operacaoFinanceiraSchema),
   total: z.number().int().nonnegative(),
   incompleta: z.boolean(),
+  proximoCursor: z.string().nullable(),
 });
 
 /**
@@ -130,6 +131,7 @@ export const resultadoDaQuitacaoSchema = z.enum([
   'quitacao_recusada',
   'quitacao_nao_enviada',
   'ja_quitada_no_bling',
+  'conta_divergente',
   'conta_inconsistente',
   'conta_nao_quitavel',
   'sem_categoria',

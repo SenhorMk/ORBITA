@@ -1,4 +1,3 @@
-import { projetarSituacaoDaConta } from '@/lib/integrations/bling/situacaoDaContaBling';
 import { logger } from '@/lib/observability/logger';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
@@ -9,6 +8,7 @@ import { quitar, type QuitacaoDependencies } from './quitacaoDaConta';
 import {
   decidirAutoriaDaBaixa,
   decidirConfirmacaoManual,
+  decidirContaQuitavel,
   decidirCriacao,
   decidirPagamentoConfirmado,
   pendenciaDaOperacao,
@@ -54,6 +54,15 @@ export interface OperacaoRegistrada {
   } | null;
 }
 
+/** Posição na lista de pendências: a criação exata (como o banco a grava) e a chave. */
+export interface CursorDePendencias {
+  readonly criadaEm: string;
+  readonly ref: string;
+}
+
+/** Quantas pendências cabem numa página. */
+export const PENDENCIAS_POR_PAGINA = 100;
+
 /** O que a reconciliação grava, na mesma transação, pela migration 74. */
 export interface RegistroDeReconciliacao {
   readonly ref: string;
@@ -73,12 +82,17 @@ export interface OperacoesStorePort {
     | { readonly _tag: 'Indisponivel' }
   >;
   /**
-   * Operações com alguma pendência, decididas NO BANCO pela regra de
-   * `pendenciaDaOperacao` — sem janela que esconda as antigas. `total` conta
-   * todas; se passar das devolvidas, a lista está incompleta e a tela diz isso.
+   * Uma página das operações com alguma pendência, decididas NO BANCO pela
+   * regra de `pendenciaDaOperacao`. `total` conta todas; `proximo` é o cursor
+   * estável `(criação, chave)` da página seguinte, ou `null` na última.
    */
-  listarPendentes(scope: VerifiedOrganizationScope): Promise<
-    | { readonly _tag: 'Listadas'; readonly operacoes: readonly OperacaoRegistrada[]; readonly total: number }
+  listarPendentes(scope: VerifiedOrganizationScope, apos?: CursorDePendencias): Promise<
+    | {
+        readonly _tag: 'Listadas';
+        readonly operacoes: readonly OperacaoRegistrada[];
+        readonly total: number;
+        readonly proximo: CursorDePendencias | null;
+      }
     | { readonly _tag: 'Indisponivel' }
   >;
   registrarReconciliacao(scope: VerifiedOrganizationScope, registro: RegistroDeReconciliacao): Promise<
@@ -122,7 +136,7 @@ export type ResultadoDaReconciliacao = ResultadoComOperacao<{
 export type ResultadoDaQuitacaoDaOperacao = ResultadoComOperacao<{
   readonly resultado:
     | 'quitada' | 'quitacao_nao_confirmada' | 'quitacao_recusada' | 'quitacao_nao_enviada'
-    | 'ja_quitada_no_bling' | 'conta_inconsistente' | 'conta_nao_quitavel' | 'sem_categoria' | 'consulta_incompleta'
+    | 'ja_quitada_no_bling' | 'conta_divergente' | 'conta_inconsistente' | 'conta_nao_quitavel' | 'sem_categoria' | 'consulta_incompleta'
     | 'nada_pendente';
 }>;
 
@@ -385,20 +399,25 @@ export async function quitarOperacao(
     return responder('nada_pendente');
   }
 
-  const leitura = await deps.bling(scope).lerContaPagarParaReconciliacao(operacao.blingContaId);
-  if (leitura._tag !== 'RemotoPresente') return responder('consulta_incompleta');
-  const conta = leitura.valor;
-  if (projetarSituacaoDaConta(conta.situacao) === 'pago') {
-    // Paga por alguém, fora desta operação: nada é enviado. O título local só
-    // passa a pago com o pagamento CONFIRMADO (saldo informado e zero), e sem
-    // atribuir a quitação ao ORBITA; leitura incompleta não marca nada.
-    if (decidirPagamentoConfirmado(operacao.blingContaId, leitura)._tag !== 'PagamentoConfirmado') {
-      return responder('conta_inconsistente');
-    }
-    await deps.operacoes.marcarTituloPago(scope, operacao.tituloId);
-    return responder('ja_quitada_no_bling');
+  // Pré-condições verificáveis ANTES do POST: a conta confirmada, ainda
+  // compatível com a intenção, com situação e saldo coerentes.
+  const paraQuitar = decidirContaQuitavel(
+    operacao, operacao.blingContaId, await deps.bling(scope).lerContaPagarParaReconciliacao(operacao.blingContaId),
+  );
+  switch (paraQuitar._tag) {
+    case 'Indisponivel': return responder('consulta_incompleta');
+    case 'Divergente': return responder('conta_divergente');
+    case 'Inconsistente': return responder('conta_inconsistente');
+    case 'NaoQuitavel': return responder('conta_nao_quitavel');
+    case 'JaPaga':
+      // Paga por alguém, fora desta operação, com saldo zero: nada é enviado,
+      // e o título conta o pagamento sem atribuí-lo ao ORBITA.
+      await deps.operacoes.marcarTituloPago(scope, operacao.tituloId);
+      return responder('ja_quitada_no_bling');
+    case 'Quitavel':
+      break;
   }
-  if (conta.situacao !== 1) return responder('conta_nao_quitavel');
+  const { conta } = paraQuitar;
   if (conta.categoriaId === null) return responder('sem_categoria');
 
   const quitacao = await quitar(

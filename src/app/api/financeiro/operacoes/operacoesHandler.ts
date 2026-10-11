@@ -9,6 +9,7 @@ import {
   quitarOperacao,
   reconciliarOperacao,
   type OperacaoRegistrada,
+  type CursorDePendencias,
   type QuitacaoDaOperacaoDependencies,
   type ResultadoDaReconciliacao,
 } from '../reconciliacaoDaOperacao';
@@ -25,6 +26,22 @@ export interface OperacoesDependencies extends QuitacaoDaOperacaoDependencies {
 }
 
 const refSchema = z.string().uuid();
+
+/** O cursor público é opaco: `criação|chave` em base64url. Só posiciona; a organização vem da sessão. */
+const cursorSchema = z.object({
+  criadaEm: z.string().regex(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}(:?\d{2})?)$/u),
+  ref: z.string().uuid(),
+});
+
+function codificarCursor(cursor: CursorDePendencias): string {
+  return Buffer.from(`${cursor.criadaEm}|${cursor.ref}`, 'utf8').toString('base64url');
+}
+
+function decodificarCursor(bruto: string): CursorDePendencias | null {
+  const [criadaEm, ref, ...resto] = Buffer.from(bruto, 'base64url').toString('utf8').split('|');
+  const lido = cursorSchema.safeParse({ criadaEm, ref });
+  return lido.success && resto.length === 0 ? lido.data : null;
+}
 
 const falha = (error: string, status: number) => NextResponse.json({ success: false, error }, { status });
 const NAO_ENCONTRADA = () => falha('Operação não encontrada.', 404);
@@ -74,13 +91,17 @@ export function createOperacoesHandlers(deps: OperacoesDependencies) {
     async listar(request: Request): Promise<NextResponse> {
       const autorizacao = await deps.autorizar(request);
       if (autorizacao._tag === 'Negado') return autorizacao.response;
-      const lidas = await deps.operacoes.listarPendentes(autorizacao.scope);
+      const bruto = new URL(request.url).searchParams.get('cursor');
+      const apos = bruto === null ? undefined : decodificarCursor(bruto);
+      if (apos === null) return falha('Cursor inválido.', 400);
+      const lidas = await deps.operacoes.listarPendentes(autorizacao.scope, apos);
       if (lidas._tag !== 'Listadas') return INDISPONIVEL();
       return NextResponse.json({
         success: true,
         operacoes: lidas.operacoes.map(publica),
         total: lidas.total,
-        incompleta: lidas.total > lidas.operacoes.length,
+        incompleta: lidas.proximo !== null,
+        proximoCursor: lidas.proximo === null ? null : codificarCursor(lidas.proximo),
       });
     },
 

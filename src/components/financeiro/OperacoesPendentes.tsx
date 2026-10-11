@@ -109,16 +109,28 @@ export function OperacoesPendentes({
   const [resultados, setResultados] = useState<Readonly<Record<string, string>>>({});
   const [contas, setContas] = useState<Readonly<Record<string, string>>>({});
   const [declaracoes, setDeclaracoes] = useState<Readonly<Record<string, boolean>>>({});
-  const [faltam, setFaltam] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [proximoCursor, setProximoCursor] = useState<string | null>(null);
+  const [paginas, setPaginas] = useState(1);
 
-  const carregar = useCallback(async () => {
+  /** Lê as `quantas` primeiras páginas pelo cursor estável e troca a lista inteira. */
+  const carregar = useCallback(async (quantas = 1) => {
     try {
-      const res = await fetchWithAuth('/api/financeiro/operacoes');
-      const lida = listaDeOperacoesSchema.safeParse(await res.json());
-      if (lida.success) {
-        setOperacoes(lida.data.operacoes);
-        setFaltam(lida.data.incompleta ? lida.data.total - lida.data.operacoes.length : 0);
+      const lidas: OperacaoFinanceira[] = [];
+      let cursor: string | null = null;
+      let ultimoTotal = 0;
+      for (let pagina = 0; pagina < quantas; pagina++) {
+        const url: string = cursor === null ? '/api/financeiro/operacoes' : `/api/financeiro/operacoes?cursor=${encodeURIComponent(cursor)}`;
+        const lida = listaDeOperacoesSchema.safeParse(await (await fetchWithAuth(url)).json());
+        if (!lida.success) return;
+        lidas.push(...lida.data.operacoes.filter((o) => !lidas.some((j) => j.ref === o.ref)));
+        ultimoTotal = lida.data.total;
+        cursor = lida.data.proximoCursor;
+        if (cursor === null) break;
       }
+      setOperacoes(lidas);
+      setTotal(ultimoTotal);
+      setProximoCursor(cursor);
     } catch {
       // Lista auxiliar: sem ela a tela continua, e a próxima abertura tenta de novo.
     }
@@ -137,7 +149,8 @@ export function OperacoesPendentes({
     try {
       const mensagem = await acao();
       setResultados((r) => ({ ...r, [ref]: mensagem }));
-      await carregar();
+      // Relê as páginas já abertas: a operação em que se agiu não some de vista.
+      await carregar(paginas);
     } catch {
       setResultados((r) => ({ ...r, [ref]: FALHA }));
     } finally {
@@ -182,10 +195,8 @@ export function OperacoesPendentes({
         <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden />
         Operações com resultado ainda não concluído. Não lance de novo: confira primeiro.
       </p>
-      {faltam > 0 && (
-        <output>
-          Mostrando as {operacoes.length} mais recentes; há mais {faltam} pendência(s) nesta organização. Resolva estas para ver as demais.
-        </output>
+      {proximoCursor !== null && (
+        <output>Mostrando {operacoes.length} de {total} pendências.</output>
       )}
       <ul className="flex flex-col gap-2">
         {operacoes.map((operacao) => (
@@ -255,6 +266,20 @@ export function OperacoesPendentes({
           <li key={ref}><output>{resultados[ref]}</output></li>
         ))}
       </ul>
+      {proximoCursor !== null && (
+        <button
+          type="button"
+          className="orbita-chip cursor-pointer self-start"
+          disabled={ocupado !== null}
+          onClick={() => {
+            const quantas = paginas + 1;
+            setPaginas(quantas);
+            void carregar(quantas);
+          }}
+        >
+          Carregar mais
+        </button>
+      )}
     </section>
   );
 }
