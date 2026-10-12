@@ -3,7 +3,7 @@ import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import type { ContaPagarDetalhada } from '@/services/blingPort';
 
-import type { LeiturasDoBling, OperacaoRegistrada, ReconciliacaoDependencies } from './reconciliacaoDaOperacao';
+import type { LeiturasDoBling, OperacaoRegistrada, ProjecaoLocal, ReconciliacaoDependencies } from './reconciliacaoDaOperacao';
 import {
   decidirAutoriaDaBaixa,
   decidirCriacao,
@@ -30,10 +30,14 @@ export async function fechar(
   ref: string,
   original: OperacaoRegistrada,
   deps: ReconciliacaoDependencies,
-): Promise<{ readonly operacao: OperacaoRegistrada; readonly projecaoLocal: 'consistente' | 'pendente' }> {
+): Promise<{ readonly operacao: OperacaoRegistrada; readonly projecaoLocal: ProjecaoLocal }> {
   const relida = await deps.operacoes.lerOperacao(scope, ref);
   if (relida._tag !== 'Encontrada') return { operacao: original, projecaoLocal: 'pendente' };
-  return { operacao: relida.operacao, projecaoLocal: REPAROS.has(pendenciaDaOperacao(relida.operacao)) ? 'pendente' : 'consistente' };
+  const pendencia = pendenciaDaOperacao(relida.operacao);
+  return {
+    operacao: relida.operacao,
+    projecaoLocal: REPAROS.has(pendencia) ? 'pendente' : pendencia === 'pagamento_nao_comprovado' ? 'divergente' : 'consistente',
+  };
 }
 
 /** Lê a listagem e os candidatos por id; decide a criação. Só leitura. */
@@ -72,6 +76,7 @@ export async function gravarTituloDaConta(
 ): Promise<void> {
   try {
     const categoriaId = conta.categoriaId === null ? null : await deps.operacoes.categoriaLocalPorBlingId(scope, conta.categoriaId);
+    const situacao = situacaoLocalComprovada(conta);
     const titulo = await deps.titulos.salvarTitulo(scope, {
       blingId: conta.id,
       valor: conta.valor,
@@ -79,15 +84,19 @@ export async function gravarTituloDaConta(
       descricao: conta.historico?.trim() || `Conta a pagar ${conta.id} conciliada com o Bling`,
       ...(categoriaId === null ? {} : { categoriaId }),
       fornecedorBlingId: conta.contatoId,
-      situacao: situacaoLocalComprovada(conta),
+      situacao,
       // Guarda o que o Bling disse: `Pago` sem saldo comprovado deixa o título
       // aberto e a divergência visível (`pagamento_nao_comprovado`).
       situacaoBling: conta.situacao,
     });
-    if (operacao.tituloId === titulo.id) return;
-    if (await deps.titulos.vincularTitulo(scope, operacao.tentativaId, titulo.id) === 'NaoGravado') {
+    if (operacao.tituloId !== titulo.id
+        && await deps.titulos.vincularTitulo(scope, operacao.tentativaId, titulo.id) === 'NaoGravado') {
       registrarFalhaInterna('financeiro.reconciliacao.titulo.vincular', new Error('vínculo não gravado'));
+      return;
     }
+    // Um título que já existia não vira pago por upsert (migration 74 o
+    // impede): com o pagamento comprovado, passa pela marcação do servidor.
+    if (situacao === 'pago' && titulo.situacao !== 'pago') await deps.operacoes.marcarTituloPago(scope, titulo.id);
   } catch (erro: unknown) {
     registrarFalhaInterna('financeiro.reconciliacao.titulo', erro);
   }

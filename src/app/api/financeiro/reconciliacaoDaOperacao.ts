@@ -115,10 +115,17 @@ export interface QuitacaoDaOperacaoDependencies extends ReconciliacaoDependencie
   readonly escrita: (scope: VerifiedOrganizationScope) => QuitacaoDependencies;
 }
 
+/**
+ * Se o ORBITA conta a mesma história que o Bling: `pendente` quando o registro
+ * local está incompleto; `divergente` quando o Bling diz `Pago` sem saldo
+ * comprovado e o título segue aberto.
+ */
+export type ProjecaoLocal = 'consistente' | 'pendente' | 'divergente';
+
 type ResultadoComOperacao<R> =
   | { readonly _tag: 'NaoEncontrada' }
   | { readonly _tag: 'Indisponivel' }
-  | ({ readonly _tag: 'Reconciliada'; readonly operacao: OperacaoRegistrada; readonly projecaoLocal: 'consistente' | 'pendente' } & R);
+  | ({ readonly _tag: 'Reconciliada'; readonly operacao: OperacaoRegistrada; readonly projecaoLocal: ProjecaoLocal } & R);
 
 /** Resultado de pedir a reconciliação (ou a confirmação manual) de uma operação. */
 export type ResultadoDaReconciliacao = ResultadoComOperacao<{

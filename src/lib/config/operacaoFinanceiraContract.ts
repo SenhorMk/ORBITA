@@ -102,7 +102,7 @@ export const listaDeOperacoesSchema = z.object({
  * quando o Bling está resolvido mas o título local ainda não (vínculo, título
  * pago): a operação não é apresentada como concluída.
  */
-export const projecaoLocalSchema = z.enum(['consistente', 'pendente']);
+export const projecaoLocalSchema = z.enum(['consistente', 'pendente', 'divergente']);
 
 /** `POST .../{ref}/reconciliar` e `POST .../{ref}/confirmacao-manual`. */
 export const respostaDaReconciliacaoSchema = z.object({
@@ -149,7 +149,8 @@ export const respostaDaQuitacaoSchema = z.object({
 });
 
 /** O que o operador lê depois de "Conferir no Bling". */
-export type SituacaoParaOOperador = 'confirmada' | 'registro_local_pendente' | 'ainda_pendente' | 'revisao_manual' | 'sem_pendencia';
+export type SituacaoParaOOperador =
+  | 'confirmada' | 'registro_local_pendente' | 'pagamento_nao_comprovado' | 'ainda_pendente' | 'revisao_manual' | 'sem_pendencia';
 
 /**
  * Traduz o desfecho da reconciliação para o operador.
@@ -168,7 +169,10 @@ export function situacaoParaOOperador(
 ): SituacaoParaOOperador {
   const confirmou = resposta.resultado === 'confirmada' || resposta.resultado === 'ja_confirmada'
     || resposta.resultado === 'reparo_local';
-  if (confirmou) return resposta.projecaoLocal === 'consistente' ? 'confirmada' : 'registro_local_pendente';
+  if (confirmou) {
+    if (resposta.projecaoLocal === 'divergente') return 'pagamento_nao_comprovado';
+    return resposta.projecaoLocal === 'consistente' ? 'confirmada' : 'registro_local_pendente';
+  }
   if (resposta.resultado === 'nada_pendente') return 'sem_pendencia';
   if (resposta.motivo === 'consulta_incompleta' || resposta.motivo === 'listagem_incompleta') return 'ainda_pendente';
   return 'revisao_manual';

@@ -677,3 +677,76 @@ $$;
 
 revoke all on function public.listar_pendencias_conta_pagar(uuid, integer, timestamptz, uuid) from public, anon, authenticated;
 grant execute on function public.listar_pendencias_conta_pagar(uuid, integer, timestamptz, uuid) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 8. O título de uma conta do PRE-002 só vira pago com a comprovação do servidor.
+--
+-- A sincronização financeira grava `situacao = 'pago'` quando o Bling diz Pago,
+-- sem saldo; a reconciliação deixa o título aberto enquanto o saldo não
+-- comprova (`pagamento_nao_comprovado`). Uma releitura no servidor seguida de
+-- escrita não basta (a sincronização pode gravar no meio): a regra fica no
+-- próprio UPDATE. Um título a pagar vinculado a uma operação do PRE-002, ou
+-- cuja conta remota já é de uma, não passa a pago por gravação comum — o resto
+-- da linha é gravado normalmente. Só `marcar_titulo_pago_conta_pagar`, que o
+-- servidor chama depois de comprovar o pagamento, marca, e a comprovação vale
+-- só para aquele título, naquela transação. Títulos a receber, contas fora do
+-- PRE-002 e os estados terminais (migration 68) seguem como antes.
+-- ---------------------------------------------------------------------------
+create or replace function public.fn_titulo_conta_pagar_pago_so_comprovado()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+    if new.situacao = 'pago' and old.situacao is distinct from 'pago' and old.tipo = 'pagar'
+       and coalesce(current_setting('orbita.titulo_pago_comprovado', true), '') is distinct from old.id::text
+       and exists (
+           select 1 from public.tentativas_conta_pagar t
+            where t.organizacao_id = old.organizacao_id
+              and (t.titulo_id = old.id or (old.bling_id is not null and t.bling_conta_id = old.bling_id::text))
+       ) then
+        new.situacao := old.situacao;
+        new.data_pagamento := old.data_pagamento;
+    end if;
+    return new;
+end;
+$$;
+
+revoke all on function public.fn_titulo_conta_pagar_pago_so_comprovado() from public, anon, authenticated;
+
+drop trigger if exists tg_titulo_conta_pagar_pago_so_comprovado on public.titulos_financeiros;
+create trigger tg_titulo_conta_pagar_pago_so_comprovado
+    before update on public.titulos_financeiros
+    for each row execute function public.fn_titulo_conta_pagar_pago_so_comprovado();
+
+create or replace function public.marcar_titulo_pago_conta_pagar(
+    p_organizacao_id uuid,
+    p_titulo_id uuid
+)
+returns boolean
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+    v_linhas integer;
+begin
+    if p_organizacao_id is null or p_titulo_id is null then
+        raise exception 'Organizacao e titulo sao obrigatorios.' using errcode = '22023';
+    end if;
+    perform set_config('orbita.titulo_pago_comprovado', p_titulo_id::text, true);
+    update public.titulos_financeiros tf
+       set situacao = 'pago'
+     where tf.id = p_titulo_id
+       and tf.organizacao_id = p_organizacao_id
+       and tf.situacao = 'aberto'
+       and exists (select 1 from public.tentativas_conta_pagar t
+                    where t.organizacao_id = p_organizacao_id and t.titulo_id = p_titulo_id);
+    get diagnostics v_linhas = row_count;
+    perform set_config('orbita.titulo_pago_comprovado', '', true);
+    return v_linhas = 1;
+end;
+$$;
+
+revoke all on function public.marcar_titulo_pago_conta_pagar(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.marcar_titulo_pago_conta_pagar(uuid, uuid) to service_role;

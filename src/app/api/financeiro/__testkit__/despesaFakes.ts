@@ -235,8 +235,13 @@ export function fakeStore(options: {
       // Upsert por conta remota, como `upsertTitulo` (organização + bling_id).
       const existente = titulo.blingId === null ? undefined : salvos.find((x) => x.blingId === titulo.blingId);
       if (existente) {
-        Object.assign(existente, titulo);
-        return { id: existente.id, blingId: titulo.blingId, situacao: titulo.situacao };
+        // Como `tg_titulo_conta_pagar_pago_so_comprovado` (migration 74): um
+        // título do PRE-002 não vira pago por upsert; só pela marcação.
+        const doPre002 = tentativas.some((t) => t.tituloId === existente.id || t.blingContaId === titulo.blingId);
+        const situacao = doPre002 && titulo.situacao === 'pago' && existente.situacao !== 'pago'
+          ? existente.situacao : titulo.situacao;
+        Object.assign(existente, titulo, { situacao });
+        return { id: existente.id, blingId: titulo.blingId, situacao: situacao as 'aberto' | 'pago' | 'cancelado' };
       }
       const id = `titulo-${salvos.length + 1}`;
       salvos.push({ ...titulo, id });

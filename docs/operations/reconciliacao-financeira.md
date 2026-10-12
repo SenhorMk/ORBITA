@@ -17,7 +17,7 @@ lista cada operação com uma pendência:
 | quitada no Bling, registro no ORBITA pendente | a baixa foi confirmada, o título local continua aberto | **Conferir no Bling** (marca pago) |
 | quitação pedida no lançamento ainda não feita | o lançamento pediu "pago", a criação só se confirmou depois | **Quitar no Bling** |
 | quitação recusada pelo Bling | a baixa do ORBITA foi recusada; a conta continua em aberto | quitar pelo próprio Bling e **Conferir no Bling** |
-| o Bling indica pago, sem saldo zerado | a conta está `Pago` no Bling, mas o saldo não comprova; o título fica aberto | **Conferir no Bling** quando o Bling mostrar o saldo; nada é marcado pago antes |
+| o Bling indica pago, sem saldo zerado | a conta está `Pago` no Bling, mas o saldo não comprova; o título fica aberto — nem a sincronização financeira o marca pago | **Conferir no Bling** quando o Bling mostrar o saldo; nada é marcado pago antes |
 | registro local inconsistente | o título vinculado não está na organização, tem situação desconhecida ou foi cancelado com quitação em jogo | correção administrativa; nenhuma ação automática |
 
 A lista é decidida no banco sobre todas as operações da organização, 100 por

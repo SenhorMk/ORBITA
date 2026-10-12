@@ -16,15 +16,23 @@
 -- `ck_baixas_conta_pagar_confirmada_tem_bordero` e
 -- `ck_reconciliacoes_conta_pagar_baixa_tem_bordero`: 48-57 falham. Tire a
 -- exigência de situação remota `Pago` na baixa confirmada: 58-60 falham. Tire
--- `situacao_bling = 2` do predicado da listagem: 44 e 46 falham.
+-- `situacao_bling = 2` do predicado da listagem: 44 e 46 falham. Remova o
+-- gatilho `tg_titulo_conta_pagar_pago_so_comprovado`: 61-63, 67 e 69 falham;
+-- deixe a comprovação valer para qualquer título e sem limpeza: 69 falha.
 
 begin;
 
 create table public.titulos_financeiros (
     id uuid primary key default gen_random_uuid(),
     organizacao_id uuid not null,
+    bling_id bigint,
+    tipo text not null default 'pagar',
     situacao text not null default 'aberto',
-    situacao_bling smallint
+    situacao_bling smallint,
+    valor numeric(10, 2),
+    descricao text,
+    data_pagamento date,
+    unique (organizacao_id, bling_id)
 );
 
 insert into auth.users (id, email)
@@ -40,7 +48,7 @@ insert into public.organizacoes (id, nome, slug)
 values ('74100000-0000-4000-8000-000000000001', 'Org T74 A', 'org-t74-a'),
        ('74100000-0000-4000-8000-000000000002', 'Org T74 B', 'org-t74-b');
 
-select plan(67);
+select plan(77);
 
 create temp table ids as select
     '74100000-0000-4000-8000-000000000001'::uuid as org_a,
@@ -468,13 +476,84 @@ select is((select count(*)::int from public.reconciliacoes_conta_pagar where cor
           '0/indeterminada', '60. nada é gravado e a baixa continua sem desfecho');
 
 -- ----------------------------------------------------------------------------
--- 61-67. Privilégios e RLS.
+-- 61-70. A sincronização não confirma o pagamento de uma conta do PRE-002.
 -- ----------------------------------------------------------------------------
-select ok(not has_table_privilege('authenticated', 'public.reconciliacoes_conta_pagar', 'select'), '61. navegador não lê recibos');
-select ok(not has_table_privilege('service_role', 'public.reconciliacoes_conta_pagar', 'update'), '62. nem o servidor altera recibos');
-select ok(not has_table_privilege('service_role', 'public.reconciliacoes_conta_pagar', 'delete'), '63. nem apaga');
-select ok(not has_table_privilege('authenticated', 'public.baixas_conta_pagar', 'select'), '64. navegador não lê baixas');
-select ok(not has_table_privilege('service_role', 'public.baixas_conta_pagar', 'delete'), '65. baixa não é apagada');
+-- O mesmo upsert que `financeiroRepository.upsertTitulo` faz pela sincronização.
+create function pg_temp.sincronizar(p_org uuid, p_bling bigint, p_tipo text, p_situacao text, p_situacao_bling smallint)
+returns text language sql as $$
+    insert into public.titulos_financeiros (organizacao_id, bling_id, tipo, situacao, situacao_bling, valor, descricao, data_pagamento)
+    values (p_org, p_bling, p_tipo, p_situacao, p_situacao_bling, 100, 'Sincronizada #' || p_bling,
+            case p_situacao when 'pago' then date '2026-10-11' end)
+    on conflict (organizacao_id, bling_id) do update
+       set tipo = excluded.tipo, situacao = excluded.situacao, situacao_bling = excluded.situacao_bling,
+           valor = excluded.valor, descricao = excluded.descricao, data_pagamento = excluded.data_pagamento
+    returning situacao || '/' || coalesce(situacao_bling::text, '-');
+$$;
+
+-- Operação confirmada (conta 570), título aberto com o Bling dizendo Pago sem saldo comprovado.
+select * from public.reivindicar_tentativa_conta_pagar(
+    (select org_a from ids), '74200000-0000-4000-8000-00000000000a', repeat('a', 63) || 'b',
+    100.00, '2026-10-20', '2026-10-09', 7001, 'ORB-AAAAAAAAAAAAAAAB');
+update public.tentativas_conta_pagar set estado = 'confirmada', bling_conta_id = '570'
+ where chave = '74200000-0000-4000-8000-00000000000a';
+insert into public.titulos_financeiros (id, organizacao_id, bling_id, situacao, situacao_bling, valor, descricao)
+values ('74300000-0000-4000-8000-00000000000a', (select org_a from ids), 570, 'aberto', 2, 100, 'Aluguel');
+update public.tentativas_conta_pagar set titulo_id = '74300000-0000-4000-8000-00000000000a'
+ where chave = '74200000-0000-4000-8000-00000000000a';
+create temp table ta as select id from public.tentativas_conta_pagar where chave = '74200000-0000-4000-8000-00000000000a';
+
+select is(pg_temp.sincronizar((select org_a from ids), 570, 'pagar', 'pago', 2::smallint), 'aberto/2',
+          '61. a sincronização grava os dados da conta, mas não confirma o pagamento do título do PRE-002');
+select ok(exists (select 1 from public.listar_pendencias_conta_pagar((select org_a from ids), 500)
+                   where tentativa_id = (select id from ta)),
+          '62. e a divergência continua na fila');
+
+-- Conta 571 confirmada, título já criado e ainda não vinculado (a janela entre gravar e vincular).
+select * from public.reivindicar_tentativa_conta_pagar(
+    (select org_a from ids), '74200000-0000-4000-8000-00000000000b', repeat('b', 63) || 'c',
+    100.00, '2026-10-20', '2026-10-09', 7001, 'ORB-BBBBBBBBBBBBBBBC');
+update public.tentativas_conta_pagar set estado = 'confirmada', bling_conta_id = '571'
+ where chave = '74200000-0000-4000-8000-00000000000b';
+insert into public.titulos_financeiros (organizacao_id, bling_id, situacao, situacao_bling, valor, descricao)
+values ((select org_a from ids), 571, 'aberto', 2, 100, 'Aluguel');
+select is(pg_temp.sincronizar((select org_a from ids), 571, 'pagar', 'pago', 2::smallint), 'aberto/2',
+          '63. nem antes do vínculo: a conta remota já é de uma operação do PRE-002');
+
+select is(pg_temp.sincronizar((select org_a from ids), 572, 'pagar', 'aberto', 1::smallint)
+          || '>' || pg_temp.sincronizar((select org_a from ids), 572, 'pagar', 'pago', 2::smallint), 'aberto/1>pago/2',
+          '64. conta a pagar fora do PRE-002 sincroniza normalmente');
+select * from public.reivindicar_tentativa_conta_pagar(
+    (select org_a from ids), '74200000-0000-4000-8000-00000000000c', repeat('c', 63) || 'd',
+    100.00, '2026-10-20', '2026-10-09', 7001, 'ORB-CCCCCCCCCCCCCCCD');
+update public.tentativas_conta_pagar set estado = 'confirmada', bling_conta_id = '573'
+ where chave = '74200000-0000-4000-8000-00000000000c';
+select is(pg_temp.sincronizar((select org_a from ids), 573, 'receber', 'aberto', 1::smallint)
+          || '>' || pg_temp.sincronizar((select org_a from ids), 573, 'receber', 'pago', 2::smallint), 'aberto/1>pago/2',
+          '65. conta a receber com o mesmo número remoto sincroniza normalmente');
+select is(pg_temp.sincronizar((select org_b from ids), 570, 'pagar', 'pago', 2::smallint), 'pago/2',
+          '66. a mesma conta remota em outra organização não é afetada');
+
+select is(public.marcar_titulo_pago_conta_pagar((select org_a from ids), '74300000-0000-4000-8000-00000000000a'), true,
+          '67. a comprovação do servidor marca o título pago');
+select is((select situacao from public.titulos_financeiros where id = '74300000-0000-4000-8000-00000000000a')
+          || '/' || (select count(*)::int from public.listar_pendencias_conta_pagar((select org_a from ids), 500)
+                      where tentativa_id = (select id from ta)), 'pago/0',
+          '68. e a pendência sai da fila');
+select is(pg_temp.sincronizar((select org_a from ids), 571, 'pagar', 'pago', 2::smallint), 'aberto/2',
+          '69. a comprovação não vaza para outro título na mesma transação');
+select is(public.marcar_titulo_pago_conta_pagar((select org_b from ids), '74300000-0000-4000-8000-00000000000a')::text
+          || '/' || public.marcar_titulo_pago_conta_pagar((select org_a from ids),
+              (select id from public.titulos_financeiros where organizacao_id = (select org_a from ids) and bling_id = 572))::text,
+          'false/false', '70. não marca título de outra organização nem fora do PRE-002');
+
+-- ----------------------------------------------------------------------------
+-- 71-77. Privilégios e RLS.
+-- ----------------------------------------------------------------------------
+select ok(not has_table_privilege('authenticated', 'public.reconciliacoes_conta_pagar', 'select'), '71. navegador não lê recibos');
+select ok(not has_table_privilege('service_role', 'public.reconciliacoes_conta_pagar', 'update'), '72. nem o servidor altera recibos');
+select ok(not has_table_privilege('service_role', 'public.reconciliacoes_conta_pagar', 'delete'), '73. nem apaga');
+select ok(not has_table_privilege('authenticated', 'public.baixas_conta_pagar', 'select'), '74. navegador não lê baixas');
+select ok(not has_table_privilege('service_role', 'public.baixas_conta_pagar', 'delete'), '75. baixa não é apagada');
 select ok(not has_function_privilege('authenticated',
     'public.registrar_reconciliacao_conta_pagar(uuid, uuid, text, uuid, text, text, text, text, text, text, integer, integer)',
     'execute')
@@ -482,11 +561,13 @@ select ok(not has_function_privilege('authenticated',
     'public.reivindicar_tentativa_conta_pagar(uuid, uuid, text, numeric, date, date, bigint, text, boolean)', 'execute')
     and not has_function_privilege('authenticated', 'public.listar_pendencias_conta_pagar(uuid, integer, timestamptz, uuid)', 'execute')
     and has_function_privilege('service_role', 'public.listar_pendencias_conta_pagar(uuid, integer, timestamptz, uuid)', 'execute')
+    and not has_function_privilege('authenticated', 'public.marcar_titulo_pago_conta_pagar(uuid, uuid)', 'execute')
+    and has_function_privilege('service_role', 'public.marcar_titulo_pago_conta_pagar(uuid, uuid)', 'execute')
     and to_regprocedure('public.reivindicar_tentativa_conta_pagar(uuid, uuid, text, numeric, date, date, bigint)') is null,
-    '66. só o servidor registra, reivindica e lista; a assinatura antiga não sobra');
+    '76. só o servidor registra, reivindica e lista; a assinatura antiga não sobra');
 select is((select bool_and(relrowsecurity) from pg_class
             where oid in ('public.reconciliacoes_conta_pagar'::regclass, 'public.baixas_conta_pagar'::regclass)),
-          true, '67. RLS ligada nas tabelas novas');
+          true, '77. RLS ligada nas tabelas novas');
 
 select * from finish();
 rollback;

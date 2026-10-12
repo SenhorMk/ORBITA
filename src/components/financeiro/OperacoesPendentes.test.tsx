@@ -228,4 +228,24 @@ describe('operações pendentes', () => {
     expect(await screen.findByText(/o Bling indica pago, sem saldo zerado/u)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Conferir no Bling' })).toBeInTheDocument();
   });
+
+  it('criação confirmada com pagamento não comprovado: não é apresentada como concluída', async () => {
+    const onConfirmada = vi.fn();
+    const divergente = { ...operacaoConfirmada, pendencia: 'pagamento_nao_comprovado' };
+    render(
+      <OperacoesPendentes
+        fetchWithAuth={servidor({ ...confirmada, projecaoLocal: 'divergente', operacao: divergente }, [divergente]).busca}
+        ativo
+        versao={0}
+        onConfirmada={onConfirmada}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Conferir no Bling' }));
+
+    expect(await screen.findByText(/pagamento ainda não comprovado/u)).toBeInTheDocument();
+    expect(screen.queryByText('Confirmada no Bling e registrada no ORBITA.')).not.toBeInTheDocument();
+    expect(onConfirmada).not.toHaveBeenCalled();
+  });
 });
+

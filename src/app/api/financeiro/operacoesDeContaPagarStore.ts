@@ -225,14 +225,21 @@ async function categoriaLocalPorBlingId(scope: VerifiedOrganizationScope, catego
   return lida.success ? lida.data.id : null;
 }
 
+/**
+ * Marca pago o título de uma operação do PRE-002, com o pagamento comprovado
+ * pelo servidor. Só por esta RPC: a migration 74 impede que uma gravação comum
+ * (a sincronização, um upsert) confirme o pagamento desses títulos.
+ */
 async function marcarTituloPago(scope: VerifiedOrganizationScope, tituloId: string): Promise<GravacaoDeTentativa> {
-  const { data, error } = await supabaseServer.from('titulos_financeiros').update({ situacao: 'pago' })
-    .eq('organizacao_id', scope.organizationId).eq('id', tituloId).eq('situacao', 'aberto').select('id');
+  const { data, error } = await supabaseServer.rpc('marcar_titulo_pago_conta_pagar', {
+    p_organizacao_id: scope.organizationId,
+    p_titulo_id: tituloId,
+  });
   if (error) {
     registrarFalhaInterna('financeiro.reconciliacao.titulo_pago', error);
     return 'NaoGravado';
   }
-  return Array.isArray(data) && data.length === 1 ? 'Gravado' : 'NaoGravado';
+  return data === true ? 'Gravado' : 'NaoGravado';
 }
 
 /** `OperacoesStorePort` sobre o Supabase. Toda leitura e escrita filtra a organização verificada. */

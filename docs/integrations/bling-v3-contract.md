@@ -511,7 +511,14 @@ controlável: a intenção durável e a referência no histórico cobrem o inter
 O título guarda o código cru do Bling (`situacao_bling`): `Pago` com o título
 aberto (saldo não comprovado) é a pendência `pagamento_nao_comprovado`, visível
 até uma leitura completa — saldo zero marca pago; a conta reaberta fecha a
-divergência. A página de pendências falha explicitamente se uma operação
+divergência. A sincronização financeira não apaga essa pendência: o gatilho
+`tg_titulo_conta_pagar_pago_so_comprovado` (migration 74) impede que uma
+gravação comum torne pago um título a pagar vinculado a uma operação do PRE-002
+(ou cuja conta remota já é de uma); o resto da linha sincroniza normalmente, e
+só `marcar_titulo_pago_conta_pagar`, chamada pelo servidor com o pagamento
+comprovado, marca — a comprovação vale para aquele título, naquela transação.
+A resposta da conferência traz `projecaoLocal: 'divergente'` enquanto o Bling
+diz Pago sem saldo comprovado. A página de pendências falha explicitamente se uma operação
 escolhida pela listagem não puder ser carregada: nunca sai parcial.
 
 Pagamento confirmado ≠ autoria: `Pago` com saldo INFORMADO e zero confirma que

@@ -41,6 +41,7 @@ const MOTIVOS: Record<MotivoDeRevisao, string> = {
 const SITUACOES: Record<SituacaoParaOOperador, string> = {
   confirmada: 'Confirmada no Bling e registrada no ORBITA.',
   registro_local_pendente: 'Confirmada no Bling, mas o registro no ORBITA ainda não foi concluído — confira de novo.',
+  pagamento_nao_comprovado: 'Confirmada no Bling e registrada no ORBITA, com pagamento ainda não comprovado: o Bling indica pago sem saldo zerado, e o título segue em aberto.',
   ainda_pendente: 'Ainda pendente — tente conferir de novo em instantes.',
   revisao_manual: 'Revisão manual necessária',
   sem_pendencia: 'Nada pendente nesta operação.',
