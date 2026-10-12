@@ -854,7 +854,7 @@ export default function Home() {
                     <tbody className="divide-y divide-white/5">
                       {selectedPedidoItems.map((item, idx) => (
                         <tr key={idx}>
-                          <td className="py-2.5 px-3 font-semibold text-white">{item.produto?.nome || 'Item do Pedido'}</td>
+                          <td className="py-2.5 px-3 font-semibold text-white">{item.produto_nome || item.produto?.nome || 'Item do Pedido'}</td>
                           <td className="py-2.5 px-3 text-center font-mono text-cyan-300">{item.quantidade}</td>
                           <td className="py-2.5 px-3 text-right text-slate-300">R$ {Number(item.valor_unitario).toFixed(2)}</td>
                           <td className="py-2.5 px-3 text-right font-bold text-emerald-400">R$ {(item.quantidade * item.valor_unitario).toFixed(2)}</td>
@@ -911,7 +911,7 @@ export default function Home() {
         onSaved={() => { void loadDashboardData(); }}
         // Excluído (confirmado pelo servidor): a linha some porque o catálogo
         // foi relido, não por um filtro otimista na tela.
-        onDeleted={() => { void loadDashboardData(); }}
+        onArquivado={() => { void loadDashboardData(); }}
         // A miniatura da tabela vem da mesma releitura, com o carimbo da
         // organização preservado por `useLeituraDoPainel`.
         onImagemAlterada={() => { void loadDashboardData(); }}

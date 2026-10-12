@@ -3,6 +3,7 @@ import type { BlingPort } from './blingPort';
 import { espelhoDaPagina } from './espelhoDaImagemDoBling';
 import { clienteRepository } from '../repositories/clienteRepository';
 import { produtoRepository } from '../repositories/produtoRepository';
+import { situacaoLocalDaSituacaoBling } from '../lib/config/produtoContract';
 import { pedidoRepository } from '../repositories/pedidoRepository';
 import { Cliente, Produto, Pedido, ItemPedido } from '../types';
 import { descreverErro } from '../lib/erroLegivel';
@@ -324,7 +325,7 @@ export class SyncService {
           }));
         },
         async ({ raw: bp, saldo, espelharImagem }) => {
-          const produto: Produto = {
+          await produtoRepository.upsert(scope, {
             bling_id: String(bp.id),
             codigo: bp.codigo || undefined,
             nome: bp.nome,
@@ -332,8 +333,8 @@ export class SyncService {
             unidade: bp.unidade || 'UN',
             imagem_url: await espelharImagem(bp),
             estoque: saldo,
-          };
-          await produtoRepository.upsert(scope, produto);
+            situacao: situacaoLocalDaSituacaoBling((bp as { situacao?: unknown }).situacao), // arquivado fica (migration 75)
+          } satisfies Produto);
         },
         async (page, count) => {
           progress.pagina_atual = page;

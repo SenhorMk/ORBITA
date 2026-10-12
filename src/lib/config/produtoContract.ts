@@ -25,6 +25,30 @@ export const produtoTipoSchema = z.enum(['S', 'P', 'N']);
 export const produtoSituacaoSchema = z.enum(['A', 'I']);
 export const produtoFormatoSchema = z.enum(['S', 'V', 'E']);
 
+/**
+ * O ciclo de vida do produto NO ORBITA (migration 75), distinto da situação
+ * do Bling: `ativo` é vendável; `inativo` espelha um produto inativo no Bling;
+ * `arquivado` foi retirado da venda pelo ORBITA e continua no histórico dos
+ * pedidos. Só `ativo` é candidato à venda.
+ */
+export const situacaoDoProdutoSchema = z.enum(['ativo', 'inativo', 'arquivado']);
+export type SituacaoDoProduto = z.infer<typeof situacaoDoProdutoSchema>;
+
+/**
+ * A situação local que a sincronização grava a partir da do Bling. `E`
+ * (excluído no Bling) não é decidido aqui — é o webhook de exclusão (PRE-004).
+ * Um produto já arquivado no ORBITA continua arquivado: o banco não deixa
+ * gravação comum desfazer o arquivamento.
+ *
+ * @param situacao - A situação crua do Bling.
+ * @returns `ativo`/`inativo`, ou `undefined` para não gravar nada.
+ */
+export function situacaoLocalDaSituacaoBling(situacao: unknown): 'ativo' | 'inativo' | undefined {
+  if (situacao === 'A') return 'ativo';
+  if (situacao === 'I') return 'inativo';
+  return undefined;
+}
+
 export type ProdutoTipo = z.infer<typeof produtoTipoSchema>;
 export type ProdutoSituacao = z.infer<typeof produtoSituacaoSchema>;
 export type ProdutoFormato = z.infer<typeof produtoFormatoSchema>;

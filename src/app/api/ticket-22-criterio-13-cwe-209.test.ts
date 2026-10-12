@@ -48,9 +48,10 @@ const consultarContatoMock = vi.fn();
 const carregarParaExclusaoMock = vi.fn();
 const excluirClienteMock = vi.fn();
 const CLIENTE_ID = '22000000-0000-4000-8000-0000000000c1';
-const marcarProdutoExcluidoMock = vi.fn();
-const excluirProdutoMock = vi.fn();
+const marcarProdutoInativoMock = vi.fn();
 const consultarProdutoMock = vi.fn();
+const carregarParaArquivamentoMock = vi.fn();
+const arquivarProdutoMock = vi.fn();
 const PRODUTO_ID = '22000000-0000-4000-8000-0000000000d1';
 const deletePedidoMock = vi.fn();
 const getResumoMock = vi.fn();
@@ -69,8 +70,7 @@ vi.mock('@/services/bling', () => ({
       createContato: createContatoMock,
       excluirContato: excluirContatoMock,
       consultarContato: consultarContatoMock,
-      marcarProdutoExcluido: marcarProdutoExcluidoMock,
-      excluirProduto: excluirProdutoMock,
+      marcarProdutoInativo: marcarProdutoInativoMock,
       consultarProduto: consultarProdutoMock,
       deletePedido: deletePedidoMock,
       createNfe: createNfeMock,
@@ -81,7 +81,7 @@ vi.mock('@/repositories/clienteRepository', () => ({
   clienteRepository: { carregarParaExclusao: carregarParaExclusaoMock, excluir: excluirClienteMock },
 }));
 vi.mock('@/repositories/produtoRepository', () => ({
-  produtoRepository: { delete: vi.fn().mockRejectedValue(falharCom) },
+  produtoRepository: { carregarParaArquivamento: carregarParaArquivamentoMock, arquivar: arquivarProdutoMock },
 }));
 vi.mock('@/repositories/financeiroRepository', () => ({
   financeiroRepository: {
@@ -152,9 +152,10 @@ async function cenarioLimpo(): Promise<void> {
     consultarContatoMock,
     carregarParaExclusaoMock,
     excluirClienteMock,
-    marcarProdutoExcluidoMock,
-    excluirProdutoMock,
+    marcarProdutoInativoMock,
     consultarProdutoMock,
+    carregarParaArquivamentoMock,
+    arquivarProdutoMock,
     deletePedidoMock,
     getResumoMock,
     createNfeMock,
@@ -162,9 +163,6 @@ async function cenarioLimpo(): Promise<void> {
     duble.mockReset();
     duble.mockResolvedValue(undefined);
   }
-  const { produtoRepository } = await import('@/repositories/produtoRepository');
-  vi.mocked(produtoRepository.delete).mockReset();
-  vi.mocked(produtoRepository.delete).mockResolvedValue(null);
 
   fronteira = new FronteiraDeAutorizacao();
   fronteira.sessaoDe(OWNER_ID).vinculoDe('owner');
@@ -240,19 +238,16 @@ describe('critério 13 — nenhuma rota migrada devolve diagnóstico interno', (
     await naoVazaDiagnostico(resposta);
   });
 
-  // Aqui o vazamento tinha dois caminhos: `details` e o `logs`, que carregava
-  // o mesmo texto dentro de uma narrativa de execução.
-  it('POST /api/produtos/delete não devolve `details` nem `logs`', async () => {
-    const { produtoRepository } = await import('@/repositories/produtoRepository');
-    vi.mocked(produtoRepository.delete).mockRejectedValue(falharCom);
-    // O Bling confirma a exclusão; é a exclusão local que falha.
-    fronteira.tabela('produtos', { data: { id: PRODUTO_ID, bling_id: '123' }, error: null });
-    marcarProdutoExcluidoMock.mockResolvedValue({ _tag: 'EscritaAceita' });
-    excluirProdutoMock.mockResolvedValue({ _tag: 'ExclusaoAceita' });
-    const { POST } = await import('./produtos/delete/route');
+  // A exclusão física virou arquivamento (PRE-003). O Bling confirma que o
+  // produto saiu da venda; é o arquivamento local que falha.
+  it('POST /api/produtos/arquivar não devolve `details` nem `logs`', async () => {
+    carregarParaArquivamentoMock.mockResolvedValue({ id: PRODUTO_ID, blingId: '123', situacao: 'ativo' });
+    marcarProdutoInativoMock.mockResolvedValue({ _tag: 'EscritaAceita' });
+    arquivarProdutoMock.mockRejectedValue(falharCom);
+    const { POST } = await import('./produtos/arquivar/route');
 
     const resposta = await POST(
-      requisicao('https://orbita.test/api/produtos/delete', {
+      requisicao('https://orbita.test/api/produtos/arquivar', {
         metodo: 'POST',
         corpo: { id: PRODUTO_ID },
       }),
@@ -359,18 +354,15 @@ describe('critério 13 — os ramos que a primeira auditoria não olhou', () => 
     await naoVazaDiagnostico(resposta);
   });
 
-  // Antes: o Bling falhava e o produto saía do ORBITA mesmo assim (200 com
-  // aviso), ficando vivo no Bling. Agora a exclusão é Bling-primeiro
-  // confirmada: sem prova da ausência remota, nada local é apagado.
-  it('POST /api/produtos/delete preserva o produto local quando o Bling não confirma, sem vazar a causa', async () => {
-    const { produtoRepository } = await import('@/repositories/produtoRepository');
-    fronteira.tabela('produtos', { data: { id: PRODUTO_ID, bling_id: '123' }, error: null });
-    marcarProdutoExcluidoMock.mockResolvedValue({ _tag: 'RemotoIndeterminado', causa: 'falha_de_rede' });
+  // Sem prova de que o produto saiu da venda no Bling, nada local muda (PRE-003).
+  it('POST /api/produtos/arquivar mantém o produto quando o Bling não confirma, sem vazar a causa', async () => {
+    carregarParaArquivamentoMock.mockResolvedValue({ id: PRODUTO_ID, blingId: '123', situacao: 'ativo' });
+    marcarProdutoInativoMock.mockResolvedValue({ _tag: 'RemotoIndeterminado', causa: 'falha_de_rede' });
     consultarProdutoMock.mockResolvedValue({ _tag: 'RemotoIndeterminado', causa: 'falha_de_rede' });
-    const { POST } = await import('./produtos/delete/route');
+    const { POST } = await import('./produtos/arquivar/route');
 
     const resposta = await POST(
-      requisicao('https://orbita.test/api/produtos/delete', {
+      requisicao('https://orbita.test/api/produtos/arquivar', {
         metodo: 'POST',
         corpo: { id: PRODUTO_ID },
       }),
@@ -378,8 +370,7 @@ describe('critério 13 — os ramos que a primeira auditoria não olhou', () => 
 
     expect(resposta.status).toBe(503);
     await naoVazaDiagnostico(resposta);
-    expect(produtoRepository.delete).not.toHaveBeenCalled();
-    expect(excluirProdutoMock).not.toHaveBeenCalled();
+    expect(arquivarProdutoMock).not.toHaveBeenCalled();
   });
 
   // `nfeError` é um `PostgrestError`: `message` carrega texto do Postgres, e

@@ -1,6 +1,7 @@
 import { supabaseServer } from '../lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { Produto } from '../types';
+import { situacaoDoProdutoSchema, type SituacaoDoProduto } from '../lib/config/produtoContract';
 import { logger } from '../lib/observability/logger';
 import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 import { ReconciliacaoDeProdutoNecessaria } from './reconciliacaoDeProduto';
@@ -213,27 +214,49 @@ export class ProdutoRepository {
   }
 
   /**
-   * Exclui o produto da organização do escopo.
-   *
-   * @returns O `imagem_storage_path` que a linha **excluída** tinha (lido pelo
-   *   próprio `DELETE ... RETURNING`), ou `null` quando não havia foto ou
-   *   nenhuma linha saiu. É o único caminho que a limpeza do Storage pode
-   *   usar: vem do banco, depois da exclusão, e nunca do navegador.
+   * O produto da organização do escopo, no que o arquivamento precisa: o
+   * `bling_id` gravado (só quando numérico — `null` é produto só do ORBITA) e
+   * a situação. `null` quando não existe nesta organização.
    */
-  async delete(scope: VerifiedOrganizationScope, id: string): Promise<string | null> {
+  async carregarParaArquivamento(
+    scope: VerifiedOrganizationScope,
+    id: string,
+  ): Promise<{ readonly id: string; readonly blingId: string | null; readonly situacao: SituacaoDoProduto } | null> {
     const { data, error } = await supabaseServer
       .from('produtos')
-      .delete()
+      .select('id, bling_id, situacao')
       .eq('id', id)
       .eq('organizacao_id', scope.organizationId)
-      .select('imagem_storage_path');
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    const blingId = typeof data.bling_id === 'string' && /^\d+$/u.test(data.bling_id) ? data.bling_id : null;
+    const situacao = situacaoDoProdutoSchema.parse(data.situacao);
+    return { id: String(data.id), blingId, situacao };
+  }
 
+  /**
+   * Arquiva o produto (migration 75, `arquivar_produto`): trava a linha, é
+   * idempotente e não mexe em estoque, reserva, foto nem pedidos. O ator vem
+   * do escopo verificado.
+   *
+   * @returns `arquivado`, `ja_arquivado`, ou `nao_encontrado` quando o produto
+   *   não é desta organização.
+   */
+  async arquivar(scope: VerifiedOrganizationScope, id: string): Promise<'arquivado' | 'ja_arquivado' | 'nao_encontrado'> {
+    const { data, error } = await supabaseServer.rpc('arquivar_produto', {
+      p_organizacao_id: scope.organizationId,
+      p_produto_id: id,
+      p_ator_id: scope.actorId,
+    });
     if (error) {
-      console.error(`Erro ao deletar produto com id ${id} no Supabase:`, error);
+      if (error.code === 'P0002') return 'nao_encontrado';
       throw error;
     }
-    const caminho = (data ?? [])[0]?.imagem_storage_path;
-    return typeof caminho === 'string' && caminho.length > 0 ? caminho : null;
+    const linha = Array.isArray(data) ? data[0] : data;
+    const desfecho = (linha as { desfecho?: unknown } | null)?.desfecho;
+    if (desfecho === 'arquivado' || desfecho === 'ja_arquivado') return desfecho;
+    throw new Error('arquivar_produto devolveu um desfecho fora do contrato');
   }
 }
 

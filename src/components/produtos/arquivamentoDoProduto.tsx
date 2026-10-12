@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, type ComponentProps, type ReactNode } from 'react';
-import { Loader2, Trash2 } from 'lucide-react';
+import { Archive, Loader2 } from 'lucide-react';
 import { z } from 'zod';
 
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
@@ -10,25 +10,25 @@ import { isProdutoSynced } from '@/lib/utils';
 import type { Produto } from '@/types';
 
 /**
- * A exclusão de produto pela tela: só expõe o fluxo seguro que já existe em
- * `POST /api/produtos/delete`. O servidor decide tudo — `bling_id`,
- * organização, foto — a partir do banco: produto vinculado sai do Bling
- * primeiro (situação E → DELETE → GET 404) e só então do ORBITA; incerteza no
- * Bling preserva o produto local.
+ * O arquivamento de produto pela tela (PRE-003): só expõe
+ * `POST /api/produtos/arquivar`. O servidor decide tudo — `bling_id`,
+ * organização — a partir do banco: produto vinculado fica inativo no Bling
+ * (nunca excluído), com prova, e só então é arquivado no ORBITA; incerteza no
+ * Bling mantém o produto ativo. Arquivar não apaga o produto, a foto nem os
+ * pedidos antigos.
  *
  * Na tela são dois passos dentro do MESMO modal (nada de diálogo empilhado nem
- * `window.confirm`): "Excluir produto" abre a confirmação; "Excluir
- * definitivamente" envia UMA requisição. Nada é removido de forma otimista: o
- * produto continua na lista até o servidor confirmar, e quem abriu o modal relê
- * o catálogo da fonte.
+ * `window.confirm`): "Arquivar produto" abre a confirmação; "Arquivar" envia
+ * UMA requisição. Nada muda de forma otimista: quem abriu o modal relê o
+ * catálogo da fonte. Produto já arquivado não oferece a ação.
  */
 
-export type DesfechoDaExclusao =
-  | { readonly _tag: 'Excluido' }
+export type DesfechoDoArquivamento =
+  | { readonly _tag: 'Arquivado' }
   | { readonly _tag: 'Falhou'; readonly mensagem: string };
 
-const FALHA_DE_REDE = 'Não foi possível falar com o servidor. O produto foi mantido. Tente de novo.';
-const FALHA_GENERICA = 'Não foi possível excluir o produto. Ele foi mantido. Tente de novo.';
+const FALHA_DE_REDE = 'Não foi possível falar com o servidor. O produto continua ativo. Tente de novo.';
+const FALHA_GENERICA = 'Não foi possível arquivar o produto. Ele continua ativo. Tente de novo.';
 
 /** O contrato da rota: sucesso, ou a frase pública que o servidor escolheu. Nada além disso é exibido. */
 const respostaSchema = z.union([
@@ -36,11 +36,11 @@ const respostaSchema = z.union([
   z.object({ success: z.literal(false), error: z.string().min(1).max(400) }),
 ]);
 
-/** `POST /api/produtos/delete` com SÓ o id local. `bling_id`, organização e foto o servidor lê do banco. */
-export async function submitProdutoDelete(id: string): Promise<DesfechoDaExclusao> {
+/** `POST /api/produtos/arquivar` com SÓ o id local. `bling_id` e organização o servidor lê do banco. */
+export async function submitProdutoArquivamento(id: string): Promise<DesfechoDoArquivamento> {
   let resposta: Response;
   try {
-    resposta = await fetchWithAuth('/api/produtos/delete', {
+    resposta = await fetchWithAuth('/api/produtos/arquivar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
@@ -55,18 +55,18 @@ export async function submitProdutoDelete(id: string): Promise<DesfechoDaExclusa
     corpo = null;
   }
   const lido = respostaSchema.safeParse(corpo);
-  if (resposta.ok && lido.success && lido.data.success) return { _tag: 'Excluido' };
+  if (resposta.ok && lido.success && lido.data.success) return { _tag: 'Arquivado' };
   return { _tag: 'Falhou', mensagem: lido.success && !lido.data.success ? lido.data.error : FALHA_GENERICA };
 }
 
-function ConfirmacaoDaExclusao({ produto, aviso }: { produto: Produto; aviso: string | null }) {
+function ConfirmacaoDoArquivamento({ produto, aviso }: { produto: Produto; aviso: string | null }) {
   const noBling = isProdutoSynced(produto.bling_id);
   return (
     <div className="flex flex-col gap-4 text-sm leading-relaxed" style={{ color: 'var(--txt2)' }}>
       <p className="m-0">
         {noBling
-          ? 'Este produto será excluído do Bling e, somente depois da confirmação da exclusão no Bling, será removido do ORBITA. Esta ação não pode ser desfeita.'
-          : 'Este produto será removido do ORBITA. Esta ação não pode ser desfeita.'}
+          ? 'O produto sai da venda: no Bling ele fica inativo (não é excluído) e, só depois da confirmação lá, é arquivado no ORBITA. Pedidos antigos continuam com o produto, o nome e o valor.'
+          : 'O produto é arquivado no ORBITA e deixa de aparecer para venda. Pedidos antigos continuam com o produto, o nome e o valor.'}
       </p>
       <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
         <dt className="orbita-eyebrow">Nome</dt>
@@ -94,38 +94,38 @@ function ConfirmacaoDaExclusao({ produto, aviso }: { produto: Produto; aviso: st
 }
 
 /**
- * O estado da exclusão no modal do produto.
+ * O estado do arquivamento no modal do produto.
  *
- * - `botao`: "Excluir produto" para o rodapé (`RodapeDeModal.destrutiva`);
- *   `null` em produto novo.
+ * - `botao`: "Arquivar produto" para o rodapé (`RodapeDeModal.destrutiva`);
+ *   `null` em produto novo ou já arquivado.
  * - `confirmacao`: com a confirmação aberta, as props que trocam o modal para a
  *   etapa destrutiva (cabeçalho, rodapé, não dispensável durante o envio) e o
  *   corpo. `null` no formulário normal.
  *
- * `bloqueada` (salvando, ou foto em envio) impede começar a excluir: salvar e
- * excluir nunca correm juntos pelo mesmo modal. A trava síncrona fecha a
+ * `bloqueada` (salvando, ou foto em envio) impede começar a arquivar: salvar e
+ * arquivar nunca correm juntos pelo mesmo modal. A trava síncrona fecha a
  * janela de dois cliques no mesmo quadro, antes de o `disabled` renderizar.
  */
-export function useExclusaoDoProduto({
+export function useArquivamentoDoProduto({
   aberto,
   produto,
   bloqueada,
-  onDeleted,
+  onArquivado,
   onClose,
 }: {
   aberto: boolean;
   produto: Produto | null;
   bloqueada: boolean;
-  onDeleted?: () => void;
+  onArquivado?: () => void;
   onClose: () => void;
 }): {
   readonly botao: ReactNode;
   readonly confirmacao: { readonly modal: Partial<ComponentProps<typeof Modal>>; readonly corpo: ReactNode } | null;
-  readonly excluindo: boolean;
+  readonly arquivando: boolean;
 } {
   /** A confirmação pertence a UM produto: abrir outro volta ao formulário. */
   const [confirmandoId, setConfirmandoId] = useState<string | null>(null);
-  const [excluindo, setExcluindo] = useState(false);
+  const [arquivando, setArquivando] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
   const travaRef = useRef(false);
   const [abertoAntes, setAbertoAntes] = useState(aberto);
@@ -145,55 +145,53 @@ export function useExclusaoDoProduto({
   const confirmar = async () => {
     if (id === null || travaRef.current) return;
     travaRef.current = true;
-    setExcluindo(true);
+    setArquivando(true);
     setAviso(null);
-    const desfecho = await submitProdutoDelete(id);
+    const desfecho = await submitProdutoArquivamento(id);
     travaRef.current = false;
-    setExcluindo(false);
+    setArquivando(false);
     if (desfecho._tag === 'Falhou') {
       setAviso(desfecho.mensagem);
       return;
     }
     setConfirmandoId(null);
     onClose();
-    onDeleted?.();
+    onArquivado?.();
   };
 
-  const botao = id === null ? null : (
+  const botao = id === null || produto?.situacao === 'arquivado' ? null : (
     <button
       type="button"
       onClick={() => { setAviso(null); setConfirmandoId(id); }}
       disabled={bloqueada}
       className="orbita-chip cursor-pointer"
-      style={{ color: 'var(--danger)' }}
     >
-      <Trash2 className="w-3.5 h-3.5" aria-hidden />
-      Excluir produto
+      <Archive className="w-3.5 h-3.5" aria-hidden />
+      Arquivar produto
     </button>
   );
 
-  if (!confirmando || produto === null) return { botao, confirmacao: null, excluindo };
+  if (!confirmando || produto === null) return { botao, confirmacao: null, arquivando };
 
   const modal: Partial<ComponentProps<typeof Modal>> = {
     tamanho: 'sm',
-    destrutivo: true,
-    dispensavel: !excluindo,
+    dispensavel: !arquivando,
     // `dispensavel` só segura ESC e clique fora; o X do cabeçalho fecha por
-    // `onAbertoChange(false)`. Enquanto a exclusão corre, NENHUM pedido de
+    // `onAbertoChange(false)`. Enquanto o arquivamento corre, NENHUM pedido de
     // fechar vale — o sucesso fecha por código, e a falha devolve o controle.
     onAbertoChange: (abertoAgora) => {
       if (!abertoAgora && !travaRef.current) onClose();
     },
-    eyebrow: 'Excluir produto',
-    titulo: `Excluir “${produto.nome || 'Produto sem nome'}”?`,
-    descricao: 'Confirmação de exclusão de produto.',
+    eyebrow: 'Arquivar produto',
+    titulo: `Arquivar “${produto.nome || 'Produto sem nome'}”?`,
+    descricao: 'Confirmação de arquivamento de produto.',
     rodape: (
       <RodapeDeModal
         secundaria={
           <button
             type="button"
             onClick={() => { setConfirmandoId(null); setAviso(null); }}
-            disabled={excluindo}
+            disabled={arquivando}
             className="orbita-chip cursor-pointer"
           >
             Voltar
@@ -203,17 +201,16 @@ export function useExclusaoDoProduto({
           <button
             type="button"
             onClick={() => { void confirmar(); }}
-            disabled={excluindo}
-            aria-busy={excluindo}
+            disabled={arquivando}
+            aria-busy={arquivando}
             className="orbita-chip cursor-pointer"
-            style={{ background: 'var(--danger)', borderColor: 'var(--danger)', color: '#fff' }}
           >
-            {excluindo && <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />}
-            {excluindo ? 'Excluindo…' : 'Excluir definitivamente'}
+            {arquivando && <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />}
+            {arquivando ? 'Arquivando…' : 'Arquivar'}
           </button>
         }
       />
     ),
   };
-  return { botao, confirmacao: { modal, corpo: <ConfirmacaoDaExclusao produto={produto} aviso={aviso} /> }, excluindo };
+  return { botao, confirmacao: { modal, corpo: <ConfirmacaoDoArquivamento produto={produto} aviso={aviso} /> }, arquivando };
 }

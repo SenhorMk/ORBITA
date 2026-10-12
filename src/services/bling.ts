@@ -191,6 +191,7 @@ const contatoLidoSchema = z.object({
 const produtoLidoSchema = z.object({
   data: z.object({
     id: z.union([z.number().int().positive(), z.string().regex(/^\d+$/u)]),
+    situacao: z.enum(['A', 'I', 'E']).optional(),
     midia: z.object({
       imagens: z.object({
         internas: z.array(z.unknown()).optional(),
@@ -701,6 +702,7 @@ export class BlingClient implements BlingPort {
     return this.lerRecursoConfirmado(resposta.response, produtoLidoSchema, (data) => ({
       id: String(data.id),
       imagens: (data.midia?.imagens?.internas?.length ?? 0) + (data.midia?.imagens?.externas?.length ?? 0),
+      situacao: data.situacao ?? null,
     }));
   }
 
@@ -715,6 +717,22 @@ export class BlingClient implements BlingPort {
       `/produtos/${encodeURIComponent(id)}/situacoes`,
       'PATCH',
       { situacao: 'E' },
+    );
+    if (resposta._tag !== 'Resposta') return resposta;
+    return this.escritaConfirmada(resposta.response);
+  }
+
+  /**
+   * `PATCH /produtos/{id}/situacoes` com `I`. É como o ORBITA tira um produto
+   * da venda no Bling ao arquivá-lo: inativo, não excluído — o cadastro e o
+   * histórico de vendas continuam no ERP.
+   */
+  async marcarProdutoInativo(id: string): Promise<EscritaRemota> {
+    const resposta = await this.requisicaoDeCorrecao(
+      'bling.produto.situacao-inativo',
+      `/produtos/${encodeURIComponent(id)}/situacoes`,
+      'PATCH',
+      { situacao: 'I' },
     );
     if (resposta._tag !== 'Resposta') return resposta;
     return this.escritaConfirmada(resposta.response);

@@ -122,15 +122,18 @@ enviar arquivos ao projeto remoto.
 
 ## Exclusão de produto e a foto
 
-Caminhos que removem uma linha de `public.produtos` (auditados; a guarda
+Desde o PRE-003 (migration 75) a ação da tela **arquiva** o produto
+(`POST /api/produtos/arquivar`): a linha, a foto e os pedidos ficam. Um produto
+com pedido ou movimentação de estoque não sai por `DELETE` direto — o banco
+recusa (`tg_produto_com_historico_nao_e_excluido`). Caminhos que ainda removem
+uma linha de `public.produtos` (auditados; a guarda
 `src/repositories/produto-exclusao-e-deduplicacao.test.ts` falha se surgir
-outro chamador de `ProdutoRepository.delete` ou outro `delete` direto em
-`produtos`):
+outro `delete` direto em `produtos`):
 
 | Caminho | Tratamento da foto |
 |---|---|
-| `POST /api/produtos/delete` | `excluirProdutoComFoto`: exclui a linha escopada por `id` + organização; o `DELETE ... RETURNING` devolve o `imagem_storage_path` da linha excluída; só então o objeto sai do Storage, depois de passar de novo por `caminhoPertenceAoProduto`. Exclusão local falhou → o arquivo fica. Limpeza falhou → a exclusão continua valendo, a resposta não muda, e a falha vai para o log (`produtos.delete.limpeza_da_foto`). Antes disso, se o produto tem `bling_id`, a exclusão no Bling precisa estar confirmada: situação `E`, `DELETE` e `GET` 404 (`excluirProdutoNoBling`). Sem confirmação, nada local é apagado. |
-| Deduplicação por `bling_id` em `ProdutoRepository.upsert` | Ocorre em `POST /api/produtos/update` quando o produto editado (A) passa a apontar para um `bling_id` que já pertence a outra linha local (B). B com foto → nada é excluído nem gravado localmente; a gravação falha com `ReconciliacaoDeProdutoNecessaria` e a rota responde "Produto salvo no Bling (id …), mas falhou ao gravar no ORBITA … Sincronize o catálogo para reconciliar". A continua A, B continua B com a foto. B sem foto → `excluirDuplicadoSemFoto`, um `DELETE ... WHERE id AND organizacao_id AND imagem_storage_path IS NULL RETURNING id`: a decisão "sem foto" é da mesma instrução. Zero linhas → relê: ausente segue; com foto (confirmada no meio) é reconciliação; outro estado falha explicitamente. Erro de banco nesse `DELETE` (FK de pedido, por exemplo) também é reconciliação: A e B ficam como estão, sem `update` nem `upsert`, e a causa vai só para o log do servidor. A corrida confirmação × DELETE condicionado é provada com duas transações reais em `scripts/database-concurrency-foto-produto.mjs`. |
+| `POST /api/produtos/arquivar` | Não exclui: arquiva (`arquivar_produto`). A foto continua no Storage e no produto, que segue consultável no histórico. |
+| Deduplicação por `bling_id` em `ProdutoRepository.upsert` | Ocorre em `POST /api/produtos/update` quando o produto editado (A) passa a apontar para um `bling_id` que já pertence a outra linha local (B). B com foto → nada é excluído nem gravado localmente; a gravação falha com `ReconciliacaoDeProdutoNecessaria` e a rota responde "Produto salvo no Bling (id …), mas falhou ao gravar no ORBITA … Sincronize o catálogo para reconciliar". A continua A, B continua B com a foto. B sem foto → `excluirDuplicadoSemFoto`, um `DELETE ... WHERE id AND organizacao_id AND imagem_storage_path IS NULL RETURNING id`: a decisão "sem foto" é da mesma instrução. Zero linhas → relê: ausente segue; com foto (confirmada no meio) é reconciliação; outro estado falha explicitamente. Erro de banco nesse `DELETE` (FK de pedido, ou a recusa da migration 75 a apagar produto com pedido ou movimentação) também é reconciliação: A e B ficam como estão, sem `update` nem `upsert`, e a causa vai só para o log do servidor. A corrida confirmação × DELETE condicionado é provada com duas transações reais em `scripts/database-concurrency-foto-produto.mjs`. |
 | `ON DELETE CASCADE` de `organizacoes` e de `auth.users` | Só a limpeza do E2E (`src/lib/e2e/supabasePorta.ts`) apaga organização ou usuário, e apenas os sintéticos da execução, que não enviam foto. Não há exclusão de organização no produto. Se um dia houver, ela precisa limpar o prefixo `<organizacao>/` do bucket. |
 | Policy `produtos_org_delete` (RLS, `authenticated`) | Nenhum código do ORBITA exclui produto pelo cliente do navegador; o cliente só lê. Uma exclusão direta por PostgREST deixaria o objeto sem referência. |
 

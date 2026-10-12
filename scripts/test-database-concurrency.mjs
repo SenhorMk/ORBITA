@@ -16,6 +16,7 @@ import { runItemReplayRaceRehearsal } from './database-concurrency-item-replay.m
 import { runFotoDoProdutoRaceRehearsal } from './database-concurrency-foto-produto.mjs';
 import { runContaPagarRaceRehearsal } from './database-concurrency-conta-pagar.mjs';
 import { runReconciliacaoRaceRehearsal } from './database-concurrency-reconciliacao.mjs';
+import { runArquivamentoRaceRehearsal } from './database-concurrency-arquivamento.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -41,6 +42,7 @@ let outcomeItemReplay;
 let outcomeFoto;
 let outcomeContaPagar;
 let outcomeReconciliacao;
+let outcomeArquivamento;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -55,6 +57,7 @@ try {
     outcomeFoto = started;
     outcomeContaPagar = started;
     outcomeReconciliacao = started;
+    outcomeArquivamento = started;
   } else {
     const alinhado = await alinharStubDeAuthComProducao();
     const applied = alinhado._tag === 'err' ? alinhado : await applyCanonicalMigrations({});
@@ -70,6 +73,7 @@ try {
       outcomeFoto = applied;
       outcomeContaPagar = applied;
       outcomeReconciliacao = applied;
+      outcomeArquivamento = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
@@ -82,6 +86,7 @@ try {
       outcomeFoto = await runFotoDoProdutoRaceRehearsal();
       outcomeContaPagar = await runContaPagarRaceRehearsal();
       outcomeReconciliacao = await runReconciliacaoRaceRehearsal();
+      outcomeArquivamento = await runArquivamentoRaceRehearsal();
     }
   }
 } finally {
@@ -139,6 +144,7 @@ const relatos = [
   [outcomeFoto, (v) => v.relato],
   [outcomeContaPagar, (v) => v.relato],
   [outcomeReconciliacao, (v) => v.relato],
+  [outcomeArquivamento, (v) => v.relato],
 ];
 
 const falhou = relatos.map(([outcome, resumo]) => relatar(outcome, resumo)).includes(true);

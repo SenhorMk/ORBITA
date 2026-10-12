@@ -246,8 +246,8 @@ vi.mock('@/lib/supabaseServer', () => ({
             eq: () => ({
               in: () => Promise.resolve({
                 data: [
-                  { id: PRODUTO_ID, nome: 'Produto Teste', codigo: null, bling_id: '77', preco: 10, estoque: 5, estoque_reservado: 0 },
-                  { id: PRODUTO_ID_B, nome: 'Produto Teste B', codigo: null, bling_id: '78', preco: 20, estoque: 5, estoque_reservado: 0 },
+                  { id: PRODUTO_ID, nome: 'Produto Teste', codigo: null, bling_id: '77', preco: 10, estoque: 5, estoque_reservado: 0, situacao: 'ativo' },
+                  { id: PRODUTO_ID_B, nome: 'Produto Teste B', codigo: null, bling_id: '78', preco: 20, estoque: 5, estoque_reservado: 0, situacao: 'ativo' },
                 ],
                 error: null,
               }),

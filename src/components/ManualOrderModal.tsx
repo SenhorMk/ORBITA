@@ -53,7 +53,8 @@ async function loadManualOrderFormData(
 ): Promise<void> {
   const [clientesRes, produtosRes] = await Promise.all([
     supabase.from('clientes').select('id, nome, bling_id').order('nome'),
-    supabase.from('produtos').select('id, nome, codigo, preco, estoque, estoque_reservado, bling_id').order('nome'),
+    // Só produtos vendáveis: arquivado ou inativo não é oferecido (o servidor recusa de novo).
+    supabase.from('produtos').select('id, nome, codigo, preco, estoque, estoque_reservado, bling_id').eq('situacao', 'ativo').order('nome'),
   ]);
 
   if (clientesRes.data) setClientes(clientesRes.data as ClienteOption[]);

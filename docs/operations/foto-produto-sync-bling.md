@@ -40,8 +40,8 @@ Consequências no código:
 - A mídia tem operações próprias na porta (`limparImagensDoProduto`,
   `importarImagemDoProduto`, `consultarProduto`), e nunca passa por
   `atualizarProduto`.
-- A exclusão de produto segue situação `E` → `DELETE` → `GET` 404. Veja
-  "Exclusão de produto" abaixo.
+- Retirar um produto da venda é arquivar (PRE-003): situação `I` no Bling,
+  com prova, e o arquivamento local. Veja "Arquivamento de produto" abaixo.
 
 ## Estratégia de URL
 
@@ -277,21 +277,34 @@ Metadata permitida: `produto_id`, `operacao` (`adicionar`/`trocar`/`remover`),
 caminho do objeto, corpo e resposta do Bling são proibidos pelo catálogo.
 Falha ao auditar não interrompe a sincronização.
 
-## Exclusão de produto
+## Arquivamento de produto (PRE-003)
 
-`POST /api/produtos/delete` recebe só o id local. O `bling_id` vem do banco,
-nunca do navegador.
+A exclusão física foi substituída: com pedido, ela falhava no banco depois de
+o produto já ter saído do Bling; sem pedido, levava junto a movimentação de
+estoque. `POST /api/produtos/arquivar` recebe só o id local. O `bling_id` vem
+do banco, nunca do navegador.
 
-1. Produto com `bling_id`: `PATCH situacoes E`, depois `DELETE`, depois
-   `GET` 404 (`excluirProdutoNoBling`, que reaproveita
-   `exclusaoRemotaConfirmada`). Uma resposta ambígua é decidida pelo `GET`, e
-   nunca há um segundo `DELETE` às cegas.
-2. Sem ausência confirmada no Bling, nada local é apagado. Recusa → 409, limite
-   → 503, produto ainda presente → 409, indeterminado → 503. O corpo bruto do
+1. Produto já arquivado: sucesso, sem chamar o Bling.
+2. Produto com `bling_id`: `PATCH situacoes I` (inativo — nunca `E` nem
+   `DELETE`; `inativarProdutoNoBling`). `2xx` prova. Uma resposta ambígua
+   (prazo, rede, `5xx`, `404`) é decidida pelo `GET`: `I`, `E` ou `404` é fora
+   da venda; `A` é "ainda ativo"; o resto é indeterminado. Nunca um segundo
+   `PATCH` às cegas.
+3. Sem prova de que o produto saiu da venda, nada local muda. Recusa → 409,
+   limite → 503, ainda ativo → 409, indeterminado → 503. O corpo bruto do
    Bling não aparece na resposta.
-3. Só então a linha local sai, e depois o objeto no Storage
-   (`excluirProdutoComFoto`).
-4. Produto sem `bling_id`: só a exclusão local.
+4. Só então `arquivar_produto` (migration 75): trava a linha, é idempotente
+   (`ja_arquivado`), e não mexe em estoque, reserva, foto nem pedidos.
+   Falha local depois do Bling confirmar → 500 "Tente de novo para concluir";
+   repetir é seguro.
+5. Produto sem `bling_id`: só o arquivamento local.
+
+Arquivado não é candidato à venda: o `ManualOrderModal` só lista `ativo`, e a
+venda manual recusa produto arquivado ou inativo **antes** do POST ao Bling.
+A sincronização grava `ativo`/`inativo` a partir do Bling, mas não desarquiva:
+o banco mantém `arquivado` em qualquer gravação comum. O item do pedido guarda
+nome e código do produto (`produto_nome`, `produto_codigo`), e o detalhe do
+pedido mostra esse retrato. Não há desarquivamento pela tela.
 
 ## Validação real (2026-10-02, uma execução)
 
@@ -317,7 +330,7 @@ Observações:
 - Os webhooks do Bling fazem o ORBITA publicado espelhar produtos criados no
   Bling. Os produtos descartáveis ganharam linhas locais no projeto de
   desenvolvimento. Essas linhas continuam lá mesmo depois do 404 no Bling: a
-  exclusão no Bling não remove o espelho local.
+  exclusão no Bling não remove o espelho local (PRE-004).
 
 ## O que não foi feito nesta entrega
 

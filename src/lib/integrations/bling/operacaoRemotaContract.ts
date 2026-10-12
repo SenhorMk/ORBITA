@@ -63,12 +63,15 @@ export type EscritaRemota =
   | FalhaDeOperacaoRemota;
 
 /**
- * Produto lido por id: só o que a exclusão confirmada e a sincronização da
- * foto precisam. `imagens` conta internas + externas — o ORBITA converge o
- * conjunto inteiro para zero ou uma imagem, então a quantidade é o que se
- * confere, não a identidade de cada uma.
+ * Produto lido por id: só o que a exclusão confirmada, a sincronização da
+ * foto e o arquivamento precisam. `imagens` conta internas + externas — o
+ * ORBITA converge o conjunto inteiro para zero ou uma imagem, então a
+ * quantidade é o que se confere, não a identidade de cada uma. `situacao` é a
+ * do Bling (`A` ativo, `I` inativo, `E` excluído), ou `null` quando a resposta
+ * não a trouxe.
  */
 export interface ProdutoRemoto {
   readonly id: string;
   readonly imagens: number;
+  readonly situacao: 'A' | 'I' | 'E' | null;
 }

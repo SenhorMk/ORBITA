@@ -58,7 +58,7 @@ abaixo, que responde 401/403/503 pela fonte canônica.
 | Rota | O que saiu |
 | --- | --- |
 | `bling/situacoes`, `financeiro`, `financeiro/fornecedores` (GET+POST) | portão puro |
-| `clientes/delete`, `produtos/delete`, `nfe` | `session.role !== 'dono'` → `escopoTemCapacidade(scope, 'organization:manage')` |
+| `clientes/delete`, `produtos/arquivar` (antes `produtos/delete`), `nfe` | `session.role !== 'dono'` → `escopoTemCapacidade(scope, 'organization:manage')` |
 | `pedidos/manual`, `pedidos/status`, `financeiro/sync` | `session.tenant.id` como ator → `scope.actorId` |
 
 **`src/app/api/config` foi apagada**, por decisão do proprietário. Lia
