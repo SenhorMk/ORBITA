@@ -5,7 +5,8 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 
 import { createDespesaHandler } from '@/app/api/financeiro/despesaHandler';
-import { depsDeTeste, fakeBling, fakeStore } from '@/app/api/financeiro/__testkit__/despesaFakes';
+import { fakeBling } from '@/app/api/financeiro/__testkit__/blingContasPagarFake';
+import { depsDeTeste, fakeStore } from '@/app/api/financeiro/__testkit__/despesaFakes';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 import { LancamentoDeDespesa } from './LancamentoDeDespesa';

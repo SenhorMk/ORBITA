@@ -5,10 +5,12 @@ import { supabaseServer } from '@/lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 import type {
+  DesfechoDaBaixa,
   DesfechoDaTentativa,
   DespesaStorePort,
   GravacaoDeTentativa,
   IntencaoDeContaPagar,
+  ReivindicacaoDeBaixa,
   ReivindicacaoDeTentativa,
 } from './despesaHandler';
 
@@ -22,6 +24,8 @@ const linhaDeReivindicacaoSchema = z.object({
   contato_bling_id: z.number().int().positive().nullable(),
   desfecho: z.enum(['nova', 'reaberta', 'repetida', 'conflito_de_conteudo', 'pendencia_identica']),
   chave_pendente: z.string().min(1).nullable(),
+  // Ausente na resposta de um banco ainda sem a migration 74.
+  numero_documento: z.string().nullable().optional(),
 });
 
 /**
@@ -43,7 +47,7 @@ export function lerReivindicacao(linha: unknown): ReivindicacaoDeTentativa {
     case 'nova':
     case 'reaberta':
       if (r.tentativa_id === null || r.epoca === null || r.estado !== 'em_voo') break;
-      return { _tag: 'TentativaPropria', tentativaId: r.tentativa_id, epoca: r.epoca };
+      return { _tag: 'TentativaPropria', tentativaId: r.tentativa_id, epoca: r.epoca, numeroDocumento: r.numero_documento ?? null };
     case 'repetida':
       if (r.tentativa_id === null || r.estado === null || r.estado === 'nao_enviada') break;
       return {
@@ -77,6 +81,8 @@ async function reivindicarTentativa(
     p_data_vencimento: intencao.dataVencimento,
     p_data_emissao: intencao.dataEmissao,
     p_contato_bling_id: intencao.contatoBlingId,
+    p_numero_documento: intencao.numeroDocumento,
+    p_quitacao_solicitada: intencao.quitacaoSolicitada,
   });
 
   // Toda falha, inclusive tabela ou função ausente (`42883`/`42P01` num banco
@@ -149,12 +155,78 @@ async function vincularTitulo(
   return Array.isArray(data) && data.length === 1 ? 'Gravado' : 'NaoGravado';
 }
 
+const linhaDeBaixaSchema = z.object({
+  baixa_id: z.string().min(1),
+  estado: z.enum(['em_voo', 'nao_enviada', 'confirmada', 'recusada', 'indeterminada']),
+  epoca: z.number().int().positive(),
+  desfecho: z.enum(['nova', 'reaberta', 'repetida']),
+});
+
+/**
+ * Traduz a linha de `reivindicar_baixa_conta_pagar` (migration 74). Qualquer
+ * combinação inesperada é indisponível: na dúvida, a quitação não sai.
+ *
+ * @param linha - O valor cru devolvido pelo PostgREST.
+ * @returns O resultado da reivindicação da baixa.
+ */
+export function lerReivindicacaoDeBaixa(linha: unknown): ReivindicacaoDeBaixa {
+  const lida = linhaDeBaixaSchema.safeParse(linha);
+  if (!lida.success) return { _tag: 'BaixaIndisponivel' };
+  const { desfecho, estado, baixa_id: baixaId, epoca } = lida.data;
+  if (desfecho !== 'repetida') {
+    return estado === 'em_voo' ? { _tag: 'BaixaPropria', baixaId, epoca } : { _tag: 'BaixaIndisponivel' };
+  }
+  return estado === 'nao_enviada' ? { _tag: 'BaixaIndisponivel' } : { _tag: 'BaixaRepetida', estado };
+}
+
+async function reivindicarBaixa(
+  scope: VerifiedOrganizationScope,
+  baixa: { readonly tentativaId: string; readonly blingContaId: string; readonly dataBaixa: string },
+): Promise<ReivindicacaoDeBaixa> {
+  const { data, error } = await supabaseServer.rpc('reivindicar_baixa_conta_pagar', {
+    p_organizacao_id: scope.organizationId,
+    p_tentativa_id: baixa.tentativaId,
+    p_bling_conta_id: baixa.blingContaId,
+    p_data_baixa: baixa.dataBaixa,
+  });
+  if (error) {
+    registrarFalhaInterna('financeiro.baixa.reivindicar', error);
+    return { _tag: 'BaixaIndisponivel' };
+  }
+  return lerReivindicacaoDeBaixa(Array.isArray(data) ? data[0] : data);
+}
+
+async function concluirBaixa(
+  scope: VerifiedOrganizationScope,
+  baixa: { readonly baixaId: string; readonly epoca: number },
+  desfecho: DesfechoDaBaixa,
+): Promise<GravacaoDeTentativa> {
+  const campos = desfecho.estado === 'confirmada'
+    ? { estado: 'confirmada', bordero_id: desfecho.borderoId }
+    : { estado: desfecho.estado, motivo: desfecho.motivo };
+  const { data, error } = await supabaseServer
+    .from('baixas_conta_pagar')
+    .update(campos)
+    .eq('organizacao_id', scope.organizationId)
+    .eq('id', baixa.baixaId)
+    .eq('estado', 'em_voo')
+    .eq('epoca', baixa.epoca)
+    .select('id');
+  if (error) {
+    registrarFalhaInterna('financeiro.baixa.concluir', error);
+    return 'NaoGravado';
+  }
+  return Array.isArray(data) && data.length === 1 ? 'Gravado' : 'NaoGravado';
+}
+
 /** As operações de tentativa que `DespesaStorePort` exige, sobre o Supabase. */
 export const tentativasDeContaPagarStore: Pick<
   DespesaStorePort,
-  'reivindicarTentativa' | 'concluirTentativa' | 'vincularTitulo'
+  'reivindicarTentativa' | 'concluirTentativa' | 'vincularTitulo' | 'reivindicarBaixa' | 'concluirBaixa'
 > = {
   reivindicarTentativa,
   concluirTentativa,
   vincularTitulo,
+  reivindicarBaixa,
+  concluirBaixa,
 };

@@ -8,8 +8,6 @@ import {
   resolveActiveRequestOrganizationContext,
   resolveVerifiedOrganizationScope,
 } from '@/lib/requestOrganizationContext';
-import { supabaseServer } from '@/lib/supabaseServer';
-import { TituloFinanceiro } from '@/types';
 import { organizationContextToScope } from '@/lib/verifiedOrganizationScope';
 import type { BlingCallResult } from '@/lib/integrations/bling/pedidoVendaContract';
 
@@ -19,9 +17,9 @@ import {
   createDespesaHandler,
   type DespesaAuthPort,
   type DespesaBlingPort,
-  type DespesaStorePort,
 } from './despesaHandler';
-import { tentativasDeContaPagarStore } from './tentativasDeContaPagarStore';
+import { despesaStore } from './despesaStoreSupabase';
+import { hojeEmSaoPaulo } from './hojeEmSaoPaulo';
 
 export type { DespesaBlingPort, DespesaDependencies, DespesaStorePort } from './despesaHandler';
 
@@ -101,19 +99,6 @@ async function resolverContatoPadrao(blingClient: BlingPort): Promise<BlingCallR
   return { _tag: 'BlingOk', value: Number(criado.value.id) };
 }
 
-/** Data de hoje em `America/Sao_Paulo`, no formato `AAAA-MM-DD`. */
-function hojeEmSaoPaulo(): string {
-  // `Intl` com `en-CA` já devolve AAAA-MM-DD. A versão anterior fazia
-  // `toLocaleString('en-US', {timeZone})` → `new Date(...)` → `toISOString()`,
-  // que reinterpreta a hora local como UTC e erra o dia perto da meia-noite.
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Sao_Paulo',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date());
-}
-
 function blingDespesaAdapter(client: BlingPort): DespesaBlingPort {
   return {
     resolverContatoPadrao: () => resolverContatoPadrao(client),
@@ -121,76 +106,6 @@ function blingDespesaAdapter(client: BlingPort): DespesaBlingPort {
     obterPortadorPadrao: () => client.obterContaFinanceiraPadraoId(),
     baixarContaPagar: (id, payload) => client.baixarContaPagar(id, payload),
   };
-}
-
-const despesaStore: DespesaStorePort = {
-  ...tentativasDeContaPagarStore,
-
-  async resolverCategoriaBling(scope, categoriaId) {
-    const { data } = await supabaseServer
-      .from('categorias_financeiras')
-      .select('bling_id')
-      .eq('organizacao_id', scope.organizationId)
-      .eq('id', categoriaId)
-      .maybeSingle();
-
-    const blingId = Number(data?.bling_id);
-    return Number.isSafeInteger(blingId) && blingId > 0 ? blingId : null;
-  },
-
-  async salvarTitulo(scope, titulo) {
-    const essencial = {
-      bling_id: titulo.blingId ?? undefined,
-      tipo: 'pagar',
-      situacao: titulo.situacao,
-      valor: titulo.valor,
-      data_vencimento: titulo.dataVencimento,
-      descricao: titulo.descricao,
-      categoria_id: titulo.categoriaId,
-    } as TituloFinanceiro;
-
-    const completo = {
-      ...essencial,
-      titulo: titulo.titulo,
-      fornecedor_bling_id: titulo.fornecedorBlingId,
-      fornecedor_nome: titulo.fornecedorNome,
-    } as TituloFinanceiro;
-
-    let salvo: TituloFinanceiro;
-    let aviso: string | undefined;
-    try {
-      salvo = await financeiroRepository.upsertTitulo(scope, completo);
-    } catch (erro: unknown) {
-      // `PGRST204` é o PostgREST dizendo que a coluna não existe NESTE banco —
-      // a migration 62 ainda não foi aplicada aqui. Isso não é motivo para
-      // recusar a despesa: valor, data, categoria e situação são o que a
-      // contabilidade precisa, e eles cabem no esquema antigo. O que não cabe
-      // é dito em voz alta, em vez de sumir.
-      if (!esquemaSemColunasNovas(erro)) throw erro;
-      salvo = await financeiroRepository.upsertTitulo(scope, essencial);
-      aviso = 'A despesa foi gravada, mas o título e o fornecedor não foram registrados: '
-        + 'a migration 62 ainda não foi aplicada neste banco.';
-    }
-
-    return {
-      id: String(salvo.id ?? ''),
-      blingId: salvo.bling_id ? String(salvo.bling_id) : null,
-      situacao: salvo.situacao ?? titulo.situacao,
-      ...(aviso ? { aviso } : {}),
-    };
-  },
-};
-
-/**
- * O banco ainda não tem as colunas que a migration 62 cria?
- *
- * O sinal é o `code` do PostgREST, e não o texto da mensagem: `PGRST204` é
- * "coluna não encontrada no cache de esquema". A causa vem anexada ao erro que
- * o repositório lança justamente para esta pergunta poder ser feita.
- */
-function esquemaSemColunasNovas(erro: unknown): boolean {
-  const causa = erro instanceof Error ? erro.cause : erro;
-  return typeof causa === 'object' && causa !== null && (causa as { code?: unknown }).code === 'PGRST204';
 }
 
 const despesaAuth: DespesaAuthPort = {

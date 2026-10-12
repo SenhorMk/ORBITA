@@ -6,7 +6,8 @@ import {
   type DespesaDependencies,
   type DespesaResponseBody,
 } from './despesaHandler';
-import { depsDeTeste, fakeBling, fakeStore } from './__testkit__/despesaFakes';
+import { fakeBling } from './__testkit__/blingContasPagarFake';
+import { depsDeTeste, fakeStore } from './__testkit__/despesaFakes';
 import { buildDespesaRequest, despesaRequestSchema } from '@/lib/config/despesaContract';
 import { parseBlingFailure } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';

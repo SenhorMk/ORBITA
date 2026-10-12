@@ -435,9 +435,108 @@ segunda conta. Por isso:
   `mensagemPublicaDaFalhaDoBling` (status + categoria do `type`, vocabulário
   fechado).
 
-A saída de `indeterminada` (consultar o Bling e concluir) é o PRE-002. Para essa
-busca, a tentativa guarda contato, valor, vencimento e emissão — nunca o texto
-da descrição.
+### Reconciliação: sair de `indeterminada` só com prova (PRE-002)
+
+Contrato oficial usado (`openapi-Dw6cY8yQ.json`, conferido em 09/10/2026):
+
+| Operação | O que o contrato oferece | Uso |
+|---|---|---|
+| `POST /contas/pagar` | `numeroDocumento` (string, "controle interno da empresa"), sem tamanho máximo declarado | recebe a referência opaca `ORB-` + 16 hex, derivada da chave da operação |
+| `GET /contas/pagar` | filtros `dataEmissaoInicial/Final`, `dataVencimentoInicial/Final`, `idContato`, `situacao`, `pagina`, `limite`; item com `id`, `situacao`, `valor`, `vencimento`, `contato.id` | estreita os candidatos — **não filtra nem devolve `numeroDocumento`** |
+| `GET /contas/pagar/{id}` | `numeroDocumento`, `dataEmissao`, `saldo`, `borderos`, `historico`, `categoria` | prova (ou não) cada candidato |
+| `POST /contas/pagar/{id}/baixar` | `200 { bordero: { id } }`; sem idempotência; aceita `historico` | intenção de baixa antes do POST; o histórico leva `[ORBQ-` + 16 hex da intenção`]` |
+| `GET /borderos/{id}` | `id`, `data`, `historico`, `portador`, `categoria`, `pagamentos` | prova de AUTORIA da baixa |
+
+O que é prova:
+
+- **criação**: exatamente uma conta, entre as listadas com o mesmo valor,
+  vencimento, emissão e contato, traz a referência da tentativa em
+  `numeroDocumento` e os campos batem na leitura por id. Tentativas anteriores à
+  migration 74 não têm referência: para elas nada é prova, e o resultado é
+  revisão manual;
+- **baixa**, em duas metades: (1) a leitura por id da própria conta mostra
+  `situacao = 2` (Pago), `saldo` INFORMADO e zero, e de 1 a 10 borderôs; (2)
+  exatamente um desses borderôs traz no `historico` a referência completa e
+  delimitada `[ORBQ-…]` da intenção de baixa e tem a `data` dela; cada
+  `GET /borderos/{id}` precisa devolver o borderô pedido (mesmo `id`), na ordem
+  dos borderôs da conta, ou a leitura é inconsistente. Conta paga não basta: um pagamento
+  lançado por terceiro na mesma conta deixa a conta paga sem que a baixa do
+  ORBITA tenha acontecido (`quitada_sem_autoria`). Saldo ausente, borderô
+  ausente, borderôs demais ou mais de um borderô com a referência também são
+  revisão manual.
+
+A referência da baixa só existe nas baixas enviadas a partir desta versão. Uma
+baixa anterior sem desfecho não tem como ser provada: fica em revisão manual.
+
+Uma operação confirmada no Bling com a projeção local incompleta (título não
+gravado ou não vinculado; título não marcado pago depois da baixa confirmada) é
+reparada pela própria conferência, que só LÊ a conta por id e grava o título por
+upsert da conta remota — chamar de novo não cria outro título. A resposta diz
+`projecaoLocal: 'pendente'` enquanto o reparo não fechar, e a operação continua
+listada.
+
+A quitação pedida no lançamento (`pago: true`) é gravada com a intenção
+(`quitacao_solicitada`, imutável) antes do POST de criação. Se a criação só se
+confirma depois (ACK perdido), a conferência NÃO quita sozinha: a operação fica
+com a pendência `quitacao_solicitada`, e quitar é uma ação explícita do operador
+(`POST /api/financeiro/operacoes/{ref}/quitacao`), que lê a conta antes (já paga
+ou não aberta → nada é enviado) e passa pela intenção durável de baixa.
+
+A confirmação manual (`POST .../{ref}/confirmacao-manual`, corpo
+`{ blingContaId }`) é a saída auditável de uma criação em revisão manual: o
+servidor lê a conta apontada por id e só aceita se valor, vencimento, emissão e
+contato baterem e se ela não tiver a referência de outra operação. Com a
+referência desta operação em `numeroDocumento`, é evidência (`confirmacao_manual`).
+Sem ela, coincidência de campos não prova nada: só a declaração explícita do
+operador (`declaracaoDoOperador: true`) vincula, e o recibo grava o ator e o
+método `declaracao_do_operador`, distinto de prova. Uma conta remota já ligada a
+outra operação da organização nunca é confirmada para uma segunda
+(`conta_de_outra_operacao`, índice único `uq_tentativas_conta_pagar_conta_remota`
+e trava consultiva por conta na função de registro).
+
+O banco impõe o mesmo: `registrar_reconciliacao_conta_pagar` recusa (22023)
+baixa confirmada sem borderô, por método que não seja `leitura_de_borderos` ou
+com a conta registrada fora de `Pago` (`p_situacao_remota`), criação confirmada
+por método de baixa, confirmação com motivo e revisão sem motivo — o banco
+confere a coerência do registrado, não a autoria, que o servidor decide pelo
+borderô; `baixas_conta_pagar` e `reconciliacoes_conta_pagar` têm checks que
+impedem baixa confirmada sem borderô por qualquer caminho.
+
+Antes de quitar, a conta é relida e validada contra a intenção (mesmo id, valor,
+vencimento, emissão e fornecedor) e precisa estar em aberto com o saldo
+integral; divergente ou contraditória, nada é enviado (`conta_divergente`,
+`conta_inconsistente`). Uma mudança no Bling entre essa leitura e o POST não é
+controlável: a intenção durável e a referência no histórico cobrem o intervalo.
+
+O título guarda o código cru do Bling (`situacao_bling`): `Pago` com o título
+aberto (saldo não comprovado) é a pendência `pagamento_nao_comprovado`, visível
+até uma leitura completa — saldo zero marca pago; a conta reaberta fecha a
+divergência. A sincronização financeira não apaga essa pendência: o gatilho
+`tg_titulo_conta_pagar_pago_so_comprovado` (migration 74) impede que uma
+gravação comum torne pago um título a pagar vinculado a uma operação do PRE-002
+(ou cuja conta remota já é de uma); o resto da linha sincroniza normalmente, e
+só `marcar_titulo_pago_conta_pagar`, chamada pelo servidor com o pagamento
+comprovado, marca — a comprovação vale para aquele título, naquela transação.
+A resposta da conferência traz `projecaoLocal: 'divergente'` enquanto o Bling
+diz Pago sem saldo comprovado. A página de pendências falha explicitamente se uma operação
+escolhida pela listagem não puder ser carregada: nunca sai parcial.
+
+Pagamento confirmado ≠ autoria: `Pago` com saldo INFORMADO e zero confirma que
+a conta foi paga; só o borderô com a referência `ORBQ-` atribui a baixa ao
+ORBITA. Sem saldo zerado, nenhum caminho marca o título como pago (nem a
+quitação explícita, nem o reparo do título, nem a conferência de uma quitação
+recusada).
+
+Todo o resto é `revisao_manual`, com recibo: busca vazia, candidatos múltiplos,
+candidato divergente, listagem incompleta (teto de 5 páginas de 100), timeout,
+`429`, `5xx`, corpo inválido, conta que some entre leituras, conta aberta ou
+parcial. Nenhum desfecho da reconciliação autoriza um novo POST: o serviço só
+recebe a porta de leitura do Bling.
+
+A migration 74 impõe isso no banco: `indeterminada → confirmada` (criação e
+baixa) só com recibo `confirmada` da mesma conta remota na mesma transação; não
+existe `indeterminada → nao_enviada`, `recusada` ou `em_voo`. Recibos são
+append-only. Ver `docs/operations/reconciliacao-financeira.md`.
 
 ### O portador vem de `GET /contas-contabeis`
 

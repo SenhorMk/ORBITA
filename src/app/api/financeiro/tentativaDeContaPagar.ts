@@ -39,14 +39,16 @@ export type MotivoDeIndeterminacao =
   | 'falha_nao_classificada';
 
 /**
- * O que um envio de `POST /contas/pagar` provou.
+ * O que um envio de `POST /contas/pagar` ou de `POST .../baixar` provou.
  *
  * Só `Confirmada` e `Recusada` são conhecimento sobre o efeito no Bling.
  * `NaoEnviada` é conhecimento sobre a requisição (nenhuma saiu).
  * `Indeterminada` é a ausência de conhecimento — e nunca é tratada como recusa.
+ *
+ * @template T - O que a confirmação traz (o id da conta, o borderô da baixa).
  */
-export type DesfechoDoEnvio =
-  | { readonly _tag: 'Confirmada'; readonly blingContaId: string }
+export type DesfechoDoEnvio<T> =
+  | { readonly _tag: 'Confirmada'; readonly valor: T }
   | { readonly _tag: 'NaoEnviada'; readonly motivo: MotivoDeNaoEnvio }
   | { readonly _tag: 'Recusada'; readonly failure: BlingProviderFailure }
   | { readonly _tag: 'Indeterminada'; readonly motivo: MotivoDeIndeterminacao };
@@ -69,16 +71,44 @@ function motivoDaIndeterminacao(failure: BlingProviderFailure): MotivoDeIndeterm
  * status `4xx`. Timeout, rede, `5xx`, `429`, `2xx` sem id e qualquer caso não
  * previsto são `Indeterminada`.
  *
+ * @template T - O que a confirmação traz.
  * @param envio - O que o adapter sabe sobre o POST.
- * @returns O desfecho a gravar na tentativa.
+ * @returns O desfecho a gravar.
  */
-export function classificarEnvio(envio: EnvioDeCriacaoAoBling<{ id: string }>): DesfechoDoEnvio {
+export function classificarEnvio<T>(envio: EnvioDeCriacaoAoBling<T>): DesfechoDoEnvio<T> {
   if (envio._tag === 'NaoEnviado') return { _tag: 'NaoEnviada', motivo: envio.motivo };
 
   const { resultado } = envio;
-  if (resultado._tag === 'BlingOk') return { _tag: 'Confirmada', blingContaId: resultado.value.id };
+  if (resultado._tag === 'BlingOk') return { _tag: 'Confirmada', valor: resultado.value };
   if (classificarFalhaDeCriacaoNoBling(resultado.failure) === 'Definitiva') {
     return { _tag: 'Recusada', failure: resultado.failure };
   }
   return { _tag: 'Indeterminada', motivo: motivoDaIndeterminacao(resultado.failure) };
+}
+
+/**
+ * A referência opaca que vai em `numeroDocumento` no `POST /contas/pagar`.
+ *
+ * Derivada da chave da operação — a mesma chave sempre dá a mesma referência —
+ * e curta (20 caracteres): o OpenAPI não declara tamanho máximo para o campo, e
+ * nada nela descreve a despesa. A migration 74 impõe o formato e a unicidade
+ * por organização.
+ *
+ * @param chave - A `chaveIdempotencia` (UUID) da operação.
+ * @returns `ORB-` seguido de 16 dígitos hexadecimais maiúsculos.
+ */
+export function referenciaNoBling(chave: string): string {
+  return `ORB-${chave.replace(/-/gu, '').slice(0, 16).toUpperCase()}`;
+}
+
+/**
+ * A referência da baixa, que vai no histórico do `POST .../baixar` e volta no
+ * borderô (`GET /borderos/{id}`). É o que prova que a quitação foi do ORBITA, e
+ * não de um pagamento lançado por terceiro na mesma conta.
+ *
+ * @param baixaId - O id (UUID) da intenção de baixa.
+ * @returns `ORBQ-` seguido de 16 dígitos hexadecimais maiúsculos.
+ */
+export function referenciaDaBaixa(baixaId: string): string {
+  return `ORBQ-${baixaId.replace(/-/gu, '').slice(0, 16).toUpperCase()}`;
 }

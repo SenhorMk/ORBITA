@@ -380,6 +380,11 @@
       "order": 76,
       "path": "../database/73_tentativas_de_conta_a_pagar.sql",
       "sha256": "94684056d1631d87417393b011cab008aca9c764e513245e92532447536037b4"
+    },
+    {
+      "order": 77,
+      "path": "../database/74_reconciliacao_de_conta_a_pagar.sql",
+      "sha256": "5a3c9e3824baa745c0e0c423a84feba399e7711ec803a978149289de2ca78dbb"
     }
   ],
   "references": [

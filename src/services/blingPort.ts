@@ -2,7 +2,14 @@ import type { BlingCategoria, BlingCliente, BlingPedido, BlingProduto } from '..
 import type { BlingCallResult, BuscaDePedidoPorNumeroLoja, PedidoVendaPayload } from '../lib/integrations/bling/pedidoVendaContract';
 import type { Situacao } from '../lib/integrations/bling/situacoesContract';
 import type { EnvioDeCriacaoAoBling } from '../lib/integrations/bling/classificacaoDeFalhaDeCriacao';
-import type { ContatoRemoto, EscritaRemota, ExclusaoRemota, LeituraRemota, ProdutoRemoto } from '../lib/integrations/bling/operacaoRemotaContract';
+import type {
+  ContatoRemoto,
+  EscritaRemota,
+  ExclusaoRemota,
+  FalhaDeOperacaoRemota,
+  LeituraRemota,
+  ProdutoRemoto,
+} from '../lib/integrations/bling/operacaoRemotaContract';
 import type { CodigoDaSituacaoDaConta } from '../lib/integrations/bling/situacaoDaContaBling';
 
 /** Conta a pagar lida por id: só o que a correção precisa. */
@@ -119,7 +126,13 @@ export interface BlingPort {
   getCategorias(): Promise<unknown[]>;
   /** Conferidos contra o schema oficial; quitar é uma chamada separada da criação. */
   criarContaPagar(payload: ContaPagarBlingEntrada): Promise<EnvioDeCriacaoAoBling<{ id: string }>>;
-  baixarContaPagar(idConta: string, payload: BaixaContaPagarEntrada): Promise<BlingCallResult<void>>;
+  baixarContaPagar(idConta: string, payload: BaixaContaPagarEntrada): Promise<EnvioDeCriacaoAoBling<{ borderoId: string | null }>>;
+  /** Leitura por id para a reconciliação (PRE-002). */
+  lerContaPagarParaReconciliacao(id: string): Promise<LeituraRemota<ContaPagarDetalhada>>;
+  /** Borderô lido por id, para provar de quem é a baixa (PRE-002). */
+  lerBorderoParaReconciliacao(id: string): Promise<LeituraRemota<BorderoLido>>;
+  /** Listagem filtrada e paginada para a reconciliação (PRE-002). */
+  listarContasPagarParaReconciliacao(filtro: FiltroDeContasPagar): Promise<ListagemDeContasPagar>;
   /** Situação real (1..7) de uma conta a pagar, lida por id. */
   consultarContaPagar(id: string): Promise<LeituraRemota<ContaPagarRemota>>;
   /** Remove a conta a pagar — o único efeito oficial equivalente a cancelar. */
@@ -212,7 +225,48 @@ export interface ContaPagarBlingEntrada {
   dataEmissao: string;
   competencia: string;
   categoriaId?: number;
+  /** Referência opaca do ORBITA, no campo `numeroDocumento` do contrato. */
+  numeroDocumento?: string;
 }
+
+/** Conta a pagar como `GET /contas/pagar` a lista. */
+export interface ContaPagarResumida {
+  readonly id: string;
+  readonly situacao: CodigoDaSituacaoDaConta;
+  readonly valor: number;
+  readonly vencimento: string;
+  readonly contatoId: number;
+}
+
+/** Conta a pagar como `GET /contas/pagar/{id}` a devolve, no que a reconciliação compara. */
+export interface ContaPagarDetalhada extends ContaPagarResumida {
+  readonly dataEmissao: string | null;
+  readonly numeroDocumento: string | null;
+  readonly saldo: number | null;
+  readonly historico: string | null;
+  readonly categoriaId: number | null;
+  readonly borderos: readonly string[];
+}
+
+/** Borderô como `GET /borderos/{id}` o devolve, no que prova a autoria da baixa. */
+export interface BorderoLido {
+  readonly id: string;
+  readonly data: string;
+  readonly historico: string | null;
+}
+
+/** Os filtros oficiais que a reconciliação usa em `GET /contas/pagar`. */
+export interface FiltroDeContasPagar {
+  readonly dataEmissao: string;
+  readonly dataVencimento: string;
+  readonly contatoId: number | null;
+}
+
+/** Resultado da listagem: completa, incompleta (teto de páginas) ou falha. */
+export type ListagemDeContasPagar =
+  | { readonly _tag: 'Listada'; readonly contas: readonly ContaPagarResumida[] }
+  | { readonly _tag: 'ListagemIncompleta' }
+  | FalhaDeOperacaoRemota;
 
 /** Entrada de `POST /contas/pagar/{id}/baixar`. */
 export interface BaixaContaPagarEntrada {
