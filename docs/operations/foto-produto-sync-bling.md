@@ -329,8 +329,9 @@ Observações:
   caminho do objeto.
 - Os webhooks do Bling fazem o ORBITA publicado espelhar produtos criados no
   Bling. Os produtos descartáveis ganharam linhas locais no projeto de
-  desenvolvimento. Essas linhas continuam lá mesmo depois do 404 no Bling: a
-  exclusão no Bling não remove o espelho local (PRE-004).
+  desenvolvimento. Essas linhas continuam lá mesmo depois do 404 no Bling.
+  Desde o PRE-004, o `product.deleted` arquiva o espelho local e grava a
+  tombstone — o produto não volta, mas a linha (e a foto) não é apagada.
 
 ## O que não foi feito nesta entrega
 

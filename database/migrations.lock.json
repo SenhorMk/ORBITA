@@ -390,6 +390,11 @@
       "order": 78,
       "path": "../database/75_arquivamento_de_produto.sql",
       "sha256": "fcf1f782771574e4d814a90b49771f4349211752609c46087d52fd9d50a20236"
+    },
+    {
+      "order": 79,
+      "path": "../database/76_produto_excluido_no_bling.sql",
+      "sha256": "41da2a9b141c1234def4d7e365f388e21c802b1327453b63fd306d21397a5a78"
     }
   ],
   "references": [

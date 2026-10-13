@@ -44,6 +44,7 @@ vi.mock('../../../../lib/supabaseServer', () => ({ supabaseServer: {} }));
 vi.mock('../../../../repositories/produtoRepository', () => ({
   produtoRepository: {
     getByBlingId: async () => local,
+    excluidoNoBling: async () => false,
     upsert: async (_scope: unknown, produto: Produto) => { gravados.push(produto); return produto; },
   },
 }));

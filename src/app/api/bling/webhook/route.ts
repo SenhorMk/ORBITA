@@ -10,6 +10,7 @@ import { supabaseServer } from '../../../../lib/supabaseServer';
 import { descreverErro } from '../../../../lib/erroLegivel';
 import { mapBlingStatus, normalizeToE164 } from '../../../../lib/utils';
 import { authorizeWebhookTenant } from './autorizacao';
+import { aplicarExclusaoDeProduto, blingIdDoProduto, ehExclusaoDeProduto } from './exclusaoDeProduto';
 import { blingInboxService, generateBlingIdempotencyKey } from '../../../../services/blingInboxService';
 import type { VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 
@@ -228,6 +229,10 @@ async function processProdutoEvent(
     console.warn('⚠️ Webhook Bling: Evento recebido sem ID de produto válido.');
     return { blingId, processed: false, ignoredReason: 'missing_id' };
   }
+  // Excluído no Bling (PRE-004): o update atrasado não pede detalhe nem regrava.
+  if (blingIdDoProduto(eventData) && await produtoRepository.excluidoNoBling(organizationScope, blingId)) {
+    return { blingId, processed: false, ignoredReason: 'excluido_no_bling' };
+  }
 
   const { dados: fullProduct, autoritativo, leituraAtual } = await fetchFullProdutoIfIncomplete(prodData, blingId, blingClient);
   const existingLocal = await produtoRepository.getByBlingId(organizationScope, blingId);
@@ -314,6 +319,14 @@ async function processWebhookEvent(
       return { _tag: 'Concluido', produtosAtualizados: 0 };
     }
 
+    if (ehExclusaoDeProduto(entity)) {
+      const exclusao = await aplicarExclusaoDeProduto(eventRecord, eventData, organizationScope, idempotencyKey);
+      await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, exclusao._tag === 'Registrada'
+        ? { success: true, entity: 'produto', acao: 'excluido_no_bling', blingId: exclusao.blingId, desfecho: exclusao.desfecho }
+        : { success: true, ignored: true, reason: exclusao.reason });
+      return { _tag: 'Concluido', produtosAtualizados: 0 };
+    }
+
     if (entity.includes('product') || entity.includes('produto') || entity.includes('stock') || entity.includes('estoque')) {
       const result = await processProdutoEvent(eventData, blingClient, organizationScope);
       if (!result.processed) {
@@ -329,6 +342,11 @@ async function processWebhookEvent(
       return { _tag: 'Concluido', produtosAtualizados: 1 };
     }
 
+    // Evento que o ORBITA não trata: fica no inbox como ignorado, não some.
+    console.warn(`⚠️ Webhook Bling: evento "${entity || 'desconhecido'}" não é tratado; registrado como ignorado.`);
+    await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, {
+      success: true, ignored: true, reason: 'evento_desconhecido', entity: entity || 'desconhecido',
+    });
     return { _tag: 'Concluido', produtosAtualizados: 0 };
   } catch (err: unknown) {
     await blingInboxService.markFailed(supabaseServer, organizationScope, inboxResult.eventoId, err);

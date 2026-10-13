@@ -262,6 +262,48 @@ export class ProdutoRepository {
     if (desfecho === 'arquivado' || desfecho === 'ja_arquivado') return desfecho;
     throw new Error('arquivar_produto devolveu um desfecho fora do contrato');
   }
+
+  /**
+   * Registra a exclusão feita no Bling como tombstone (migration 76,
+   * `registrar_exclusao_de_produto_no_bling`): arquiva o produto local sem
+   * apagar cadastro, foto, itens nem movimentação, e nenhuma gravação
+   * posterior o recria. Idempotente.
+   *
+   * @param excluidoNoBlingEm - A data do evento no Bling, quando veio.
+   * @returns `registrado`, `registrado_sem_produto` (o ORBITA nunca o teve) ou
+   *   `ja_registrado` (reentrega).
+   */
+  async registrarExclusaoNoBling(
+    scope: VerifiedOrganizationScope,
+    blingId: string,
+    excluidoNoBlingEm: string | null,
+  ): Promise<DesfechoDaExclusaoNoBling> {
+    const { data, error } = await supabaseServer.rpc('registrar_exclusao_de_produto_no_bling', {
+      p_organizacao_id: scope.organizationId,
+      p_bling_id: blingId,
+      p_excluido_no_bling_em: excluidoNoBlingEm,
+    });
+    if (error) throw error;
+    const linha = Array.isArray(data) ? data[0] : data;
+    const desfecho = (linha as { desfecho?: unknown } | null)?.desfecho;
+    if (desfecho === 'registrado' || desfecho === 'registrado_sem_produto' || desfecho === 'ja_registrado') return desfecho;
+    throw new Error('registrar_exclusao_de_produto_no_bling devolveu um desfecho fora do contrato');
+  }
+
+  /** O produto foi excluído no Bling nesta organização (há tombstone)? */
+  async excluidoNoBling(scope: VerifiedOrganizationScope, blingId: string): Promise<boolean> {
+    const { data, error } = await supabaseServer
+      .from('produtos_excluidos_no_bling')
+      .select('bling_id')
+      .eq('organizacao_id', scope.organizationId)
+      .eq('bling_id', blingId)
+      .maybeSingle();
+    if (error) throw error;
+    return data !== null;
+  }
 }
+
+/** Desfecho de `registrar_exclusao_de_produto_no_bling`. */
+export type DesfechoDaExclusaoNoBling = 'registrado' | 'registrado_sem_produto' | 'ja_registrado';
 
 export const produtoRepository = new ProdutoRepository();
