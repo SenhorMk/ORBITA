@@ -60,6 +60,14 @@ async function resolveItens(
     if (!produto) {
       return { _tag: 'ItensRejected', response: fail(`Produto não encontrado no cadastro desta organização (${item.produtoId}).`, 400) };
     }
+    // Antes de qualquer envio ao Bling: arquivado ou inativo não é candidato à
+    // venda (PRE-003). O pedido ainda não existe em lugar nenhum.
+    if (produto.situacao !== 'ativo') {
+      return {
+        _tag: 'ItensRejected',
+        response: fail(`${produto.nome} não está disponível para venda (${produto.situacao === 'arquivado' ? 'arquivado' : 'inativo'}).`, 400),
+      };
+    }
     if (produto.estoqueDisponivel < item.quantidade) {
       return {
         _tag: 'ItensRejected',

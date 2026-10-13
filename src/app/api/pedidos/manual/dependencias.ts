@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { situacaoDoProdutoSchema } from '@/lib/config/produtoContract';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
@@ -109,7 +110,7 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
 
       const { data, error } = await supabaseServer
         .from('produtos')
-        .select('id, nome, codigo, bling_id, preco, estoque, estoque_reservado')
+        .select('id, nome, codigo, bling_id, preco, estoque, estoque_reservado, situacao')
         .eq('organizacao_id', scope.organizationId)
         .in('id', [...produtoIds]);
 
@@ -122,6 +123,7 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
         blingId: row.bling_id ?? null,
         preco: numberOrZero(row.preco),
         estoqueDisponivel: numberOrZero(row.estoque) - numberOrZero(row.estoque_reservado),
+        situacao: situacaoDoProdutoSchema.parse(row.situacao),
       }));
     },
 

@@ -164,6 +164,12 @@ export interface Produto {
   nome: string;
   preco: number;
   /**
+   * Ciclo de vida no ORBITA (migration 75): só `ativo` é vendável. Na gravação,
+   * ausente = mantém; `arquivado` só pelo comando de arquivamento.
+   */
+  situacao?: 'ativo' | 'inativo' | 'arquivado';
+  arquivado_em?: string | null;
+  /**
    * No banco: a imagem espelhada do Bling, regravada pela sincronização.
    * Nas leituras para a tela (`/api/dashboard`, `/api/produtos`): a imagem
    * EFETIVA — URL assinada da foto do ORBITA quando existe, senão a do Bling.
@@ -228,6 +234,9 @@ export interface ItemPedido {
   produto_id: string; // UUID
   quantidade: number;
   valor_unitario: number;
+  /** Retrato do produto quando o item entrou no pedido (migration 75). O banco grava; ninguém envia. */
+  produto_nome?: string;
+  produto_codigo?: string | null;
   created_at?: string;
   updated_at?: string;
 }

@@ -25,6 +25,54 @@ export const produtoTipoSchema = z.enum(['S', 'P', 'N']);
 export const produtoSituacaoSchema = z.enum(['A', 'I']);
 export const produtoFormatoSchema = z.enum(['S', 'V', 'E']);
 
+/**
+ * O ciclo de vida do produto NO ORBITA (migration 75), distinto da situação
+ * do Bling: `ativo` é vendável; `inativo` espelha um produto inativo no Bling;
+ * `arquivado` foi retirado da venda pelo ORBITA e continua no histórico dos
+ * pedidos. Só `ativo` é candidato à venda.
+ */
+export const situacaoDoProdutoSchema = z.enum(['ativo', 'inativo', 'arquivado']);
+export type SituacaoDoProduto = z.infer<typeof situacaoDoProdutoSchema>;
+
+/**
+ * A situação local que a sincronização grava a partir da do Bling. `E`
+ * (excluído no Bling) não é decidido aqui — é o webhook de exclusão (PRE-004).
+ * Um produto já arquivado no ORBITA continua arquivado: o banco não deixa
+ * gravação comum desfazer o arquivamento.
+ *
+ * @param situacao - A situação crua do Bling.
+ * @returns `ativo`/`inativo`, ou `undefined` para não gravar nada.
+ */
+export function situacaoLocalDaSituacaoBling(situacao: unknown): 'ativo' | 'inativo' | undefined {
+  if (situacao === 'A') return 'ativo';
+  if (situacao === 'I') return 'inativo';
+  return undefined;
+}
+
+/** O vínculo do produto com o Bling, como o arquivamento precisa decidir. */
+export type VinculoComBling =
+  | { readonly _tag: 'Bling'; readonly blingId: string }
+  /** Produto só do ORBITA: o único formato legítimo é o legado `LOCAL-<timestamp>`. */
+  | { readonly _tag: 'SoLocal' }
+  /** Nem id do Bling nem marca local reconhecida: pode haver conta remota que não se sabe qual. */
+  | { readonly _tag: 'Ambiguo' };
+
+/**
+ * Classifica o `bling_id` gravado. Só um inteiro positivo é vínculo; só o
+ * formato que o ORBITA já gerou para produto local (`LOCAL-${Date.now()}`) é
+ * "sem Bling". Qualquer outra coisa — vazio, `temp_…`, texto — é ambígua: tratar
+ * como local declararia sucesso ignorando uma possível conta remota.
+ *
+ * @param valor - O `bling_id` lido do banco.
+ * @returns O vínculo classificado.
+ */
+export function classificarVinculoComBling(valor: unknown): VinculoComBling {
+  const bruto = typeof valor === 'number' ? String(valor) : typeof valor === 'string' ? valor.trim() : '';
+  if (/^[1-9]\d*$/u.test(bruto)) return { _tag: 'Bling', blingId: bruto };
+  if (/^LOCAL-\d+$/u.test(bruto)) return { _tag: 'SoLocal' };
+  return { _tag: 'Ambiguo' };
+}
+
 export type ProdutoTipo = z.infer<typeof produtoTipoSchema>;
 export type ProdutoSituacao = z.infer<typeof produtoSituacaoSchema>;
 export type ProdutoFormato = z.infer<typeof produtoFormatoSchema>;

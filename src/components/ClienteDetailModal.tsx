@@ -33,8 +33,8 @@ import type { Cliente } from '@/types';
  * com histórico ele responde `Blocked`, e esta tela só mostra a frase do
  * contrato (`mensagemDaCorrecao`), nunca texto do banco ou do Bling.
  *
- * Produto continua sem exclusão na interface: `POST /api/produtos/delete`
- * existe no servidor, e nenhuma tela o chama.
+ * Produto não é excluído: a tela de produto arquiva (`POST /api/produtos/arquivar`,
+ * PRE-003), e o histórico de pedidos fica.
  */
 
 interface ClienteDetailModalProps {

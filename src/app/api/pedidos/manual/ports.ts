@@ -61,6 +61,8 @@ export interface ManualOrderProduto {
   readonly blingId: string | null;
   readonly preco: number;
   readonly estoqueDisponivel: number;
+  /** Só `ativo` é vendável (migration 75): arquivado ou inativo não entra em pedido novo. */
+  readonly situacao: 'ativo' | 'inativo' | 'arquivado';
 }
 
 /** Item já resolvido: quantidade pedida somada ao produto do cadastro. */

@@ -107,24 +107,6 @@ async function salvarA() {
   return produtoRepository.upsert(scope, { id: A, bling_id: '77', nome: 'Editado v2', preco: 1, estoque: 1 });
 }
 
-describe('exclusão normal — ProdutoRepository.delete (POST /api/produtos/delete)', () => {
-  it('exclui por id + organização, SEM condição de foto, e devolve o caminho que a linha tinha', async () => {
-    const { produtoRepository } = await import('./produtoRepository');
-    linha(B)!.imagem_storage_path = FOTO_DE_B;
-    expect(await produtoRepository.delete(scope, B)).toBe(FOTO_DE_B);
-    expect(cadeias[0]).toEqual([
-      ['delete'], ['eq', 'id', B], ['eq', 'organizacao_id', ORG], ['select', 'imagem_storage_path'],
-    ]);
-    expect(linha(B)).toBeUndefined();
-  });
-
-  it('sem foto, ou nenhuma linha excluída: null', async () => {
-    const { produtoRepository } = await import('./produtoRepository');
-    expect(await produtoRepository.delete(scope, B)).toBeNull();
-    expect(await produtoRepository.delete(scope, B)).toBeNull();
-  });
-});
-
 describe('deduplicação por bling_id', () => {
   it('1. duplicado sem foto: DELETE por id + organização + imagem_storage_path IS NULL, na MESMA instrução, e A assume o bling_id', async () => {
     await salvarA();
@@ -275,19 +257,18 @@ describe('todos os caminhos de exclusão de produto estão tratados', () => {
   const relativo = (f: string) => path.relative(RAIZ, f).replaceAll('\\', '/');
   const repositorio = readFileSync(path.join(RAIZ, 'repositories/produtoRepository.ts'), 'utf8');
 
-  it('só a rota de exclusão chama o delete normal; a deduplicação usa a exclusão condicional', () => {
+  it('nenhuma rota exclui produto: a ação da tela arquiva (PRE-003); só a deduplicação exclui, com condição', () => {
     const chamadores = fontes(RAIZ)
       .filter((f) => /produtoRepository\.delete\(|this\.delete\(/u.test(readFileSync(f, 'utf8')))
       .map(relativo);
-    expect(chamadores).toEqual(['app/api/produtos/delete/route.ts']);
+    expect(chamadores).toEqual([]);
     expect(repositorio).toContain('await this.excluirDuplicadoSemFoto(scope, duplicado.id)');
   });
 
-  it('a rota de exclusão passa pela orquestração que limpa a foto depois da linha', () => {
-    const rota = readFileSync(path.join(RAIZ, 'app/api/produtos/delete/route.ts'), 'utf8');
-    expect(rota).toContain('await excluirProdutoComFoto(scope, id, {');
-    expect(rota).toMatch(/excluirLinha: \(escopo, produtoId\) => produtoRepository\.delete\(escopo, produtoId\)/u);
-    expect(rota.match(/produtoRepository\.delete\(/gu)).toHaveLength(1);
+  it('a rota da tela arquiva pelo comando do banco e nunca exclui', () => {
+    const rota = readFileSync(path.join(RAIZ, 'app/api/produtos/arquivar/route.ts'), 'utf8');
+    expect(rota).toContain('produtoRepository.arquivar(scope, id)');
+    expect(rota).not.toMatch(/\.delete\(/u);
   });
 
   it('nenhum outro código de aplicação exclui de produtos diretamente', () => {
@@ -295,7 +276,8 @@ describe('todos os caminhos de exclusão de produto estão tratados', () => {
       .filter((f) => /from\('produtos'\)[\s\S]{0,120}?\.delete\(/u.test(readFileSync(f, 'utf8')))
       .map(relativo);
     expect(diretos).toEqual(['repositories/produtoRepository.ts']);
-    // Duas exclusões no repositório: a normal e a condicional da deduplicação.
-    expect(repositorio.match(/\.delete\(\)/gu)).toHaveLength(2);
+    // Uma exclusão no repositório: a condicional da deduplicação. Produto com
+    // pedido ou movimentação, nem ela apaga (migration 75).
+    expect(repositorio.match(/\.delete\(\)/gu)).toHaveLength(1);
   });
 });

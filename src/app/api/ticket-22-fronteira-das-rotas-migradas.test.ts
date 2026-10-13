@@ -11,7 +11,7 @@
  * um retorno pronto. Uma por classe de mudança:
  *
  * - portão puro removido           → `bling/situacoes`
- * - `session.role` virou capacidade → `produtos/delete`
+ * - `session.role` virou capacidade → `produtos/arquivar` (antes `produtos/delete`)
  * - `tenant.id` virou `scope.actorId` → `pedidos/status`
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
@@ -146,20 +146,20 @@ describe('GET /api/bling/situacoes — portão puro removido', () => {
   });
 });
 
-describe('POST /api/produtos/delete — papel legado virou capacidade', () => {
+describe('POST /api/produtos/arquivar — papel legado virou capacidade', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  const url = 'https://orbita.test/api/produtos/delete';
+  const url = 'https://orbita.test/api/produtos/arquivar';
 
   it('devolve 401 sem sessão', async () => {
-    const { POST } = await import('./produtos/delete/route');
+    const { POST } = await import('./produtos/arquivar/route');
     expect((await POST(requisicao(url, 'POST', false, { id: 'p1' }))).status).toBe(401);
   });
 
   it('nega o membro com 403, por capacidade e não por papel de `app_metadata`', async () => {
     sessaoDe(MEMBER_ID);
     vinculoDe('member');
-    const { POST } = await import('./produtos/delete/route');
+    const { POST } = await import('./produtos/arquivar/route');
     const resposta = await POST(requisicao(url, 'POST', true, { id: 'p1' }));
     expect(resposta.status).toBe(403);
   });
@@ -169,7 +169,7 @@ describe('POST /api/produtos/delete — papel legado virou capacidade', () => {
   it('deixa o admin passar da autorização, o que o papel legado impedia', async () => {
     sessaoDe(OWNER_ID);
     vinculoDe('admin');
-    const { POST } = await import('./produtos/delete/route');
+    const { POST } = await import('./produtos/arquivar/route');
     const resposta = await POST(requisicao(url, 'POST', true, {}));
     // Sem `id` no corpo a rota responde 400 — e chegar ao 400 já prova que a
     // autorização deixou passar.

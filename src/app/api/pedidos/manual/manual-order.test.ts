@@ -39,7 +39,7 @@ function scopeFor(organizacaoId: string): VerifiedOrganizationScope {
 const scopeA = scopeFor(ORG_A);
 
 function produto(overrides: Partial<ManualOrderProduto> = {}): ManualOrderProduto {
-  return { id: PRODUTO, nome: 'Camiseta', codigo: 'CAM-01', blingId: '77', preco: 49.9, estoqueDisponivel: 10, ...overrides };
+  return { id: PRODUTO, nome: 'Camiseta', codigo: 'CAM-01', blingId: '77', preco: 49.9, estoqueDisponivel: 10, situacao: 'ativo', ...overrides };
 }
 
 function cliente(overrides: Partial<ManualOrderCliente> = {}): ManualOrderCliente {
@@ -756,6 +756,22 @@ describe('estoque local', () => {
 
     expect(response.status).toBe(400);
     expect(body.error).toContain('Estoque insuficiente');
+    expect(store.persisted).toHaveLength(0);
+  });
+
+  // PRE-003: arquivado (ou inativo) não é candidato à venda. A recusa vem
+  // antes do POST ao Bling — o pedido não chega a existir em lugar nenhum.
+  it.each([['arquivado'], ['inativo']] as const)('recusa produto %s antes de qualquer envio ao Bling', async (situacao) => {
+    const store = fakeStore({ produtos: [produto({ situacao })] });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+    const body = (await response.json()) as ManualOrderResponseBody;
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe(`Camiseta não está disponível para venda (${situacao}).`);
+    expect(bling.payloads).toHaveLength(0);
     expect(store.persisted).toHaveLength(0);
   });
 

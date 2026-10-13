@@ -85,6 +85,8 @@ export interface BlingPort {
    */
   consultarProduto(id: string): Promise<LeituraRemota<ProdutoRemoto>>;
   marcarProdutoExcluido(id: string): Promise<EscritaRemota>;
+  /** `PATCH /produtos/{id}/situacoes` com `I`: tira o produto da venda no Bling sem excluí-lo. */
+  marcarProdutoInativo(id: string): Promise<EscritaRemota>;
   excluirProduto(id: string): Promise<ExclusaoRemota>;
   limparImagensDoProduto(id: string): Promise<EscritaRemota>;
   importarImagemDoProduto(id: string, url: string): Promise<EscritaRemota>;

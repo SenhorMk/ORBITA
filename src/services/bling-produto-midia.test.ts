@@ -91,10 +91,29 @@ describe('exclusão de produto', () => {
   });
 });
 
+describe('arquivamento de produto (PRE-003)', () => {
+  it('situação I: PATCH /produtos/{id}/situacoes com { situacao: "I" } — inativo, nunca excluído', async () => {
+    fake.programar({ status: 204, body: '' });
+    expect(await adapter().marcarProdutoInativo('777')).toEqual({ _tag: 'EscritaAceita' });
+    expect(fake.recebidas[0]).toMatchObject({ method: 'PATCH', url: '/produtos/777/situacoes' });
+    expect(corpo()).toEqual({ situacao: 'I' });
+  });
+
+  it('a leitura do produto traz a situação do Bling; fora do contrato é indeterminado', async () => {
+    fake.programar(
+      { status: 200, body: JSON.stringify({ data: { id: 777, situacao: 'I' } }) },
+      { status: 200, body: JSON.stringify({ data: { id: 777, situacao: 'Z' } }) },
+    );
+    const cliente = adapter();
+    expect(await cliente.consultarProduto('777')).toEqual({ _tag: 'RemotoPresente', valor: { id: '777', imagens: 0, situacao: 'I' } });
+    expect(await cliente.consultarProduto('777')).toMatchObject({ _tag: 'RemotoIndeterminado' });
+  });
+});
+
 describe('leitura do produto', () => {
   it('conta imagens internas e externas', async () => {
     fake.programar({ status: 200, body: JSON.stringify({ data: { id: 777, midia: { imagens: { internas: [{ link: 'a' }, { link: 'b' }], externas: [], imagensURL: [] } } } }) });
-    expect(await adapter().consultarProduto('777')).toEqual({ _tag: 'RemotoPresente', valor: { id: '777', imagens: 2 } });
+    expect(await adapter().consultarProduto('777')).toEqual({ _tag: 'RemotoPresente', valor: { id: '777', imagens: 2, situacao: null } });
     expect(fake.recebidas[0]).toMatchObject({ method: 'GET', url: '/produtos/777' });
   });
 
@@ -105,7 +124,7 @@ describe('leitura do produto', () => {
       { status: 200, body: JSON.stringify({ data: { nome: 'sem id' } }) },
     );
     const cliente = adapter();
-    expect(await cliente.consultarProduto('777')).toEqual({ _tag: 'RemotoPresente', valor: { id: '777', imagens: 0 } });
+    expect(await cliente.consultarProduto('777')).toEqual({ _tag: 'RemotoPresente', valor: { id: '777', imagens: 0, situacao: null } });
     expect(await cliente.consultarProduto('777')).toEqual({ _tag: 'RemotoAusente' });
     expect(await cliente.consultarProduto('777')).toEqual({ _tag: 'RemotoIndeterminado', causa: 'resposta_invalida' });
   });

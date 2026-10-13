@@ -329,7 +329,7 @@ const CLIENTE_LOCAL: ManualOrderCliente = {
   id: CLIENTE, nome: 'Mateus Kahuan', blingId: '4321', email: null, telefone: null, cpfCnpj: null,
 };
 const PRODUTO_LOCAL: ManualOrderProduto = {
-  id: PRODUTO, nome: 'Rapé Pequeno Artemísia', codigo: 'RAP-15', blingId: '77', preco: 40, estoqueDisponivel: 3,
+  id: PRODUTO, nome: 'Rapé Pequeno Artemísia', codigo: 'RAP-15', blingId: '77', preco: 40, estoqueDisponivel: 3, situacao: 'ativo',
 };
 
 function lojaEmMemoria(comTomada: boolean): ManualOrderStorePort {

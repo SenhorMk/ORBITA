@@ -52,7 +52,7 @@ function blingFalso(inicial: string[], opcoes: {
       const prontos = pendentes.filter((p) => p.em <= estado.leituras);
       pendentes = pendentes.filter((p) => p.em > estado.leituras);
       prontos.forEach((p) => p.efeito());
-      return { _tag: 'RemotoPresente', valor: { id, imagens: estado.imagens.length } };
+      return { _tag: 'RemotoPresente', valor: { id, imagens: estado.imagens.length, situacao: 'A' } };
     },
     async limparImagensDoProduto() {
       chamadas.push('limpar');
