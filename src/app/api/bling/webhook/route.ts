@@ -104,6 +104,15 @@ function isDeletionEvent(entity: string): boolean {
 }
 
 /**
+ * O recurso do evento (`recurso.acao`), comparado por igualdade e nunca por
+ * substring: `product_supplier.deleted` contém `product`, mas o id dele é do
+ * vínculo com o fornecedor, e o ramo de produto faria GET e upsert do produto.
+ */
+const RECURSOS_DE_CONTATO = new Set(['contact', 'contato']);
+const RECURSOS_DE_PEDIDO = new Set(['order', 'pedido']);
+const RECURSOS_DE_PRODUTO = new Set(['product', 'produto', 'stock', 'estoque', 'virtual_stock']);
+
+/**
  * Aplica no ORBITA uma exclusão de pedido feita no Bling: o pedido local é
  * marcado `Cancelado`, não apagado (decisão de produto: preservar o histórico).
  *
@@ -276,6 +285,7 @@ async function processWebhookEvent(
   const entity = String(eventRecord.event || eventRecord.entity || eventRecord.entidade || eventRecord.topic || eventRecord.type || '').toLowerCase();
   const eventData = (eventRecord.data || eventRecord.retorno || eventRecord) as Record<string, unknown>;
   const idempotencyKey = generateBlingIdempotencyKey(event);
+  const recurso = entity.split('.')[0];
 
   const inboxResult = await blingInboxService.registerEvent(supabaseServer, organizationScope, {
     conexaoId,
@@ -295,13 +305,13 @@ async function processWebhookEvent(
   }
 
   try {
-    if (entity.includes('contact') || entity.includes('contato')) {
+    if (RECURSOS_DE_CONTATO.has(recurso)) {
       const blingId = await processContatoEvent(eventData, organizationScope);
       await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, { success: true, entity: 'contato', blingId });
       return { _tag: 'Concluido', produtosAtualizados: 0 };
     }
 
-    if (entity.includes('order') || entity.includes('pedido')) {
+    if (RECURSOS_DE_PEDIDO.has(recurso)) {
       if (isDeletionEvent(entity)) {
         const exclusao = await processPedidoExclusaoEvent(eventData, organizationScope);
         await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, {
@@ -327,7 +337,7 @@ async function processWebhookEvent(
       return { _tag: 'Concluido', produtosAtualizados: 0 };
     }
 
-    if (entity.includes('product') || entity.includes('produto') || entity.includes('stock') || entity.includes('estoque')) {
+    if (RECURSOS_DE_PRODUTO.has(recurso)) {
       const result = await processProdutoEvent(eventData, blingClient, organizationScope);
       if (!result.processed) {
         await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, { success: true, ignored: true, reason: result.ignoredReason });
@@ -349,7 +359,13 @@ async function processWebhookEvent(
     });
     return { _tag: 'Concluido', produtosAtualizados: 0 };
   } catch (err: unknown) {
-    await blingInboxService.markFailed(supabaseServer, organizationScope, inboxResult.eventoId, err);
+    // Chega aqui também quando a conclusão `processed` não foi gravada: o
+    // evento continua reprocessável e a resposta não pode ser 2xx.
+    try {
+      await blingInboxService.markFailed(supabaseServer, organizationScope, inboxResult.eventoId, err);
+    } catch (erroAoConcluir: unknown) {
+      console.error(`❌ Webhook Bling: o inbox não registrou a falha (Key: ${idempotencyKey}):`, descreverErro(erroAoConcluir));
+    }
     const causa = descreverErro(err);
     console.error(`❌ Erro ao processar evento do webhook Bling (Key: ${idempotencyKey}):`, causa);
     return { _tag: 'Falhou', idempotencyKey, causa };

@@ -83,8 +83,10 @@ revoke all on function public.fn_travar_bling_id_de_produto(uuid, text) from pub
 --
 -- Vale para o INSERT (inclusive o `insert ... on conflict do update` do
 -- espelho, cujo BEFORE INSERT roda antes da resolução do conflito) e para o
--- UPDATE que troca o `bling_id`. A trava serializa com o registro da
--- tombstone: das duas ordens, a tombstone sempre vence.
+-- UPDATE que troca o `bling_id` ou a `organizacao_id` — mover um produto de
+-- outra organização para esta com o id excluído também o ressuscitaria. A
+-- trava serializa com o registro da tombstone: das duas ordens, a tombstone
+-- sempre vence.
 -- ---------------------------------------------------------------------------
 create or replace function public.fn_produto_excluido_no_bling_nao_volta()
 returns trigger
@@ -95,7 +97,7 @@ begin
     if new.bling_id is null or new.bling_id !~ '^[1-9][0-9]*$' then
         return new;
     end if;
-    if tg_op = 'UPDATE' and new.bling_id = old.bling_id then
+    if tg_op = 'UPDATE' and new.bling_id = old.bling_id and new.organizacao_id = old.organizacao_id then
         return new;
     end if;
     perform public.fn_travar_bling_id_de_produto(new.organizacao_id, new.bling_id);
@@ -111,7 +113,7 @@ revoke all on function public.fn_produto_excluido_no_bling_nao_volta() from publ
 
 drop trigger if exists tg_produto_excluido_no_bling_nao_volta on public.produtos;
 create trigger tg_produto_excluido_no_bling_nao_volta
-    before insert or update of bling_id on public.produtos
+    before insert or update of bling_id, organizacao_id on public.produtos
     for each row execute function public.fn_produto_excluido_no_bling_nao_volta();
 
 -- ---------------------------------------------------------------------------

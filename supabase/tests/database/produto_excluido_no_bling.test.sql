@@ -4,9 +4,11 @@
 -- atrasado não o recria; a reentrega não duplica nada.
 --
 -- REINTRODUZIR O DEFEITO: tire o gatilho `tg_produto_excluido_no_bling_nao_volta`:
--- 7-10 falham (o update atrasado recria ou regrava o produto excluído). Tire o
--- `if found` da tombstone existente na função: a reentrega tenta reescrever e o
--- teste aborta em 23505. Tire a trava de tombstone imutável: 13-14 falham.
+-- 7-10 e 13 falham (o update atrasado recria ou regrava o produto excluído).
+-- Volte o gatilho a só `update of bling_id`: 13 falha (mover o produto de outra
+-- organização o ressuscita). Tire o `if found` da tombstone existente na
+-- função: a reentrega tenta reescrever e o teste aborta em 23505. Tire a trava
+-- de tombstone imutável: 14-15 falham.
 
 begin;
 
@@ -52,7 +54,7 @@ insert into public.itens_pedido (pedido_id, produto_id, quantidade, valor_unitar
 values ('76000000-0000-4000-8000-0000000000d1', '76000000-0000-4000-8000-000000000001', 2, 79.90);
 insert into public.movimentacao_estoque (produto_id, quantidade) values ('76000000-0000-4000-8000-000000000001', 5);
 
-select plan(18);
+select plan(19);
 
 -- ----------------------------------------------------------------------------
 -- 1-5. A exclusão no Bling arquiva e preserva; a reentrega não muda nada.
@@ -112,13 +114,17 @@ select is((select situacao from public.produtos where id = '76000000-0000-4000-8
 select lives_ok(
     $$insert into public.produtos (organizacao_id, bling_id, nome) values ('76000000-0000-4000-8000-0000000000b1', '99999999901', 'Existe em B')$$,
     '12. a tombstone de A não impede B');
+select throws_ok(
+    $$update public.produtos set organizacao_id = '76000000-0000-4000-8000-0000000000a1'
+       where organizacao_id = '76000000-0000-4000-8000-0000000000b1' and bling_id = '99999999901'$$,
+    '23514', null, '13. nem mover para A o produto de B com o id excluído em A');
 
 -- ----------------------------------------------------------------------------
--- 13-15. Tombstone permanente; falha transacional não deixa resto.
+-- 14-16. Tombstone permanente; falha transacional não deixa resto.
 -- ----------------------------------------------------------------------------
 select throws_ok($$update public.produtos_excluidos_no_bling set excluido_no_bling_em = now()$$, '23514', null,
-                 '13. a tombstone não é reescrita');
-select throws_ok($$delete from public.produtos_excluidos_no_bling$$, '23514', null, '14. nem apagada');
+                 '14. a tombstone não é reescrita');
+select throws_ok($$delete from public.produtos_excluidos_no_bling$$, '23514', null, '15. nem apagada');
 
 insert into public.produtos (id, organizacao_id, bling_id, nome) values
     ('76000000-0000-4000-8000-000000000004', '76000000-0000-4000-8000-0000000000a1', '77777', 'Falha no meio');
@@ -131,19 +137,19 @@ exception when others then
 end $$;
 select is((select count(*)::int from public.produtos_excluidos_no_bling where bling_id = '77777')
           || '/' || (select situacao from public.produtos where id = '76000000-0000-4000-8000-000000000004'),
-          '0/ativo', '15. a transação que cai não deixa tombstone nem arquivamento; a reentrega refaz do zero');
+          '0/ativo', '16. a transação que cai não deixa tombstone nem arquivamento; a reentrega refaz do zero');
 
 -- ----------------------------------------------------------------------------
--- 16-18. Entrada inválida, cascata da organização e privilégios.
+-- 17-19. Entrada inválida, cascata da organização e privilégios.
 -- ----------------------------------------------------------------------------
 select throws_ok(
     $$select * from public.registrar_exclusao_de_produto_no_bling('76000000-0000-4000-8000-0000000000a1', 'LOCAL-1', null)$$,
-    '22023', null, '16. id que não é do Bling é recusado');
+    '22023', null, '17. id que não é do Bling é recusado');
 
 select * from public.registrar_exclusao_de_produto_no_bling('76000000-0000-4000-8000-0000000000b1', '123456', null);
 delete from public.organizacoes where id = '76000000-0000-4000-8000-0000000000b1';
 select ok(not exists (select 1 from public.produtos_excluidos_no_bling where organizacao_id = '76000000-0000-4000-8000-0000000000b1'),
-          '17. a exclusão da organização leva as tombstones dela');
+          '18. a exclusão da organização leva as tombstones dela');
 
 select ok(not has_function_privilege('authenticated', 'public.registrar_exclusao_de_produto_no_bling(uuid, text, timestamptz)', 'execute')
           and not has_function_privilege('anon', 'public.registrar_exclusao_de_produto_no_bling(uuid, text, timestamptz)', 'execute')
@@ -151,7 +157,7 @@ select ok(not has_function_privilege('authenticated', 'public.registrar_exclusao
           and not has_table_privilege('authenticated', 'public.produtos_excluidos_no_bling', 'select')
           and not has_table_privilege('service_role', 'public.produtos_excluidos_no_bling', 'delete')
           and (select relrowsecurity from pg_class where oid = 'public.produtos_excluidos_no_bling'::regclass),
-          '18. só o servidor registra; o navegador não lê; RLS ligada');
+          '19. só o servidor registra; o navegador não lê; RLS ligada');
 
 select * from finish();
 rollback;

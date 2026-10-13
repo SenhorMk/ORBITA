@@ -14,7 +14,10 @@ import { esperar, observarBloqueioNoPostgres } from './database-concurrency.mjs'
  * 2. a gravação de um produto novo segura a trava; a exclusão espera e, depois
  *    do commit, encontra o produto e o arquiva (`registrado`);
  * 3. duas exclusões simultâneas do mesmo id deixam uma tombstone só:
- *    `registrado` e `ja_registrado`.
+ *    `registrado` e `ja_registrado`;
+ * 4. mover para esta organização um produto de outra, com o id que está sendo
+ *    excluído aqui, espera a trava e é recusado com 23514 — o produto fica na
+ *    organização de origem.
  */
 
 const ORG_ID = 'e7600000-0000-4000-8000-000000000001';
@@ -22,6 +25,8 @@ const OWNER_ID = 'e7600000-0000-4000-8000-000000000002';
 const CLIENTE_ID = 'e7600000-0000-4000-8000-000000000003';
 const PEDIDO_ID = 'e7600000-0000-4000-8000-000000000004';
 const PRODUTO_A = 'e7610000-0000-4000-8000-000000000001';
+const ORG_B = 'e7600000-0000-4000-8000-0000000000b1';
+const PRODUTO_DE_B = 'e7610000-0000-4000-8000-0000000000b1';
 
 async function semear(client) {
   await client.query("insert into auth.users (id, email) values ($1, 'owner-tombstone@orbita.test')", [OWNER_ID]);
@@ -29,7 +34,18 @@ async function semear(client) {
     "insert into public.organizacoes (id, nome, slug, status) values ($1, 'Org Tombstone', 'org-tombstone', 'active')",
     [ORG_ID],
   );
-  await client.query("insert into public.membros_organizacao (organizacao_id, user_id, papel) values ($1, $2, 'owner')", [ORG_ID, OWNER_ID]);
+  await client.query(
+    "insert into public.organizacoes (id, nome, slug, status) values ($1, 'Org Tombstone B', 'org-tombstone-b', 'active')",
+    [ORG_B],
+  );
+  await client.query(
+    "insert into public.membros_organizacao (organizacao_id, user_id, papel) values ($1, $3, 'owner'), ($2, $3, 'owner')",
+    [ORG_ID, ORG_B, OWNER_ID],
+  );
+  await client.query(
+    "insert into public.produtos (id, organizacao_id, user_id, bling_id, nome, preco, estoque) values ($1, $2, $3, '76004', 'Produto de B', 5, 1)",
+    [PRODUTO_DE_B, ORG_B, OWNER_ID],
+  );
   await client.query(
     `insert into public.produtos (id, organizacao_id, user_id, bling_id, nome, preco, estoque)
      values ($1, $2, $3, '76001', 'Produto A', 10, 10)`,
@@ -139,12 +155,25 @@ export async function runTombstoneRaceRehearsal({
       return err('TombstoneRaceDuplicou', 'Duas exclusões concorrentes não convergiram para uma tombstone', { b: duas.value.b, tombstones });
     }
 
+    const mover = await correr({
+      admin, clientA, clientB, timeoutDeObservacaoMs,
+      sqlA: SQL_EXCLUIR, paramsA: [ORG_ID, '76004'],
+      sqlB: 'update public.produtos set organizacao_id = $1 where id = $2 returning organizacao_id',
+      paramsB: [ORG_ID, PRODUTO_DE_B],
+    });
+    if (mover._tag === 'err') return mover;
+    const deB = (await admin.query('select organizacao_id from public.produtos where id = $1', [PRODUTO_DE_B])).rows[0];
+    if (mover.value.b.ok || mover.value.b.code !== '23514' || deB.organizacao_id !== ORG_B) {
+      return err('TombstoneRaceMoveuDeOrganizacao', 'Mover o produto de outra organização ressuscitou o id excluído', { b: mover.value.b, produto: deB });
+    }
+
     return ok(Object.freeze({
       relato: `tombstone provada com bloqueio observado no Postgres nas DUAS ordens: exclusão → upsert atrasado `
         + `(wait_event=${exclusaoPrimeiro.value.waitEvent}) recusado com ${exclusaoPrimeiro.value.b.code}, produto ${a.situacao} `
         + `com nome e preço intactos e ${itens} item de pedido; gravação → exclusão (wait_event=${gravacaoPrimeiro.value.waitEvent}) `
         + `arquivou o produto recém-gravado; duas exclusões simultâneas (wait_event=${duas.value.waitEvent}) deram `
-        + `${duas.value.a.desfecho} e ${duas.value.b.linha.desfecho} com ${tombstones} tombstone`,
+        + `${duas.value.a.desfecho} e ${duas.value.b.linha.desfecho} com ${tombstones} tombstone; mover o produto de outra `
+        + `organização para o id excluído (wait_event=${mover.value.waitEvent}) foi recusado com ${mover.value.b.code}`,
     }));
   } catch (cause) {
     await clientA.query('ROLLBACK').catch(() => {});

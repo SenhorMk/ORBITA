@@ -29,6 +29,8 @@ let inbox: Map<string, EventoNoInbox>;
 let tombstones: Map<string, { excluidoNoBlingEm: unknown }>;
 let produtosLocais: Set<string>;
 let bancoCai: boolean;
+/** Status de conclusão do inbox que o banco recusa (a RPC devolve erro). */
+let conclusaoRecusada: Set<string>;
 
 const chaveDe = (org: unknown, bling: unknown) => `${String(org)}:${String(bling)}`;
 const eventoPorId = (id: unknown) => [...inbox.values()].find((e) => e.id === id);
@@ -45,6 +47,7 @@ const rpc = vi.fn(async (nome: string, args: Record<string, unknown>) => {
     return { data: [{ evento_id: novo.id, status: novo.status, is_duplicate: false, cached_response: null }], error: null };
   }
   if (nome === 'concluir_evento_inbox_bling') {
+    if (conclusaoRecusada.has(String(args.p_status))) return { data: null, error: { code: '57014', message: 'statement timeout' } };
     const evento = eventoPorId(args.p_evento_id);
     if (evento) Object.assign(evento, { status: args.p_status, response: args.p_response_body ?? null });
     return { data: null, error: null };
@@ -150,6 +153,7 @@ beforeEach(() => {
   tombstones = new Map();
   produtosLocais = new Set([chaveDe(ORG_A, BLING_ID), chaveDe(ORG_B, BLING_ID)]);
   bancoCai = false;
+  conclusaoRecusada = new Set();
   rpc.mockClear();
   getProduto.mockClear();
   getByBlingId.mockClear();
@@ -265,10 +269,55 @@ describe('webhook: product.deleted vira tombstone (PRE-004)', () => {
     });
   });
 
-  it('product_supplier.deleted não é exclusão do produto', async () => {
-    await entregar({ event: 'product_supplier.deleted', data: { id: Number(BLING_ID) } });
+  it.each(['product_supplier.deleted', 'product_supplier.updated'])(
+    '%s não é evento de produto: sem tombstone, sem GET, sem upsert, ignorado e auditado',
+    async (event) => {
+      // O payload real traz o produto aninhado; o ramo de produto o buscaria e regravaria.
+      const resposta = await entregar({ event, data: { id: 555, produto: { id: Number(BLING_ID) }, fornecedor: { id: 9 } } });
 
-    expect(chamadasDaExclusao()).toHaveLength(0);
-    expect(tombstones.size).toBe(0);
+      expect(resposta.status).toBe(200);
+      expect(chamadasDaExclusao()).toHaveLength(0);
+      expect(tombstones.size).toBe(0);
+      expect(getProduto).not.toHaveBeenCalled();
+      expect(getByBlingId).not.toHaveBeenCalled();
+      expect(upsert).not.toHaveBeenCalled();
+      expect(respostaNoInbox(ORG_A, `${event}_555`)).toMatchObject({
+        status: 'processed', response: { ignored: true, reason: 'evento_desconhecido', entity: event },
+      });
+    },
+  );
+});
+
+describe('webhook: conclusão do inbox que o banco não grava', () => {
+  it('não responde 200 sem o processed gravado; o evento fica failed e a reentrega conclui sem repetir efeito', async () => {
+    conclusaoRecusada = new Set(['processed']);
+    const primeira = await entregar(exclusao());
+
+    expect(primeira.status).toBe(503);
+    expect(respostaNoInbox(ORG_A, `product.deleted_${BLING_ID}`)?.status).toBe('failed');
+    expect(tombstones.size).toBe(1);
+
+    conclusaoRecusada = new Set();
+    const segunda = await entregar(exclusao());
+
+    expect(segunda.status).toBe(200);
+    expect(respostaNoInbox(ORG_A, `product.deleted_${BLING_ID}`)).toMatchObject({
+      status: 'processed', response: { desfecho: 'ja_registrado' },
+    });
+    expect(tombstones.size).toBe(1);
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('nem quando o banco também recusa o failed: 503, evento received e reprocessável', async () => {
+    conclusaoRecusada = new Set(['processed', 'failed']);
+    const primeira = await entregar({ event: 'invoice.created', data: { id: 777 } });
+
+    expect(primeira.status).toBe(503);
+    expect(respostaNoInbox(ORG_A, 'invoice.created_777')?.status).toBe('received');
+
+    conclusaoRecusada = new Set();
+    const segunda = await entregar({ event: 'invoice.created', data: { id: 777 } });
+    expect(segunda.status).toBe(200);
+    expect(respostaNoInbox(ORG_A, 'invoice.created_777')?.status).toBe('processed');
   });
 });

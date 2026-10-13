@@ -161,8 +161,10 @@ export class BlingInboxService {
       p_error: null,
     });
 
+    // Sem a conclusão gravada o evento fica `received`: quem chamou não pode
+    // responder 2xx ao Bling, senão ele não reentrega e o desfecho se perde.
     if (error) {
-      console.error('❌ Falha ao marcar evento Bling como processed:', error.message);
+      throw new Error(`Falha ao marcar evento Bling como processed: ${error.message}`);
     }
   }
 
@@ -191,7 +193,7 @@ export class BlingInboxService {
     });
 
     if (dbError) {
-      console.error('❌ Falha ao marcar evento Bling como failed:', dbError.message);
+      throw new Error(`Falha ao marcar evento Bling como failed: ${dbError.message}`);
     }
   }
 
