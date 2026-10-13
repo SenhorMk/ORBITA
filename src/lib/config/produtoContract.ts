@@ -49,6 +49,30 @@ export function situacaoLocalDaSituacaoBling(situacao: unknown): 'ativo' | 'inat
   return undefined;
 }
 
+/** O vínculo do produto com o Bling, como o arquivamento precisa decidir. */
+export type VinculoComBling =
+  | { readonly _tag: 'Bling'; readonly blingId: string }
+  /** Produto só do ORBITA: o único formato legítimo é o legado `LOCAL-<timestamp>`. */
+  | { readonly _tag: 'SoLocal' }
+  /** Nem id do Bling nem marca local reconhecida: pode haver conta remota que não se sabe qual. */
+  | { readonly _tag: 'Ambiguo' };
+
+/**
+ * Classifica o `bling_id` gravado. Só um inteiro positivo é vínculo; só o
+ * formato que o ORBITA já gerou para produto local (`LOCAL-${Date.now()}`) é
+ * "sem Bling". Qualquer outra coisa — vazio, `temp_…`, texto — é ambígua: tratar
+ * como local declararia sucesso ignorando uma possível conta remota.
+ *
+ * @param valor - O `bling_id` lido do banco.
+ * @returns O vínculo classificado.
+ */
+export function classificarVinculoComBling(valor: unknown): VinculoComBling {
+  const bruto = typeof valor === 'number' ? String(valor) : typeof valor === 'string' ? valor.trim() : '';
+  if (/^[1-9]\d*$/u.test(bruto)) return { _tag: 'Bling', blingId: bruto };
+  if (/^LOCAL-\d+$/u.test(bruto)) return { _tag: 'SoLocal' };
+  return { _tag: 'Ambiguo' };
+}
+
 export type ProdutoTipo = z.infer<typeof produtoTipoSchema>;
 export type ProdutoSituacao = z.infer<typeof produtoSituacaoSchema>;
 export type ProdutoFormato = z.infer<typeof produtoFormatoSchema>;

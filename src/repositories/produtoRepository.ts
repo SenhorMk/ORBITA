@@ -1,7 +1,12 @@
 import { supabaseServer } from '../lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 import { Produto } from '../types';
-import { situacaoDoProdutoSchema, type SituacaoDoProduto } from '../lib/config/produtoContract';
+import {
+  classificarVinculoComBling,
+  situacaoDoProdutoSchema,
+  type SituacaoDoProduto,
+  type VinculoComBling,
+} from '../lib/config/produtoContract';
 import { logger } from '../lib/observability/logger';
 import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 import { ReconciliacaoDeProdutoNecessaria } from './reconciliacaoDeProduto';
@@ -215,13 +220,13 @@ export class ProdutoRepository {
 
   /**
    * O produto da organização do escopo, no que o arquivamento precisa: o
-   * `bling_id` gravado (só quando numérico — `null` é produto só do ORBITA) e
-   * a situação. `null` quando não existe nesta organização.
+   * vínculo com o Bling classificado (`classificarVinculoComBling`) e a
+   * situação. `null` quando não existe nesta organização.
    */
   async carregarParaArquivamento(
     scope: VerifiedOrganizationScope,
     id: string,
-  ): Promise<{ readonly id: string; readonly blingId: string | null; readonly situacao: SituacaoDoProduto } | null> {
+  ): Promise<{ readonly id: string; readonly vinculo: VinculoComBling; readonly situacao: SituacaoDoProduto } | null> {
     const { data, error } = await supabaseServer
       .from('produtos')
       .select('id, bling_id, situacao')
@@ -230,9 +235,8 @@ export class ProdutoRepository {
       .maybeSingle();
     if (error) throw error;
     if (!data) return null;
-    const blingId = typeof data.bling_id === 'string' && /^\d+$/u.test(data.bling_id) ? data.bling_id : null;
     const situacao = situacaoDoProdutoSchema.parse(data.situacao);
-    return { id: String(data.id), blingId, situacao };
+    return { id: String(data.id), vinculo: classificarVinculoComBling(data.bling_id), situacao };
   }
 
   /**

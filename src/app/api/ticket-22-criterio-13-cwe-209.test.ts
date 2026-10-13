@@ -241,7 +241,7 @@ describe('critério 13 — nenhuma rota migrada devolve diagnóstico interno', (
   // A exclusão física virou arquivamento (PRE-003). O Bling confirma que o
   // produto saiu da venda; é o arquivamento local que falha.
   it('POST /api/produtos/arquivar não devolve `details` nem `logs`', async () => {
-    carregarParaArquivamentoMock.mockResolvedValue({ id: PRODUTO_ID, blingId: '123', situacao: 'ativo' });
+    carregarParaArquivamentoMock.mockResolvedValue({ id: PRODUTO_ID, vinculo: { _tag: 'Bling', blingId: '123' }, situacao: 'ativo' });
     marcarProdutoInativoMock.mockResolvedValue({ _tag: 'EscritaAceita' });
     arquivarProdutoMock.mockRejectedValue(falharCom);
     const { POST } = await import('./produtos/arquivar/route');
@@ -356,7 +356,7 @@ describe('critério 13 — os ramos que a primeira auditoria não olhou', () => 
 
   // Sem prova de que o produto saiu da venda no Bling, nada local muda (PRE-003).
   it('POST /api/produtos/arquivar mantém o produto quando o Bling não confirma, sem vazar a causa', async () => {
-    carregarParaArquivamentoMock.mockResolvedValue({ id: PRODUTO_ID, blingId: '123', situacao: 'ativo' });
+    carregarParaArquivamentoMock.mockResolvedValue({ id: PRODUTO_ID, vinculo: { _tag: 'Bling', blingId: '123' }, situacao: 'ativo' });
     marcarProdutoInativoMock.mockResolvedValue({ _tag: 'RemotoIndeterminado', causa: 'falha_de_rede' });
     consultarProdutoMock.mockResolvedValue({ _tag: 'RemotoIndeterminado', causa: 'falha_de_rede' });
     const { POST } = await import('./produtos/arquivar/route');

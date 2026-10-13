@@ -4,11 +4,12 @@
 -- apagado por DELETE direto.
 --
 -- REINTRODUZIR O DEFEITO: tire o gatilho `tg_produto_com_historico_nao_e_excluido`:
--- 16 falha (o DELETE direto apaga o produto e o CASCADE leva a movimentação
--- de estoque junto; a 15 continua protegida pela FK `fk_item_produto`). Tire o
--- ramo `old.situacao = 'arquivado'` do ciclo de vida: a 11 aborta (a gravação
--- da sincronização num arquivado deixa de funcionar). Tire a preservação do
--- retrato no UPDATE: 4, 5 e 14 falham.
+-- 16 e 20-21 falham (o DELETE direto, ou a exclusão do usuário criador, apaga
+-- o produto e o CASCADE leva a movimentação de estoque junto; a 15 continua
+-- protegida pela FK `fk_item_produto`). Volte a guarda a `pg_trigger_depth() = 1`:
+-- 20-21 falham. Tire o ramo `old.situacao = 'arquivado'` do ciclo de vida: a
+-- 11 aborta (a gravação da sincronização num arquivado deixa de funcionar).
+-- Tire a preservação do retrato no UPDATE: 4, 5 e 14 falham.
 
 begin;
 
@@ -22,6 +23,8 @@ create table public.clientes (
 create table public.produtos (
     id                uuid primary key default gen_random_uuid(),
     organizacao_id    uuid not null references public.organizacoes(id) on delete cascade,
+    -- Como no banco real: o produto cai em cascata com o usuário que o criou.
+    user_id           uuid references auth.users(id) on delete cascade,
     nome              text not null,
     codigo            text,
     preco             numeric(12,2) not null default 0,
@@ -67,6 +70,9 @@ after insert or update or delete on itens_pedido for each row execute function f
 create trigger tg_validar_estoque_disponivel
 before insert or update on itens_pedido for each row execute function fn_validar_estoque_disponivel();
 
+insert into auth.users (id, email) values
+    ('75000000-0000-4000-8000-0000000000f1', 'criador-t75@orbita.test'),
+    ('75000000-0000-4000-8000-0000000000f2', 'sem-historico-t75@orbita.test');
 insert into public.organizacoes values ('75000000-0000-4000-8000-0000000000a1'), ('75000000-0000-4000-8000-0000000000b1');
 insert into public.clientes (id, nome) values ('75000000-0000-4000-8000-0000000000c1', 'Cliente sintético');
 insert into public.produtos (id, organizacao_id, nome, codigo, preco, estoque) values
@@ -85,7 +91,7 @@ insert into public.movimentacao_estoque (produto_id, quantidade) values
 
 \ir ../../../database/75_arquivamento_de_produto.sql
 
-select plan(20);
+select plan(23);
 
 -- ----------------------------------------------------------------------------
 -- 1-5. O item guarda o retrato do produto.
@@ -184,10 +190,29 @@ delete from public.organizacoes where id = '75000000-0000-4000-8000-0000000000b1
 select is((select count(*)::int from public.produtos where organizacao_id = '75000000-0000-4000-8000-0000000000b1'), 0,
           '19. a exclusão da organização segue em cascata, como antes');
 
+-- ----------------------------------------------------------------------------
+-- 20-22. A exclusão do usuário que criou o produto não leva o histórico.
+-- ----------------------------------------------------------------------------
+insert into public.produtos (id, organizacao_id, user_id, nome, codigo, preco, estoque) values
+    ('75000000-0000-4000-8000-000000000006', '75000000-0000-4000-8000-0000000000a1', '75000000-0000-4000-8000-0000000000f1',
+     'Criado pelo usuário', 'USR-01', 10, 3),
+    ('75000000-0000-4000-8000-000000000007', '75000000-0000-4000-8000-0000000000a1', '75000000-0000-4000-8000-0000000000f2',
+     'Sem histórico do outro usuário', 'USR-02', 10, 0);
+insert into public.movimentacao_estoque (produto_id, quantidade) values ('75000000-0000-4000-8000-000000000006', 3);
+select throws_ok(
+    $$delete from auth.users where id = '75000000-0000-4000-8000-0000000000f1'$$,
+    '23503', null, '20. excluir o usuário que criou um produto com movimentação é recusado');
+select is((select count(*)::int from public.produtos where id = '75000000-0000-4000-8000-000000000006')
+          || '/' || (select count(*)::int from public.movimentacao_estoque where produto_id = '75000000-0000-4000-8000-000000000006'),
+          '1/1', '21. o produto e a movimentação continuam lá');
+delete from auth.users where id = '75000000-0000-4000-8000-0000000000f2';
+select is((select count(*)::int from public.produtos where id = '75000000-0000-4000-8000-000000000007'), 0,
+          '22. produto sem histórico segue a cascata do usuário, como antes');
+
 select ok(not has_function_privilege('authenticated', 'public.arquivar_produto(uuid, uuid, uuid)', 'execute')
           and not has_function_privilege('anon', 'public.arquivar_produto(uuid, uuid, uuid)', 'execute')
           and has_function_privilege('service_role', 'public.arquivar_produto(uuid, uuid, uuid)', 'execute'),
-          '20. só o servidor arquiva');
+          '23. só o servidor arquiva');
 
 select * from finish();
 rollback;

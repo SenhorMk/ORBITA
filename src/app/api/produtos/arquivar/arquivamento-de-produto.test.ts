@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EscritaRemota, LeituraRemota, ProdutoRemoto } from '@/lib/integrations/bling/operacaoRemotaContract';
 import { logger } from '@/lib/observability/logger';
+import { classificarVinculoComBling } from '@/lib/config/produtoContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 import { createArquivamentoDeProdutoHandler, type ArquivamentoDeProdutoDependencies } from './handler';
@@ -23,7 +24,7 @@ const DE_B = '55555555-5555-4555-8555-555555555555';
 const scope = { organizationId: ORG, actorId: ORG, role: 'owner' } as unknown as VerifiedOrganizationScope;
 
 type Situacao = 'ativo' | 'inativo' | 'arquivado';
-interface Linha { organizacao: string; id: string; blingId: string | null; situacao: Situacao; estoqueReservado: number; itensDePedido: number }
+interface Linha { organizacao: string; id: string; blingId: string; situacao: Situacao; estoqueReservado: number; itensDePedido: number }
 
 let linhas: Linha[];
 let remoto: { situacao: 'A' | 'I' };
@@ -37,7 +38,7 @@ function deps(overrides: Partial<ArquivamentoDeProdutoDependencies> = {}): Arqui
     autorizar: async () => ({ _tag: 'Autorizado', scope }),
     carregar: async (escopo, id) => {
       const l = linhas.find((x) => x.organizacao === escopo.organizationId && x.id === id);
-      return l ? { id: l.id, blingId: l.blingId, situacao: l.situacao } : null;
+      return l ? { id: l.id, vinculo: classificarVinculoComBling(l.blingId), situacao: l.situacao } : null;
     },
     bling: () => ({
       async marcarProdutoInativo() {
@@ -77,7 +78,7 @@ const linha = (id = PRODUTO) => linhas.find((l) => l.id === id);
 beforeEach(() => {
   linhas = [
     { organizacao: ORG, id: PRODUTO, blingId: '16714230397', situacao: 'ativo', estoqueReservado: 2, itensDePedido: 3 },
-    { organizacao: ORG, id: LOCAL, blingId: null, situacao: 'ativo', estoqueReservado: 0, itensDePedido: 0 },
+    { organizacao: ORG, id: LOCAL, blingId: 'LOCAL-1696000000000', situacao: 'ativo', estoqueReservado: 0, itensDePedido: 0 },
     { organizacao: OUTRA_ORG, id: DE_B, blingId: '999', situacao: 'ativo', estoqueReservado: 0, itensDePedido: 0 },
   ];
   remoto = { situacao: 'A' };
@@ -144,9 +145,24 @@ describe('sem prova no Bling, nada local muda', () => {
 });
 
 describe('ORBITA', () => {
-  it('produto sem bling_id: só o arquivamento local, sem nenhuma chamada ao Bling', async () => {
+  it('produto só do ORBITA (LOCAL-<timestamp>): só o arquivamento local, sem nenhuma chamada ao Bling', async () => {
     expect(await arquivar({ id: LOCAL })).toMatchObject({ status: 200, corpo: { success: true, foraDaVendaNoBling: null } });
     expect(diario).toEqual(['local:arquivar']);
+  });
+
+  it.each([
+    ['vazio', ''],
+    ['temporário legado', 'temp_1a2b3c4d'],
+    ['texto solto', 'SKU-ABC'],
+    ['número com lixo', '123abc'],
+    ['zero', '0'],
+  ])('vínculo ambíguo (%s): 409, sem chamar o Bling e sem arquivar', async (_caso, blingId) => {
+    linhas[1]!.blingId = blingId;
+    const r = await arquivar({ id: LOCAL });
+    expect(r.status).toBe(409);
+    expect(String(r.corpo.error)).toContain('O produto continua ativo no ORBITA.');
+    expect(diario).toEqual([]);
+    expect(linha(LOCAL)?.situacao).toBe('ativo');
   });
 
   it('o bling_id e a organização vêm do banco: os do corpo são ignorados', async () => {

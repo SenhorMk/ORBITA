@@ -15,9 +15,10 @@
 -- 2. O item do pedido guarda nome e código do produto no momento em que entra
 --    no pedido (`produto_nome`, `produto_codigo`), e a gravação de um item já
 --    existente não reescreve esse retrato.
--- 3. Um produto com pedido ou movimentação de estoque não é apagado por
---    `DELETE` direto. A exclusão em cascata (a organização ou o usuário que é
---    removido) segue como antes.
+-- 3. Um produto com pedido ou movimentação de estoque não é apagado — nem
+--    por `DELETE` direto, nem pela cascata da exclusão do usuário que o criou
+--    (`produtos.user_id` é `ON DELETE CASCADE`). Só a exclusão da própria
+--    organização leva o catálogo junto, como antes.
 --
 -- Forward-only. Rollback: desligar a ação de arquivar na aplicação; nunca
 -- voltar ao hard-delete.
@@ -130,11 +131,14 @@ create trigger tg_item_pedido_retrato_do_produto
     for each row execute function public.fn_item_pedido_retrato_do_produto();
 
 -- ---------------------------------------------------------------------------
--- 3. Produto com histórico não é apagado por DELETE direto.
+-- 3. Produto com histórico não é apagado.
 --
--- `pg_trigger_depth() = 1` é o DELETE que alguém mandou sobre `produtos`. Na
--- exclusão em cascata (organização, usuário) o gatilho roda mais fundo, e o
--- comportamento existente fica como está.
+-- A única exclusão que leva um produto com histórico é a da própria
+-- organização: na cascata dela, a linha da organização já não existe quando
+-- este gatilho roda. Qualquer outra — o DELETE direto, ou a cascata de
+-- `auth.users` quando o usuário que criou o produto é excluído — encontra a
+-- organização viva e é recusada se houver pedido ou movimentação. Remover um
+-- membro da organização não exclui o usuário e não toca nos produtos.
 -- ---------------------------------------------------------------------------
 create or replace function public.fn_produto_com_historico_nao_e_excluido()
 returns trigger
@@ -142,7 +146,7 @@ language plpgsql
 set search_path = ''
 as $$
 begin
-    if pg_trigger_depth() = 1
+    if exists (select 1 from public.organizacoes o where o.id = old.organizacao_id)
        and (exists (select 1 from public.itens_pedido i where i.produto_id = old.id)
             or exists (select 1 from public.movimentacao_estoque m where m.produto_id = old.id)) then
         raise exception 'Produto com pedido ou movimentacao de estoque nao e excluido; arquive-o.'

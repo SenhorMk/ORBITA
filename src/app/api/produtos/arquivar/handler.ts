@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import type { SituacaoDoProduto } from '@/lib/config/produtoContract';
+import type { SituacaoDoProduto, VinculoComBling } from '@/lib/config/produtoContract';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import { logger } from '@/lib/observability/logger';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
@@ -21,7 +21,9 @@ import {
  * 2. o produto é carregado por `id` + organização; o corpo só traz o `id`;
  * 3. já arquivado: responde sucesso sem chamar o Bling (idempotente);
  * 4. com vínculo no Bling: situação `I` (inativo), com prova
- *    (`inativarProdutoNoBling`). Sem essa prova, **nada local muda**;
+ *    (`inativarProdutoNoBling`). Sem essa prova, **nada local muda**. Vínculo
+ *    ambíguo (nem id do Bling nem `LOCAL-<timestamp>`) é recusado sem chamar o
+ *    Bling: arquivar como local ignoraria uma possível conta remota;
  * 5. só então `arquivar_produto` (migration 75): trava a linha, marca
  *    `arquivado`, e não mexe em estoque, reserva, foto nem pedidos.
  *
@@ -31,8 +33,8 @@ import {
 
 export interface ProdutoParaArquivamento {
   readonly id: string;
-  /** O `bling_id` **gravado**, e só quando numérico. `null` = produto só do ORBITA. */
-  readonly blingId: string | null;
+  /** O vínculo com o Bling, classificado a partir do `bling_id` **gravado**. */
+  readonly vinculo: VinculoComBling;
   readonly situacao: SituacaoDoProduto;
 }
 
@@ -99,9 +101,18 @@ export function createArquivamentoDeProdutoHandler(deps: ArquivamentoDeProdutoDe
       return NextResponse.json({ success: true, message: 'O produto já estava arquivado.', arquivado: true, foraDaVendaNoBling: null });
     }
 
+    if (produto.vinculo._tag === 'Ambiguo') {
+      evento('produtos.arquivamento.recusado', { produto: produto.id, desfecho: 'VinculoAmbiguo' });
+      return falha(
+        'O vínculo deste produto com o Bling não é reconhecido, então não dá para confirmar que ele saiu da venda lá. '
+          + 'O produto continua ativo no ORBITA. Sincronize o catálogo ou corrija o cadastro antes de arquivar.',
+        409,
+      );
+    }
+
     let foraDaVendaNoBling: 'I' | 'E' | 'ausente' | null = null;
-    if (produto.blingId !== null) {
-      const desfecho = await inativarProdutoNoBling(deps.bling(scope), produto.blingId);
+    if (produto.vinculo._tag === 'Bling') {
+      const desfecho = await inativarProdutoNoBling(deps.bling(scope), produto.vinculo.blingId);
       if (desfecho._tag !== 'ForaDaVenda') {
         evento(desfecho._tag === 'Indeterminada' || desfecho._tag === 'Limitada' ? 'produtos.arquivamento.sem_prova' : 'produtos.arquivamento.recusado',
           { produto: produto.id, desfecho: desfecho._tag });
@@ -116,7 +127,7 @@ export function createArquivamentoDeProdutoHandler(deps: ArquivamentoDeProdutoDe
     } catch (erro: unknown) {
       registrarFalhaInterna('produtos.arquivamento.local', erro, { organizacaoId: scope.organizationId });
       return falha(
-        produto.blingId === null
+        produto.vinculo._tag === 'SoLocal'
           ? 'Não foi possível arquivar o produto no ORBITA. Tente de novo.'
           : 'O produto saiu da venda no Bling, mas o arquivamento no ORBITA falhou. Tente de novo para concluir.',
         500,
