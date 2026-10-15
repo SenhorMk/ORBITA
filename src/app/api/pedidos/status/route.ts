@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { supabaseServer } from '@/lib/supabaseServer';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
@@ -131,6 +131,11 @@ export async function POST(request: Request): Promise<NextResponse> {
   const scopeResult = await resolveVerifiedOrganizationScope(request);
   if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
   const { scope } = scopeResult;
+  // Mudar a situação mexe no pedido e no estoque, aqui e no Bling: é gestão,
+  // como as demais mutações comerciais (PRE-006A). `member` só tem acesso.
+  if (!escopoTemCapacidade(scope, 'organization:manage')) {
+    return NextResponse.json({ success: false, error: 'Acesso negado' }, { status: 403 });
+  }
 
   const handler = createPedidoStatusHandler({
     auth: authFor(scope.actorId, scope),

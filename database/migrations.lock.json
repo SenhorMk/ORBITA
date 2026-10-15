@@ -395,6 +395,11 @@
       "order": 79,
       "path": "../database/76_produto_excluido_no_bling.sql",
       "sha256": "c0d9b5eaa18dd45024a49094522ced4db959fe8c4f81804f72f46e9fb28bdc89"
+    },
+    {
+      "order": 80,
+      "path": "../database/78_movimentacao_estoque_somente_por_organizacao.sql",
+      "sha256": "9356eade79abb3e3c60b2437c317103cffd3db1d905365e0176d450fcd452de0"
     }
   ],
   "references": [
