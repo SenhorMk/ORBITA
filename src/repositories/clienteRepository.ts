@@ -118,6 +118,90 @@ export class ClienteRepository {
   }
 
   /**
+   * Registra a exclusão feita no Bling (migration 77,
+   * `registrar_exclusao_de_contato_no_bling`): o contato local é marcado, não
+   * apagado — pedidos, casos e solicitações continuam apontando para ele — e
+   * nenhuma gravação posterior o recria. Idempotente.
+   *
+   * @param excluidoNoBlingEm - A data do evento no Bling, quando veio.
+   * @param chaveDoEvento - A chave de idempotência da entrega: a mesma entrega
+   *   não tem segundo efeito, nem depois de resolvida.
+   * @returns Ver `DESFECHOS_DA_EXCLUSAO_DE_CONTATO`.
+   */
+  async registrarExclusaoNoBling(
+    scope: VerifiedOrganizationScope,
+    blingId: string,
+    excluidoNoBlingEm: string | null,
+    chaveDoEvento: string,
+  ): Promise<DesfechoDaExclusaoDeContato> {
+    const { data, error } = await supabaseServer.rpc('registrar_exclusao_de_contato_no_bling', {
+      p_organizacao_id: scope.organizationId,
+      p_bling_id: blingId,
+      p_excluido_no_bling_em: excluidoNoBlingEm,
+      p_chave_do_evento: chaveDoEvento,
+    });
+    if (error) throw error;
+    const desfecho = desfechoDaLinha(data);
+    if (typeof desfecho === 'string' && (DESFECHOS_DA_EXCLUSAO_DE_CONTATO as readonly string[]).includes(desfecho)) {
+      return desfecho as DesfechoDaExclusaoDeContato;
+    }
+    throw new Error('registrar_exclusao_de_contato_no_bling devolveu um desfecho fora do contrato');
+  }
+
+  /**
+   * A exclusão aberta deste contato no Bling, nesta organização: `confirmada`,
+   * `pendente` (recebida sem ordem provável, aguardando conferência) ou
+   * `nenhuma`.
+   */
+  async estadoDaExclusaoNoBling(scope: VerifiedOrganizationScope, blingId: string): Promise<EstadoDaExclusaoDeContato> {
+    const { data, error } = await supabaseServer
+      .from('contatos_excluidos_no_bling')
+      .select('confirmada')
+      .eq('organizacao_id', scope.organizationId)
+      .eq('bling_id', blingId)
+      .is('reativado_em', null)
+      .maybeSingle();
+    if (error) throw error;
+    if (data === null) return 'nenhuma';
+    return (data as { confirmada?: unknown }).confirmada === false ? 'pendente' : 'confirmada';
+  }
+
+  /** Há exclusão aberta (confirmada ou pendente) deste contato no Bling? */
+  async exclusaoVigenteNoBling(scope: VerifiedOrganizationScope, blingId: string): Promise<boolean> {
+    return (await this.estadoDaExclusaoNoBling(scope, blingId)) !== 'nenhuma';
+  }
+
+  /**
+   * Confirma a exclusão pendente (migration 77,
+   * `confirmar_exclusao_pendente_de_contato`): quem chama já leu o contato
+   * excluído ou ausente no Bling. O contato fica marcado como excluído.
+   *
+   * @returns `confirmada`, `sem_pendencia`, ou `negado` quando o ator não
+   *   administra a organização.
+   */
+  async confirmarExclusaoPendente(
+    scope: VerifiedOrganizationScope,
+    blingId: string,
+  ): Promise<'confirmada' | 'sem_pendencia' | 'negado'> {
+    return comandoDeReconciliacao('confirmar_exclusao_pendente_de_contato', scope, blingId, ['confirmada', 'sem_pendencia'] as const);
+  }
+
+  /**
+   * Encerra a exclusão vigente (migration 77, `reativar_contato_excluido_no_bling`).
+   * O único caminho de volta: quem chama já confirmou o contato ativo no
+   * Bling, e o banco confere de novo que o ator administra a organização.
+   *
+   * @returns `reativado`, `nao_excluido`, ou `negado` quando o ator não
+   *   administra a organização.
+   */
+  async reativarExcluidoNoBling(
+    scope: VerifiedOrganizationScope,
+    blingId: string,
+  ): Promise<'reativado' | 'nao_excluido' | 'negado'> {
+    return comandoDeReconciliacao('reativar_contato_excluido_no_bling', scope, blingId, ['reativado', 'nao_excluido'] as const);
+  }
+
+  /**
    * Remove a linha e devolve **quantas** saíram.
    *
    * Zero não é sucesso: quem chama decide o que ele significa. Um pedido
@@ -135,6 +219,55 @@ export class ClienteRepository {
     if (error) throw new Error('Falha ao excluir o cliente.', { cause: error });
     return (data ?? []).length;
   }
+}
+
+/**
+ * Desfecho de `registrar_exclusao_de_contato_no_bling`. `registrado` e
+ * `registrado_sem_contato` são exclusão **confirmada**; `reconciliacao_*` é
+ * exclusão **recebida** sem ordem provável — o contato fica bloqueado até a
+ * conferência, sem marca de excluído.
+ */
+export const DESFECHOS_DA_EXCLUSAO_DE_CONTATO = [
+  'registrado',
+  'registrado_sem_contato',
+  'ja_registrado',
+  'ja_resolvido',
+  'anterior_a_reativacao',
+  'reconciliacao_necessaria',
+  'reconciliacao_pendente',
+] as const;
+
+export type EstadoDaExclusaoDeContato = 'nenhuma' | 'confirmada' | 'pendente';
+export type DesfechoDaExclusaoDeContato = (typeof DESFECHOS_DA_EXCLUSAO_DE_CONTATO)[number];
+
+function desfechoDaLinha(data: unknown): unknown {
+  const linha = Array.isArray(data) ? data[0] : data;
+  return (linha as { desfecho?: unknown } | null)?.desfecho;
+}
+
+/**
+ * Chama um comando de reconciliação da migration 77 com o ator do escopo. O
+ * banco confere o papel (`42501` → `negado`); um desfecho fora de `aceitos`
+ * é quebra de contrato.
+ */
+async function comandoDeReconciliacao<D extends string>(
+  comando: 'reativar_contato_excluido_no_bling' | 'confirmar_exclusao_pendente_de_contato',
+  scope: VerifiedOrganizationScope,
+  blingId: string,
+  aceitos: readonly D[],
+): Promise<D | 'negado'> {
+  const { data, error } = await supabaseServer.rpc(comando, {
+    p_organizacao_id: scope.organizationId,
+    p_bling_id: blingId,
+    p_ator_id: scope.actorId,
+  });
+  if (error) {
+    if (error.code === '42501') return 'negado';
+    throw error;
+  }
+  const desfecho = desfechoDaLinha(data);
+  if ((aceitos as readonly unknown[]).includes(desfecho)) return desfecho as D;
+  throw new Error(`${comando} devolveu um desfecho fora do contrato`);
 }
 
 /** Contagem exata de uma consulta `head`, ou exceção com a causa anexada. */

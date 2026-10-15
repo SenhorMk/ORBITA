@@ -180,7 +180,10 @@ export class BlingAcessoRecusadoError extends Error {
 }
 
 const contatoLidoSchema = z.object({
-  data: z.object({ id: z.union([z.number().int().positive(), z.string().regex(/^\d+$/u)]) }),
+  data: z.object({
+    id: z.union([z.number().int().positive(), z.string().regex(/^\d+$/u)]),
+    situacao: z.string().nullish(),
+  }),
 });
 
 /**
@@ -996,7 +999,7 @@ export class BlingClient implements BlingPort {
   async consultarContato(id: string): Promise<LeituraRemota<ContatoRemoto>> {
     const resposta = await this.requisicaoDeCorrecao('bling.contato.consultar', `/contatos/${encodeURIComponent(id)}`, 'GET');
     if (resposta._tag !== 'Resposta') return resposta;
-    return this.lerRecursoConfirmado(resposta.response, contatoLidoSchema, (data) => ({ id: String(data.id) }));
+    return this.lerRecursoConfirmado(resposta.response, contatoLidoSchema, (data) => ({ id: String(data.id), situacao: data.situacao ?? null }));
   }
 
   /** `DELETE /contatos/{id}` — `204` no OpenAPI oficial. */

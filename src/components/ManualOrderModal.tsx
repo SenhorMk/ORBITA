@@ -52,7 +52,10 @@ async function loadManualOrderFormData(
   setProdutos: (produtos: ProdutoOption[]) => void,
 ): Promise<void> {
   const [clientesRes, produtosRes] = await Promise.all([
-    supabase.from('clientes').select('id, nome, bling_id').order('nome'),
+    // Contato excluído no Bling, ou com exclusão aguardando conferência (PRE-005),
+    // não é oferecido; o servidor recusa de novo.
+    supabase.from('clientes').select('id, nome, bling_id')
+      .is('excluido_no_bling_em', null).is('exclusao_pendente_desde', null).order('nome'),
     // Só produtos vendáveis: arquivado ou inativo não é oferecido (o servidor recusa de novo).
     supabase.from('produtos').select('id, nome, codigo, preco, estoque, estoque_reservado, bling_id').eq('situacao', 'ativo').order('nome'),
   ]);

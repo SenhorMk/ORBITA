@@ -47,6 +47,8 @@ export type ExclusaoRemota =
 /** Contato lido por id: só o que a confirmação precisa. */
 export interface ContatoRemoto {
   readonly id: string;
+  /** `A` Ativo, `E` Excluído, `I` Inativo, `S` Sem movimentação; `null` se o Bling não informou. */
+  readonly situacao?: string | null;
 }
 
 /**

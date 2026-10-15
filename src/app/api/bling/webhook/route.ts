@@ -5,12 +5,13 @@ import { pedidoRepository } from '../../../../repositories/pedidoRepository';
 import { imagemDoBling, imagemUrlParaGravar, midiaCompleta } from '../../../../services/imagemDoBling';
 import { registrarSeDivergente } from '../../../../services/espelhoDaImagemDoBling';
 import type { BlingPort } from '../../../../services/blingPort';
-import { Produto, Cliente, Pedido, ItemPedido } from '../../../../types';
+import { Produto, Pedido, ItemPedido } from '../../../../types';
 import { supabaseServer } from '../../../../lib/supabaseServer';
 import { descreverErro } from '../../../../lib/erroLegivel';
-import { mapBlingStatus, normalizeToE164 } from '../../../../lib/utils';
+import { mapBlingStatus } from '../../../../lib/utils';
 import { authorizeWebhookTenant } from './autorizacao';
 import { aplicarExclusaoDeProduto, blingIdDoProduto, ehExclusaoDeProduto } from './exclusaoDeProduto';
+import { processarEventoDeContato } from './contato';
 import { blingInboxService, generateBlingIdempotencyKey } from '../../../../services/blingInboxService';
 import type { VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 
@@ -39,30 +40,6 @@ function parseWebhookEvents(rawBody: string, contentType: string): unknown[] {
   }
 
   return Array.isArray(body) ? body : [body];
-}
-
-/** Sincroniza um evento de contato/cliente recebido do webhook. */
-async function processContatoEvent(
-  eventData: Record<string, unknown>,
-  organizationScope: VerifiedOrganizationScope,
-): Promise<string> {
-  const contatoData = (eventData.contato || eventData) as Record<string, unknown>;
-  const blingId = String(contatoData.id || contatoData.bling_id || '');
-
-  if (blingId) {
-    const tel = (contatoData.telefone || contatoData.celular) as string | undefined;
-    const cliente: Cliente = {
-      bling_id: blingId,
-      nome: (contatoData.nome as string) || `Cliente #${blingId}`,
-      cpf_cnpj: (contatoData.cnpj || contatoData.numeroDocumento) as string | undefined,
-      email: contatoData.email as string | undefined,
-      telefone: tel,
-      telefone_normalizado: normalizeToE164(tel) || undefined,
-    };
-    await clienteRepository.upsert(organizationScope, cliente);
-  }
-
-  return blingId;
 }
 
 /** Monta os itens locais de um pedido do Bling a partir dos itens remotos, ignorando produtos ainda não sincronizados. */
@@ -306,8 +283,8 @@ async function processWebhookEvent(
 
   try {
     if (RECURSOS_DE_CONTATO.has(recurso)) {
-      const blingId = await processContatoEvent(eventData, organizationScope);
-      await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, { success: true, entity: 'contato', blingId });
+      const desfecho = await processarEventoDeContato(entity, eventRecord, eventData, organizationScope, idempotencyKey);
+      await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, desfecho);
       return { _tag: 'Concluido', produtosAtualizados: 0 };
     }
 

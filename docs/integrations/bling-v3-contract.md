@@ -145,6 +145,48 @@ erro tipado `timeout` distinto de `network`.
   conclui como ignorado (`excluido_no_bling`) sem pedir o detalhe. Reentrega
   responde `ja_registrado`; id não numérico é ignorado e auditado
   (`id_invalido`); falha do banco → `failed` e 503.
+- **Exclusão de contato (PRE-005, migration 77):** `contact.deleted` (e
+  variantes), ou `contact.updated` com situação `E` (Excluído), é tratado
+  antes de qualquer leitura ou upsert. `registrar_exclusao_de_contato_no_bling`
+  grava a exclusão em `contatos_excluidos_no_bling` por (organização,
+  `bling_id`) e marca `clientes.excluido_no_bling_em`; o contato **fica** —
+  pedidos, casos e solicitações LGPD continuam apontando para ele — e nunca é
+  renomeado. O banco recusa (23514) a gravação que recrie, regrave pelo upsert
+  ou passe a apontar para um contato com exclusão vigente, serializada pela
+  mesma trava consultiva. Contato excluído não entra em venda manual nova nem
+  pode ser editado (o `PUT` o reativaria no Bling). Payload sem `nome` nunca
+  vira `Cliente #<id>`: usa o nome gravado, e contato desconhecido sem nome não
+  é criado (`contato_sem_nome`). Reentrega responde `ja_registrado`; id que não
+  é do Bling é ignorado e auditado (`id_invalido`).
+- **Reativação de contato:** só por `POST /api/clientes/reativar`
+  (`organization:manage`), que lê o contato no Bling e só reativa com `200`, o
+  **mesmo id** e situação `A` (Ativo). `404`/`E` e `I`/`S` (existe, mas não é
+  elegível para venda) são `Blocked`; id divergente, situação vazia ou fora de
+  `A`/`E`/`I`/`S` é `ReconcileRequired`. O banco confere de novo o papel do
+  ator e guarda quem e quando. Nenhum evento nem a sincronização reativam. A
+  tabela de exclusões guarda só ids, datas e o ator, sem dado pessoal do
+  contato.
+- **Exclusão depois de uma reativação:** o Bling não garante ordem de
+  entrega, e a exclusão antiga pode voltar com outra chave de idempotência. O
+  único sinal de ordem do contrato é `date`, autenticado pela assinatura
+  (`version` é a versão do payload, não do contato). Com margem de 5 minutos
+  para o relógio:
+  - `date` anterior à reativação → `anterior_a_reativacao`, nada muda;
+  - `date` posterior → exclusão confirmada (`registrado`);
+  - sem `date` ou dentro da margem → `reconciliacao_necessaria`: a exclusão é
+    **recebida, não confirmada**. Abre um registro pendente
+    (`contatos_excluidos_no_bling.confirmada = false`) e marca
+    `clientes.exclusao_pendente_desde`. Enquanto isso o contato fica fora da
+    venda manual e da edição, e o webhook não o grava. O inbox guarda o
+    evento com `reconcileRequired: true`. Outra entrega sem ordem responde
+    `reconciliacao_pendente`; uma comprovadamente posterior confirma a
+    pendência.
+  - A mesma entrega (`chave_do_evento`) não tem segundo efeito: depois de
+    resolvida, responde `ja_resolvido`.
+  - A pendência só sai por `POST /api/clientes/reativar`: `A` no Bling →
+    `Reactivated` (liberado); `E` ou `404` → `ExclusionConfirmed` (fica
+    excluído); qualquer outra leitura (indeterminada, recusada, outro id,
+    `I`/`S`) deixa a pendência como está.
 - **Roteamento por recurso exato:** o recurso (`recurso` em `recurso.acao`) é
   comparado por igualdade, nunca por substring: contato (`contact`), pedido
   (`order`), produto (`product`, `stock`, `virtual_stock`). `product_supplier.*`
