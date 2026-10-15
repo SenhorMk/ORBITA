@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 
 import { produtoRequestSchema, type ProdutoRequest } from '@/lib/config/produtoContract';
-import type { BlingCallResult } from '@/lib/integrations/bling/pedidoVendaContract';
+import { classificarFalhaDeCriacaoNoBling } from '@/lib/integrations/bling/classificacaoDeFalhaDeCriacao';
+import { blingFailure, type BlingCallResult, type BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { descreverErro } from '@/lib/erroLegivel';
+import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 
 /** Produto como o Bling o descreve, reduzido ao que esta rota precisa. */
 export interface BlingProdutoResumo {
@@ -72,10 +74,62 @@ export interface ProdutoStorePort {
     readonly nome: string;
     readonly codigo: string | null;
     readonly preco: number;
-    readonly estoque: number;
+    /**
+     * Ausente = o saldo local não muda. Só vem quando o Bling confirmou o
+     * balanço: o espelho nunca recebe um saldo que o ERP não aceitou.
+     */
+    readonly estoque?: number;
     readonly categoriaId?: string;
   }): Promise<ProdutoPersistido>;
 }
+
+/** Cadastro novo no Bling ou atualização de um produto que já está lá. */
+export type OperacaoNoBling = 'cadastro' | 'atualizacao';
+
+/** O que aconteceu com o saldo pedido pelo formulário. */
+export type DesfechoDoSaldo = 'nao_solicitado' | 'aplicado' | 'nao_confirmado';
+
+/**
+ * Evento de auditoria do produto. Metadata só com ids técnicos e desfecho —
+ * nunca nome, SKU, preço ou corpo do Bling.
+ *
+ * - `catalog.product_saved`: o Bling confirmou e o ORBITA espelhou;
+ * - `catalog.product_save_rejected`: o Bling recusou a requisição, sem efeito;
+ * - `catalog.product_reconcile_required`: o Bling não confirmou (pode ter
+ *   aplicado), ou confirmou e o espelho local falhou.
+ */
+export type EventoDoProduto =
+  | {
+      readonly acao: 'catalog.product_saved';
+      readonly recursoId: string;
+      readonly correlationId: string;
+      readonly metadata: {
+        readonly produto_id: string;
+        readonly bling_id: string;
+        readonly operacao: OperacaoNoBling;
+        readonly saldo: DesfechoDoSaldo;
+      };
+    }
+  | {
+      readonly acao: 'catalog.product_save_rejected';
+      readonly recursoId: string | null;
+      readonly correlationId: string;
+      readonly metadata: {
+        readonly operacao: OperacaoNoBling;
+        readonly tipo_erro: string;
+        readonly status_http: number;
+      };
+    }
+  | {
+      readonly acao: 'catalog.product_reconcile_required';
+      readonly recursoId: string | null;
+      readonly correlationId: string;
+      readonly metadata: {
+        readonly operacao: OperacaoNoBling;
+        readonly motivo: 'bling_sem_confirmacao' | 'espelho_local_falhou';
+        readonly bling_id: string | null;
+      };
+    };
 
 export interface ProdutoAuthPort {
   authorize(request: Request): Promise<
@@ -89,6 +143,9 @@ export interface ProdutoDependencies {
   readonly bling: ProdutoBlingPort;
   readonly store: ProdutoStorePort;
   readonly categorias: ProdutoCategoriaPort;
+  /** Trilha persistente (`recordAuditEvent`). Falhar aqui nunca muda a resposta. */
+  readonly auditar: (scope: VerifiedOrganizationScope, evento: EventoDoProduto) => Promise<void>;
+  readonly correlationId: (request: Request) => string;
 }
 
 export interface ProdutoResponseBody {
@@ -115,15 +172,42 @@ function toBlingPayload(body: ProdutoRequest, categoriaBlingId: number | null): 
   };
 }
 
+/**
+ * Timeout, conexão perdida ou abort chegam como exceção, não como
+ * `BlingFailed`: sem esta conversão o ACK perdido virava `500` sem desfecho nem
+ * auditoria. `status` `0` = nenhuma resposta legível, que não prova nada.
+ */
+async function semExcecao<T>(chamada: () => Promise<BlingCallResult<T>>): Promise<BlingCallResult<T>> {
+  try {
+    return await chamada();
+  } catch (erro: unknown) {
+    return blingFailure('UNKNOWN_ERROR', 0, descreverErro(erro));
+  }
+}
+
 type ResolucaoBling =
-  | { readonly _tag: 'Sincronizado'; readonly blingId: string; readonly avisos: readonly string[] }
-  | { readonly _tag: 'Recusado'; readonly response: NextResponse };
+  | {
+      readonly _tag: 'Sincronizado';
+      readonly blingId: string;
+      readonly operacao: OperacaoNoBling;
+      readonly saldo: DesfechoDoSaldo;
+      readonly avisos: readonly string[];
+    }
+  /** Nada foi escrito no Bling: a consulta prévia por SKU falhou. */
+  | { readonly _tag: 'NaoEnviado'; readonly response: NextResponse }
+  | { readonly _tag: 'RecusadoPeloBling'; readonly operacao: OperacaoNoBling; readonly failure: BlingProviderFailure }
+  | { readonly _tag: 'SemConfirmacao'; readonly operacao: OperacaoNoBling; readonly blingId: string | null; readonly failure: BlingProviderFailure };
 
 /**
  * Garante o produto no Bling e devolve o id real.
  *
  * A ordem importa: o Bling é a fonte da verdade, então nada é gravado
  * localmente antes de ele confirmar.
+ *
+ * Uma falha só é recusa quando `classificarFalhaDeCriacaoNoBling` a reconhece
+ * como recusa da requisição (`4xx` com tipo de validação/autorização). Timeout,
+ * `5xx`, `429` ou sucesso sem id não provam que nada aconteceu lá: são
+ * `SemConfirmacao`, e reenviar um cadastro nesse estado duplicaria o produto.
  */
 async function garantirProdutoNoBling(
   body: ProdutoRequest,
@@ -140,7 +224,7 @@ async function garantirProdutoNoBling(
   if (!blingId && body.codigo) {
     const encontrado = await bling.buscarPorCodigo(body.codigo);
     if (encontrado._tag === 'BlingFailed') {
-      return { _tag: 'Recusado', response: fail(`Não foi possível consultar o produto no Bling: ${encontrado.failure.message}`, 400) };
+      return { _tag: 'NaoEnviado', response: fail(`Não foi possível consultar o produto no Bling: ${encontrado.failure.message}`, 400) };
     }
     if (encontrado.value) {
       blingId = encontrado.value.id;
@@ -148,27 +232,130 @@ async function garantirProdutoNoBling(
     }
   }
 
-  if (blingId) {
-    const atualizado = await bling.atualizar(blingId, payload);
-    if (atualizado._tag === 'BlingFailed') {
-      return { _tag: 'Recusado', response: fail(`O Bling recusou a atualização do produto: ${atualizado.failure.message}`, 400) };
-    }
+  const existente = blingId;
+  const operacao: OperacaoNoBling = existente ? 'atualizacao' : 'cadastro';
+  if (existente) {
+    const atualizado = await semExcecao(() => bling.atualizar(existente, payload));
+    if (atualizado._tag === 'BlingFailed') return falhaNoBling(operacao, existente, atualizado.failure);
+    blingId = existente;
   } else {
-    const criado = await bling.criar(payload);
-    if (criado._tag === 'BlingFailed') {
-      return { _tag: 'Recusado', response: fail(`O Bling recusou o cadastro do produto: ${criado.failure.message}`, 400) };
-    }
+    const criado = await semExcecao(() => bling.criar(payload));
+    if (criado._tag === 'BlingFailed') return falhaNoBling(operacao, null, criado.failure);
     blingId = criado.value.id;
   }
+  const confirmado = blingId;
 
-  if (body.estoque !== undefined) {
-    const saldo = await bling.definirSaldo(blingId, body.estoque);
-    if (saldo._tag === 'BlingFailed') {
-      avisos.push(`O produto ${blingId} foi salvo no Bling, mas o saldo de estoque não foi aplicado: ${saldo.failure.message}.`);
+  // Balanço absoluto: repetir o mesmo valor não acumula. Só é pedido quando o
+  // formulário mandou saldo — uma edição de nome não reaplica o saldo lido ao
+  // abrir a tela, que desfaria vendas feitas nesse meio-tempo.
+  let saldo: DesfechoDoSaldo = 'nao_solicitado';
+  const quantidade = body.estoque;
+  if (quantidade !== undefined) {
+    const resultado = await semExcecao(() => bling.definirSaldo(confirmado, quantidade));
+    saldo = resultado._tag === 'BlingOk' ? 'aplicado' : 'nao_confirmado';
+    if (resultado._tag === 'BlingFailed') {
+      avisos.push(`O produto ${confirmado} foi salvo no Bling, mas o saldo de estoque não foi confirmado: ${resultado.failure.message}. O estoque no ORBITA não foi alterado; sincronize para conferir.`);
     }
   }
 
-  return { _tag: 'Sincronizado', blingId, avisos };
+  return { _tag: 'Sincronizado', blingId: confirmado, operacao, saldo, avisos };
+}
+
+function falhaNoBling(operacao: OperacaoNoBling, blingId: string | null, failure: BlingProviderFailure): ResolucaoBling {
+  return classificarFalhaDeCriacaoNoBling(failure) === 'Definitiva'
+    ? { _tag: 'RecusadoPeloBling', operacao, failure }
+    : { _tag: 'SemConfirmacao', operacao, blingId, failure };
+}
+
+function respostaDaFalhaNoBling(resolucao: Extract<ResolucaoBling, { _tag: 'RecusadoPeloBling' | 'SemConfirmacao' }>): NextResponse {
+  const { operacao, failure } = resolucao;
+  if (resolucao._tag === 'RecusadoPeloBling') {
+    return fail(operacao === 'cadastro'
+      ? `O Bling recusou o cadastro do produto: ${failure.message}`
+      : `O Bling recusou a atualização do produto: ${failure.message}`, 400);
+  }
+  return fail(operacao === 'cadastro'
+    ? `O Bling não confirmou o cadastro do produto (${failure.message}) e ele pode ter sido criado. Não cadastre de novo: sincronize o catálogo e confira antes.`
+    : `O Bling não confirmou a atualização do produto (${failure.message}). Nada foi gravado no ORBITA; repetir a mesma edição é seguro.`, 502);
+}
+
+/** Auditoria sem mudar a resposta: o desfecho no Bling já está decidido. */
+async function auditarSemInterromper(
+  deps: ProdutoDependencies,
+  scope: VerifiedOrganizationScope,
+  evento: EventoDoProduto,
+): Promise<void> {
+  try {
+    await deps.auditar(scope, evento);
+  } catch (erro: unknown) {
+    registrarFalhaInterna(`produtos.update.auditoria.${evento.acao}`, erro, { organizacaoId: scope.organizationId, atorId: scope.actorId });
+  }
+}
+
+function eventoDaFalhaNoBling(
+  resolucao: Extract<ResolucaoBling, { _tag: 'RecusadoPeloBling' | 'SemConfirmacao' }>,
+  recursoId: string | null,
+  correlationId: string,
+): EventoDoProduto {
+  return resolucao._tag === 'RecusadoPeloBling'
+    ? {
+        acao: 'catalog.product_save_rejected',
+        recursoId,
+        correlationId,
+        metadata: { operacao: resolucao.operacao, tipo_erro: resolucao.failure.type, status_http: resolucao.failure.status },
+      }
+    : {
+        acao: 'catalog.product_reconcile_required',
+        recursoId,
+        correlationId,
+        metadata: { operacao: resolucao.operacao, motivo: 'bling_sem_confirmacao', bling_id: resolucao.blingId },
+      };
+}
+
+/** O Bling confirmou: espelha no ORBITA, com o saldo só se ele também foi confirmado. */
+async function espelharNoOrbita(
+  deps: ProdutoDependencies,
+  scope: VerifiedOrganizationScope,
+  body: ProdutoRequest,
+  resolucao: Extract<ResolucaoBling, { _tag: 'Sincronizado' }>,
+  correlationId: string,
+): Promise<NextResponse> {
+  try {
+    const product = await deps.store.upsert(scope, {
+      id: body.id,
+      blingId: resolucao.blingId,
+      nome: body.nome,
+      codigo: body.codigo ?? null,
+      preco: body.preco,
+      ...(resolucao.saldo === 'aplicado' && body.estoque !== undefined ? { estoque: body.estoque } : {}),
+      categoriaId: body.categoriaId,
+    });
+
+    await auditarSemInterromper(deps, scope, {
+      acao: 'catalog.product_saved',
+      recursoId: product.id,
+      correlationId,
+      metadata: { produto_id: product.id, bling_id: resolucao.blingId, operacao: resolucao.operacao, saldo: resolucao.saldo },
+    });
+    return NextResponse.json(
+      { success: true, product, avisos: resolucao.avisos } satisfies ProdutoResponseBody,
+      { status: 200 },
+    );
+  } catch (error: unknown) {
+    await auditarSemInterromper(deps, scope, {
+      acao: 'catalog.product_reconcile_required',
+      recursoId: body.id ?? null,
+      correlationId,
+      metadata: { operacao: resolucao.operacao, motivo: 'espelho_local_falhou', bling_id: resolucao.blingId },
+    });
+    const causa = descreverErro(error);
+    // O produto já existe no Bling neste ponto; dizer isso é o que permite
+    // reconciliar em vez de reenviar e duplicar.
+    return fail(
+      `Produto salvo no Bling (id ${resolucao.blingId}), mas falhou ao gravar no ORBITA: ${causa}. Sincronize o catálogo para reconciliar.`,
+      500,
+    );
+  }
 }
 
 /**
@@ -208,32 +395,13 @@ export function createProdutoUpdateHandler(deps: ProdutoDependencies) {
       }
     }
 
+    const correlationId = deps.correlationId(request);
     const resolucao = await garantirProdutoNoBling(body, deps.bling, categoriaBlingId);
-    if (resolucao._tag === 'Recusado') return resolucao.response;
-
-    try {
-      const product = await deps.store.upsert(scope, {
-        id: body.id,
-        blingId: resolucao.blingId,
-        nome: body.nome,
-        codigo: body.codigo ?? null,
-        preco: body.preco,
-        estoque: body.estoque ?? 0,
-        categoriaId: body.categoriaId,
-      });
-
-      return NextResponse.json(
-        { success: true, product, avisos: resolucao.avisos } satisfies ProdutoResponseBody,
-        { status: 200 },
-      );
-    } catch (error: unknown) {
-      const causa = descreverErro(error);
-      // O produto já existe no Bling neste ponto; dizer isso é o que permite
-      // reconciliar em vez de reenviar e duplicar.
-      return fail(
-        `Produto salvo no Bling (id ${resolucao.blingId}), mas falhou ao gravar no ORBITA: ${causa}. Sincronize o catálogo para reconciliar.`,
-        500,
-      );
+    if (resolucao._tag === 'NaoEnviado') return resolucao.response;
+    if (resolucao._tag !== 'Sincronizado') {
+      await auditarSemInterromper(deps, scope, eventoDaFalhaNoBling(resolucao, body.id ?? null, correlationId));
+      return respostaDaFalhaNoBling(resolucao);
     }
+    return espelharNoOrbita(deps, scope, body, resolucao, correlationId);
   };
 }

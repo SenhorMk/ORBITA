@@ -119,3 +119,20 @@ export type ProdutoRequestInput = z.input<typeof produtoRequestSchema>;
 export function buildProdutoRequest(input: ProdutoRequestInput): ProdutoRequest {
   return produtoRequestSchema.parse(input);
 }
+
+/**
+ * O saldo que o formulário envia: só no cadastro ou quando a pessoa o alterou.
+ *
+ * O saldo é um balanço absoluto no Bling. Reenviar o valor lido ao abrir a
+ * tela numa edição de nome ou preço desfaria as vendas feitas nesse
+ * meio-tempo — no Bling e no espelho local.
+ *
+ * @param digitado - O texto do campo de estoque.
+ * @param carregado - O estoque do produto quando a tela abriu (`undefined` no cadastro).
+ * @param cadastro - `true` quando o produto ainda não existe.
+ * @returns `{ estoque }` para espalhar no corpo, ou `{}` para não mexer no saldo.
+ */
+export function saldoParaEnvio(digitado: string, carregado: number | undefined, cadastro: boolean): { estoque?: number } {
+  const saldo = parseInt(digitado, 10) || 0;
+  return cadastro || saldo !== (carregado ?? 0) ? { estoque: saldo } : {};
+}

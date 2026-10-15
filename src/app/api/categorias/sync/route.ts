@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 import { supabaseServer } from '@/lib/supabaseServer';
+import { getCorrelationId } from '@/lib/observability/correlation';
+import { recordAuditEvent } from '@/services/auditService';
 import { bling } from '@/services/bling';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import {
@@ -76,6 +78,17 @@ const categoryStore: CategoryStore = {
 const handlers = createCategoryHandlers({
   resolveScope: resolveVerifiedOrganizationScope,
   catalog: new CategoryCatalog(categorySource, categoryStore),
+  // Pela infraestrutura existente: catálogo validado e RPC que reconfere a
+  // membership do ator.
+  auditar: async (scope, evento) => {
+    await recordAuditEvent(supabaseServer, scope, {
+      acao: evento.acao,
+      recurso: 'categorias',
+      correlationId: evento.correlationId,
+      metadata: { ...evento.metadata },
+    });
+  },
+  correlationId: getCorrelationId,
 });
 
 export const GET = handlers.GET;

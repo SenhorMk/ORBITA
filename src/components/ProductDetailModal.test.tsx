@@ -493,3 +493,43 @@ describe('ProductDetailModal — recuperação manual quando a leitura do ERP fa
     expect(botaoSalvar().disabled).toBe(true);
   });
 });
+
+describe('ProductDetailModal — o saldo só vai quando a pessoa o alterou (PRE-006B)', () => {
+  beforeEach(() => {
+    fetchWithAuthMock.mockReset();
+    enviados.length = 0;
+  });
+
+  function campoEstoque(): HTMLInputElement {
+    return document.getElementById('product-detail-estoque') as HTMLInputElement;
+  }
+
+  it('editar o nome não reenvia o saldo lido ao abrir a tela', async () => {
+    // O saldo é balanço absoluto no Bling: reenviar o `3` lido na abertura
+    // desfaria uma venda feita enquanto a tela estava aberta.
+    rede({ obrigatorios: { tipo: 'P', situacao: 'A', formato: 'S', unidade: 'CX' } });
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => expect(botaoSalvar().disabled).toBe(false));
+    await usuaria.type(document.getElementById('product-detail-nome') as HTMLInputElement, ' Grande');
+    await usuaria.click(botaoSalvar());
+
+    await waitFor(() => expect(enviados).toHaveLength(1));
+    expect(enviados[0]).not.toHaveProperty('estoque');
+  });
+
+  it('saldo alterado vai no envio', async () => {
+    rede({ obrigatorios: { tipo: 'P', situacao: 'A', formato: 'S', unidade: 'CX' } });
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => expect(botaoSalvar().disabled).toBe(false));
+    await usuaria.clear(campoEstoque());
+    await usuaria.type(campoEstoque(), '7');
+    await usuaria.click(botaoSalvar());
+
+    await waitFor(() => expect(enviados).toHaveLength(1));
+    expect(enviados[0].estoque).toBe(7);
+  });
+});

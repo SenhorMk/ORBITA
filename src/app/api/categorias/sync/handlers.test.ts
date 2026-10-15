@@ -11,7 +11,7 @@ import {
   type CategoryStore,
 } from '../../../../services/categoryCatalog';
 
-import { createCategoryHandlers } from './handlers';
+import { createCategoryHandlers, type EventoDeCategorias } from './handlers';
 
 /**
  * Ticket 22 — este teste era escrito contra o modelo de tenancy por usuário:
@@ -50,6 +50,21 @@ function resolvedorPorToken(
   };
 }
 
+/** Trilha de auditoria em memória; `falhar` simula a RPC indisponível. */
+function trilha(options: { falhar?: boolean } = {}) {
+  const eventos: Array<{ organizationId: string; actorId: string; evento: EventoDeCategorias }> = [];
+  return {
+    eventos,
+    deps: {
+      async auditar(scope: VerifiedOrganizationScope, evento: EventoDeCategorias) {
+        if (options.falhar) throw new Error('registrar_evento_auditoria indisponível');
+        eventos.push({ organizationId: scope.organizationId, actorId: scope.actorId, evento });
+      },
+      correlationId: () => 'corr_categorias',
+    },
+  };
+}
+
 const catalogoQueNuncaRoda = {
   async list(): Promise<never> {
     throw new Error('Requisição negada não deve listar categorias.');
@@ -62,6 +77,7 @@ const catalogoQueNuncaRoda = {
 describe('category HTTP handlers', () => {
   it('nega leitura anônima na fronteira HTTP', async () => {
     const handlers = createCategoryHandlers({
+      ...trilha().deps,
       resolveScope: resolvedorPorToken({}),
       catalog: catalogoQueNuncaRoda,
     });
@@ -77,6 +93,7 @@ describe('category HTTP handlers', () => {
   // reconhecido, e negado, em vez de tratado como desconhecido.
   it('nega a sincronização a quem não administra a organização', async () => {
     const handlers = createCategoryHandlers({
+      ...trilha().deps,
       resolveScope: resolvedorPorToken({ 'membro-token': escopo(ORG_A_ID, 'member') }),
       catalog: catalogoQueNuncaRoda,
     });
@@ -103,6 +120,7 @@ describe('category HTTP handlers', () => {
       },
     };
     const handlers = createCategoryHandlers({
+      ...trilha().deps,
       resolveScope: resolvedorPorToken({ 'membro-token': escopo(ORG_A_ID, 'member') }),
       catalog: new CategoryCatalog({ async fetchPage() { return []; } }, store),
     });
@@ -132,6 +150,7 @@ describe('category HTTP handlers', () => {
       },
     };
     const handlers = createCategoryHandlers({
+      ...trilha().deps,
       resolveScope: resolvedorPorToken({
         'owner-a-token': escopo(ORG_A_ID, 'owner'),
         'owner-b-token': escopo(ORG_B_ID, 'owner'),
@@ -163,5 +182,79 @@ describe('category HTTP handlers', () => {
     // A organização B não enxerga nada da A — o isolamento é pela organização,
     // não mais pelo tenant pessoal.
     expect(await respostaOrgB.json()).toEqual({ success: true, data: [] });
+  });
+});
+
+describe('auditoria da sincronização de categorias (PRE-006B)', () => {
+  const owner = { 'owner-token': escopo(ORG_A_ID, 'owner'), 'membro-token': escopo(ORG_A_ID, 'member') };
+  const post = (token: string) => new Request('https://orbita.test/api/categorias/sync', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  /** Duas páginas cheias e a terceira falhando: as duas primeiras ficam gravadas. */
+  function catalogo(options: { falharNaPagina?: number } = {}) {
+    const gravadas: CategoryRecord[] = [];
+    const source: CategorySource = {
+      async fetchPage(_scope, page, pageSize) {
+        if (page === options.falharNaPagina) throw new Error('Bling indisponível');
+        if (page > 2) return [];
+        return Array.from({ length: pageSize }, (_, i) => ({ blingId: `${page}-${i}`, description: `C${i}`, parentBlingId: null }));
+      },
+    };
+    const store: CategoryStore = {
+      async list() { return gravadas; },
+      async upsertAll(_scope, categories) { gravadas.push(...categories); },
+    };
+    return { gravadas, catalog: new CategoryCatalog(source, store) };
+  }
+
+  it('concluída: contagem, ator e organização verificados, sem descrição de categoria', async () => {
+    const auditoria = trilha();
+    const { catalog } = catalogo();
+    const handlers = createCategoryHandlers({ ...auditoria.deps, resolveScope: resolvedorPorToken(owner), catalog });
+
+    const resposta = await handlers.POST(post('owner-token'));
+
+    expect(resposta.status).toBe(200);
+    expect(auditoria.eventos).toEqual([{
+      organizationId: ORG_A_ID,
+      actorId: ATOR_ID,
+      evento: { acao: 'catalog.categories_synced', correlationId: 'corr_categorias', metadata: { categorias: 200 } },
+    }]);
+  });
+
+  it('falha no meio é parcial, não "nada mudou": o evento diz quantas ficaram gravadas', async () => {
+    const auditoria = trilha();
+    const { catalog, gravadas } = catalogo({ falharNaPagina: 2 });
+    const handlers = createCategoryHandlers({ ...auditoria.deps, resolveScope: resolvedorPorToken(owner), catalog });
+
+    const resposta = await handlers.POST(post('owner-token'));
+
+    expect(resposta.status).toBe(500);
+    expect(gravadas).toHaveLength(100);
+    expect(auditoria.eventos.map((e) => e.evento)).toEqual([
+      { acao: 'catalog.categories_sync_failed', correlationId: 'corr_categorias', metadata: { categorias_gravadas: 100 } },
+    ]);
+  });
+
+  it('membro sem capacidade é recusado antes de ler o Bling ou gravar, e não há evento de efeito', async () => {
+    const auditoria = trilha();
+    const handlers = createCategoryHandlers({ ...auditoria.deps, resolveScope: resolvedorPorToken(owner), catalog: catalogoQueNuncaRoda });
+
+    const resposta = await handlers.POST(post('membro-token'));
+
+    expect(resposta.status).toBe(403);
+    expect(auditoria.eventos).toEqual([]);
+  });
+
+  it('auditoria indisponível não muda o resultado já gravado', async () => {
+    const { catalog, gravadas } = catalogo();
+    const handlers = createCategoryHandlers({ ...trilha({ falhar: true }).deps, resolveScope: resolvedorPorToken(owner), catalog });
+
+    const resposta = await handlers.POST(post('owner-token'));
+
+    expect(resposta.status).toBe(200);
+    expect(gravadas).toHaveLength(200);
   });
 });

@@ -209,11 +209,14 @@ describe('erro de banco no DELETE condicionado da deduplicação', () => {
         async definirSaldo() { return ok; },
       },
       categorias: { async resolverBlingId() { return null; } },
+      auditar: async () => {},
+      correlationId: () => 'corr_teste',
       // A mesma tradução de `route.ts`, sobre o repositório real.
       store: {
         async upsert(escopo, p) {
           const salvo = await produtoRepository.upsert(escopo, {
-            id: p.id, bling_id: p.blingId, nome: p.nome, codigo: p.codigo ?? '', preco: p.preco, estoque: p.estoque,
+            id: p.id, bling_id: p.blingId, nome: p.nome, codigo: p.codigo ?? '', preco: p.preco,
+            ...(p.estoque !== undefined ? { estoque: p.estoque } : {}),
           });
           return {
             id: String(salvo.id), blingId: String(salvo.bling_id), nome: salvo.nome,

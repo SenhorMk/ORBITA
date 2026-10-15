@@ -8,8 +8,9 @@ import {
   type ProdutoDependencies,
   type ProdutoResponseBody,
   type ProdutoStorePort,
+  type EventoDoProduto,
 } from './handler';
-import { buildProdutoRequest, produtoRequestSchema } from '@/lib/config/produtoContract';
+import { buildProdutoRequest, produtoRequestSchema, saldoParaEnvio } from '@/lib/config/produtoContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { ReconciliacaoDeProdutoNecessaria } from '@/repositories/reconciliacaoDeProduto';
 
@@ -41,6 +42,8 @@ function fakeBling(options: {
   falhaCriar?: string;
   falhaAtualizar?: string;
   falhaSaldo?: string;
+  /** Forma da falha: o padrão é recusa de validação (`400`), que prova ausência de efeito. */
+  formaDaFalha?: { readonly type: string; readonly status: number };
 } = {}): FakeBling {
   const buscas: string[] = [];
   const criados: ProdutoBlingPayload[] = [];
@@ -49,7 +52,13 @@ function fakeBling(options: {
 
   const falha = (message: string) => ({
     _tag: 'BlingFailed' as const,
-    failure: { _tag: 'BlingProviderFailure' as const, type: 'VALIDATION_ERROR', status: 400, message, duplicateSale: false },
+    failure: {
+      _tag: 'BlingProviderFailure' as const,
+      type: options.formaDaFalha?.type ?? 'VALIDATION_ERROR',
+      status: options.formaDaFalha?.status ?? 400,
+      message,
+      duplicateSale: false,
+    },
   });
 
   return {
@@ -97,7 +106,7 @@ function fakeStore(options: { erro?: Error } = {}): FakeStore {
         nome: produto.nome,
         codigo: produto.codigo,
         preco: produto.preco,
-        estoque: produto.estoque,
+        estoque: produto.estoque ?? 0,
       };
     },
   };
@@ -128,12 +137,26 @@ function fakeCategorias(linhas: Array<{ id: string; organizacaoId: string; bling
   };
 }
 
+/** A trilha gravada pela rota; `falhar` simula a RPC de auditoria indisponível. */
+function fakeAuditoria(options: { falhar?: boolean } = {}) {
+  const eventos: Array<{ organizationId: string; actorId: string; evento: EventoDoProduto }> = [];
+  return {
+    eventos,
+    async auditar(escopo: VerifiedOrganizationScope, evento: EventoDoProduto) {
+      if (options.falhar) throw new Error('registrar_evento_auditoria indisponível');
+      eventos.push({ organizationId: escopo.organizationId, actorId: escopo.actorId, evento });
+    },
+  };
+}
+
 function deps(overrides: Partial<ProdutoDependencies> = {}): ProdutoDependencies {
   return {
     auth: { async authorize() { return { _tag: 'Authorized', scope }; } },
     bling: fakeBling(),
     store: fakeStore(),
     categorias: fakeCategorias(),
+    auditar: fakeAuditoria().auditar,
+    correlationId: () => 'corr_teste',
     ...overrides,
   };
 }
@@ -299,6 +322,8 @@ describe('o Bling é a fonte da verdade', () => {
     expect(resposta.status).toBe(200);
     expect(corpo.avisos?.join(' ')).toContain('Depósito padrão não configurado');
     expect(store.gravados).toHaveLength(1);
+    // O espelho não recebe um saldo que o Bling não confirmou.
+    expect(store.gravados[0]).not.toHaveProperty('estoque');
   });
 
   it('avisa que o produto já existe no Bling quando a gravação local falha', async () => {
@@ -440,5 +465,206 @@ describe('categoria do produto chega ao Bling, e só a da própria organização
     expect(bling.atualizados).toHaveLength(1);
     expect(bling.atualizados[0].id).toBe('14077064');
     expect(bling.atualizados[0].payload.categoria).toEqual({ id: 900 });
+  });
+});
+
+describe('estoque: o espelho só recebe saldo confirmado (PRE-006B)', () => {
+  it('sem saldo no corpo, não lança balanço no Bling nem zera o estoque local', async () => {
+    // Antes: `estoque: body.estoque ?? 0` — uma edição sem saldo zerava o
+    // estoque local de um produto que tinha unidades.
+    const bling = fakeBling();
+    const store = fakeStore();
+    const handler = createProdutoUpdateHandler(deps({ bling, store }));
+
+    const resposta = await handler(requisicao(corpoValido({ id: PRODUTO_LOCAL, blingId: '4242' })));
+
+    expect(resposta.status).toBe(200);
+    expect(bling.saldos).toEqual([]);
+    expect(store.gravados[0]).not.toHaveProperty('estoque');
+  });
+
+  it('saldo confirmado pelo Bling é o que vai para o espelho', async () => {
+    const store = fakeStore();
+    const handler = createProdutoUpdateHandler(deps({ store }));
+
+    await handler(requisicao(corpoValido({ estoque: 9 })));
+
+    expect(store.gravados[0]!.estoque).toBe(9);
+  });
+
+  it('repetir a mesma edição de saldo não acumula: é balanço absoluto, nunca entrada', async () => {
+    const bling = fakeBling();
+    const handler = createProdutoUpdateHandler(deps({ bling }));
+
+    await handler(requisicao(corpoValido({ blingId: '4242', estoque: 9 })));
+    await handler(requisicao(corpoValido({ blingId: '4242', estoque: 9 })));
+
+    expect(bling.saldos).toEqual([{ id: '4242', quantidade: 9 }, { id: '4242', quantidade: 9 }]);
+  });
+});
+
+describe('falha no Bling: recusa comprovada ≠ estado desconhecido (PRE-006B)', () => {
+  it('timeout no cadastro é desconhecido: 502, sem espelho e sem convite a cadastrar de novo', async () => {
+    const bling = fakeBling({ falhaCriar: 'tempo esgotado', formaDaFalha: { type: 'UNKNOWN_ERROR', status: 0 } });
+    const store = fakeStore();
+    const auditoria = fakeAuditoria();
+    const handler = createProdutoUpdateHandler(deps({ bling, store, auditar: auditoria.auditar }));
+
+    const resposta = await handler(requisicao(corpoValido()));
+    const corpo = (await resposta.json()) as ProdutoResponseBody;
+
+    expect(resposta.status).toBe(502);
+    expect(corpo.error).toContain('pode ter sido criado');
+    expect(corpo.error).toContain('Não cadastre de novo');
+    expect(store.gravados).toHaveLength(0);
+    expect(auditoria.eventos.map((e) => e.evento)).toEqual([{
+      acao: 'catalog.product_reconcile_required',
+      recursoId: null,
+      correlationId: 'corr_teste',
+      metadata: { operacao: 'cadastro', motivo: 'bling_sem_confirmacao', bling_id: null },
+    }]);
+  });
+
+  it('5xx na atualização também é desconhecido, e repetir a mesma edição é seguro', async () => {
+    const bling = fakeBling({ falhaAtualizar: 'erro interno', formaDaFalha: { type: 'SERVER_ERROR', status: 503 } });
+    const auditoria = fakeAuditoria();
+    const handler = createProdutoUpdateHandler(deps({ bling, auditar: auditoria.auditar }));
+
+    const resposta = await handler(requisicao(corpoValido({ id: PRODUTO_LOCAL, blingId: '4242' })));
+    const corpo = (await resposta.json()) as ProdutoResponseBody;
+
+    expect(resposta.status).toBe(502);
+    expect(corpo.error).toContain('repetir a mesma edição é seguro');
+    expect(auditoria.eventos[0]!.evento).toMatchObject({
+      acao: 'catalog.product_reconcile_required',
+      recursoId: PRODUTO_LOCAL,
+      metadata: { operacao: 'atualizacao', motivo: 'bling_sem_confirmacao', bling_id: '4242' },
+    });
+  });
+
+  it('exceção na chamada (timeout, ACK perdido) é desconhecido, não 500 sem desfecho', async () => {
+    // `criarProduto` lança quando a rede cai: antes isso escapava do handler
+    // como 500 genérico, sem auditoria e sem dizer que o produto pode existir.
+    const bling = { ...fakeBling(), async criar(): Promise<never> { throw new TypeError('fetch failed'); } };
+    const store = fakeStore();
+    const auditoria = fakeAuditoria();
+    const handler = createProdutoUpdateHandler(deps({ bling, store, auditar: auditoria.auditar }));
+
+    const resposta = await handler(requisicao(corpoValido()));
+    const corpo = (await resposta.json()) as ProdutoResponseBody;
+
+    expect(resposta.status).toBe(502);
+    expect(corpo.error).toContain('pode ter sido criado');
+    expect(store.gravados).toEqual([]);
+    expect(auditoria.eventos[0]!.evento).toMatchObject({
+      acao: 'catalog.product_reconcile_required',
+      metadata: { operacao: 'cadastro', motivo: 'bling_sem_confirmacao', bling_id: null },
+    });
+  });
+
+  it('exceção no balanço vira saldo não confirmado, e o espelho não recebe o saldo', async () => {
+    const bling = { ...fakeBling(), async definirSaldo(): Promise<never> { throw new TypeError('fetch failed'); } };
+    const store = fakeStore();
+    const handler = createProdutoUpdateHandler(deps({ bling, store }));
+
+    const resposta = await handler(requisicao(corpoValido({ estoque: 5 })));
+
+    expect(resposta.status).toBe(200);
+    expect(store.gravados[0]).not.toHaveProperty('estoque');
+  });
+
+  it('recusa de validação do Bling é recusa: 400 e evento de recusa', async () => {
+    const bling = fakeBling({ falhaCriar: 'Campo obrigatório não informado' });
+    const auditoria = fakeAuditoria();
+    const handler = createProdutoUpdateHandler(deps({ bling, auditar: auditoria.auditar }));
+
+    const resposta = await handler(requisicao(corpoValido()));
+
+    expect(resposta.status).toBe(400);
+    expect(auditoria.eventos.map((e) => e.evento)).toEqual([{
+      acao: 'catalog.product_save_rejected',
+      recursoId: null,
+      correlationId: 'corr_teste',
+      metadata: { operacao: 'cadastro', tipo_erro: 'VALIDATION_ERROR', status_http: 400 },
+    }]);
+  });
+});
+
+describe('auditoria do produto (PRE-006B)', () => {
+  it('produto salvo: ator e organização do escopo verificado, sem nome, SKU nem preço', async () => {
+    const auditoria = fakeAuditoria();
+    const handler = createProdutoUpdateHandler(deps({ auditar: auditoria.auditar }));
+
+    await handler(requisicao(corpoValido({ codigo: 'CAM-01', estoque: 4 })));
+
+    expect(auditoria.eventos).toEqual([{
+      organizationId: ORG,
+      actorId: ACTOR,
+      evento: {
+        acao: 'catalog.product_saved',
+        recursoId: PRODUTO_LOCAL,
+        correlationId: 'corr_teste',
+        metadata: { produto_id: PRODUTO_LOCAL, bling_id: '4242', operacao: 'cadastro', saldo: 'aplicado' },
+      },
+    }]);
+    expect(JSON.stringify(auditoria.eventos)).not.toMatch(/Camiseta|CAM-01|49\.9/u);
+  });
+
+  it('saldo não confirmado fica registrado como tal no evento de sucesso', async () => {
+    const auditoria = fakeAuditoria();
+    const handler = createProdutoUpdateHandler(deps({ bling: fakeBling({ falhaSaldo: 'x' }), auditar: auditoria.auditar }));
+
+    await handler(requisicao(corpoValido({ estoque: 4 })));
+
+    expect(auditoria.eventos[0]!.evento).toMatchObject({ acao: 'catalog.product_saved', metadata: { saldo: 'nao_confirmado' } });
+  });
+
+  it('Bling confirmou e o espelho falhou: evento de reconciliação com o id do Bling', async () => {
+    const auditoria = fakeAuditoria();
+    const handler = createProdutoUpdateHandler(deps({ store: fakeStore({ erro: new Error('conexão perdida') }), auditar: auditoria.auditar }));
+
+    const resposta = await handler(requisicao(corpoValido()));
+
+    expect(resposta.status).toBe(500);
+    expect(auditoria.eventos[0]!.evento).toMatchObject({
+      acao: 'catalog.product_reconcile_required',
+      metadata: { operacao: 'cadastro', motivo: 'espelho_local_falhou', bling_id: '4242' },
+    });
+  });
+
+  it('auditoria indisponível não transforma o sucesso confirmado em falha', async () => {
+    const store = fakeStore();
+    const handler = createProdutoUpdateHandler(deps({ store, auditar: fakeAuditoria({ falhar: true }).auditar }));
+
+    const resposta = await handler(requisicao(corpoValido()));
+
+    expect(resposta.status).toBe(200);
+    expect(store.gravados).toHaveLength(1);
+  });
+
+  it('recusas antes de qualquer efeito não gravam nada: corpo inválido, categoria de outra organização', async () => {
+    const bling = fakeBling();
+    const store = fakeStore();
+    const auditoria = fakeAuditoria();
+    const handler = createProdutoUpdateHandler(deps({ bling, store, auditar: auditoria.auditar }));
+
+    const invalido = await handler(requisicao({ nome: '', preco: -1, organizacaoId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }));
+    const alheia = await handler(requisicao(corpoValido({ categoriaId: CATEGORIA_DE_OUTRA_ORG })));
+
+    expect([invalido.status, alheia.status]).toEqual([400, 400]);
+    expect(bling.criados).toEqual([]);
+    expect(bling.atualizados).toEqual([]);
+    expect(bling.saldos).toEqual([]);
+    expect(store.gravados).toEqual([]);
+    expect(auditoria.eventos).toEqual([]);
+  });
+});
+
+describe('saldoParaEnvio: o formulário só manda saldo alterado (PRE-006B)', () => {
+  it('edição sem mexer no saldo não manda estoque; alteração e cadastro mandam', () => {
+    expect(saldoParaEnvio('3', 3, false)).toEqual({});
+    expect(saldoParaEnvio('7', 3, false)).toEqual({ estoque: 7 });
+    expect(saldoParaEnvio('0', undefined, true)).toEqual({ estoque: 0 });
+    expect(saldoParaEnvio('', 2, false)).toEqual({ estoque: 0 });
   });
 });

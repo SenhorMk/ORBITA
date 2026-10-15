@@ -11,6 +11,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import {
   buildProdutoRequest,
+  saldoParaEnvio,
   produtoFormatoSchema,
   produtoSituacaoSchema,
   produtoTipoSchema,
@@ -385,7 +386,7 @@ export function ProductDetailModal({
         nome: nomeSanitizado,
         codigo: codigo.trim() ? codigo.trim() : undefined,
         preco: parseFloat(preco) || 0,
-        estoque: parseInt(estoque, 10) || 0,
+        ...saldoParaEnvio(estoque, produto?.estoque, isNew),
         tipo,
         situacao,
         formato,

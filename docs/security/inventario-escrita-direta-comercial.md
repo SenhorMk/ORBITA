@@ -1,7 +1,9 @@
 # Inventário da escrita direta — catálogo, clientes, pedidos e estoque (PRE-006A)
 
 Escopo: `produtos`, `categorias`, `movimentacao_estoque`, `clientes`,
-`pedidos` e `itens_pedido`. Base: `main` em `091fd01` + este PR.
+`pedidos` e `itens_pedido`. Base: `main` em `091fd01` + PRE-006A.
+Atualizado pelo PRE-006B (base `6cb9d09`) para catálogo e estoque — ver
+a seção [PRE-006B](#pre-006b--catálogo-e-estoque-por-comando-autorizado).
 
 Fontes, todas executadas:
 - código em `src/` (varredura de `.from(...)`/`.rpc(...)`, rotas e repositórios);
@@ -30,10 +32,10 @@ Todas as mutações saem por `fetchWithAuth` para as rotas da seção 2.
 
 | Rota / caller | Tabelas escritas | Sessão + organização | Capacidade | Zod | Auditoria |
 |---|---|---|---|---|---|
-| `POST /api/produtos/update` | `produtos` | contexto verificado | `organization:manage` | sim | — |
+| `POST /api/produtos/update` | `produtos` | contexto verificado | `organization:manage` | sim | **`catalog.product_*` (PRE-006B)** |
 | `POST /api/produtos/arquivar` | `produtos` (RPC `arquivar_produto`) | `autorizarCorrecaoOperacional` | `organization:manage` | sim | eventos `produtos.arquivamento.*` |
 | `POST /api/produtos/imagem/{upload,confirmar,remover,sincronizar}` | `produtos` | `autorizarCorrecaoOperacional` | `organization:manage` | sim | `auditarCorrecao` |
-| `POST /api/categorias/sync` | `categorias` | escopo verificado | `organization:manage` | sim | — |
+| `POST /api/categorias/sync` | `categorias` | escopo verificado | `organization:manage` | sim | **`catalog.categories_*` (PRE-006B)** |
 | `POST /api/clientes/update` | `clientes` | contexto verificado | `organization:manage` | sim | só log de falha |
 | `POST /api/clientes/delete` | `clientes` | `autorizarCorrecaoOperacional` | `organization:manage` | sim | `auditarCorrecao` |
 | `POST /api/pedidos/manual` (+ `/reconciliar`) | `pedidos`, `itens_pedido`, `clientes.bling_id`, `produtos`/`movimentacao_estoque` (RPCs da venda manual) | escopo verificado | `organization:manage` | sim | ledger de tentativas/intervenções |
@@ -80,6 +82,8 @@ Os grants ficam intactos nesta fatia; a revogação é do PRE-006D.
    - Exigir a capacidade aqui pararia a sincronização do SAC para membros, por isso não foi alterado.
 4. **Fora do escopo:** policies com `auth.uid()` em `financeiro` e `integracoes_bling` (PRE-007A / PRE-008). As demais são checagens de admin.
 5. **Auditoria das rotas existentes:** produtos/update, categorias/sync e bling/pedidos não registram evento de auditoria. clientes/update e pedidos/status registram só a falha. Fica para PRE-006B/C, que tocam esses fluxos; este PR não cria boundary novo que precise auditar.
+   - **PRE-006B fechou produtos/update e categorias/sync** (seção abaixo).
+   - **Continua para PRE-006C:** bling/pedidos, clientes/update e pedidos/status.
 
 ## Comandos ausentes
 
@@ -93,3 +97,120 @@ toda mutação legítima do produto já tem rota com escopo verificado,
 
 Inaplicável: esta fatia não cria efeito externo novo. A rota de situação
 apenas ganhou uma recusa **antes** de qualquer chamada ao Bling.
+
+## PRE-006B — catálogo e estoque por comando autorizado
+
+Base: `main` em `6cb9d09`. Os callers foram revalidados no código atual, não
+copiados da seção 1. A revalidação incluiu:
+- import relativo do cliente do navegador;
+- `.from(<variável>)`;
+- o cliente Supabase com a sessão do usuário no servidor (`createActorScopedSupabaseClient`);
+- Storage;
+- leituras do modal de venda.
+
+### O que já estava correto e foi preservado
+
+| Fronteira | Evidência |
+|---|---|
+| Navegador sem DML em `produtos`, `categorias` e `movimentacao_estoque` | `src/lib/escritaDiretaComercial.test.ts`; o navegador só usa `auth.getSession`, Storage com URL assinada e as leituras inventariadas |
+| `produtos/update`, `categorias/sync`, `produtos/arquivar` e `produtos/imagem/*`: organização da sessão verificada e `organization:manage` | `produto-update.test.ts` ("autorização"), `handlers.test.ts`, `ticket-22-fronteira-das-rotas-migradas.test.ts` |
+| Service role filtra `organizacao_id` em toda leitura e escrita de catálogo | `produtoRepository.ts`, `route.ts` de categorias e produtos; categoria de outra organização é recusada antes do Bling (`produto-update.test.ts`) |
+| Movimentação de estoque só pela venda manual: `registrar_venda_manual_com_posse` → `baixar_estoque_organizacao`, com o ator verificado, `service_role` apenas | pgTAP `baixa_estoque_com_ator` (7), `venda_manual_transacional` (11) |
+| Retry da venda não duplica a baixa | pgTAP `tentativas_venda_manual_idempotentes` (111) e `replay_de_item_nao_consome_estoque` (12); concorrência do `test:db` (mesma tentativa reivindicada uma vez; mesmo item aplicado uma vez; posse cercada recusada com `55P03` sem efeito residual) |
+| Auditoria de arquivamento e de foto | eventos `produtos.arquivamento.*` e `catalog.product_image_*` já existentes |
+
+Não há caller de DML do navegador a migrar.
+
+### Defeitos comprovados e corrigidos
+
+1. **A edição do produto reaplicava um saldo velho.** O modal enviava `estoque` em toda gravação, até quando só o nome mudava. A rota lançava esse valor como balanço absoluto no Bling (`POST /estoques`, operação `B`) e no espelho local.
+   - Efeito: uma venda feita com a tela aberta era desfeita, e as unidades vendidas voltavam ao estoque nos dois lados. Um retry da edição repetia o mesmo efeito.
+   - Agora o formulário só manda o saldo no cadastro ou quando a pessoa o altera (`saldoParaEnvio`, `produtoContract.ts`).
+2. **O espelho local recebia saldo não confirmado.** O espelho gravava `estoque: body.estoque ?? 0`:
+   - uma edição sem saldo zerava o estoque local;
+   - um saldo recusado pelo Bling entrava no ORBITA mesmo assim.
+
+   O estoque local é o que `baixar_estoque_organizacao` confere na venda manual. Agora o espelho só recebe saldo que o Bling confirmou; caso contrário, a coluna fica como estava (`ProdutoStorePort.estoque` opcional, `ProdutoRepository.upsert`).
+3. **Timeout ou `5xx` virava "O Bling recusou".** A rota devolvia 400 e tratava a falha como recusa. Num cadastro sem SKU, repetir criava um segundo produto no ERP. Pior, timeout e conexão perdida chegam do adapter como **exceção**, e esta escapava do handler como `500` genérico, sem desfecho nem auditoria.
+   - Agora a exceção é convertida em falha sem resposta (`status` `0`, `semExcecao`).
+   - Agora a rota usa `classificarFalhaDeCriacaoNoBling`, o mesmo classificador da venda manual e da conta a pagar:
+     - recusa comprovada → `400`;
+     - qualquer outra falha → `502` e estado desconhecido. No cadastro, a mensagem manda não cadastrar de novo e sincronizar antes; na atualização, um `PATCH` idempotente, diz que repetir é seguro.
+4. **Faltava auditoria de negócio** em `produtos/update` e `categorias/sync`. Os eventos novos estão na migration 79 e em `auditEventCatalog.ts`. Eles passam por `recordAuditEvent` → `registrar_evento_auditoria`, que só `service_role` executa e que reconfere a membership do ator. Cada evento leva ator e organização do escopo verificado, recurso, `correlation_id` e o desfecho:
+
+   | Evento | Quando |
+   |---|---|
+   | `catalog.product_saved` | Bling confirmou e o ORBITA espelhou; `saldo` = `nao_solicitado`/`aplicado`/`nao_confirmado` (falha parcial do saldo) |
+   | `catalog.product_save_rejected` | recusa comprovada do Bling; nada gravado |
+   | `catalog.product_reconcile_required` | `bling_sem_confirmacao` (indeterminado) ou `espelho_local_falhou` (Bling confirmou, ORBITA não) |
+   | `catalog.categories_synced` | sincronização concluída, com a contagem |
+   | `catalog.categories_sync_failed` | interrompida; `categorias_gravadas` diz quantas páginas anteriores ficaram (falha parcial, não "nada mudou") |
+
+   - A metadata não leva nome, SKU, preço, descrição nem corpo do Bling.
+   - Recusas antes de qualquer efeito (sessão, capacidade, corpo inválido, categoria alheia) não geram evento. Isso segue a convenção das demais rotas comerciais.
+   - Falha ao gravar a auditoria vai para o log técnico redigido (`registrarFalhaInterna`) e não altera a resposta de uma operação já decidida no Bling.
+5. **O detector do PRE-006A tinha pontos cegos.** Ele não reconhecia como navegador quem importa `./supabaseClient` por caminho relativo. Também não olhava `.from(<variável>)` nem o cliente com a sessão do usuário no servidor, que depende dos mesmos grants que o PRE-006D revoga. Os três agora são regras, com contraprova permanente nos próprios detectores.
+
+### Matriz de efeitos externos (17 casos)
+
+Efeitos tocados nesta fatia:
+- `POST /produtos` e `PATCH /produtos/{id}`;
+- `POST /estoques` (balanço).
+
+A sincronização de categorias só lê o Bling.
+
+| Caso | Tratamento |
+|---|---|
+| 1 Antes do envio | consulta por SKU falhou → nada escrito; `400`, sem evento. Credencial ausente no cadastro não se distingue de timeout pelo adapter atual → tratada como desconhecida (conservador) |
+| 2 Recusa definitiva | `400`, `catalog.product_save_rejected` |
+| 3 Timeout · 4 ACK perdido · 5 2xx inválido · 7 5xx | `502`, estado desconhecido, `catalog.product_reconcile_required`; nada local gravado |
+| 6 429 | conservador: tratado como desconhecido, como na venda manual |
+| 8 Retry automático | nenhum: a rota não repete chamada ao Bling |
+| 9 Retry humano | cadastro desconhecido: a mensagem manda sincronizar, não recadastrar. Atualização e saldo são idempotentes (`PATCH`, balanço absoluto) |
+| 10 Crash depois do efeito · 11 crash antes do commit | Bling confirmou e o espelho falhou → `500` com o id do Bling e evento `espelho_local_falhou`; a sincronização do catálogo reconcilia |
+| 12 Duplicata | SKU exato evita a segunda criação; sem SKU, o risco residual está abaixo |
+| 13 Fora de ordem · 14 atrasado · 15 webhook repetido | inaplicáveis à rota; o webhook de produto tem inbox idempotente e tombstone (PRE-004) |
+| 16 Compensação | nenhuma automática: não se apaga produto no Bling por falha local |
+| 17 Reconciliação | sincronização do catálogo (`POST /api/sync`), por `bling_id` |
+
+### Testes que provam
+
+- **Sem DML direto:**
+  - `src/lib/escritaDiretaComercial.test.ts` (navegador, sessão do usuário no servidor, `.from` não literal, contraprovas dos detectores);
+  - pgTAP final `escrita_direta_comercial` (grants e policies; nenhuma RPC do navegador escreve).
+- **Jornada:** a jornada UI → API → banco está coberta em camadas:
+  - `ProductDetailModal.test.tsx`: o corpo enviado;
+  - `produto-update.test.ts`: rota, Bling, espelho e auditoria;
+  - `produto-exclusao-e-deduplicacao.test.ts`: rota sobre o repositório real;
+  - `handlers.test.ts` de categorias.
+- **Isolamento e permissão:** organização A/B, membro sem capacidade e payload inválido sem efeito estão nos mesmos arquivos.
+- **Retry:** `produto-update.test.ts` (balanço repetido não acumula) e os pgTAP de idempotência da venda manual.
+- **Auditoria:**
+  - pgTAP `eventos_de_auditoria_do_catalogo`: eventos no catálogo SQL; membro grava; dono de B não grava em A; `authenticated` não grava;
+  - `auditEventCatalog.test.ts`: TypeScript × SQL.
+- **Contraprovas executadas:** reintroduzir cada defeito derruba o teste correspondente. Os dez casos:
+  - saldo no espelho;
+  - timeout como recusa;
+  - produto sem auditoria;
+  - auditoria derrubando a resposta;
+  - modal reenviando saldo;
+  - categorias sem auditoria;
+  - parcial como zero;
+  - detector cego para import relativo;
+  - evento sem projeção SQL;
+  - exceção de rede escapando como `500`.
+
+### Riscos que permanecem para o PRE-006D e depois
+
+- **DML direto ainda concedido.** `authenticated` mantém INSERT/UPDATE/DELETE em `produtos`, `categorias` e `movimentacao_estoque`.
+  - Um `member` (sem `organization:manage`) ainda pode, pelo PostgREST com o próprio token, alterar `produtos.estoque` ou inserir movimentação na própria organização.
+  - A RLS impede outra organização; só a revogação fecha isso.
+  - Nenhum fluxo do produto depende desse grant: os testes acima o provam.
+- **Cadastro sem SKU em estado desconhecido.** Não há chave de idempotência aceita pelo Bling em `POST /produtos`, nem ledger de tentativa de cadastro.
+  - O estado fica visível (`502` + evento crítico), mas evitar o recadastro depende de a pessoa seguir a mensagem.
+  - Um ledger durável, como o da venda manual, seria um ticket próprio.
+- **Saldo editado em concorrência com uma venda.** Alterar o saldo é um balanço absoluto. Se a pessoa muda o saldo enquanto uma venda acontece, o valor digitado vence: é a semântica de inventário. O que este ticket elimina é o reenvio silencioso do saldo sem alteração.
+- **`pedidos/status` grava `produtos.estoque`** com o saldo lido do Bling, sem movimento no livro. É do PRE-006C, que trata pedidos.
+- **Fora de escopo:**
+  - as rotas de pedidos e clientes (PRE-006C);
+  - o auto-registro de cliente pelo SAC (achado 3).
