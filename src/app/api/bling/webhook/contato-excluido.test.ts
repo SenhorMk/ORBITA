@@ -32,6 +32,8 @@ let contatos: Map<string, string>;
 let bancoCai: boolean;
 /** Reativações explícitas já feitas, por (organização, bling_id) → quando. */
 let reativacoes: Map<string, number>;
+/** Exclusões recebidas sem ordem provável, aguardando conferência. */
+let pendentes: Set<string>;
 const MARGEM_MS = 5 * 60 * 1000;
 
 const chaveDe = (org: unknown, bling: unknown) => `${String(org)}:${String(bling)}`;
@@ -58,12 +60,18 @@ const rpc = vi.fn(async (nome: string, args: Record<string, unknown>) => {
     if (bancoCai) return { data: null, error: { code: '08006', message: 'conexão com o banco recusada' } };
     const chave = chaveDe(args.p_organizacao_id, args.p_bling_id);
     if (exclusoes.has(chave)) return { data: [{ desfecho: 'ja_registrado', cliente_id: null }], error: null };
-    // O contrato da migration 77 depois de uma reativação (provado no pgTAP 21-24).
+    // O contrato da migration 77 depois de uma reativação (provado no pgTAP 21-34).
     const reativadoEm = reativacoes.get(chave);
     if (reativadoEm !== undefined) {
       const em = typeof args.p_excluido_no_bling_em === 'string' ? Date.parse(args.p_excluido_no_bling_em) : null;
-      if (em !== null && em < reativadoEm - MARGEM_MS) return { data: [{ desfecho: 'anterior_a_reativacao', cliente_id: null }], error: null };
-      if (em === null || em <= reativadoEm + MARGEM_MS) return { data: [{ desfecho: 'reconciliacao_necessaria', cliente_id: null }], error: null };
+      const posterior = em !== null && em > reativadoEm + MARGEM_MS;
+      if (pendentes.has(chave) && !posterior) return { data: [{ desfecho: 'reconciliacao_pendente', cliente_id: null }], error: null };
+      if (!posterior && em !== null && em < reativadoEm - MARGEM_MS) return { data: [{ desfecho: 'anterior_a_reativacao', cliente_id: null }], error: null };
+      if (!posterior) {
+        pendentes.add(chave);
+        return { data: [{ desfecho: 'reconciliacao_necessaria', cliente_id: null }], error: null };
+      }
+      pendentes.delete(chave);
     }
     exclusoes.set(chave, { excluidoNoBlingEm: args.p_excluido_no_bling_em });
     return { data: [{ desfecho: contatos.has(chave) ? 'registrado' : 'registrado_sem_contato', cliente_id: null }], error: null };
@@ -109,7 +117,12 @@ vi.mock('../../../../lib/supabaseServer', () => ({
           ? { id: f.id } : null));
       }
       if (tabela === 'contatos_excluidos_no_bling') {
-        return consulta((f) => (f.reativado_em === null && exclusoes.has(chaveDe(f.organizacao_id, f.bling_id)) ? { id: 'excl-1' } : null));
+        return consulta((f) => {
+          if (f.reativado_em !== null) return null;
+          const chave = chaveDe(f.organizacao_id, f.bling_id);
+          if (exclusoes.has(chave)) return { confirmada: true };
+          return pendentes.has(chave) ? { confirmada: false } : null;
+        });
       }
       throw new Error(`tabela inesperada: ${tabela}`);
     },
@@ -133,7 +146,7 @@ vi.mock('../../../../repositories/clienteRepository', async (importOriginal) => 
     clienteRepository: {
       // O caminho da exclusão é o real, até o `supabaseServer`.
       registrarExclusaoNoBling: real.clienteRepository.registrarExclusaoNoBling.bind(real.clienteRepository),
-      exclusaoVigenteNoBling: real.clienteRepository.exclusaoVigenteNoBling.bind(real.clienteRepository),
+      estadoDaExclusaoNoBling: real.clienteRepository.estadoDaExclusaoNoBling.bind(real.clienteRepository),
       getByBlingId,
       upsert,
     },
@@ -164,6 +177,7 @@ beforeEach(() => {
   contatos = new Map([[chaveDe(ORG_A, BLING_ID), 'Maria Real'], [chaveDe(ORG_B, BLING_ID), 'Cliente de B']]);
   bancoCai = false;
   reativacoes = new Map();
+  pendentes = new Set();
   rpc.mockClear();
   getByBlingId.mockClear();
   upsert.mockClear();
@@ -176,6 +190,7 @@ describe('webhook: contact.deleted marca o contato como excluído (PRE-005)', ()
     expect(resposta.status).toBe(200);
     expect(chamadasDaExclusao()).toEqual([['registrar_exclusao_de_contato_no_bling', {
       p_organizacao_id: ORG_A, p_bling_id: BLING_ID, p_excluido_no_bling_em: '2026-10-14T10:00:00.000Z',
+      p_chave_do_evento: `contact.deleted_${BLING_ID}`,
     }]]);
     expect(getByBlingId).not.toHaveBeenCalled();
     expect(upsert).not.toHaveBeenCalled();
@@ -273,28 +288,37 @@ describe('webhook: contact.deleted marca o contato como excluído (PRE-005)', ()
     expect(respostaNoInbox(ORG_A, `contact.deleted_${BLING_ID}`)?.status).toBe('processed');
   });
 
-  it('depois de uma reativação: a exclusão antiga reentregue não a desfaz; sem data pede reconciliação; uma nova vale', async () => {
+  it('depois de uma reativação: antiga não bloqueia; sem ordem abre pendência que bloqueia; nova comprovada confirma', async () => {
     const reativadoEm = Date.parse('2026-10-14T12:00:00Z');
     reativacoes.set(chaveDe(ORG_A, BLING_ID), reativadoEm);
 
     const antiga = await entregar(exclusao(BLING_ID, { eventId: 'antiga', date: '2026-10-14T10:00:00Z' }));
     expect(antiga.status).toBe(200);
-    expect(respostaNoInbox(ORG_A, 'contact.deleted_antiga')).toMatchObject({
-      status: 'processed', response: { desfecho: 'anterior_a_reativacao' },
-    });
+    expect(respostaNoInbox(ORG_A, 'contact.deleted_antiga')?.response).toMatchObject({ desfecho: 'anterior_a_reativacao' });
+    expect(pendentes.size).toBe(0);
 
-    const semData = await entregar(exclusao(BLING_ID, { eventId: 'sem-data' }));
-    // Não é sucesso fictício nem descarte: o inbox guarda o pedido de reconciliação.
-    expect(semData.status).toBe(200);
+    // Recebida, não confirmada: a pendência é persistente e o inbox pede reconciliação.
+    await entregar(exclusao(BLING_ID, { eventId: 'sem-data' }));
     expect(respostaNoInbox(ORG_A, 'contact.deleted_sem-data')).toMatchObject({
       status: 'processed', response: { desfecho: 'reconciliacao_necessaria', reconcileRequired: true },
     });
+    expect(chamadasDaExclusao().at(-1)?.[1]).toMatchObject({ p_chave_do_evento: 'contact.deleted_sem-data' });
+    expect([...pendentes]).toEqual([chaveDe(ORG_A, BLING_ID)]);
     expect(exclusoes.size).toBe(0);
+
+    // Durante a pendência, o update atrasado não grava nada.
+    await entregar({ event: 'contact.updated', data: { id: Number(BLING_ID), nome: 'Maria Real', situacao: 'A' }, eventId: 'upd' });
+    expect(respostaNoInbox(ORG_A, 'contact.updated_upd')?.response).toMatchObject({ ignored: true, reason: 'reconciliacao_pendente' });
+    expect(upsert).not.toHaveBeenCalled();
+
+    await entregar(exclusao(BLING_ID, { eventId: 'sem-data-2', date: '2026-10-14T12:01:00Z' }));
+    expect(respostaNoInbox(ORG_A, 'contact.deleted_sem-data-2')?.response).toMatchObject({ desfecho: 'reconciliacao_pendente', reconcileRequired: true });
 
     await entregar(exclusao(BLING_ID, { eventId: 'nova', date: '2026-10-14T15:00:00Z' }));
     expect(respostaNoInbox(ORG_A, 'contact.deleted_nova')?.response).toMatchObject({ desfecho: 'registrado' });
+    expect(respostaNoInbox(ORG_A, 'contact.deleted_nova')?.response).not.toHaveProperty('reconcileRequired');
+    expect(pendentes.size).toBe(0);
     expect(exclusoes.size).toBe(1);
-    expect(upsert).not.toHaveBeenCalled();
   });
 
   it('evento de outro recurso de contato continua ignorado e auditado', async () => {

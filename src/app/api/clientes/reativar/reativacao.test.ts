@@ -18,12 +18,14 @@ const scope = { organizationId: '11111111-1111-4111-8111-111111111111', actorId:
 
 function montar(opcoes: {
   autorizado?: boolean;
-  vigente?: boolean;
+  estado?: 'nenhuma' | 'confirmada' | 'pendente';
   leitura?: LeituraRemota<ContatoRemoto>;
   desfecho?: 'reativado' | 'nao_excluido' | 'negado';
+  confirmacao?: 'confirmada' | 'sem_pendencia' | 'negado';
   auditoriaCai?: boolean;
 } = {}) {
   const reativados: Array<{ org: string; blingId: string }> = [];
+  const confirmados: Array<{ org: string; blingId: string }> = [];
   const lidos: string[] = [];
   const auditados: EventoDeReativacao[] = [];
   const handler = createReativacaoDeContatoHandler({
@@ -31,8 +33,9 @@ function montar(opcoes: {
       ? { _tag: 'Autorizado', scope }
       : { _tag: 'Negado', response: NextResponse.json({ success: false }, { status: 403 }) }),
     store: {
-      async exclusaoVigenteNoBling() { return opcoes.vigente ?? true; },
+      async estadoDaExclusaoNoBling() { return opcoes.estado ?? 'confirmada'; },
       async reativarExcluidoNoBling(s, blingId) { reativados.push({ org: s.organizationId, blingId }); return opcoes.desfecho ?? 'reativado'; },
+      async confirmarExclusaoPendente(s, blingId) { confirmados.push({ org: s.organizationId, blingId }); return opcoes.confirmacao ?? 'confirmada'; },
     },
     bling: () => ({
       async consultarContato(id) { lidos.push(id); return opcoes.leitura ?? { _tag: 'RemotoPresente', valor: { id, situacao: 'A' } }; },
@@ -43,7 +46,7 @@ function montar(opcoes: {
     },
     correlationId: () => 'corr-1',
   });
-  return { handler, reativados, lidos, auditados };
+  return { handler, reativados, confirmados, lidos, auditados };
 }
 
 const pedido = (corpo: unknown) => new Request('https://orbita.test/api/clientes/reativar', { method: 'POST', body: JSON.stringify(corpo) });
@@ -101,11 +104,12 @@ describe('reativação explícita de contato excluído no Bling (PRE-005)', () =
     expect(r).toEqual({ status, corpo });
     expect(respostaDaReativacaoSchema.parse(r.corpo)).toEqual(corpo);
     expect(m.reativados).toEqual([]);
+    expect(m.confirmados).toEqual([]);
     expect(m.auditados).toEqual([]);
   });
 
-  it('sem exclusão vigente: NotExcluded, sem ler o Bling', async () => {
-    const m = montar({ vigente: false });
+  it('sem exclusão aberta: NotExcluded, sem ler o Bling', async () => {
+    const m = montar({ estado: 'nenhuma' });
     const r = await chamar(m);
 
     expect(r).toEqual({ status: 200, corpo: { resultado: 'NotExcluded' } });
@@ -125,5 +129,70 @@ describe('reativação explícita de contato excluído no Bling (PRE-005)', () =
     const r = await chamar(m);
 
     expect(r).toEqual({ status: 200, corpo: { resultado: 'Reactivated' } });
+  });
+});
+
+describe('exclusão aguardando conferência (PRE-005)', () => {
+  it('o Bling confirma o contato ativo: a pendência se resolve e o contato é liberado', async () => {
+    const m = montar({ estado: 'pendente' });
+    const r = await chamar(m);
+
+    expect(r).toEqual({ status: 200, corpo: { resultado: 'Reactivated' } });
+    expect(m.reativados).toHaveLength(1);
+    expect(m.confirmados).toEqual([]);
+    expect(m.auditados).toEqual([expect.objectContaining({ acao: 'customer.contact_reactivated', metadata: expect.objectContaining({ estado_anterior: 'pendente' }) })]);
+  });
+
+  it.each([
+    ['excluído (E)', { _tag: 'RemotoPresente', valor: { id: '17000000001', situacao: 'E' } } as const],
+    ['ausente (404)', { _tag: 'RemotoAusente' } as const],
+  ])('o Bling prova o contato %s: a pendência vira exclusão confirmada', async (_caso, leitura) => {
+    const m = montar({ estado: 'pendente', leitura });
+    const r = await chamar(m);
+
+    expect(r).toEqual({ status: 200, corpo: { resultado: 'ExclusionConfirmed' } });
+    expect(respostaDaReativacaoSchema.parse(r.corpo)).toEqual({ resultado: 'ExclusionConfirmed' });
+    expect(m.confirmados).toEqual([{ org: scope.organizationId, blingId: '17000000001' }]);
+    expect(m.reativados).toEqual([]);
+    expect(m.auditados).toEqual([expect.objectContaining({ acao: 'customer.contact_deletion_confirmed' })]);
+  });
+
+  it.each([
+    ['indeterminada', { _tag: 'RemotoIndeterminado', causa: 'falha_de_rede' } as const, 503],
+    ['recusada', { _tag: 'RemotoRecusou', status: 401 } as const, 502],
+    ['com outro id', { _tag: 'RemotoPresente', valor: { id: '17000000002', situacao: 'E' } } as const, 503],
+    ['inativo (I)', { _tag: 'RemotoPresente', valor: { id: '17000000001', situacao: 'I' } } as const, 409],
+  ])('leitura %s: a pendência continua, nada é liberado nem confirmado', async (_caso, leitura, status) => {
+    const m = montar({ estado: 'pendente', leitura });
+    const r = await chamar(m);
+
+    expect(r.status).toBe(status);
+    expect(m.reativados).toEqual([]);
+    expect(m.confirmados).toEqual([]);
+    expect(m.auditados).toEqual([]);
+  });
+
+  it('exclusão já confirmada e o Bling ainda a prova: segue bloqueado, sem confirmar de novo', async () => {
+    const m = montar({ estado: 'confirmada', leitura: { _tag: 'RemotoAusente' } });
+    const r = await chamar(m);
+
+    expect(r).toEqual({ status: 409, corpo: { resultado: 'Blocked', motivo: 'ainda_excluido_no_bling' } });
+    expect(m.confirmados).toEqual([]);
+  });
+
+  it('o banco recusa o ator na confirmação: Forbidden, sem auditoria', async () => {
+    const m = montar({ estado: 'pendente', leitura: { _tag: 'RemotoAusente' }, confirmacao: 'negado' });
+    const r = await chamar(m);
+
+    expect(r).toEqual({ status: 403, corpo: { resultado: 'Forbidden' } });
+    expect(m.auditados).toEqual([]);
+  });
+
+  it('a pendência mudou durante a reconciliação: ReconcileRequired, sem sucesso fictício', async () => {
+    const m = montar({ estado: 'pendente', leitura: { _tag: 'RemotoAusente' }, confirmacao: 'sem_pendencia' });
+    const r = await chamar(m);
+
+    expect(r).toEqual({ status: 503, corpo: { resultado: 'ReconcileRequired' } });
+    expect(m.auditados).toEqual([]);
   });
 });

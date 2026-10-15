@@ -43,7 +43,7 @@ function produto(overrides: Partial<ManualOrderProduto> = {}): ManualOrderProdut
 }
 
 function cliente(overrides: Partial<ManualOrderCliente> = {}): ManualOrderCliente {
-  return { id: CLIENTE, nome: 'Ana', blingId: '4321', email: null, telefone: null, cpfCnpj: null, excluidoNoBling: false, ...overrides };
+  return { id: CLIENTE, nome: 'Ana', blingId: '4321', email: null, telefone: null, cpfCnpj: null, excluidoNoBling: false, exclusaoPendenteNoBling: false, ...overrides };
 }
 
 interface FakeStore extends ManualOrderStorePort {
@@ -777,6 +777,20 @@ describe('estoque local', () => {
 
   // PRE-005: contato excluído no Bling não entra em venda nova. A recusa vem
   // antes de qualquer envio ao Bling e de qualquer gravação.
+  it('recusa cliente com exclusão aguardando conferência antes de qualquer envio', async () => {
+    const store = fakeStore({ clientes: { [ORG_A]: cliente({ exclusaoPendenteNoBling: true }) } });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+    const body = (await response.json()) as ManualOrderResponseBody;
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('Ana tem uma exclusão no Bling aguardando conferência e não pode ser usado em venda nova.');
+    expect(bling.payloads).toHaveLength(0);
+    expect(store.persisted).toHaveLength(0);
+  });
+
   it('recusa cliente excluído no Bling antes de qualquer envio', async () => {
     const store = fakeStore({ clientes: { [ORG_A]: cliente({ excluidoNoBling: true }) } });
     const bling = fakeBling();

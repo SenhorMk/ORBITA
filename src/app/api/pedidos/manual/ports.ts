@@ -53,6 +53,8 @@ export interface ManualOrderCliente {
   readonly cpfCnpj: string | null;
   /** Excluído no Bling (PRE-005): não entra em venda nova até a reativação explícita. */
   readonly excluidoNoBling: boolean;
+  /** Exclusão recebida sem ordem provável, aguardando conferência no Bling (PRE-005). */
+  readonly exclusaoPendenteNoBling: boolean;
 }
 
 /** Produto já lido dentro do escopo verificado, com o preço em que o servidor confia. */

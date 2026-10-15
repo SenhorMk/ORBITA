@@ -1,16 +1,18 @@
 -- contato_excluido_no_bling.test.sql
 -- PRE-005, migration 77: `contact.deleted` do Bling marca o contato como
 -- excluído sem apagá-lo nem inventar nome; pedidos continuam legíveis; um
--- update atrasado não o traz de volta; só a reativação explícita traz.
+-- update atrasado não o traz de volta; só a reconciliação explícita traz.
+-- Depois de uma reativação, exclusão sem ordem provável abre pendência que
+-- bloqueia o contato até a conferência no Bling.
 --
--- REINTRODUZIR O DEFEITO: tire o gatilho `tg_contato_excluido_no_bling_nao_volta`:
--- 6-11 falham (o update atrasado recria, renomeia para `Cliente #id` ou
--- reativa). Tire o `if found` da exclusão vigente no registro: a reentrega
--- tenta gravar outra vigente e o teste aborta em 23505. Tire a trava de
--- registro imutável: 15-17 falham (e 19 e 21-24 em cascata). Tire a checagem
--- de papel da reativação: 18 falha (e 19 em cascata). Tire a guarda de data
--- posterior à reativação: 21-23 falham (a exclusão antiga, ou sem data,
--- desfaz a reativação legítima; 24 em cascata).
+-- REINTRODUZIR O DEFEITO (medido):
+-- - sem o gatilho `tg_contato_excluido_no_bling_nao_volta`: 6-11, 24 e 25 falham;
+-- - sem absorver a reentrega da exclusão confirmada: 4 falha;
+-- - registro de exclusão mutável: 15-17 falham (e 19, 21-23, 25, 28, 29, 31);
+-- - sem a checagem de papel: 18 e 26 falham (e 19);
+-- - sem a guarda de data: 21-23 falham (e 25, 28, 29, 32);
+-- - pendência sem marca no contato (só aviso): 22 e 25 falham;
+-- - sem a checagem da mesma entrega: 28 falha (e 29).
 
 begin;
 
@@ -51,7 +53,7 @@ insert into public.clientes (id, organizacao_id, bling_id, nome, email) values
     ('77000000-0000-4000-8000-000000000004', '77000000-0000-4000-8000-0000000000b1', '99999999901', 'Mesmo id em B', null);
 insert into public.pedidos (cliente_id, numero) values ('77000000-0000-4000-8000-000000000001', 'PED-77');
 
-select plan(28);
+select plan(38);
 
 -- ----------------------------------------------------------------------------
 -- 1-5. A exclusão no Bling marca e preserva; a reentrega não muda nada.
@@ -113,8 +115,7 @@ select lives_ok(
     '14. a exclusão de A não impede B');
 
 -- ----------------------------------------------------------------------------
--- 15-24. Registro permanente; só a reativação explícita traz de volta; uma
--- exclusão antiga não a desfaz.
+-- 15-20. Registro permanente; só o comando explícito encerra.
 -- ----------------------------------------------------------------------------
 select throws_ok($$update public.contatos_excluidos_no_bling set excluido_no_bling_em = now()$$, '23514', null,
                  '15. a exclusão não é reescrita');
@@ -127,42 +128,89 @@ select throws_ok(
     $$select * from public.reativar_contato_excluido_no_bling('77000000-0000-4000-8000-0000000000a1', '17000000001', '77000000-0000-4000-8000-0000000000f2')$$,
     '42501', null, '18. quem não administra a organização não reativa');
 
-create temp table r4 as select * from public.reativar_contato_excluido_no_bling(
-    '77000000-0000-4000-8000-0000000000a1', '17000000001', '77000000-0000-4000-8000-0000000000f1');
-select is((select desfecho from r4)
-          || '/' || (select (excluido_no_bling_em is null) from public.clientes where id = '77000000-0000-4000-8000-000000000001')
+create temp table r4 as select * from public.reativar_contato_excluido_no_bling('77000000-0000-4000-8000-0000000000a1', '17000000001', '77000000-0000-4000-8000-0000000000f1');
+select is((select desfecho from r4) || '/' || (select (excluido_no_bling_em is not null)::text || '/' || (exclusao_pendente_desde is not null)::text from public.clientes where id = '77000000-0000-4000-8000-000000000001')
           || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where bling_id = '17000000001' and reativado_por = '77000000-0000-4000-8000-0000000000f1'),
-          'reativado/true/1', '19. a reativação explícita traz o contato de volta e registra quem reativou');
+          'reativado/false/false/1', '19. a reativação explícita traz o contato de volta e registra quem reativou');
 select lives_ok(
     $$insert into public.clientes (organizacao_id, bling_id, nome) values ('77000000-0000-4000-8000-0000000000a1', '17000000001', 'Maria Atualizada')
       on conflict (organizacao_id, bling_id) do update set nome = excluded.nome$$,
     '20. depois dela, a sincronização volta a gravar o contato');
--- A reativação desta transação aconteceu em now(). A exclusão antiga (10:00 de
--- hoje, a mesma de 1) chega de novo com outra chave de idempotência.
-create temp table r5 as select * from public.registrar_exclusao_de_contato_no_bling(
-    '77000000-0000-4000-8000-0000000000a1', '17000000001', now() - interval '1 day');
-select is((select desfecho from r5) || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where bling_id = '17000000001' and organizacao_id = '77000000-0000-4000-8000-0000000000a1')
-          || '/' || (select (excluido_no_bling_em is null) from public.clientes where id = '77000000-0000-4000-8000-000000000001'),
-          'anterior_a_reativacao/1/true', '21. a exclusão antiga reentregue não desfaz a reativação');
-create temp table r6 as select * from public.registrar_exclusao_de_contato_no_bling(
-    '77000000-0000-4000-8000-0000000000a1', '17000000001', null);
-select is((select desfecho from r6) || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where bling_id = '17000000001' and organizacao_id = '77000000-0000-4000-8000-0000000000a1')
-          || '/' || (select (excluido_no_bling_em is null) from public.clientes where id = '77000000-0000-4000-8000-000000000001'),
-          'reconciliacao_necessaria/1/true', '22. sem data, a ordem não é provável: o estado local fica e pede reconciliação');
-create temp table r7 as select * from public.registrar_exclusao_de_contato_no_bling(
-    '77000000-0000-4000-8000-0000000000a1', '17000000001', now() + interval '1 minute');
-select is((select desfecho from r7) || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where bling_id = '17000000001' and organizacao_id = '77000000-0000-4000-8000-0000000000a1'),
-          'reconciliacao_necessaria/1', '23. dentro da margem dos relógios também: nada muda, pede reconciliação');
-create temp table r8 as select * from public.registrar_exclusao_de_contato_no_bling(
-    '77000000-0000-4000-8000-0000000000a1', '17000000001', now() + interval '1 hour');
-select is((select desfecho from r8)
-          || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where bling_id = '17000000001' and organizacao_id = '77000000-0000-4000-8000-0000000000a1')
-          || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where bling_id = '17000000001' and organizacao_id = '77000000-0000-4000-8000-0000000000a1' and reativado_em is null)
-          || '/' || (select (excluido_no_bling_em is not null) from public.clientes where id = '77000000-0000-4000-8000-000000000001'),
-          'registrado/2/1/true', '24. exclusão comprovadamente posterior à reativação vale: o histórico guarda as duas, uma vigente');
 
 -- ----------------------------------------------------------------------------
--- 25-28. Falha transacional, entrada inválida, cascata e privilégios.
+-- 21-34. Depois da reativação (em now()): exclusão antiga não a desfaz; sem
+-- ordem provável, o contato fica pendente e bloqueado até a conferência.
+-- ----------------------------------------------------------------------------
+create temp table r5 as select * from public.registrar_exclusao_de_contato_no_bling(
+    '77000000-0000-4000-8000-0000000000a1', '17000000001', now() - interval '1 day', 'k-antiga');
+select is((select desfecho from r5) || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where organizacao_id = '77000000-0000-4000-8000-0000000000a1' and bling_id = '17000000001') || '/' || (select (excluido_no_bling_em is not null)::text || '/' || (exclusao_pendente_desde is not null)::text from public.clientes where id = '77000000-0000-4000-8000-000000000001'),
+          'anterior_a_reativacao/1/false/false', '21. a exclusão antiga comprovada não bloqueia o contato reativado');
+create temp table r6 as select * from public.registrar_exclusao_de_contato_no_bling(
+    '77000000-0000-4000-8000-0000000000a1', '17000000001', null, 'k1');
+select is((select desfecho from r6) || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where organizacao_id = '77000000-0000-4000-8000-0000000000a1' and bling_id = '17000000001') || '/' || (select (excluido_no_bling_em is not null)::text || '/' || (exclusao_pendente_desde is not null)::text from public.clientes where id = '77000000-0000-4000-8000-000000000001')
+          || '/' || (select confirmada::text from public.contatos_excluidos_no_bling where organizacao_id = '77000000-0000-4000-8000-0000000000a1' and bling_id = '17000000001' and reativado_em is null),
+          'reconciliacao_necessaria/2/false/true/false', '22. sem ordem provável: pendência aberta, não confirmada; o contato fica pendente, não excluído');
+create temp table r7 as select * from public.registrar_exclusao_de_contato_no_bling(
+    '77000000-0000-4000-8000-0000000000a1', '17000000001', now() + interval '1 minute', 'k2');
+select is((select desfecho from r7) || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where organizacao_id = '77000000-0000-4000-8000-0000000000a1' and bling_id = '17000000001'),
+          'reconciliacao_pendente/2', '23. outra entrega sem ordem provável não abre outra pendência');
+select throws_ok(
+    $$insert into public.clientes (organizacao_id, bling_id, nome) values ('77000000-0000-4000-8000-0000000000a1', '17000000001', 'Durante a pendência')
+      on conflict (organizacao_id, bling_id) do update set nome = excluded.nome$$,
+    '23514', null, '24. durante a pendência, a gravação do contato é recusada');
+select throws_ok(
+    $$update public.clientes set exclusao_pendente_desde = null where id = '77000000-0000-4000-8000-000000000001'$$,
+    '23514', null, '25. nem a pendência se limpa por gravação direta');
+select throws_ok(
+    $$select * from public.confirmar_exclusao_pendente_de_contato('77000000-0000-4000-8000-0000000000a1', '17000000001', '77000000-0000-4000-8000-0000000000f2')$$,
+    '42501', null, '26. quem não administra a organização não confirma a exclusão');
+
+-- O Bling confirmou o contato ativo: a reconciliação encerra a pendência.
+create temp table r8 as select * from public.reativar_contato_excluido_no_bling('77000000-0000-4000-8000-0000000000a1', '17000000001', '77000000-0000-4000-8000-0000000000f1');
+select is((select desfecho from r8) || '/' || (select (excluido_no_bling_em is not null)::text || '/' || (exclusao_pendente_desde is not null)::text from public.clientes where id = '77000000-0000-4000-8000-000000000001') || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where organizacao_id = '77000000-0000-4000-8000-0000000000a1' and bling_id = '17000000001' and reativado_em is null),
+          'reativado/false/false/0', '27. confirmação de contato ativo resolve a pendência e libera o contato');
+create temp table r9 as select * from public.registrar_exclusao_de_contato_no_bling(
+    '77000000-0000-4000-8000-0000000000a1', '17000000001', null, 'k1');
+select is((select desfecho from r9) || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where organizacao_id = '77000000-0000-4000-8000-0000000000a1' and bling_id = '17000000001') || '/' || (select (excluido_no_bling_em is not null)::text || '/' || (exclusao_pendente_desde is not null)::text from public.clientes where id = '77000000-0000-4000-8000-000000000001'),
+          'ja_resolvido/2/false/false', '28. a reentrega da entrega que abriu a pendência resolvida não a reabre');
+
+-- Nova entrega sem ordem provável; desta vez o Bling confirma a exclusão.
+create temp table r10 as select * from public.registrar_exclusao_de_contato_no_bling(
+    '77000000-0000-4000-8000-0000000000a1', '17000000001', null, 'k3');
+create temp table r11 as select * from public.confirmar_exclusao_pendente_de_contato('77000000-0000-4000-8000-0000000000a1', '17000000001', '77000000-0000-4000-8000-0000000000f1');
+select is((select desfecho from r10) || '/' || (select desfecho from r11) || '/' || (select (excluido_no_bling_em is not null)::text || '/' || (exclusao_pendente_desde is not null)::text from public.clientes where id = '77000000-0000-4000-8000-000000000001')
+          || '/' || (select confirmada::text from public.contatos_excluidos_no_bling where organizacao_id = '77000000-0000-4000-8000-0000000000a1' and bling_id = '17000000001' and reativado_em is null),
+          'reconciliacao_necessaria/confirmada/true/false/true', '29. contato ainda excluído no Bling: a pendência vira exclusão confirmada');
+create temp table r12 as select * from public.registrar_exclusao_de_contato_no_bling(
+    '77000000-0000-4000-8000-0000000000a1', '17000000001', null, 'k3');
+create temp table r13 as select * from public.confirmar_exclusao_pendente_de_contato('77000000-0000-4000-8000-0000000000a1', '17000000001', '77000000-0000-4000-8000-0000000000f1');
+select is((select desfecho from r12) || '/' || (select desfecho from r13) || '/' || (select (excluido_no_bling_em is not null)::text || '/' || (exclusao_pendente_desde is not null)::text from public.clientes where id = '77000000-0000-4000-8000-000000000001'),
+          'ja_registrado/sem_pendencia/true/false', '30. a reentrega e a segunda confirmação não mudam nada; o contato segue excluído');
+
+-- Exclusão genuinamente nova depois de outra reativação.
+create temp table r14 as select * from public.reativar_contato_excluido_no_bling('77000000-0000-4000-8000-0000000000a1', '17000000001', '77000000-0000-4000-8000-0000000000f1');
+create temp table r15 as select * from public.registrar_exclusao_de_contato_no_bling(
+    '77000000-0000-4000-8000-0000000000a1', '17000000001', now() + interval '1 hour', 'k4');
+select is((select desfecho from r14) || '/' || (select desfecho from r15) || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where organizacao_id = '77000000-0000-4000-8000-0000000000a1' and bling_id = '17000000001') || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where organizacao_id = '77000000-0000-4000-8000-0000000000a1' and bling_id = '17000000001' and reativado_em is null) || '/' || (select (excluido_no_bling_em is not null)::text || '/' || (exclusao_pendente_desde is not null)::text from public.clientes where id = '77000000-0000-4000-8000-000000000001'),
+          'reativado/registrado/4/1/true/false', '31. exclusão comprovadamente posterior à reativação vale: histórico com quatro, uma aberta');
+
+-- Pendência aberta + exclusão comprovadamente posterior: a pendência é confirmada.
+insert into public.clientes (id, organizacao_id, bling_id, nome) values ('77000000-0000-4000-8000-000000000005', '77000000-0000-4000-8000-0000000000a1', '17000000005', 'Joana');
+select * from public.registrar_exclusao_de_contato_no_bling('77000000-0000-4000-8000-0000000000a1', '17000000005', null, 'j1');
+select * from public.reativar_contato_excluido_no_bling('77000000-0000-4000-8000-0000000000a1', '17000000005', '77000000-0000-4000-8000-0000000000f1');
+create temp table r16 as select * from public.registrar_exclusao_de_contato_no_bling('77000000-0000-4000-8000-0000000000a1', '17000000005', null, 'j2');
+create temp table r17 as select * from public.registrar_exclusao_de_contato_no_bling('77000000-0000-4000-8000-0000000000a1', '17000000005', now() + interval '1 hour', 'j3');
+select is((select desfecho from r16) || '/' || (select desfecho from r17)
+          || '/' || (select (excluido_no_bling_em is not null)::text || '/' || (exclusao_pendente_desde is not null)::text from public.clientes where id = '77000000-0000-4000-8000-000000000005')
+          || '/' || (select count(*)::int from public.contatos_excluidos_no_bling where bling_id = '17000000005' and reativado_em is null and confirmada),
+          'reconciliacao_necessaria/registrado/true/false/1', '32. pendência aberta + exclusão comprovadamente posterior: confirmada, sem segunda linha aberta');
+select is((select desfecho from public.reativar_contato_excluido_no_bling('77000000-0000-4000-8000-0000000000a1', '17000000005', '77000000-0000-4000-8000-0000000000f1')), 'reativado',
+          '33. e a pendência confirmada também só sai pela reativação explícita');
+select is((select (excluido_no_bling_em is null and exclusao_pendente_desde is null) from public.clientes where id = '77000000-0000-4000-8000-000000000002'),
+          true, '34. organização B: o mesmo bling_id não recebe exclusão nem pendência de A');
+
+-- ----------------------------------------------------------------------------
+-- 35-38. Falha transacional, entrada inválida, cascata e privilégios.
 -- ----------------------------------------------------------------------------
 do $$
 begin
@@ -173,28 +221,31 @@ exception when others then
 end $$;
 select is((select count(*)::int from public.contatos_excluidos_no_bling where bling_id = '55555')
           || '/' || (select (excluido_no_bling_em is null) from public.clientes where id = '77000000-0000-4000-8000-000000000003'),
-          '0/true', '25. a transação que cai não deixa exclusão nem marca; a reentrega refaz do zero');
+          '0/true', '35. a transação que cai não deixa exclusão nem marca; a reentrega refaz do zero');
 
 select throws_ok(
     $$select * from public.registrar_exclusao_de_contato_no_bling('77000000-0000-4000-8000-0000000000a1', 'temp_ab12', null)$$,
-    '22023', null, '26. id que não é do Bling é recusado');
+    '22023', null, '36. id que não é do Bling é recusado');
 
 select * from public.registrar_exclusao_de_contato_no_bling('77000000-0000-4000-8000-0000000000c1', '123456', null);
 delete from public.organizacoes where id = '77000000-0000-4000-8000-0000000000c1';
 select ok(not exists (select 1 from public.contatos_excluidos_no_bling where organizacao_id = '77000000-0000-4000-8000-0000000000c1')
           and (select count(*) from public.contatos_excluidos_no_bling) > 0,
-          '27. a exclusão da organização leva só as exclusões dela');
+          '37. a exclusão da organização leva só as exclusões dela');
 
-select ok(not has_function_privilege('authenticated', 'public.registrar_exclusao_de_contato_no_bling(uuid, text, timestamptz)', 'execute')
+select ok(not has_function_privilege('authenticated', 'public.registrar_exclusao_de_contato_no_bling(uuid, text, timestamptz, text)', 'execute')
           and not has_function_privilege('anon', 'public.reativar_contato_excluido_no_bling(uuid, text, uuid)', 'execute')
           and not has_function_privilege('authenticated', 'public.reativar_contato_excluido_no_bling(uuid, text, uuid)', 'execute')
-          and has_function_privilege('service_role', 'public.registrar_exclusao_de_contato_no_bling(uuid, text, timestamptz)', 'execute')
+          and not has_function_privilege('authenticated', 'public.confirmar_exclusao_pendente_de_contato(uuid, text, uuid)', 'execute')
+          and has_function_privilege('service_role', 'public.registrar_exclusao_de_contato_no_bling(uuid, text, timestamptz, text)', 'execute')
           and has_function_privilege('service_role', 'public.reativar_contato_excluido_no_bling(uuid, text, uuid)', 'execute')
+          and has_function_privilege('service_role', 'public.confirmar_exclusao_pendente_de_contato(uuid, text, uuid)', 'execute')
           and not has_table_privilege('authenticated', 'public.contatos_excluidos_no_bling', 'select')
           and not has_table_privilege('service_role', 'public.contatos_excluidos_no_bling', 'delete')
           and not has_column_privilege('service_role', 'public.contatos_excluidos_no_bling', 'bling_id', 'update')
+          and not has_column_privilege('service_role', 'public.contatos_excluidos_no_bling', 'chave_do_evento', 'update')
           and (select relrowsecurity from pg_class where oid = 'public.contatos_excluidos_no_bling'::regclass),
-          '28. só o servidor registra e reativa; o navegador não lê; RLS ligada');
+          '38. só o servidor registra, confirma e reativa; o navegador não lê; RLS ligada');
 
 select * from finish();
 rollback;

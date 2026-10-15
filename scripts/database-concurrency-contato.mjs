@@ -20,7 +20,13 @@ import { esperar, observarBloqueioNoPostgres } from './database-concurrency.mjs'
  *    depois do commit, registra outra vigente — o histórico fica com as duas;
  * 5. a reativação segura a trava; a exclusão antiga, reentregue com outra
  *    chave, espera e, depois do commit, vê a reativação e não a desfaz
- *    (`anterior_a_reativacao`).
+ *    (`anterior_a_reativacao`);
+ * 6. a reconciliação que resolve uma pendência (contato ativo) segura a trava;
+ *    a reentrega da mesma entrega que a abriu espera e, depois do commit,
+ *    responde `ja_resolvido` — a pendência não reabre;
+ * 7. a confirmação de uma pendência segura a trava; outra entrega sem ordem
+ *    provável espera e, depois do commit, vê a exclusão confirmada
+ *    (`ja_registrado`) — sem segunda linha aberta.
  */
 
 const ORG_ID = 'e7700000-0000-4000-8000-000000000001';
@@ -77,6 +83,9 @@ async function correr({ admin, clientA, clientB, sqlA, paramsA, sqlB, paramsB, t
 const SQL_EXCLUIR = 'select * from public.registrar_exclusao_de_contato_no_bling($1, $2, null)';
 /** Exclusão com a data do evento no Bling, relativa ao relógio do banco. */
 const SQL_EXCLUIR_EM = 'select * from public.registrar_exclusao_de_contato_no_bling($1, $2, now() + $3::interval)';
+/** Exclusão sem data, como uma entrega que não prova a ordem, com a chave da entrega. */
+const SQL_EXCLUIR_SEM_DATA = 'select * from public.registrar_exclusao_de_contato_no_bling($1, $2, null, $3)';
+const SQL_CONFIRMAR = 'select * from public.confirmar_exclusao_pendente_de_contato($1, $2, $3)';
 const SQL_REATIVAR = 'select * from public.reativar_contato_excluido_no_bling($1, $2, $3)';
 /** O upsert do webhook (`clienteRepository.upsert`), como o update atrasado sem nome o fazia. */
 const SQL_UPSERT = `insert into public.clientes (organizacao_id, user_id, bling_id, nome)
@@ -164,13 +173,45 @@ export async function runContatoExcluidoRaceRehearsal({
       return err('ContatoRaceExclusaoAntiga', 'A exclusão antiga concorrente desfez a reativação', { b: antiga.value.b, contato: reativado });
     }
 
+    // 77002 está reativado (corrida 5): uma entrega sem data abre a pendência.
+    const aberta = (await admin.query(SQL_EXCLUIR_SEM_DATA, [ORG_ID, '77002', 'k-pendencia'])).rows[0];
+    const resolve = await correr({
+      admin, clientA, clientB, timeoutDeObservacaoMs,
+      sqlA: SQL_REATIVAR, paramsA: [ORG_ID, '77002', OWNER_ID],
+      sqlB: SQL_EXCLUIR_SEM_DATA, paramsB: [ORG_ID, '77002', 'k-pendencia'],
+    });
+    if (resolve._tag === 'err') return resolve;
+    const liberado = (await admin.query(
+      "select excluido_no_bling_em, exclusao_pendente_desde from public.clientes where organizacao_id = $1 and bling_id = '77002'", [ORG_ID])).rows[0];
+    if (aberta.desfecho !== 'reconciliacao_necessaria' || resolve.value.a.desfecho !== 'reativado'
+        || resolve.value.b.linha?.desfecho !== 'ja_resolvido' || liberado.excluido_no_bling_em !== null || liberado.exclusao_pendente_desde !== null) {
+      return err('ContatoRacePendenciaReaberta', 'A reentrega concorrente reabriu a pendência resolvida', { aberta, b: resolve.value.b, contato: liberado });
+    }
+
+    const segunda = (await admin.query(SQL_EXCLUIR_SEM_DATA, [ORG_ID, '77002', 'k-pendencia-2'])).rows[0];
+    const confirma = await correr({
+      admin, clientA, clientB, timeoutDeObservacaoMs,
+      sqlA: SQL_CONFIRMAR, paramsA: [ORG_ID, '77002', OWNER_ID],
+      sqlB: SQL_EXCLUIR_SEM_DATA, paramsB: [ORG_ID, '77002', 'k-pendencia-3'],
+    });
+    if (confirma._tag === 'err') return confirma;
+    const confirmado = (await admin.query(
+      `select (select count(*)::int from public.contatos_excluidos_no_bling where organizacao_id = $1 and bling_id = '77002' and reativado_em is null) as abertas,
+              (select excluido_no_bling_em is not null from public.clientes where organizacao_id = $1 and bling_id = '77002') as excluido`, [ORG_ID])).rows[0];
+    if (segunda.desfecho !== 'reconciliacao_necessaria' || confirma.value.a.desfecho !== 'confirmada'
+        || confirma.value.b.linha?.desfecho !== 'ja_registrado' || confirmado.abertas !== 1 || !confirmado.excluido) {
+      return err('ContatoRaceConfirmacao', 'Confirmação e nova entrega concorrentes não convergiram', { segunda, b: confirma.value.b, estado: confirmado });
+    }
+
     return ok(Object.freeze({
       relato: `exclusão de contato provada com bloqueio observado no Postgres: exclusão → upsert atrasado com Cliente #id `
         + `(wait_event=${exclusaoPrimeiro.value.waitEvent}) recusado com ${exclusaoPrimeiro.value.b.code}, contato com o nome real e o pedido `
         + `legível; gravação → exclusão (wait_event=${gravacaoPrimeiro.value.waitEvent}) marcou o contato recém-gravado; duas exclusões `
         + `simultâneas (wait_event=${duas.value.waitEvent}) deram ${duas.value.a.desfecho} e ${duas.value.b.linha.desfecho} com ${vigentes} vigente; `
         + `reativação → nova exclusão (wait_event=${reativacao.value.waitEvent}) deixou ${historico.total} registros e ${historico.vigentes} vigente; `
-        + `reativação → exclusão antiga reentregue (wait_event=${antiga.value.waitEvent}) deu ${antiga.value.b.linha.desfecho} e o contato seguiu reativado`,
+        + `reativação → exclusão antiga reentregue (wait_event=${antiga.value.waitEvent}) deu ${antiga.value.b.linha.desfecho} e o contato seguiu reativado; `
+        + `resolução da pendência → reentrega da mesma entrega (wait_event=${resolve.value.waitEvent}) deu ${resolve.value.b.linha.desfecho}; `
+        + `confirmação da pendência → nova entrega sem ordem (wait_event=${confirma.value.waitEvent}) deu ${confirma.value.b.linha.desfecho} com ${confirmado.abertas} aberta`,
     }));
   } catch (cause) {
     await clientA.query('ROLLBACK').catch(() => {});

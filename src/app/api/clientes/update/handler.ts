@@ -53,7 +53,7 @@ export interface ClienteStorePort {
     readonly cidade: string;
     readonly uf: string;
   }): Promise<ClientePersistido>;
-  /** Exclusão vigente no Bling (PRE-005): o contato só volta pela reativação explícita. */
+  /** Exclusão aberta no Bling, confirmada ou aguardando conferência (PRE-005): só a reconciliação libera. */
   exclusaoVigenteNoBling(scope: VerifiedOrganizationScope, blingId: string): Promise<boolean>;
 }
 
@@ -304,7 +304,7 @@ export function createClienteUpdateHandler(deps: ClienteDependencies) {
     // PRE-005: o `PUT` num contato excluído no Bling o reativaria por fora da
     // reconciliação. Nada sai daqui: nem Bling, nem banco.
     if (body.blingId && await deps.store.exclusaoVigenteNoBling(scope, body.blingId)) {
-      return fail('Este contato foi excluído no Bling. Reative-o pela reconciliação antes de editar.', 409);
+      return fail('Este contato foi excluído no Bling ou aguarda conferência. Resolva pela reconciliação antes de editar.', 409);
     }
     const payload = toContatoPayload(body);
 

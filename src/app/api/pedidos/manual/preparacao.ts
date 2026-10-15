@@ -129,6 +129,12 @@ export async function prepararPedido(request: Request, deps: ManualOrderDependen
   if (cliente.excluidoNoBling) {
     return { _tag: 'Rejeitado', response: fail(`${cliente.nome} foi excluído no Bling e não pode ser usado em venda nova.`, 400) };
   }
+  if (cliente.exclusaoPendenteNoBling) {
+    return {
+      _tag: 'Rejeitado',
+      response: fail(`${cliente.nome} tem uma exclusão no Bling aguardando conferência e não pode ser usado em venda nova.`, 400),
+    };
+  }
 
   const itensResult = await resolveItens(scope, body, deps.store);
   if (itensResult._tag === 'ItensRejected') {

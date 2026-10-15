@@ -27,7 +27,9 @@ function ehExclusao(entity: string, dados: Record<string, unknown>): boolean {
  *   marcado como excluído (`registrar_exclusao_de_contato_no_bling`), nunca
  *   apagado nem recriado. A reentrega responde `ja_registrado`. Depois de uma
  *   reativação, a exclusão antiga reentregue não a desfaz; sem data que prove
- *   a ordem, nada muda e o desfecho pede reconciliação (`reconcileRequired`).
+ *   a ordem, o contato fica pendente de conferência — bloqueado para venda
+ *   nova, sem marca de excluído — e o desfecho pede reconciliação
+ *   (`reconcileRequired`). Recebida não é confirmada.
  * - **Atualização de contato excluído** é ignorada e auditada: só a
  *   reativação explícita o traz de volta. O banco recusa a gravação de
  *   qualquer jeito (23514); conferir antes evita a falha e a reentrega.
@@ -55,8 +57,8 @@ export async function processarEventoDeContato(
   const blingId = id.data;
 
   if (ehExclusao(entity, dados)) {
-    const desfecho = await clienteRepository.registrarExclusaoNoBling(organizationScope, blingId, dataDoEventoDoBling(eventRecord));
-    if (desfecho === 'reconciliacao_necessaria') {
+    const desfecho = await clienteRepository.registrarExclusaoNoBling(organizationScope, blingId, dataDoEventoDoBling(eventRecord), correlationId);
+    if (desfecho === 'reconciliacao_necessaria' || desfecho === 'reconciliacao_pendente') {
       logger.warn('bling_webhook.contato_excluido.reconciliacao_necessaria', { ...contexto, blingId, outcome: desfecho });
       return { success: true, entity: 'contato', acao: 'excluido_no_bling', blingId, desfecho, reconcileRequired: true };
     }
@@ -64,9 +66,11 @@ export async function processarEventoDeContato(
     return { success: true, entity: 'contato', acao: 'excluido_no_bling', blingId, desfecho };
   }
 
-  if (await clienteRepository.exclusaoVigenteNoBling(organizationScope, blingId)) {
-    logger.info('bling_webhook.contato.ignorado', { ...contexto, blingId, outcome: 'excluido_no_bling' });
-    return { success: true, ignored: true, reason: 'excluido_no_bling', blingId };
+  const estado = await clienteRepository.estadoDaExclusaoNoBling(organizationScope, blingId);
+  if (estado !== 'nenhuma') {
+    const reason = estado === 'pendente' ? 'reconciliacao_pendente' : 'excluido_no_bling';
+    logger.info('bling_webhook.contato.ignorado', { ...contexto, blingId, outcome: reason });
+    return { success: true, ignored: true, reason, blingId };
   }
 
   const nome = texto(dados.nome) ?? (await clienteRepository.getByBlingId(organizationScope, blingId))?.nome;

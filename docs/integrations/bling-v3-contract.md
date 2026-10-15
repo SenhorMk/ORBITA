@@ -170,12 +170,23 @@ erro tipado `timeout` distinto de `network`.
   entrega, e a exclusão antiga pode voltar com outra chave de idempotência. O
   único sinal de ordem do contrato é `date`, autenticado pela assinatura
   (`version` é a versão do payload, não do contato). Com margem de 5 minutos
-  para o relógio: `date` anterior à reativação → `anterior_a_reativacao`, nada
-  muda; posterior → nova exclusão; sem `date` ou dentro da margem →
-  `reconciliacao_necessaria`, nada muda e o inbox guarda o evento com
-  `reconcileRequired: true` (e log `warn`) para alguém conferir no Bling. Não
-  há rota de reconciliação para esse caso: se o contato de fato saiu do Bling,
-  uma venda com ele é recusada pelo próprio Bling.
+  para o relógio:
+  - `date` anterior à reativação → `anterior_a_reativacao`, nada muda;
+  - `date` posterior → exclusão confirmada (`registrado`);
+  - sem `date` ou dentro da margem → `reconciliacao_necessaria`: a exclusão é
+    **recebida, não confirmada**. Abre um registro pendente
+    (`contatos_excluidos_no_bling.confirmada = false`) e marca
+    `clientes.exclusao_pendente_desde`. Enquanto isso o contato fica fora da
+    venda manual e da edição, e o webhook não o grava. O inbox guarda o
+    evento com `reconcileRequired: true`. Outra entrega sem ordem responde
+    `reconciliacao_pendente`; uma comprovadamente posterior confirma a
+    pendência.
+  - A mesma entrega (`chave_do_evento`) não tem segundo efeito: depois de
+    resolvida, responde `ja_resolvido`.
+  - A pendência só sai por `POST /api/clientes/reativar`: `A` no Bling →
+    `Reactivated` (liberado); `E` ou `404` → `ExclusionConfirmed` (fica
+    excluído); qualquer outra leitura (indeterminada, recusada, outro id,
+    `I`/`S`) deixa a pendência como está.
 - **Roteamento por recurso exato:** o recurso (`recurso` em `recurso.acao`) é
   comparado por igualdade, nunca por substring: contato (`contact`), pedido
   (`order`), produto (`product`, `stock`, `virtual_stock`). `product_supplier.*`

@@ -11,32 +11,38 @@ import { logger } from '@/lib/observability/logger';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 /**
- * `POST /api/clientes/reativar` — a reativação explícita de um contato
- * excluído no Bling (PRE-005). É o **único** caminho de volta: nenhum evento
- * do webhook nem a sincronização reativam sozinhos.
+ * `POST /api/clientes/reativar` — a reconciliação explícita de um contato com
+ * exclusão aberta no Bling (PRE-005), confirmada ou aguardando conferência. É
+ * o **único** caminho de saída: nenhum evento do webhook nem a sincronização
+ * reativam sozinhos.
  *
  * 1. escopo verificado e `organization:manage` (quem pode); o banco confere o
  *    papel de novo;
  * 2. só o `blingId` vem do corpo, e só vale dentro da organização do escopo;
- * 3. sem exclusão vigente, nada a fazer (`NotExcluded`);
+ * 3. sem exclusão aberta, nada a fazer (`NotExcluded`);
  * 4. o contato é **lido** no Bling: só um `200` com o **mesmo id** e a
  *    situação `A` (Ativo) prova que ele voltou e pode vender. `404` ou `E` →
  *    `Blocked` (ainda excluído); `I` ou `S` → `Blocked` (existe, mas não está
  *    ativo); id divergente, situação vazia ou fora das documentadas, ou
  *    leitura indeterminada → `ReconcileRequired`; recusa → `ProviderRefused`.
  *    Nada é reativado sem prova;
- * 5. só então `reativar_contato_excluido_no_bling`, que encerra a exclusão
- *    vigente (o registro fica, com quem e quando) e libera o contato local. Os
- *    dados dele voltam a ser atualizados pelo próximo evento ou sincronização.
+ * 5. `A` → `reativar_contato_excluido_no_bling`, que encerra a exclusão
+ *    aberta (o registro fica, com quem e quando) e libera o contato local. Os
+ *    dados dele voltam a ser atualizados pelo próximo evento ou sincronização;
+ * 6. exclusão **pendente** e o Bling prova a exclusão (`404` ou `E`) →
+ *    `confirmar_exclusao_pendente_de_contato`: a pendência vira exclusão
+ *    confirmada e o contato fica marcado como excluído (`ExclusionConfirmed`).
+ *    Qualquer outra leitura deixa a pendência como está.
  */
 
 export interface ReativacaoDeContatoStorePort {
-  exclusaoVigenteNoBling(scope: VerifiedOrganizationScope, blingId: string): Promise<boolean>;
+  estadoDaExclusaoNoBling(scope: VerifiedOrganizationScope, blingId: string): Promise<'nenhuma' | 'confirmada' | 'pendente'>;
   reativarExcluidoNoBling(scope: VerifiedOrganizationScope, blingId: string): Promise<'reativado' | 'nao_excluido' | 'negado'>;
+  confirmarExclusaoPendente(scope: VerifiedOrganizationScope, blingId: string): Promise<'confirmada' | 'sem_pendencia' | 'negado'>;
 }
 
 export interface EventoDeReativacao {
-  readonly acao: 'customer.contact_reactivated';
+  readonly acao: 'customer.contact_reactivated' | 'customer.contact_deletion_confirmed';
   readonly recurso: 'cliente';
   readonly recursoId: string;
   readonly correlationId: string;
@@ -110,31 +116,38 @@ export function createReativacaoDeContatoHandler(deps: ReativacaoDeContatoDepend
     const correlationId = deps.correlationId(request);
     const contexto = { subsystem: 'app' as const, correlationId, organizacaoId: scope.organizationId, blingId };
 
-    if (!(await deps.store.exclusaoVigenteNoBling(scope, blingId))) return responder({ resultado: 'NotExcluded' });
+    const estado = await deps.store.estadoDaExclusaoNoBling(scope, blingId);
+    if (estado === 'nenhuma') return responder({ resultado: 'NotExcluded' });
 
     const prova = provaRemota(await deps.bling(scope).consultarContato(blingId), blingId);
-    if (prova !== 'Ativo') {
-      logger.warn('clientes.reativacao.recusada', { ...contexto, outcome: prova.resultado });
+    const confirmaExclusao = estado === 'pendente' && prova !== 'Ativo'
+      && prova.resultado === 'Blocked' && prova.motivo === 'ainda_excluido_no_bling';
+    if (prova !== 'Ativo' && !confirmaExclusao) {
+      logger.warn('clientes.reativacao.recusada', { ...contexto, estado, outcome: prova.resultado });
       return responder(prova);
     }
 
-    const desfecho = await deps.store.reativarExcluidoNoBling(scope, blingId);
+    const desfecho = confirmaExclusao
+      ? await deps.store.confirmarExclusaoPendente(scope, blingId)
+      : await deps.store.reativarExcluidoNoBling(scope, blingId);
     if (desfecho === 'negado') return responder({ resultado: 'Forbidden' });
-    if (desfecho === 'nao_excluido') return responder({ resultado: 'NotExcluded' });
+    // A exclusão aberta mudou entre a leitura e o comando: nada foi feito aqui.
+    if (desfecho === 'nao_excluido' || desfecho === 'sem_pendencia') return responder({ resultado: 'ReconcileRequired' });
 
-    logger.info('clientes.reativacao.concluida', { ...contexto, outcome: 'reativado' });
+    const acao = confirmaExclusao ? 'customer.contact_deletion_confirmed' : 'customer.contact_reactivated';
+    logger.info('clientes.reativacao.concluida', { ...contexto, estado, outcome: desfecho });
     try {
       await deps.auditar(scope, {
-        acao: 'customer.contact_reactivated',
+        acao,
         recurso: 'cliente',
         recursoId: blingId,
         correlationId,
-        metadata: { bling_id: blingId, estado_remoto: 'ativo' },
+        metadata: { bling_id: blingId, estado_anterior: estado, estado_remoto: confirmaExclusao ? 'excluido' : 'ativo' },
       });
     } catch (erro: unknown) {
-      // A reativação já aconteceu; dizer "falhou" faria repeti-la.
+      // O efeito já aconteceu; dizer "falhou" faria repeti-lo.
       registrarFalhaInterna('clientes.reativacao.auditoria', erro, { organizacaoId: scope.organizationId });
     }
-    return responder({ resultado: 'Reactivated' });
+    return responder({ resultado: confirmaExclusao ? 'ExclusionConfirmed' : 'Reactivated' });
   };
 }
