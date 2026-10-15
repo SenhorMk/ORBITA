@@ -124,6 +124,11 @@ export async function prepararPedido(request: Request, deps: ManualOrderDependen
   if (!cliente) {
     return { _tag: 'Rejeitado', response: fail('Cliente não encontrado no cadastro desta organização.', 400) };
   }
+  // Antes de qualquer envio ao Bling (PRE-005): o pedido iria para um contato
+  // que o Bling já excluiu. Só a reativação explícita o devolve à venda.
+  if (cliente.excluidoNoBling) {
+    return { _tag: 'Rejeitado', response: fail(`${cliente.nome} foi excluído no Bling e não pode ser usado em venda nova.`, 400) };
+  }
 
   const itensResult = await resolveItens(scope, body, deps.store);
   if (itensResult._tag === 'ItensRejected') {

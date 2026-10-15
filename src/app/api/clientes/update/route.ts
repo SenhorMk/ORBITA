@@ -82,6 +82,7 @@ const store: ClienteStorePort = {
 
     return { id: salvo.id!, blingId: salvo.bling_id!, nome: salvo.nome };
   },
+  exclusaoVigenteNoBling: (scope, blingId) => clienteRepository.exclusaoVigenteNoBling(scope, blingId),
 };
 
 export async function POST(request: Request): Promise<NextResponse> {

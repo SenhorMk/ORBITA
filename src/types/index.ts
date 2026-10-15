@@ -140,6 +140,8 @@ export interface Cliente {
   bairro?: string;
   cidade?: string;
   uf?: string;
+  /** Excluído no Bling (PRE-005, migration 77): fora de venda nova até a reativação explícita. */
+  excluido_no_bling_em?: string | null;
   created_at?: string;
   updated_at?: string;
 }

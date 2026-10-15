@@ -145,6 +145,24 @@ erro tipado `timeout` distinto de `network`.
   conclui como ignorado (`excluido_no_bling`) sem pedir o detalhe. Reentrega
   responde `ja_registrado`; id não numérico é ignorado e auditado
   (`id_invalido`); falha do banco → `failed` e 503.
+- **Exclusão de contato (PRE-005, migration 77):** `contact.deleted` (e
+  variantes), ou `contact.updated` com situação `E` (Excluído), é tratado
+  antes de qualquer leitura ou upsert. `registrar_exclusao_de_contato_no_bling`
+  grava a exclusão em `contatos_excluidos_no_bling` por (organização,
+  `bling_id`) e marca `clientes.excluido_no_bling_em`; o contato **fica** —
+  pedidos, casos e solicitações LGPD continuam apontando para ele — e nunca é
+  renomeado. O banco recusa (23514) a gravação que recrie, regrave pelo upsert
+  ou passe a apontar para um contato com exclusão vigente, serializada pela
+  mesma trava consultiva. Contato excluído não entra em venda manual nova nem
+  pode ser editado (o `PUT` o reativaria no Bling). Payload sem `nome` nunca
+  vira `Cliente #<id>`: usa o nome gravado, e contato desconhecido sem nome não
+  é criado (`contato_sem_nome`). Reentrega responde `ja_registrado`; id que não
+  é do Bling é ignorado e auditado (`id_invalido`).
+- **Reativação de contato:** só por `POST /api/clientes/reativar`
+  (`organization:manage`), que lê o contato no Bling e só reativa com `200` e
+  situação diferente de `E`; o banco confere de novo o papel do ator e guarda
+  quem e quando. Nenhum evento nem a sincronização reativam. A tabela de
+  exclusões guarda só ids, datas e o ator, sem dado pessoal do contato.
 - **Roteamento por recurso exato:** o recurso (`recurso` em `recurso.acao`) é
   comparado por igualdade, nunca por substring: contato (`contact`), pedido
   (`order`), produto (`product`, `stock`, `virtual_stock`). `product_supplier.*`

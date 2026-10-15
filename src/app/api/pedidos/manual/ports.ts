@@ -51,6 +51,8 @@ export interface ManualOrderCliente {
   readonly email: string | null;
   readonly telefone: string | null;
   readonly cpfCnpj: string | null;
+  /** Excluído no Bling (PRE-005): não entra em venda nova até a reativação explícita. */
+  readonly excluidoNoBling: boolean;
 }
 
 /** Produto já lido dentro do escopo verificado, com o preço em que o servidor confia. */
