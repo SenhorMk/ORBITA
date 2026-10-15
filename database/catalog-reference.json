@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "fingerprint": "462d773f1bc55b7927c4e48086e1d38f596406641b1cc4971d939cd59a9f6678",
+  "fingerprint": "872359646df4acbe1fcd225df6bbad3b1b21cfbdd8b5b5ff7c3755c1d4702c8d",
   "counts": {
-    "relations": 58,
-    "columns": 635,
+    "relations": 59,
+    "columns": 640,
     "policies": 73,
-    "functions": 118,
-    "constraints": 308,
-    "indexes": 234,
-    "triggers": 65
+    "functions": 122,
+    "constraints": 312,
+    "indexes": 235,
+    "triggers": 67
   }
 }

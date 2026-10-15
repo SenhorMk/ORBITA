@@ -182,6 +182,18 @@ describe('BlingInboxService & Idempotency Boundary', () => {
     });
   });
 
+  describe('conclusão que o banco recusa', () => {
+    it.each(['markProcessed', 'markFailed'] as const)('%s propaga a falha em vez de engoli-la', async (metodo) => {
+      const mockClient = scopedClient(vi.fn().mockResolvedValue({ error: { message: 'statement timeout' } }));
+      const service = new BlingInboxService();
+      const concluir = metodo === 'markProcessed'
+        ? service.markProcessed(mockClient, scope, 'evt-uuid-1', { success: true })
+        : service.markFailed(mockClient, scope, 'evt-uuid-1', new Error('x'));
+
+      await expect(concluir).rejects.toThrow('statement timeout');
+    });
+  });
+
   describe('prepareReplay', () => {
     it('prepares event for replay and restores payload', async () => {
       const mockClient = scopedClient(vi.fn().mockResolvedValue({

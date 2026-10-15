@@ -131,6 +131,32 @@ erro tipado `timeout` distinto de `network`.
   registrado e concluído sem erro. Antes do ticket 11 não havia esse ramo:
   `order.deleted` caía no caminho de atualização, pedia ao Bling um pedido já
   apagado e retornava em silêncio.
+- **Exclusão de produto (PRE-004, migration 76):** `product.deleted` (recurso
+  exatamente `product`/`produto`; `product_supplier.deleted` e
+  `stock.deleted` não contam) é tratado antes de qualquer `GET` de detalhe ou
+  upsert. `registrar_exclusao_de_produto_no_bling` grava a tombstone em
+  `produtos_excluidos_no_bling` por (organização, `bling_id`) e arquiva o
+  produto local — cadastro, foto, itens de pedido e movimentação ficam; nunca
+  há exclusão física. O banco recusa (23514) qualquer gravação que recrie ou
+  passe a apontar para um `bling_id` com tombstone — inclusive mover para a
+  organização um produto de outra (`organizacao_id`) —, e a tombstone e a gravação
+  se serializam numa trava consultiva do mesmo par: um `product.updated` ou
+  `stock.updated` atrasado não ressuscita o produto. O webhook ainda o
+  conclui como ignorado (`excluido_no_bling`) sem pedir o detalhe. Reentrega
+  responde `ja_registrado`; id não numérico é ignorado e auditado
+  (`id_invalido`); falha do banco → `failed` e 503.
+- **Roteamento por recurso exato:** o recurso (`recurso` em `recurso.acao`) é
+  comparado por igualdade, nunca por substring: contato (`contact`), pedido
+  (`order`), produto (`product`, `stock`, `virtual_stock`). `product_supplier.*`
+  não entra no ramo de produto — o payload traz o produto aninhado e aquele
+  ramo faria GET e upsert dele.
+- **Evento não tratado:** um evento de recurso que o ORBITA não consome é
+  concluído no inbox como ignorado (`evento_desconhecido`), em vez de ficar
+  `received` sem desfecho.
+- **Conclusão do inbox:** se o banco não grava `processed`, a rota não
+  responde 2xx: o evento vai a `failed` (ou fica `received`, se nem isso for
+  gravado), a resposta é 503 e a reentrega do Bling o reprocessa — os efeitos
+  são idempotentes.
 - **Resposta esperada pelo Bling:** HTTP `2xx` dentro de **5 segundos**.
   Fora dessa janela ou com status não-2xx, o Bling tenta novamente.
 - **Retry do Bling:** até **3 dias**, com intervalos crescentes. Depois de
