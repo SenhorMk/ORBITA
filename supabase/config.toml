@@ -141,7 +141,8 @@ schema_paths = [
   "../database/74_reconciliacao_de_conta_a_pagar.sql",
   "../database/75_arquivamento_de_produto.sql",
   "../database/76_produto_excluido_no_bling.sql",
-  "../database/77_contato_excluido_no_bling.sql"
+  "../database/77_contato_excluido_no_bling.sql",
+  "../database/78_movimentacao_estoque_somente_por_organizacao.sql"
 ]
 
 [db.seed]

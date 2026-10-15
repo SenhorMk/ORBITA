@@ -194,8 +194,8 @@ describe('POST /api/pedidos/status — o ator vem do vínculo, não do tenant', 
       const real = await vi.importActual<typeof import('@/app/api/pedidos/status/handler')>('@/app/api/pedidos/status/handler');
       return { ...real, createPedidoStatusHandler: criarHandlerPedidoStatusMock };
     });
-    sessaoDe(MEMBER_ID);
-    vinculoDe('member');
+    sessaoDe(OWNER_ID);
+    vinculoDe('owner');
 
     const { POST } = await import('./pedidos/status/route');
     await POST(requisicao('https://orbita.test/api/pedidos/status', 'POST', true, {}));
@@ -204,7 +204,26 @@ describe('POST /api/pedidos/status — o ator vem do vínculo, não do tenant', 
     const deps = criarHandlerPedidoStatusMock.mock.calls[0]![0] as {
       auth: { authenticate: () => Promise<{ actorId: string }> };
     };
-    await expect(deps.auth.authenticate()).resolves.toEqual({ actorId: MEMBER_ID });
+    await expect(deps.auth.authenticate()).resolves.toEqual({ actorId: OWNER_ID });
+    vi.doUnmock('@/app/api/pedidos/status/handler');
+  });
+
+  // PRE-006A: mudar a situação é gestão. O membro é recusado antes de qualquer
+  // leitura do pedido ou chamada ao Bling.
+  it('recusa membro sem organization:manage com 403, sem chegar ao handler', async () => {
+    vi.resetModules();
+    vi.doMock('@/app/api/pedidos/status/handler', async () => {
+      const real = await vi.importActual<typeof import('@/app/api/pedidos/status/handler')>('@/app/api/pedidos/status/handler');
+      return { ...real, createPedidoStatusHandler: criarHandlerPedidoStatusMock };
+    });
+    sessaoDe(MEMBER_ID);
+    vinculoDe('member');
+
+    const { POST } = await import('./pedidos/status/route');
+    const resposta = await POST(requisicao('https://orbita.test/api/pedidos/status', 'POST', true, {}));
+
+    expect(resposta.status).toBe(403);
+    expect(criarHandlerPedidoStatusMock).not.toHaveBeenCalled();
     vi.doUnmock('@/app/api/pedidos/status/handler');
   });
 });
