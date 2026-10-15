@@ -85,6 +85,12 @@ describe('reativação explícita de contato excluído no Bling (PRE-005)', () =
     ['ausente (404)', { _tag: 'RemotoAusente' } as const, 409, { resultado: 'Blocked', motivo: 'ainda_excluido_no_bling' }],
     ['na lixeira (situação E)', { _tag: 'RemotoPresente', valor: { id: '17000000001', situacao: 'E' } } as const, 409, { resultado: 'Blocked', motivo: 'ainda_excluido_no_bling' }],
     ['sem situação na leitura', { _tag: 'RemotoPresente', valor: { id: '17000000001' } } as const, 503, { resultado: 'ReconcileRequired' }],
+    ['com situação vazia', { _tag: 'RemotoPresente', valor: { id: '17000000001', situacao: '' } } as const, 503, { resultado: 'ReconcileRequired' }],
+    ['com situação desconhecida', { _tag: 'RemotoPresente', valor: { id: '17000000001', situacao: 'X' } } as const, 503, { resultado: 'ReconcileRequired' }],
+    ['com situação malformada (minúscula)', { _tag: 'RemotoPresente', valor: { id: '17000000001', situacao: 'a' } } as const, 503, { resultado: 'ReconcileRequired' }],
+    ['ativo, mas com outro id na resposta', { _tag: 'RemotoPresente', valor: { id: '17000000002', situacao: 'A' } } as const, 503, { resultado: 'ReconcileRequired' }],
+    ['inativo (I)', { _tag: 'RemotoPresente', valor: { id: '17000000001', situacao: 'I' } } as const, 409, { resultado: 'Blocked', motivo: 'nao_ativo_no_bling' }],
+    ['sem movimentação (S)', { _tag: 'RemotoPresente', valor: { id: '17000000001', situacao: 'S' } } as const, 409, { resultado: 'Blocked', motivo: 'nao_ativo_no_bling' }],
     ['leitura indeterminada', { _tag: 'RemotoIndeterminado', causa: 'prazo_esgotado' } as const, 503, { resultado: 'ReconcileRequired' }],
     ['recusada pelo Bling', { _tag: 'RemotoRecusou', status: 401 } as const, 502, { resultado: 'ProviderRefused', motivo: 'recusado_pelo_bling' }],
     ['limitada', { _tag: 'RemotoLimitado' } as const, 502, { resultado: 'ProviderRefused', motivo: 'limite_de_requisicoes' }],
@@ -93,7 +99,9 @@ describe('reativação explícita de contato excluído no Bling (PRE-005)', () =
     const r = await chamar(m);
 
     expect(r).toEqual({ status, corpo });
+    expect(respostaDaReativacaoSchema.parse(r.corpo)).toEqual(corpo);
     expect(m.reativados).toEqual([]);
+    expect(m.auditados).toEqual([]);
   });
 
   it('sem exclusão vigente: NotExcluded, sem ler o Bling', async () => {

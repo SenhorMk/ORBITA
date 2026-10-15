@@ -19,10 +19,12 @@ import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope'
  *    papel de novo;
  * 2. só o `blingId` vem do corpo, e só vale dentro da organização do escopo;
  * 3. sem exclusão vigente, nada a fazer (`NotExcluded`);
- * 4. o contato é **lido** no Bling: só um `200` com situação diferente de `E`
- *    prova que ele voltou. `404` ou `E` → `Blocked`; leitura sem prova →
- *    `ReconcileRequired`; recusa → `ProviderRefused`. Nada é reativado sem
- *    prova;
+ * 4. o contato é **lido** no Bling: só um `200` com o **mesmo id** e a
+ *    situação `A` (Ativo) prova que ele voltou e pode vender. `404` ou `E` →
+ *    `Blocked` (ainda excluído); `I` ou `S` → `Blocked` (existe, mas não está
+ *    ativo); id divergente, situação vazia ou fora das documentadas, ou
+ *    leitura indeterminada → `ReconcileRequired`; recusa → `ProviderRefused`.
+ *    Nada é reativado sem prova;
  * 5. só então `reativar_contato_excluido_no_bling`, que encerra a exclusão
  *    vigente (o registro fica, com quem e quando) e libera o contato local. Os
  *    dados dele voltam a ser atualizados pelo próximo evento ou sincronização.
@@ -58,8 +60,11 @@ function responder(corpo: RespostaDaReativacao): NextResponse {
   return NextResponse.json(corpo, { status: STATUS_HTTP_DA_REATIVACAO[corpo.resultado] });
 }
 
+/** As situações de contato que o Bling documenta (`POST`/`PUT /contatos`). */
+const situacaoDoContatoNoBlingSchema = z.enum(['A', 'E', 'I', 'S']);
+
 /** O que a leitura do Bling prova; só `Ativo` libera a reativação. */
-function provaRemota(leitura: LeituraRemota<ContatoRemoto>): 'Ativo' | RespostaDaReativacao {
+function provaRemota(leitura: LeituraRemota<ContatoRemoto>, blingId: string): 'Ativo' | RespostaDaReativacao {
   switch (leitura._tag) {
     case 'RemotoAusente':
       return { resultado: 'Blocked', motivo: 'ainda_excluido_no_bling' };
@@ -69,10 +74,21 @@ function provaRemota(leitura: LeituraRemota<ContatoRemoto>): 'Ativo' | RespostaD
       return { resultado: 'ProviderRefused', motivo: 'limite_de_requisicoes' };
     case 'RemotoIndeterminado':
       return { resultado: 'ReconcileRequired' };
-    case 'RemotoPresente':
-      if (leitura.valor.situacao === 'E') return { resultado: 'Blocked', motivo: 'ainda_excluido_no_bling' };
-      // Sem a situação, a leitura não prova que o contato saiu da lixeira.
-      return typeof leitura.valor.situacao === 'string' ? 'Ativo' : { resultado: 'ReconcileRequired' };
+    case 'RemotoPresente': {
+      // Outro id na resposta não prova nada sobre o contato pedido.
+      if (leitura.valor.id !== blingId) return { resultado: 'ReconcileRequired' };
+      const situacao = situacaoDoContatoNoBlingSchema.safeParse(leitura.valor.situacao);
+      if (!situacao.success) return { resultado: 'ReconcileRequired' };
+      switch (situacao.data) {
+        case 'A':
+          return 'Ativo';
+        case 'E':
+          return { resultado: 'Blocked', motivo: 'ainda_excluido_no_bling' };
+        case 'I':
+        case 'S':
+          return { resultado: 'Blocked', motivo: 'nao_ativo_no_bling' };
+      }
+    }
   }
 }
 
@@ -96,7 +112,7 @@ export function createReativacaoDeContatoHandler(deps: ReativacaoDeContatoDepend
 
     if (!(await deps.store.exclusaoVigenteNoBling(scope, blingId))) return responder({ resultado: 'NotExcluded' });
 
-    const prova = provaRemota(await deps.bling(scope).consultarContato(blingId));
+    const prova = provaRemota(await deps.bling(scope).consultarContato(blingId), blingId);
     if (prova !== 'Ativo') {
       logger.warn('clientes.reativacao.recusada', { ...contexto, outcome: prova.resultado });
       return responder(prova);

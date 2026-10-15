@@ -399,7 +399,7 @@
     {
       "order": 80,
       "path": "../database/77_contato_excluido_no_bling.sql",
-      "sha256": "04bfd53f7a4fdde92ba76dd601272327d8c4a92306285a25a2b26d7b8f72ba44"
+      "sha256": "480d9dd338069cf14ccc9b4e480eeeb896e38b7e00211d6b4f47107a270a58f3"
     }
   ],
   "references": [

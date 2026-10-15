@@ -30,6 +30,9 @@ let exclusoes: Map<string, { excluidoNoBlingEm: unknown }>;
 /** Contatos locais por (organização, bling_id) → nome. */
 let contatos: Map<string, string>;
 let bancoCai: boolean;
+/** Reativações explícitas já feitas, por (organização, bling_id) → quando. */
+let reativacoes: Map<string, number>;
+const MARGEM_MS = 5 * 60 * 1000;
 
 const chaveDe = (org: unknown, bling: unknown) => `${String(org)}:${String(bling)}`;
 const eventoPorId = (id: unknown) => [...inbox.values()].find((e) => e.id === id);
@@ -55,6 +58,13 @@ const rpc = vi.fn(async (nome: string, args: Record<string, unknown>) => {
     if (bancoCai) return { data: null, error: { code: '08006', message: 'conexão com o banco recusada' } };
     const chave = chaveDe(args.p_organizacao_id, args.p_bling_id);
     if (exclusoes.has(chave)) return { data: [{ desfecho: 'ja_registrado', cliente_id: null }], error: null };
+    // O contrato da migration 77 depois de uma reativação (provado no pgTAP 21-24).
+    const reativadoEm = reativacoes.get(chave);
+    if (reativadoEm !== undefined) {
+      const em = typeof args.p_excluido_no_bling_em === 'string' ? Date.parse(args.p_excluido_no_bling_em) : null;
+      if (em !== null && em < reativadoEm - MARGEM_MS) return { data: [{ desfecho: 'anterior_a_reativacao', cliente_id: null }], error: null };
+      if (em === null || em <= reativadoEm + MARGEM_MS) return { data: [{ desfecho: 'reconciliacao_necessaria', cliente_id: null }], error: null };
+    }
     exclusoes.set(chave, { excluidoNoBlingEm: args.p_excluido_no_bling_em });
     return { data: [{ desfecho: contatos.has(chave) ? 'registrado' : 'registrado_sem_contato', cliente_id: null }], error: null };
   }
@@ -153,6 +163,7 @@ beforeEach(() => {
   exclusoes = new Map();
   contatos = new Map([[chaveDe(ORG_A, BLING_ID), 'Maria Real'], [chaveDe(ORG_B, BLING_ID), 'Cliente de B']]);
   bancoCai = false;
+  reativacoes = new Map();
   rpc.mockClear();
   getByBlingId.mockClear();
   upsert.mockClear();
@@ -260,6 +271,30 @@ describe('webhook: contact.deleted marca o contato como excluído (PRE-005)', ()
     const segunda = await entregar(exclusao());
     expect(segunda.status).toBe(200);
     expect(respostaNoInbox(ORG_A, `contact.deleted_${BLING_ID}`)?.status).toBe('processed');
+  });
+
+  it('depois de uma reativação: a exclusão antiga reentregue não a desfaz; sem data pede reconciliação; uma nova vale', async () => {
+    const reativadoEm = Date.parse('2026-10-14T12:00:00Z');
+    reativacoes.set(chaveDe(ORG_A, BLING_ID), reativadoEm);
+
+    const antiga = await entregar(exclusao(BLING_ID, { eventId: 'antiga', date: '2026-10-14T10:00:00Z' }));
+    expect(antiga.status).toBe(200);
+    expect(respostaNoInbox(ORG_A, 'contact.deleted_antiga')).toMatchObject({
+      status: 'processed', response: { desfecho: 'anterior_a_reativacao' },
+    });
+
+    const semData = await entregar(exclusao(BLING_ID, { eventId: 'sem-data' }));
+    // Não é sucesso fictício nem descarte: o inbox guarda o pedido de reconciliação.
+    expect(semData.status).toBe(200);
+    expect(respostaNoInbox(ORG_A, 'contact.deleted_sem-data')).toMatchObject({
+      status: 'processed', response: { desfecho: 'reconciliacao_necessaria', reconcileRequired: true },
+    });
+    expect(exclusoes.size).toBe(0);
+
+    await entregar(exclusao(BLING_ID, { eventId: 'nova', date: '2026-10-14T15:00:00Z' }));
+    expect(respostaNoInbox(ORG_A, 'contact.deleted_nova')?.response).toMatchObject({ desfecho: 'registrado' });
+    expect(exclusoes.size).toBe(1);
+    expect(upsert).not.toHaveBeenCalled();
   });
 
   it('evento de outro recurso de contato continua ignorado e auditado', async () => {

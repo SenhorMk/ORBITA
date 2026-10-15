@@ -20,6 +20,13 @@
 -- 4. `reativar_contato_excluido_no_bling`: o único caminho de volta, chamado
 --    pela reconciliação explícita (quem administra a organização, com o
 --    contato confirmado ativo no Bling). Nenhum evento reativa sozinho.
+-- 5. Uma exclusão que chega depois de uma reativação só vale se a data do
+--    evento no Bling (`date`, autenticada pela assinatura) for claramente
+--    posterior à reativação. Claramente anterior: é a exclusão antiga
+--    reentregue com outra chave, e não desfaz a reativação. Sem data, ou
+--    dentro da margem dos relógios: a ordem não é provável, o estado local fica
+--    e o desfecho pede reconciliação. O Bling não garante ordem de entrega; a
+--    data do evento é o único sinal de ordem do contrato.
 --
 -- Forward-only. Rollback: quarentenar `contact.deleted` no webhook e
 -- reprocessar depois; nunca redirecionar para o upsert.
@@ -155,8 +162,11 @@ create trigger tg_contato_excluido_no_bling_nao_volta
 -- O comando do webhook.
 --
 -- desfecho: `registrado` (tinha o contato, agora marcado), `registrado_sem_contato`
--- (o ORBITA nunca o teve; a exclusão impede que ele apareça depois) ou
--- `ja_registrado` (reentrega: nada muda).
+-- (o ORBITA nunca o teve; a exclusão impede que ele apareça depois),
+-- `ja_registrado` (reentrega: nada muda), `anterior_a_reativacao` (exclusão
+-- antiga, de antes da última reativação: nada muda) ou
+-- `reconciliacao_necessaria` (depois de uma reativação, sem data que prove a
+-- ordem: nada muda e alguém precisa conferir no Bling).
 -- ---------------------------------------------------------------------------
 create or replace function public.registrar_exclusao_de_contato_no_bling(
     p_organizacao_id uuid,
@@ -171,6 +181,9 @@ as $$
 declare
     v_cliente_id uuid;
     v_existente uuid;
+    v_ultima_reativacao timestamptz;
+    -- Margem para a diferença entre o relógio do Bling e o do banco.
+    c_margem constant interval := interval '5 minutes';
 begin
     if p_organizacao_id is null or p_bling_id is null or p_bling_id !~ '^[1-9][0-9]*$' then
         raise exception 'Organizacao e id numerico do Bling sao obrigatorios.' using errcode = '22023';
@@ -184,6 +197,21 @@ begin
     if found then
         return query select 'ja_registrado'::text, v_existente;
         return;
+    end if;
+
+    -- Depois de uma reativação, só uma exclusão comprovadamente posterior vale.
+    select max(e.reativado_em) into v_ultima_reativacao
+      from public.contatos_excluidos_no_bling e
+     where e.organizacao_id = p_organizacao_id and e.bling_id = p_bling_id;
+    if v_ultima_reativacao is not null then
+        if p_excluido_no_bling_em is not null and p_excluido_no_bling_em < v_ultima_reativacao - c_margem then
+            return query select 'anterior_a_reativacao'::text, null::uuid;
+            return;
+        end if;
+        if p_excluido_no_bling_em is null or p_excluido_no_bling_em <= v_ultima_reativacao + c_margem then
+            return query select 'reconciliacao_necessaria'::text, null::uuid;
+            return;
+        end if;
     end if;
 
     select c.id into v_cliente_id

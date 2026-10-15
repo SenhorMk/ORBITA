@@ -131,8 +131,10 @@ export class ClienteRepository {
    * nenhuma gravação posterior o recria. Idempotente.
    *
    * @param excluidoNoBlingEm - A data do evento no Bling, quando veio.
-   * @returns `registrado`, `registrado_sem_contato` (o ORBITA nunca o teve) ou
-   *   `ja_registrado` (reentrega).
+   * @returns `registrado`, `registrado_sem_contato` (o ORBITA nunca o teve),
+   *   `ja_registrado` (reentrega), `anterior_a_reativacao` (exclusão antiga,
+   *   de antes da última reativação) ou `reconciliacao_necessaria` (depois de
+   *   uma reativação, sem data que prove a ordem). Nos dois últimos nada muda.
    */
   async registrarExclusaoNoBling(
     scope: VerifiedOrganizationScope,
@@ -146,7 +148,9 @@ export class ClienteRepository {
     });
     if (error) throw error;
     const desfecho = desfechoDaLinha(data);
-    if (desfecho === 'registrado' || desfecho === 'registrado_sem_contato' || desfecho === 'ja_registrado') return desfecho;
+    if (typeof desfecho === 'string' && (DESFECHOS_DA_EXCLUSAO_DE_CONTATO as readonly string[]).includes(desfecho)) {
+      return desfecho as DesfechoDaExclusaoDeContato;
+    }
     throw new Error('registrar_exclusao_de_contato_no_bling devolveu um desfecho fora do contrato');
   }
 
@@ -203,7 +207,14 @@ export class ClienteRepository {
 }
 
 /** Desfecho de `registrar_exclusao_de_contato_no_bling`. */
-export type DesfechoDaExclusaoDeContato = 'registrado' | 'registrado_sem_contato' | 'ja_registrado';
+export const DESFECHOS_DA_EXCLUSAO_DE_CONTATO = [
+  'registrado',
+  'registrado_sem_contato',
+  'ja_registrado',
+  'anterior_a_reativacao',
+  'reconciliacao_necessaria',
+] as const;
+export type DesfechoDaExclusaoDeContato = (typeof DESFECHOS_DA_EXCLUSAO_DE_CONTATO)[number];
 
 function desfechoDaLinha(data: unknown): unknown {
   const linha = Array.isArray(data) ? data[0] : data;

@@ -159,10 +159,23 @@ erro tipado `timeout` distinto de `network`.
   é criado (`contato_sem_nome`). Reentrega responde `ja_registrado`; id que não
   é do Bling é ignorado e auditado (`id_invalido`).
 - **Reativação de contato:** só por `POST /api/clientes/reativar`
-  (`organization:manage`), que lê o contato no Bling e só reativa com `200` e
-  situação diferente de `E`; o banco confere de novo o papel do ator e guarda
-  quem e quando. Nenhum evento nem a sincronização reativam. A tabela de
-  exclusões guarda só ids, datas e o ator, sem dado pessoal do contato.
+  (`organization:manage`), que lê o contato no Bling e só reativa com `200`, o
+  **mesmo id** e situação `A` (Ativo). `404`/`E` e `I`/`S` (existe, mas não é
+  elegível para venda) são `Blocked`; id divergente, situação vazia ou fora de
+  `A`/`E`/`I`/`S` é `ReconcileRequired`. O banco confere de novo o papel do
+  ator e guarda quem e quando. Nenhum evento nem a sincronização reativam. A
+  tabela de exclusões guarda só ids, datas e o ator, sem dado pessoal do
+  contato.
+- **Exclusão depois de uma reativação:** o Bling não garante ordem de
+  entrega, e a exclusão antiga pode voltar com outra chave de idempotência. O
+  único sinal de ordem do contrato é `date`, autenticado pela assinatura
+  (`version` é a versão do payload, não do contato). Com margem de 5 minutos
+  para o relógio: `date` anterior à reativação → `anterior_a_reativacao`, nada
+  muda; posterior → nova exclusão; sem `date` ou dentro da margem →
+  `reconciliacao_necessaria`, nada muda e o inbox guarda o evento com
+  `reconcileRequired: true` (e log `warn`) para alguém conferir no Bling. Não
+  há rota de reconciliação para esse caso: se o contato de fato saiu do Bling,
+  uma venda com ele é recusada pelo próprio Bling.
 - **Roteamento por recurso exato:** o recurso (`recurso` em `recurso.acao`) é
   comparado por igualdade, nunca por substring: contato (`contact`), pedido
   (`order`), produto (`product`, `stock`, `virtual_stock`). `product_supplier.*`

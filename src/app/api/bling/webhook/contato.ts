@@ -25,7 +25,9 @@ function ehExclusao(entity: string, dados: Record<string, unknown>): boolean {
  *
  * - **Exclusão** vem antes de qualquer leitura ou upsert: o contato local é
  *   marcado como excluído (`registrar_exclusao_de_contato_no_bling`), nunca
- *   apagado nem recriado. A reentrega responde `ja_registrado`.
+ *   apagado nem recriado. A reentrega responde `ja_registrado`. Depois de uma
+ *   reativação, a exclusão antiga reentregue não a desfaz; sem data que prove
+ *   a ordem, nada muda e o desfecho pede reconciliação (`reconcileRequired`).
  * - **Atualização de contato excluído** é ignorada e auditada: só a
  *   reativação explícita o traz de volta. O banco recusa a gravação de
  *   qualquer jeito (23514); conferir antes evita a falha e a reentrega.
@@ -54,6 +56,10 @@ export async function processarEventoDeContato(
 
   if (ehExclusao(entity, dados)) {
     const desfecho = await clienteRepository.registrarExclusaoNoBling(organizationScope, blingId, dataDoEventoDoBling(eventRecord));
+    if (desfecho === 'reconciliacao_necessaria') {
+      logger.warn('bling_webhook.contato_excluido.reconciliacao_necessaria', { ...contexto, blingId, outcome: desfecho });
+      return { success: true, entity: 'contato', acao: 'excluido_no_bling', blingId, desfecho, reconcileRequired: true };
+    }
     logger.info('bling_webhook.contato_excluido.registrado', { ...contexto, blingId, outcome: desfecho });
     return { success: true, entity: 'contato', acao: 'excluido_no_bling', blingId, desfecho };
   }

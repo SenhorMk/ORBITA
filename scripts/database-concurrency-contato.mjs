@@ -16,8 +16,11 @@ import { esperar, observarBloqueioNoPostgres } from './database-concurrency.mjs'
  *    do commit, encontra o contato e o marca (`registrado`);
  * 3. duas exclusões simultâneas do mesmo id deixam uma exclusão vigente só:
  *    `registrado` e `ja_registrado`;
- * 4. a reativação segura a trava; uma nova exclusão espera e, depois do
- *    commit, registra outra vigente — o histórico fica com as duas.
+ * 4. a reativação segura a trava; uma exclusão com data posterior espera e,
+ *    depois do commit, registra outra vigente — o histórico fica com as duas;
+ * 5. a reativação segura a trava; a exclusão antiga, reentregue com outra
+ *    chave, espera e, depois do commit, vê a reativação e não a desfaz
+ *    (`anterior_a_reativacao`).
  */
 
 const ORG_ID = 'e7700000-0000-4000-8000-000000000001';
@@ -72,6 +75,8 @@ async function correr({ admin, clientA, clientB, sqlA, paramsA, sqlB, paramsB, t
 }
 
 const SQL_EXCLUIR = 'select * from public.registrar_exclusao_de_contato_no_bling($1, $2, null)';
+/** Exclusão com a data do evento no Bling, relativa ao relógio do banco. */
+const SQL_EXCLUIR_EM = 'select * from public.registrar_exclusao_de_contato_no_bling($1, $2, now() + $3::interval)';
 const SQL_REATIVAR = 'select * from public.reativar_contato_excluido_no_bling($1, $2, $3)';
 /** O upsert do webhook (`clienteRepository.upsert`), como o update atrasado sem nome o fazia. */
 const SQL_UPSERT = `insert into public.clientes (organizacao_id, user_id, bling_id, nome)
@@ -136,7 +141,7 @@ export async function runContatoExcluidoRaceRehearsal({
     const reativacao = await correr({
       admin, clientA, clientB, timeoutDeObservacaoMs,
       sqlA: SQL_REATIVAR, paramsA: [ORG_ID, '77001', OWNER_ID],
-      sqlB: SQL_EXCLUIR, paramsB: [ORG_ID, '77001'],
+      sqlB: SQL_EXCLUIR_EM, paramsB: [ORG_ID, '77001', '10 minutes'],
     });
     if (reativacao._tag === 'err') return reativacao;
     const historico = (await admin.query(
@@ -147,12 +152,25 @@ export async function runContatoExcluidoRaceRehearsal({
       return err('ContatoRaceReativacao', 'Reativação e nova exclusão concorrentes não se serializaram', { b: reativacao.value.b, historico });
     }
 
+    // O 77002 foi excluído na corrida 2; ele é reativado enquanto a exclusão antiga chega.
+    const antiga = await correr({
+      admin, clientA, clientB, timeoutDeObservacaoMs,
+      sqlA: SQL_REATIVAR, paramsA: [ORG_ID, '77002', OWNER_ID],
+      sqlB: SQL_EXCLUIR_EM, paramsB: [ORG_ID, '77002', '-1 day'],
+    });
+    if (antiga._tag === 'err') return antiga;
+    const reativado = (await admin.query("select excluido_no_bling_em from public.clientes where organizacao_id = $1 and bling_id = '77002'", [ORG_ID])).rows[0];
+    if (antiga.value.a.desfecho !== 'reativado' || antiga.value.b.linha?.desfecho !== 'anterior_a_reativacao' || reativado.excluido_no_bling_em !== null) {
+      return err('ContatoRaceExclusaoAntiga', 'A exclusão antiga concorrente desfez a reativação', { b: antiga.value.b, contato: reativado });
+    }
+
     return ok(Object.freeze({
       relato: `exclusão de contato provada com bloqueio observado no Postgres: exclusão → upsert atrasado com Cliente #id `
         + `(wait_event=${exclusaoPrimeiro.value.waitEvent}) recusado com ${exclusaoPrimeiro.value.b.code}, contato com o nome real e o pedido `
         + `legível; gravação → exclusão (wait_event=${gravacaoPrimeiro.value.waitEvent}) marcou o contato recém-gravado; duas exclusões `
         + `simultâneas (wait_event=${duas.value.waitEvent}) deram ${duas.value.a.desfecho} e ${duas.value.b.linha.desfecho} com ${vigentes} vigente; `
-        + `reativação → nova exclusão (wait_event=${reativacao.value.waitEvent}) deixou ${historico.total} registros e ${historico.vigentes} vigente`,
+        + `reativação → nova exclusão (wait_event=${reativacao.value.waitEvent}) deixou ${historico.total} registros e ${historico.vigentes} vigente; `
+        + `reativação → exclusão antiga reentregue (wait_event=${antiga.value.waitEvent}) deu ${antiga.value.b.linha.desfecho} e o contato seguiu reativado`,
     }));
   } catch (cause) {
     await clientA.query('ROLLBACK').catch(() => {});
