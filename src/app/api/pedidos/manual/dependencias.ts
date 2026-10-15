@@ -77,7 +77,7 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
     async findClienteById(scope: VerifiedOrganizationScope, clienteId: string): Promise<ManualOrderCliente | null> {
       const { data, error } = await supabaseServer
         .from('clientes')
-        .select('id, nome, bling_id, email, telefone, cpf_cnpj')
+        .select('id, nome, bling_id, email, telefone, cpf_cnpj, excluido_no_bling_em, exclusao_pendente_desde')
         .eq('organizacao_id', scope.organizationId)
         .eq('id', clienteId)
         .maybeSingle();
@@ -92,6 +92,8 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
         email: data.email ?? null,
         telefone: data.telefone ?? null,
         cpfCnpj: data.cpf_cnpj ?? null,
+        excluidoNoBling: data.excluido_no_bling_em != null,
+        exclusaoPendenteNoBling: data.exclusao_pendente_desde != null,
       };
     },
 

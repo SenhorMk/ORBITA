@@ -39,7 +39,7 @@ function deps(porta: ClienteBlingPort, store?: ClienteDependencies['store']): Cl
   return {
     auth: { async authorize() { return { _tag: 'Authorized', scope }; } },
     bling: porta,
-    store: store ?? { async upsert(_s, c) { return { id: 'local-1', blingId: c.blingId, nome: c.nome }; } },
+    store: store ?? { async upsert(_s, c) { return { id: 'local-1', blingId: c.blingId, nome: c.nome }; }, async exclusaoVigenteNoBling() { return false; } },
   };
 }
 
@@ -157,7 +157,7 @@ describe('os caminhos felizes e a reconciliação continuam iguais', () => {
   it('atualização bem-sucedida persiste localmente com o blingId conhecido', async () => {
     const gravados: string[] = [];
     const { porta, chamadas } = bling();
-    const r = await responder(deps(porta, { async upsert(_s, c) { gravados.push(c.blingId); return { id: 'local-1', blingId: c.blingId, nome: c.nome }; } }), edicao());
+    const r = await responder(deps(porta, { async upsert(_s, c) { gravados.push(c.blingId); return { id: 'local-1', blingId: c.blingId, nome: c.nome }; }, async exclusaoVigenteNoBling() { return false; } }), edicao());
     expect(r.corpo.success).toBe(true);
     expect(gravados).toEqual(['4321']);
     expect(chamadas).toEqual(['PUT']);
@@ -172,7 +172,7 @@ describe('os caminhos felizes e a reconciliação continuam iguais', () => {
 
   it('falha local depois do sucesso no Bling continua exigindo reconciliação (na edição também)', async () => {
     const { porta } = bling();
-    const r = await responder(deps(porta, { async upsert() { throw new Error('23514'); } }), edicao());
+    const r = await responder(deps(porta, { async upsert() { throw new Error('23514'); }, async exclusaoVigenteNoBling() { return false; } }), edicao());
     expect(r).toMatchObject({ status: 500, corpo: { reconcileRequired: true, blingId: '4321' } });
     expect(r.corpo.retrySafe).toBeUndefined();
   });

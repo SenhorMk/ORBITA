@@ -55,7 +55,12 @@ describe('contato por id', () => {
 
   it('GET /contatos/{id} com 200 e corpo do contrato é presença', async () => {
     fake.programar({ status: 200, body: JSON.stringify({ data: { id: 5550001, nome: 'Contato' } }) });
-    expect(await adapter().consultarContato('5550001')).toEqual({ _tag: 'RemotoPresente', valor: { id: '5550001' } });
+    expect(await adapter().consultarContato('5550001')).toEqual({ _tag: 'RemotoPresente', valor: { id: '5550001', situacao: null } });
+  });
+
+  it('GET /contatos/{id} devolve a situação, para a reativação distinguir a lixeira (E) do ativo (PRE-005)', async () => {
+    fake.programar({ status: 200, body: JSON.stringify({ data: { id: 5550001, nome: 'Contato', situacao: 'E' } }) });
+    expect(await adapter().consultarContato('5550001')).toEqual({ _tag: 'RemotoPresente', valor: { id: '5550001', situacao: 'E' } });
   });
 
   it('400 no DELETE é recusa definitiva, sem o corpo do provedor no resultado', async () => {

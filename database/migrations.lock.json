@@ -398,6 +398,11 @@
     },
     {
       "order": 80,
+      "path": "../database/77_contato_excluido_no_bling.sql",
+      "sha256": "013333755f763bcd8de7603f48f8ec38e16daf68be366cc98f048410f64555f0"
+    },
+    {
+      "order": 81,
       "path": "../database/78_movimentacao_estoque_somente_por_organizacao.sql",
       "sha256": "9356eade79abb3e3c60b2437c317103cffd3db1d905365e0176d450fcd452de0"
     }

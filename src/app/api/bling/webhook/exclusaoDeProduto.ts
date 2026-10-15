@@ -2,11 +2,7 @@ import { z } from 'zod';
 import { produtoRepository, type DesfechoDaExclusaoNoBling } from '../../../../repositories/produtoRepository';
 import { logger } from '../../../../lib/observability/logger';
 import type { VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
-
-/** O id de produto que o Bling emite: inteiro positivo, sem prefixo local (`LOCAL-…`). */
-const idDeProdutoDoBlingSchema = z
-  .union([z.number().int().positive().max(Number.MAX_SAFE_INTEGER), z.string().regex(/^[1-9][0-9]*$/)])
-  .transform(String);
+import { dataDoEventoDoBling, idDoBlingSchema } from './eventoDoBling';
 
 /** `data` do evento de produto: o id vem em `produto.id`, `id`, `idProduto` ou `bling_id`. */
 const dadosDoProdutoSchema = z
@@ -18,9 +14,8 @@ const dadosDoProdutoSchema = z
   })
   .partial()
   .transform((d) => d.produto?.id ?? d.id ?? d.idProduto ?? d.bling_id)
-  .pipe(idDeProdutoDoBlingSchema);
+  .pipe(idDoBlingSchema);
 
-const dataDoEventoSchema = z.object({ date: z.string().datetime({ offset: true }) });
 
 /**
  * `product.deleted` (ou `produto.excluido`): o recurso antes do ponto é
@@ -64,12 +59,7 @@ export async function aplicarExclusaoDeProduto(
     logger.warn('bling_webhook.produto_excluido.recusado', { ...contexto, outcome: 'id_invalido' });
     return { _tag: 'Ignorada', reason: 'id_invalido' };
   }
-  const data = dataDoEventoSchema.safeParse(eventRecord);
-  const desfecho = await produtoRepository.registrarExclusaoNoBling(
-    organizationScope,
-    blingId,
-    data.success ? new Date(data.data.date).toISOString() : null,
-  );
+  const desfecho = await produtoRepository.registrarExclusaoNoBling(organizationScope, blingId, dataDoEventoDoBling(eventRecord));
   logger.info('bling_webhook.produto_excluido.registrado', { ...contexto, blingId, outcome: desfecho });
   return { _tag: 'Registrada', blingId, desfecho };
 }

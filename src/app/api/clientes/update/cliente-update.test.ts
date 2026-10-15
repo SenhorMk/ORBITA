@@ -73,6 +73,7 @@ function fakeStore(options: { erro?: Error } = {}): FakeStore {
       gravados.push({ ...cliente });
       return { id: 'cliente-local-1', blingId: cliente.blingId, nome: cliente.nome };
     },
+    async exclusaoVigenteNoBling() { return false; },
   };
 }
 
