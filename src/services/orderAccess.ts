@@ -45,7 +45,12 @@ export interface OrderProvider {
 export type OrderAccessResult<T> =
   | { readonly _tag: 'OrderAccessSucceeded'; readonly value: T }
   | { readonly _tag: 'OrderNotFound' }
-  | { readonly _tag: 'OrderAccessUnavailable' };
+  | { readonly _tag: 'OrderAccessUnavailable' }
+  /**
+   * O Bling apagou (ou já não tinha) o pedido e a exclusão local falhou.
+   * Repetir é seguro: o Bling responde 404 e a exclusão local é refeita.
+   */
+  | { readonly _tag: 'OrderRemovedRemotelyOnly' };
 
 /**
  * Prove local organization ownership before reading or mutating an external order.
@@ -104,7 +109,7 @@ export class OrderAccess {
       await this.store.deleteByExternalId(scope, externalId);
       return { _tag: 'OrderAccessSucceeded', value: undefined };
     } catch {
-      return { _tag: 'OrderAccessUnavailable' };
+      return externalId.startsWith('#MANUAL-') ? { _tag: 'OrderAccessUnavailable' } : { _tag: 'OrderRemovedRemotelyOnly' };
     }
   }
 

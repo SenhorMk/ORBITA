@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import type { Pedido } from '@/types';
+import type { EventoComercial } from '@/services/auditoriaComercial';
 
 import { createPedidoStatusHandler } from './handler';
 import type {
@@ -56,9 +57,10 @@ function montarDeps(sobrescritas: {
   bling?: Partial<PedidoStatusBlingPort>;
   auth?: Partial<PedidoStatusAuthPort>;
 } = {}) {
-  const updateSituacaoPedido = vi.fn<PedidoStatusBlingPort['updateSituacaoPedido']>().mockResolvedValue(undefined);
+  const updateSituacaoPedido = vi.fn<PedidoStatusBlingPort['updateSituacaoPedido']>().mockResolvedValue({ _tag: 'BlingOk', value: undefined });
   const savePedidoStatus = vi.fn<PedidoStatusStorePort['savePedidoStatus']>().mockResolvedValue(undefined);
-  const updateEstoqueProduto = vi.fn<PedidoStatusStorePort['updateEstoqueProduto']>().mockResolvedValue(undefined);
+  const alinharEstoque = vi.fn<PedidoStatusStorePort['alinharEstoque']>().mockResolvedValue('alinhado');
+  const eventos: EventoComercial[] = [];
   const aguardarProcessamentoBling = vi.fn().mockResolvedValue(undefined);
 
   const store: PedidoStatusStorePort = {
@@ -66,7 +68,7 @@ function montarDeps(sobrescritas: {
     savePedidoStatus,
     findProdutoIdsDoPedido: vi.fn().mockResolvedValue([]),
     findProdutosByIds: vi.fn().mockResolvedValue([] as readonly PedidoStatusProduto[]),
-    updateEstoqueProduto,
+    alinharEstoque,
     ...sobrescritas.store,
   };
 
@@ -82,8 +84,12 @@ function montarDeps(sobrescritas: {
     ...sobrescritas.auth,
   };
 
-  const deps: PedidoStatusDependencies = { auth, store, bling, aguardarProcessamentoBling };
-  return { deps, store, bling, auth, updateSituacaoPedido, savePedidoStatus, updateEstoqueProduto, aguardarProcessamentoBling };
+  const deps: PedidoStatusDependencies = {
+    auth, store, bling, aguardarProcessamentoBling,
+    async auditar(_s, evento) { eventos.push(evento); },
+    correlationId: () => 'corr_status',
+  };
+  return { deps, store, bling, auth, updateSituacaoPedido, savePedidoStatus, alinharEstoque, aguardarProcessamentoBling, eventos };
 }
 
 /**
@@ -106,6 +112,12 @@ async function comLogCapturado(fn: () => Promise<Response>): Promise<{ resposta:
 
 const CORPO_VALIDO = { pedidoId: PEDIDO_ID, novaSituacaoId: 9, novaSituacaoNome: 'Atendido' };
 
+/** A resposta fixa quando o Bling confirmou e o ORBITA não gravou. */
+const ESPELHO_FALHOU = {
+  error: 'A situação foi alterada no Bling, mas não no ORBITA. Sincronize os pedidos para reconciliar; não repita a mudança.',
+  reconciliacao: { motivo: 'espelho_local_falhou' },
+};
+
 describe('POST /api/pedidos/status', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -118,7 +130,7 @@ describe('POST /api/pedidos/status', () => {
       const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
 
       expect(resposta.status).toBe(200);
-      expect(await resposta.json()).toEqual({ success: true, status: 'Atendido' });
+      expect(await resposta.json()).toEqual({ success: true, status: 'Atendido', estoque: 'alinhado' });
       expect(updateSituacaoPedido).toHaveBeenCalledWith('26735988980', 9);
       expect(savePedidoStatus).toHaveBeenCalledWith(escopo, PEDIDO, 'Atendido');
     });
@@ -129,7 +141,7 @@ describe('POST /api/pedidos/status', () => {
         { id: 'prod-mudou', blingId: '200', estoque: 3 },
         { id: 'prod-sem-bling', blingId: null, estoque: 1 },
       ];
-      const { deps, updateEstoqueProduto } = montarDeps({
+      const { deps, alinharEstoque } = montarDeps({
         store: {
           findProdutoIdsDoPedido: vi.fn().mockResolvedValue(['prod-igual', 'prod-mudou', 'prod-sem-bling']),
           findProdutosByIds: vi.fn().mockResolvedValue(produtos),
@@ -142,8 +154,9 @@ describe('POST /api/pedidos/status', () => {
       expect(resposta.status).toBe(200);
       // Só o produto cujo saldo divergiu é gravado: escrever os três geraria
       // três UPDATEs por mudança de situação, e dois deles não mudam nada.
-      expect(updateEstoqueProduto).toHaveBeenCalledTimes(1);
-      expect(updateEstoqueProduto).toHaveBeenCalledWith(escopo, 'prod-mudou', 12);
+      expect(alinharEstoque).toHaveBeenCalledTimes(1);
+      // O valor lido (3) vai junto: o banco só escreve se o estoque ainda for ele.
+      expect(alinharEstoque).toHaveBeenCalledWith(escopo, 'prod-mudou', 3, 12);
     });
 
     it('espera o Bling processar antes de reler o saldo', async () => {
@@ -274,26 +287,24 @@ describe('POST /api/pedidos/status', () => {
   });
 
   describe('falha do Bling é reportada com a causa — no servidor, não ao cliente', () => {
-    it('recusa da situação derruba a requisição e não grava nada localmente', async () => {
-      const { deps, savePedidoStatus } = montarDeps({
+    it('recusa comprovada da situação: 400, nada gravado localmente, evento de recusa', async () => {
+      const { deps, savePedidoStatus, eventos } = montarDeps({
         bling: {
-          updateSituacaoPedido: vi.fn().mockRejectedValue(
-            new Error('Erro na API Bling ao alterar situação do pedido (HTTP 400): situação inexistente'),
-          ),
+          updateSituacaoPedido: vi.fn().mockResolvedValue({
+            _tag: 'BlingFailed',
+            failure: { _tag: 'BlingProviderFailure', type: 'VALIDATION_ERROR', status: 400, message: 'situação inexistente', duplicateSale: false },
+          }),
         },
       });
 
-      const { resposta, log } = await comLogCapturado(() =>
-        createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO)),
-      );
+      const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
 
-      expect(resposta.status).toBe(500);
-      // A causa deixou de ir ao cliente (CWE-209) e passou a viver no log.
-      expect(await resposta.json()).toEqual({ error: 'Erro interno' });
-      expect(log).toContain('pedidos.status.atualizar');
+      expect(resposta.status).toBe(400);
+      expect((await resposta.json()).error).toContain('O Bling recusou a mudança de situação');
       // O Bling é a fonte da verdade: se ele recusou, o ORBITA não pode
       // registrar uma situação que não existe lá.
       expect(savePedidoStatus).not.toHaveBeenCalled();
+      expect(eventos.map((e) => e.acao)).toEqual(['order.status_change_rejected']);
     });
 
     it('erro do PostgREST fica legível no servidor e genérico na resposta', async () => {
@@ -314,7 +325,7 @@ describe('POST /api/pedidos/status', () => {
       );
 
       expect(resposta.status).toBe(500);
-      expect(await resposta.json()).toEqual({ error: 'Erro interno' });
+      expect(await resposta.json()).toEqual(ESPELHO_FALHOU);
 
       // A cobertura não sumiu, mudou de lado: o SQLSTATE continua investigável.
       expect(log).toContain('42P10');
@@ -335,7 +346,8 @@ describe('POST /api/pedidos/status', () => {
       expect(resposta.status).toBe(200);
       const corpoResposta = await resposta.json();
       expect(corpoResposta.success).toBe(true);
-      expect(corpoResposta.warning).toContain('alinhar estoque');
+      expect(corpoResposta.estoque).toBe('requer_reconciliacao');
+      expect(corpoResposta.warning).toContain('não foi conferido');
     });
   });
 
@@ -372,8 +384,8 @@ describe('POST /api/pedidos/status', () => {
       expect(resposta.status).toBe(500);
       const json = await resposta.json();
 
-      // Exatamente a mensagem genérica: nada além dela.
-      expect(json).toEqual({ error: 'Erro interno' });
+      // Exatamente a frase fixa do desfecho parcial: nada do erro.
+      expect(json).toEqual(ESPELHO_FALHOU);
 
       const serializado = JSON.stringify(json);
       for (const marcador of MARCADORES) {
@@ -391,8 +403,11 @@ describe('POST /api/pedidos/status', () => {
 
       const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
 
-      expect(resposta.status).toBe(500);
-      expect(await resposta.json()).toEqual({ error: 'Erro interno' });
+      // Exceção ao falar com o Bling é desfecho desconhecido, com frase fixa.
+      expect(resposta.status).toBe(502);
+      const serializado = JSON.stringify(await resposta.json());
+      expect(serializado).not.toContain('tok-sintetico');
+      expect(serializado).not.toContain('sessao=');
     });
 
     it('o diagnóstico seguro fica no servidor: operação e código técnico', async () => {
@@ -447,5 +462,117 @@ describe('POST /api/pedidos/status', () => {
 
       expect(capturado.join('\n')).not.toContain('tok-sintetico-abcdefgh');
     });
+  });
+});
+
+describe('POST /api/pedidos/status — desfechos e estoque (PRE-006C)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const falhaDoBling = (type: string, status: number) => vi.fn().mockResolvedValue({
+    _tag: 'BlingFailed',
+    failure: { _tag: 'BlingProviderFailure', type, status, message: 'x', duplicateSale: false },
+  });
+
+  it('timeout, 429, 5xx e exceção de rede: 502 desconhecido, sem gravação local e sem sucesso inventado', async () => {
+    for (const updateSituacaoPedido of [
+      falhaDoBling('UNKNOWN_ERROR', 0),
+      falhaDoBling('TOO_MANY_REQUESTS', 429),
+      falhaDoBling('SERVER_ERROR', 503),
+      falhaDoBling('INVALID_RESPONSE', 200),
+      vi.fn().mockRejectedValue(new TypeError('fetch failed')),
+    ]) {
+      const { deps, savePedidoStatus, alinharEstoque, eventos } = montarDeps({ bling: { updateSituacaoPedido } });
+
+      const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+      const json = await resposta.json();
+
+      expect(resposta.status).toBe(502);
+      expect(json.success).toBeUndefined();
+      expect(json.reconciliacao).toEqual({ motivo: 'bling_sem_confirmacao' });
+      expect(savePedidoStatus).not.toHaveBeenCalled();
+      expect(alinharEstoque).not.toHaveBeenCalled();
+      expect(eventos.map((e) => [e.acao, e.metadata.motivo])).toEqual([['order.reconcile_required', 'bling_sem_confirmacao']]);
+    }
+  });
+
+  it('Bling confirmou e a gravação local falhou: 500 parcial, nunca "repita"', async () => {
+    const { deps, eventos } = montarDeps({ store: { savePedidoStatus: vi.fn().mockRejectedValue({ code: '40001' }) } });
+
+    const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+
+    expect(resposta.status).toBe(500);
+    expect(await resposta.json()).toEqual(ESPELHO_FALHOU);
+    expect(eventos.map((e) => [e.acao, e.metadata.motivo])).toEqual([['order.reconcile_required', 'espelho_local_falhou']]);
+  });
+
+  it('estoque que mudou depois da leitura (venda manual) não é sobrescrito: pendência, não sucesso completo', async () => {
+    const { deps, eventos } = montarDeps({
+      store: {
+        findProdutoIdsDoPedido: vi.fn().mockResolvedValue(['p1', 'p2']),
+        findProdutosByIds: vi.fn().mockResolvedValue([
+          { id: 'p1', blingId: '100', estoque: 5 },
+          { id: 'p2', blingId: '200', estoque: 2 },
+        ]),
+        alinharEstoque: vi.fn<PedidoStatusStorePort['alinharEstoque']>()
+          .mockResolvedValueOnce('divergiu')
+          .mockResolvedValueOnce('alinhado'),
+      },
+      bling: { getSaldos: vi.fn().mockResolvedValue(new Map([['100', 4], ['200', 1]])) },
+    });
+
+    const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+    const json = await resposta.json();
+
+    expect(resposta.status).toBe(200);
+    expect(json).toMatchObject({ success: true, estoque: 'requer_reconciliacao' });
+    expect(json.warning).toContain('1 produto(s)');
+    expect(eventos.at(-1)).toMatchObject({
+      acao: 'order.status_changed',
+      metadata: { estoque: 'parcial', produtos_alinhados: 1, produtos_pendentes: 1 },
+    });
+  });
+
+  it('saldo do Bling ilegível depois da mudança: aviso, não 500 — a situação já mudou', async () => {
+    const { deps } = montarDeps({
+      store: {
+        findProdutoIdsDoPedido: vi.fn().mockResolvedValue(['p1']),
+        findProdutosByIds: vi.fn().mockResolvedValue([{ id: 'p1', blingId: '100', estoque: 5 }]),
+      },
+      bling: { getSaldos: vi.fn().mockRejectedValue(new Error('Bling indisponível')) },
+    });
+
+    const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+
+    expect(resposta.status).toBe(200);
+    expect(await resposta.json()).toMatchObject({ success: true, estoque: 'requer_reconciliacao' });
+  });
+
+  it('retry depois do alinhamento: o banco responde "já alinhado" e nada novo é lançado', async () => {
+    const { deps, eventos } = montarDeps({
+      store: {
+        findProdutoIdsDoPedido: vi.fn().mockResolvedValue(['p1']),
+        findProdutosByIds: vi.fn().mockResolvedValue([{ id: 'p1', blingId: '100', estoque: 5 }]),
+        alinharEstoque: vi.fn<PedidoStatusStorePort['alinharEstoque']>().mockResolvedValue('ja_alinhado'),
+      },
+      bling: { getSaldos: vi.fn().mockResolvedValue(new Map([['100', 4]])) },
+    });
+
+    const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+
+    expect(await resposta.json()).toEqual({ success: true, status: 'Atendido', estoque: 'alinhado' });
+    expect(eventos.at(-1)!.metadata).toMatchObject({ estoque: 'alinhado', produtos_alinhados: 0, produtos_pendentes: 0 });
+  });
+
+  it('o evento de sucesso tem ator e pedido, sem nada do Bling', async () => {
+    const { deps, eventos } = montarDeps();
+
+    await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+
+    expect(eventos).toEqual([{
+      acao: 'order.status_changed', recurso: 'pedido', recursoId: PEDIDO_ID, correlationId: 'corr_status',
+      metadata: { pedido_id: PEDIDO_ID, situacao_id: 9, estoque: 'alinhado', produtos_alinhados: 0, produtos_pendentes: 0 },
+    }]);
   });
 });

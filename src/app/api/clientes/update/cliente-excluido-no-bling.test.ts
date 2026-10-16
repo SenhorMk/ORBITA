@@ -29,7 +29,7 @@ function montar(excluidos: readonly string[]) {
     async upsert(_s, c) { gravados.push(c.blingId); return { id: 'local-1', blingId: c.blingId, nome: c.nome }; },
     async exclusaoVigenteNoBling(s, blingId) { consultados.push({ org: s.organizationId, blingId }); return excluidos.includes(blingId); },
   };
-  const handler = createClienteUpdateHandler({ auth: { async authorize() { return { _tag: 'Authorized', scope }; } }, bling, store });
+  const handler = createClienteUpdateHandler({ auth: { async authorize() { return { _tag: 'Authorized', scope }; } }, bling, store, auditar: async () => {}, correlationId: () => 'corr_teste' });
   return { handler, enviados, gravados, consultados };
 }
 

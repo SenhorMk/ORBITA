@@ -1,4 +1,8 @@
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { supabaseServer } from '@/lib/supabaseServer';
+import { getCorrelationId } from '@/lib/observability/correlation';
+import { recordAuditEvent } from '@/services/auditService';
+import { criarAuditoriaComercial } from '@/services/auditoriaComercial';
 import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { bling } from '@/services/bling';
 import {
@@ -60,6 +64,8 @@ const orderProvider: OrderProvider = {
 const handlers = createOrderByIdHandlers({
   resolveScope: resolveVerifiedOrganizationScope,
   orders: new OrderAccess(orderStore, orderProvider),
+  auditar: criarAuditoriaComercial((scope, input) => recordAuditEvent(supabaseServer, scope, input)),
+  correlationId: getCorrelationId,
 });
 
 export const GET = handlers.GET;

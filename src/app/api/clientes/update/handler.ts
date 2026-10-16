@@ -4,6 +4,7 @@ import { clienteRequestSchema, type ClienteRequest } from '@/lib/config/clienteC
 import type { BlingCallResult } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
+import type { AuditarComercial } from '@/services/auditoriaComercial';
 
 export interface ContatoBlingPayload {
   readonly nome: string;
@@ -68,6 +69,9 @@ export interface ClienteDependencies {
   readonly auth: ClienteAuthPort;
   readonly bling: ClienteBlingPort;
   readonly store: ClienteStorePort;
+  /** Trilha persistente; não lança (`criarAuditoriaComercial`). */
+  readonly auditar: AuditarComercial;
+  readonly correlationId: (request: Request) => string;
 }
 
 export interface ClienteResponseBody {
@@ -158,6 +162,18 @@ const ACESSO_RECUSADO =
 type Operacao = 'criar' | 'atualizar';
 
 /**
+ * O que a falha do envio prova, para a auditoria: `recusado` — o Bling não
+ * aplicou (4xx, limite, acesso recusado); `desconhecido` — pode ter aplicado.
+ */
+type DesfechoDoEnvio = 'recusado' | 'desconhecido';
+
+type Respondido = { readonly _tag: 'Respondido'; readonly resposta: NextResponse; readonly desfecho: DesfechoDoEnvio; readonly status: number };
+
+function respondido(resposta: NextResponse, desfecho: DesfechoDoEnvio): Respondido {
+  return { _tag: 'Respondido', resposta, desfecho, status: resposta.status };
+}
+
+/**
  * Uma exceção lançada ao falar com o Bling (`fetchWithAuth`: token, rede,
  * limite) vira resposta ESTRUTURADA, classificada pelo que ela prova. Antes ela
  * escapava do handler: a rota respondia um 500 sem JSON, a tela não conseguia
@@ -169,15 +185,15 @@ type Operacao = 'criar' | 'atualizar';
  * leitura — pode ter acontecido depois de o Bling receber o pedido: ambíguo.
  * Nada do erro (mensagem, token, corpo) vai para a resposta; só para o log.
  */
-function respostaDaExcecao(erro: unknown, operacao: Operacao, scope: VerifiedOrganizationScope): NextResponse {
+function respostaDaExcecao(erro: unknown, operacao: Operacao, scope: VerifiedOrganizationScope): Respondido {
   registrarFalhaInterna(`clientes.update.bling_${operacao}`, erro, {
     organizacaoId: scope.organizationId,
     atorId: scope.actorId,
   });
   const nome = erro instanceof Error ? erro.name : '';
-  if (nome === 'BlingLimiteDeRequisicoesError') return fail(LIMITE_DO_BLING, 503, { retrySafe: true });
-  if (nome === 'BlingAcessoRecusadoError') return fail(ACESSO_RECUSADO, 502, { retrySafe: true });
-  return fail(operacao === 'criar' ? FALHA_AMBIGUA_NA_CRIACAO : FALHA_AMBIGUA_NA_ATUALIZACAO, 502);
+  if (nome === 'BlingLimiteDeRequisicoesError') return respondido(fail(LIMITE_DO_BLING, 503, { retrySafe: true }), 'recusado');
+  if (nome === 'BlingAcessoRecusadoError') return respondido(fail(ACESSO_RECUSADO, 502, { retrySafe: true }), 'recusado');
+  return respondido(fail(operacao === 'criar' ? FALHA_AMBIGUA_NA_CRIACAO : FALHA_AMBIGUA_NA_ATUALIZACAO, 502), 'desconhecido');
 }
 
 /**
@@ -229,7 +245,7 @@ async function enviarAoBling(
   body: ClienteRequest,
   payload: ContatoBlingPayload,
   scope: VerifiedOrganizationScope,
-): Promise<{ readonly _tag: 'Enviado'; readonly blingId: string } | { readonly _tag: 'Respondido'; readonly resposta: NextResponse }> {
+): Promise<{ readonly _tag: 'Enviado'; readonly blingId: string } | Respondido> {
   if (body.blingId) {
     // Edição: `PUT /contatos/{id}`. Falha aqui NUNCA vira POST, e o retry
     // não é automático — repetir o PUT pode sobrescrever uma edição feita no
@@ -238,12 +254,12 @@ async function enviarAoBling(
     try {
       atualizado = await deps.bling.atualizar(body.blingId, payload);
     } catch (erro: unknown) {
-      return { _tag: 'Respondido', resposta: respostaDaExcecao(erro, 'atualizar', scope) };
+      return respostaDaExcecao(erro, 'atualizar', scope);
     }
     if (atualizado._tag === 'BlingFailed') {
-      return { _tag: 'Respondido', resposta: recusaProvadaPeloProvedor(atualizado.failure.status)
-        ? fail(`O Bling recusou a atualização do contato: ${motivoDaRecusa(atualizado.failure)}`, 400, { retrySafe: true })
-        : fail(FALHA_AMBIGUA_NA_ATUALIZACAO, 502) };
+      return recusaProvadaPeloProvedor(atualizado.failure.status)
+        ? respondido(fail(`O Bling recusou a atualização do contato: ${motivoDaRecusa(atualizado.failure)}`, 400, { retrySafe: true }), 'recusado')
+        : respondido(fail(FALHA_AMBIGUA_NA_ATUALIZACAO, 502), 'desconhecido');
     }
     return { _tag: 'Enviado', blingId: body.blingId };
   }
@@ -251,16 +267,40 @@ async function enviarAoBling(
   try {
     criado = await deps.bling.criar(payload);
   } catch (erro: unknown) {
-    return { _tag: 'Respondido', resposta: respostaDaExcecao(erro, 'criar', scope) };
+    return respostaDaExcecao(erro, 'criar', scope);
   }
   if (criado._tag === 'BlingFailed') {
     // Recusa (4xx) é prova de que não há contato criado; qualquer outra
     // coisa é desfecho ambíguo, e aí a tela não pode oferecer repetir.
-    return { _tag: 'Respondido', resposta: recusaProvadaPeloProvedor(criado.failure.status)
-      ? fail(`O Bling recusou o cadastro do contato: ${motivoDaRecusa(criado.failure)}`, 400, { retrySafe: true })
-      : fail(FALHA_AMBIGUA_NA_CRIACAO, 502) };
+    return recusaProvadaPeloProvedor(criado.failure.status)
+      ? respondido(fail(`O Bling recusou o cadastro do contato: ${motivoDaRecusa(criado.failure)}`, 400, { retrySafe: true }), 'recusado')
+      : respondido(fail(FALHA_AMBIGUA_NA_CRIACAO, 502), 'desconhecido');
   }
   return { _tag: 'Enviado', blingId: criado.value.id };
+}
+
+/** O corpo validado, ou a recusa — antes de qualquer envio. Repetir é seguro, e provado. */
+async function lerCorpo(request: Request): Promise<ClienteRequest | NextResponse> {
+  let rawBody: unknown;
+  try {
+    rawBody = await request.json();
+  } catch {
+    return fail('Corpo da requisição não é um JSON válido.', 400, { retrySafe: true });
+  }
+  const parsed = clienteRequestSchema.safeParse(rawBody);
+  if (parsed.success) return parsed.data;
+  const detalhes = parsed.error.issues
+    .map((issue) => `${issue.path.join('.') || 'corpo'}: ${issue.message}`)
+    .join('; ');
+  return fail(`Cliente inválido: ${detalhes}`, 400, { retrySafe: true });
+}
+
+/** A trilha desta gravação: mesmo ator, organização, correlação e operação em todo evento. */
+function trilhaDoContato(deps: ClienteDependencies, scope: VerifiedOrganizationScope, request: Request, body: ClienteRequest) {
+  const correlationId = deps.correlationId(request);
+  const operacao = body.blingId ? 'atualizacao' : 'cadastro';
+  return (acao: string, recursoId: string | null, metadata: Readonly<Record<string, string | number | null>>) =>
+    deps.auditar(scope, { acao, recurso: 'cliente', recursoId, correlationId, metadata: { operacao, ...metadata } });
 }
 
 /**
@@ -284,23 +324,8 @@ export function createClienteUpdateHandler(deps: ClienteDependencies) {
     if (authorization._tag === 'Denied') return authorization.response;
     const { scope } = authorization;
 
-    let rawBody: unknown;
-    try {
-      rawBody = await request.json();
-    } catch {
-      // Nada saiu daqui: nem Bling, nem banco. Repetir é seguro, e provado.
-      return fail('Corpo da requisição não é um JSON válido.', 400, { retrySafe: true });
-    }
-
-    const parsed = clienteRequestSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      const detalhes = parsed.error.issues
-        .map((issue) => `${issue.path.join('.') || 'corpo'}: ${issue.message}`)
-        .join('; ');
-      // Recusado antes de qualquer envio — o provedor nem foi procurado.
-      return fail(`Cliente inválido: ${detalhes}`, 400, { retrySafe: true });
-    }
-    const body = parsed.data;
+    const body = await lerCorpo(request);
+    if (body instanceof NextResponse) return body;
     // PRE-005: o `PUT` num contato excluído no Bling o reativaria por fora da
     // reconciliação. Nada sai daqui: nem Bling, nem banco.
     if (body.blingId && await deps.store.exclusaoVigenteNoBling(scope, body.blingId)) {
@@ -308,8 +333,14 @@ export function createClienteUpdateHandler(deps: ClienteDependencies) {
     }
     const payload = toContatoPayload(body);
 
+    const auditar = trilhaDoContato(deps, scope, request, body);
     const envio = await enviarAoBling(deps, body, payload, scope);
-    if (envio._tag === 'Respondido') return envio.resposta;
+    if (envio._tag === 'Respondido') {
+      await (envio.desfecho === 'recusado'
+        ? auditar('customer.contact_save_rejected', body.id ?? null, { status_http: envio.status })
+        : auditar('customer.contact_save_reconcile_required', body.id ?? null, { motivo: 'bling_sem_confirmacao', bling_id: body.blingId ?? null }));
+      return envio.resposta;
+    }
     const { blingId } = envio;
 
     try {
@@ -330,6 +361,7 @@ export function createClienteUpdateHandler(deps: ClienteDependencies) {
         uf: body.uf ?? '',
       });
 
+      await auditar('customer.contact_saved', client.id, { cliente_id: client.id, bling_id: blingId });
       return NextResponse.json({ success: true, client } satisfies ClienteResponseBody, { status: 200 });
     } catch (error: unknown) {
       // O diagnóstico fica aqui — operação, organização, ator, classe do erro e
@@ -339,6 +371,7 @@ export function createClienteUpdateHandler(deps: ClienteDependencies) {
         organizacaoId: scope.organizationId,
         atorId: scope.actorId,
       });
+      await auditar('customer.contact_save_reconcile_required', body.id ?? null, { motivo: 'espelho_local_falhou', bling_id: blingId });
 
       // E o desfecho chega **estruturado**: o Bling confirmou, então repetir a
       // requisição não conserta e pode criar um segundo contato lá.

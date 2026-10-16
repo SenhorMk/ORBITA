@@ -139,6 +139,20 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   ['catalog.product_reconcile_required', 'catalog', 'critical', 'user', 730, 'Gravação do produto sem confirmação do Bling, ou confirmada lá e não espelhada no ORBITA.'],
   ['catalog.categories_synced', 'catalog', 'info', 'user', 730, 'Categorias do Bling sincronizadas no ORBITA.'],
   ['catalog.categories_sync_failed', 'catalog', 'warning', 'user', 730, 'Sincronização de categorias interrompida; as páginas anteriores à falha ficaram gravadas.'],
+  // Clientes e pedidos por comando autorizado (migration 80, PRE-006C).
+  // Metadata: ids técnicos, operação, desfecho e contagens — nunca nome,
+  // CPF/CNPJ, e-mail, telefone, mensagem ou corpo do Bling/Chatwoot.
+  ['customer.contact_saved', 'customers', 'info', 'user', 1825, 'Contato cadastrado ou atualizado no Bling e espelhado no ORBITA.'],
+  ['customer.contact_save_rejected', 'customers', 'info', 'user', 1825, 'O Bling recusou o cadastro ou a atualização do contato; nada foi gravado.'],
+  ['customer.contact_save_reconcile_required', 'customers', 'critical', 'user', 1825, 'Gravação do contato sem confirmação do Bling, ou confirmada lá e não espelhada no ORBITA.'],
+  ['customer.sac_contacts_registered', 'customers', 'info', 'user', 1825, 'Sincronização do SAC registrou clientes novos a partir de contatos do Chatwoot.'],
+  ['order.status_changed', 'orders', 'info', 'user', 1825, 'Situação do pedido alterada no Bling e no ORBITA, com o desfecho do alinhamento de estoque.'],
+  ['order.status_change_rejected', 'orders', 'info', 'user', 1825, 'O Bling recusou a mudança de situação do pedido; nada mudou.'],
+  ['order.updated', 'orders', 'info', 'user', 1825, 'Pedido editado no Bling.'],
+  ['order.deleted', 'orders', 'warning', 'user', 1825, 'Pedido apagado no Bling e no ORBITA.'],
+  ['order.reconcile_required', 'orders', 'critical', 'user', 1825, 'Operação de pedido sem confirmação do Bling, ou confirmada lá e não refletida no ORBITA.'],
+  ['order.manual_sale_recorded', 'orders', 'info', 'user', 1825, 'Venda manual registrada no Bling e no ORBITA.'],
+  ['order.manual_sale_unresolved', 'orders', 'critical', 'user', 1825, 'Venda manual sem desfecho confirmado; tentativa bloqueada até a reconciliação.'],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 

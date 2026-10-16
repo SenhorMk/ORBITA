@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { RequestOrganizationScopeResult } from '../../../../../lib/requestOrganizationContext';
 import { escopoTemCapacidade, type VerifiedOrganizationScope } from '../../../../../lib/verifiedOrganizationScope';
 import type { OrderAccessResult } from '../../../../../services/orderAccess';
+import type { AuditarComercial } from '../../../../../services/auditoriaComercial';
 
 const orderIdentifierSchema = z.string().trim().min(1).max(160);
 const orderChangesSchema = z.record(z.string(), z.unknown());
@@ -41,6 +42,50 @@ export interface OrderByIdRouteContext {
 export interface OrderByIdHandlerDependencies {
   readonly resolveScope: OrderScopeResolver;
   readonly orders: OrderAccessPort;
+  /** Trilha persistente; não lança (`criarAuditoriaComercial`). */
+  readonly auditar: AuditarComercial;
+  readonly correlationId: (request: Request) => string;
+}
+
+type Operacao = 'edicao' | 'exclusao';
+
+/**
+ * O evento do desfecho de uma mutação. `NotFound` não gera evento: nada
+ * aconteceu, nem aqui nem no Bling.
+ */
+function eventoDoDesfecho(
+  operacao: Operacao,
+  result: OrderAccessResult<unknown>,
+): { readonly acao: string; readonly metadata: Readonly<Record<string, string>> } | null {
+  switch (result._tag) {
+    case 'OrderAccessSucceeded':
+      return { acao: operacao === 'edicao' ? 'order.updated' : 'order.deleted', metadata: {} };
+    case 'OrderAccessUnavailable':
+      return { acao: 'order.reconcile_required', metadata: { operacao, motivo: 'bling_sem_confirmacao' } };
+    case 'OrderRemovedRemotelyOnly':
+      return { acao: 'order.reconcile_required', metadata: { operacao, motivo: 'espelho_local_falhou' } };
+    default:
+      return null;
+  }
+}
+
+async function auditarDesfecho(
+  dependencies: OrderByIdHandlerDependencies,
+  request: Request,
+  scope: VerifiedOrganizationScope,
+  externalId: string,
+  operacao: Operacao,
+  result: OrderAccessResult<unknown>,
+): Promise<void> {
+  const evento = eventoDoDesfecho(operacao, result);
+  if (!evento) return;
+  await dependencies.auditar(scope, {
+    acao: evento.acao,
+    recurso: 'pedido',
+    recursoId: externalId,
+    correlationId: dependencies.correlationId(request),
+    metadata: { bling_pedido_id: externalId, ...evento.metadata },
+  });
 }
 
 /** Negação por falta de capacidade de gestão, com o mesmo corpo de antes. */
@@ -68,6 +113,12 @@ function orderResultResponse<T>(result: OrderAccessResult<T>): Response {
   if (result._tag === 'OrderAccessUnavailable') {
     return Response.json(
       { success: false, error: 'Operação de pedido indisponível' },
+      { status: 502 },
+    );
+  }
+  if (result._tag === 'OrderRemovedRemotelyOnly') {
+    return Response.json(
+      { success: false, error: 'Pedido apagado no Bling, mas não no ORBITA. Repita a exclusão para concluir.', reconciliacao: { motivo: 'espelho_local_falhou' } },
       { status: 502 },
     );
   }
@@ -108,6 +159,7 @@ export function createOrderByIdHandlers(dependencies: OrderByIdHandlerDependenci
       }
 
       const result = await dependencies.orders.remove(scopeResult.scope, externalId);
+      await auditarDesfecho(dependencies, request, scopeResult.scope, externalId, 'exclusao', result);
       if (result._tag !== 'OrderAccessSucceeded') return orderResultResponse(result);
 
       return Response.json({ success: true, message: 'Pedido apagado com sucesso' });
@@ -144,13 +196,9 @@ export function createOrderByIdHandlers(dependencies: OrderByIdHandlerDependenci
         );
       }
 
-      return orderResultResponse(
-        await dependencies.orders.update(
-          scopeResult.scope,
-          externalId,
-          changesResult.data,
-        ),
-      );
+      const result = await dependencies.orders.update(scopeResult.scope, externalId, changesResult.data);
+      await auditarDesfecho(dependencies, request, scopeResult.scope, externalId, 'edicao', result);
+      return orderResultResponse(result);
     },
   };
 }

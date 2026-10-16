@@ -6,6 +6,10 @@ import { organizationContextToScope } from '@/lib/verifiedOrganizationScope';
 import { clienteRepository } from '@/repositories/clienteRepository';
 import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
+import { supabaseServer } from '@/lib/supabaseServer';
+import { getCorrelationId } from '@/lib/observability/correlation';
+import { recordAuditEvent } from '@/services/auditService';
+import { criarAuditoriaComercial } from '@/services/auditoriaComercial';
 
 import {
   createClienteUpdateHandler,
@@ -93,6 +97,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     auth: { async authorize() { return authorization; } },
     bling: blingClienteAdapter(bling.forVerifiedOrganization(authorization.scope)),
     store,
+    auditar: criarAuditoriaComercial((scope, input) => recordAuditEvent(supabaseServer, scope, input)),
+    correlationId: getCorrelationId,
   });
 
   return handler(request);

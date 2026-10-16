@@ -117,4 +117,39 @@ describe('CancelamentoDePedido', () => {
     await waitFor(() => expect(fetchWithAuthMock).toHaveBeenCalledTimes(2));
     expect(onCancelado).not.toHaveBeenCalled();
   });
+
+  it('cancelado com pendência de estoque: a pessoa vê a pendência, não "estoque alinhado com sucesso" (PRE-006C)', async () => {
+    fetchWithAuthMock.mockImplementation(async (url: string) => {
+      if (url === '/api/bling/situacoes') return resposta([{ id: 12, nome: 'Cancelado' }]);
+      return resposta({ success: true, status: 'Cancelado', estoque: 'requer_reconciliacao', warning: 'Situação alterada, mas 1 produto(s) não tiveram o estoque alinhado ao Bling.' });
+    });
+    const alerta = vi.fn();
+    vi.stubGlobal('alert', alerta);
+    const onCancelado = vi.fn();
+    const usuaria = userEvent.setup();
+    render(<CancelamentoDePedido pedido={PEDIDO} onFechar={vi.fn()} onCancelado={onCancelado} />);
+
+    await usuaria.click(screen.getByRole('button', { name: 'Cancelar pedido' }));
+
+    await waitFor(() => expect(onCancelado).toHaveBeenCalled());
+    expect(alerta).toHaveBeenCalledWith(expect.stringContaining('com pendência'));
+    expect(alerta).not.toHaveBeenCalledWith(expect.stringContaining('alinhado com sucesso'));
+  });
+
+  it('resultado desconhecido no Bling: mostra a orientação da rota e não relê como cancelado (PRE-006C)', async () => {
+    fetchWithAuthMock.mockImplementation(async (url: string) => {
+      if (url === '/api/bling/situacoes') return resposta([{ id: 12, nome: 'Cancelado' }]);
+      return resposta({ error: 'O Bling não confirmou a mudança de situação, e ela pode ter sido aplicada. Sincronize e confira o pedido antes de repetir.', reconciliacao: { motivo: 'bling_sem_confirmacao' } }, 502);
+    });
+    const alerta = vi.fn();
+    vi.stubGlobal('alert', alerta);
+    const onCancelado = vi.fn();
+    const usuaria = userEvent.setup();
+    render(<CancelamentoDePedido pedido={PEDIDO} onFechar={vi.fn()} onCancelado={onCancelado} />);
+
+    await usuaria.click(screen.getByRole('button', { name: 'Cancelar pedido' }));
+
+    await waitFor(() => expect(alerta).toHaveBeenCalledWith(expect.stringContaining('confira o pedido antes de repetir')));
+    expect(onCancelado).not.toHaveBeenCalled();
+  });
 });

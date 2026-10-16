@@ -82,6 +82,8 @@ function deps(overrides: Partial<ClienteDependencies> = {}): ClienteDependencies
     auth: { async authorize() { return { _tag: 'Authorized', scope }; } },
     bling: fakeBling(),
     store: fakeStore(),
+    auditar: async () => {},
+    correlationId: () => 'corr_teste',
     ...overrides,
   };
 }
