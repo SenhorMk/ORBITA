@@ -711,3 +711,110 @@ describe('ProductDetailModal — sucesso parcial fica visível (PRE-006B, revis�
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1), { timeout: 3000 });
   });
 });
+
+describe('ProductDetailModal — cadastro confirmado não é reenviado na mesma abertura (PRE-006B, revisão final)', () => {
+  beforeEach(() => {
+    fetchWithAuthMock.mockReset();
+    enviados.length = 0;
+  });
+
+  const PARCIAL = {
+    success: true,
+    saldo: 'nao_confirmado',
+    avisos: ['O produto 4242 foi salvo no Bling, mas o saldo de estoque não foi confirmado: Depósito padrão não configurado.'],
+  };
+  const COMPLETO = { success: true, saldo: 'aplicado', avisos: [] };
+
+  function redeDeCadastro(corpo: unknown) {
+    fetchWithAuthMock.mockImplementation(async (url: string, options: RequestInit = {}) => {
+      if (url === '/api/categorias/sync') return json({ success: true, data: [] });
+      if (url.startsWith('/api/produtos/bling/')) return json({ success: true, obrigatorios: { tipo: 'P', situacao: 'A', formato: 'S', unidade: 'CX' } });
+      if (url === '/api/produtos/update') {
+        if (typeof options.body === 'string') enviados.push(JSON.parse(options.body));
+        return json(corpo);
+      }
+      throw new Error(`Requisição não prevista: ${url}`);
+    });
+  }
+
+  /** O botão principal, com qualquer rótulo, mesmo sob outro diálogo. */
+  function botaoPrincipal(): HTMLButtonElement {
+    return screen.getByRole('button', { name: /Salvar alterações|Produto cadastrado|Salvando/i, hidden: true }) as HTMLButtonElement;
+  }
+
+  async function cadastrar(usuaria: ReturnType<typeof userEvent.setup>, nome: string, envios: number) {
+    await usuaria.type(document.getElementById('product-detail-nome') as HTMLInputElement, nome);
+    await usuaria.click(botaoSalvar());
+    await waitFor(() => expect(enviados).toHaveLength(envios));
+  }
+
+  /** Cliques que ignoram `disabled`/`pointer-events`, como um duplo clique rápido. */
+  async function insistir() {
+    fireEvent.click(botaoPrincipal());
+    fireEvent.click(botaoPrincipal());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  it('cadastro sem SKU com saldo não confirmado: aviso visível, salvar bloqueado, Bling chamado uma vez', async () => {
+    redeDeCadastro(PARCIAL);
+    const onSaved = vi.fn();
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} onSaved={onSaved} />);
+
+    await cadastrar(usuaria, 'Rape Sem SKU', 1);
+
+    await waitFor(() => expect(screen.getByText(/Produto salvo, com pendência/i)).toBeTruthy());
+    expect(enviados[0]).not.toHaveProperty('codigo');
+    expect(botaoPrincipal().disabled).toBe(true);
+    expect(botaoPrincipal().textContent).toContain('Produto cadastrado');
+    await insistir();
+    expect(enviados).toHaveLength(1);
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Produto salvo, com pendência/i)).toBeTruthy();
+  });
+
+  it('cadastro completo: cliques durante o fechamento automático não reenviam a criação', async () => {
+    redeDeCadastro(COMPLETO);
+    const onClose = vi.fn();
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={onClose} produto={null} cliente={null} />);
+
+    await cadastrar(usuaria, 'Rape Completo', 1);
+    await waitFor(() => expect(botaoPrincipal().disabled).toBe(true));
+    await insistir();
+
+    expect(enviados).toHaveLength(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    expect(enviados).toHaveLength(1);
+  });
+
+  it('fechar e abrir de novo o formulário permite outro cadastro', async () => {
+    redeDeCadastro(PARCIAL);
+    const usuaria = userEvent.setup();
+    const { rerender } = render(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} />);
+    await cadastrar(usuaria, 'Primeiro', 1);
+    await waitFor(() => expect(botaoPrincipal().disabled).toBe(true));
+
+    rerender(<ProductDetailModal isOpen={false} onClose={vi.fn()} produto={null} cliente={null} />);
+    rerender(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} />);
+
+    expect(screen.queryByText(/Produto salvo, com pendência/i)).toBeNull();
+    await cadastrar(usuaria, 'Segundo', 2);
+    expect(enviados[1]!.nome).toBe('Segundo');
+  });
+
+  it('edição de produto existente continua podendo salvar de novo depois do sucesso parcial', async () => {
+    redeDeCadastro(PARCIAL);
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => expect(botaoSalvar().disabled).toBe(false));
+    await usuaria.click(botaoSalvar());
+    await waitFor(() => expect(screen.getByText(/Produto salvo, com pendência/i)).toBeTruthy());
+
+    expect(botaoSalvar().disabled).toBe(false);
+    await usuaria.click(botaoSalvar());
+    await waitFor(() => expect(enviados).toHaveLength(2));
+    expect(enviados.every((corpo) => corpo.id === SINCRONIZADO.id)).toBe(true);
+  });
+});

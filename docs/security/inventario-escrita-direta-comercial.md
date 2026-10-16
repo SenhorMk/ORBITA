@@ -162,6 +162,12 @@ A revisão independente achou dois furos na tela; os dois foram corrigidos.
    - O bloqueio vale para aquele produto (ou para o cadastro novo) enquanto a página estiver aberta. Fechar e reabrir o modal não o libera; outro produto segue editável.
 2. **O sucesso parcial sumia.** Os `avisos` da rota não chegavam à tela, e o modal fechava em 1,5 s. Agora a rota informa `saldo`, e o modal mostra "Produto salvo, com pendência" com o aviso. O modal relê o catálogo e não fecha sozinho; quem fecha é a pessoa.
 
+3. **Cadastro confirmado ainda podia ser reenviado.** Com o sucesso parcial, o botão principal seguia ativo; com o sucesso completo, havia 1,5 s antes do fechamento. Um novo clique era outra intenção de cadastro: sem SKU, um segundo produto no Bling.
+   - Agora, depois do primeiro cadastro confirmado (completo ou parcial), o formulário bloqueia novos envios naquela abertura ("Produto cadastrado").
+   - O aviso continua visível e o catálogo continua sendo relido.
+   - Uma nova abertura do formulário libera outro cadastro. A edição de produto existente não é afetada.
+   - Contraprovas: remover a marcação, só o guard, ou a liberação na nova abertura derruba os testes `mesma abertura`.
+
 **Contraprovas:** foram 9 sabotagens, e cada uma derrubou o teste correspondente:
 - "Tentar Novamente" de volta;
 - indeterminado sem bloqueio;

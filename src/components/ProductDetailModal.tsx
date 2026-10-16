@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { AlertTriangle, CheckCircle2, Copy, Save } from "lucide-react";
+import { CheckCircle2, Copy, Save } from "lucide-react";
 import type { Produto, Cliente, Categoria } from '@/types';
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import { Pilula } from '@/components/ui/StatusPill';
@@ -24,6 +24,7 @@ import { ImagemDoProduto } from '@/components/produtos/ImagemDoProduto';
 import type { OperacoesDeFoto } from '@/components/produtos/fotoDoProduto';
 import { useArquivamentoDoProduto } from '@/components/produtos/arquivamentoDoProduto';
 import { gravarProduto } from '@/components/produtos/gravacaoDoProduto';
+import { AvisosDaGravacao } from '@/components/produtos/AvisosDaGravacao';
 
 /**
  * O detalhe e a edição de um produto, agora no `Modal` do Design System.
@@ -161,6 +162,12 @@ export function ProductDetailModal({
   /** Salvo pela metade (saldo não confirmado…): fica na tela até a pessoa fechar. */
   const [avisosDaGravacao, setAvisosDaGravacao] = useState<readonly string[] | null>(null);
   /**
+   * Cadastro já confirmado nesta abertura do formulário (completo ou parcial).
+   * Um novo clique seria outra intenção de cadastro: sem SKU, um segundo
+   * produto no Bling. Só uma nova abertura libera outro cadastro.
+   */
+  const [cadastroConcluido, setCadastroConcluido] = useState(false);
+  /**
    * Gravação indeterminada, por produto (`id`, ou `novo` no cadastro). Não é
    * limpa ao fechar e reabrir: o modal fica montado na página, e reenviar
    * poderia duplicar o produto no Bling. Sai quando a página recarrega —
@@ -177,6 +184,7 @@ export function ProductDetailModal({
     setPrevOpen(isOpen);
     setPrevProduto(produto);
     setAvisosDaGravacao(null);
+    setCadastroConcluido(false);
     if (produto) {
       setNome(produto.nome || '');
       setCodigo(produto.codigo ?? '');
@@ -326,7 +334,7 @@ export function ProductDetailModal({
   };
 
   const handleSave = async () => {
-    if (aguardandoReconciliacao) return;
+    if (aguardandoReconciliacao || cadastroConcluido) return;
     const erroDeValidacao = validarAntesDeEnviar();
     if (erroDeValidacao) {
       setErrorLogData(erroDeValidacao);
@@ -387,6 +395,7 @@ export function ProductDetailModal({
       // converter um no outro por `as` é como a linha do catálogo perdia
       // `bling_id`, `categoria_id` e `unidade`. Quem chama relê.
       onSaved?.();
+      if (isNew) setCadastroConcluido(true);
 
       // Salvo pela metade: o aviso fica, e quem fecha é a pessoa.
       if (result._tag === 'SalvoComAvisos') {
@@ -443,12 +452,12 @@ export function ProductDetailModal({
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={isSaving || obrigatoriosDesconhecidos || aguardandoReconciliacao !== null}
+                disabled={isSaving || obrigatoriosDesconhecidos || aguardandoReconciliacao !== null || cadastroConcluido}
                 className="orbita-chip cursor-pointer"
                 style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
               >
                 <Save className="w-3.5 h-3.5" />
-                {isSaving ? 'Salvando…' : aguardandoReconciliacao ? 'Aguardando reconciliação' : 'Salvar alterações'}
+                {isSaving ? 'Salvando…' : aguardandoReconciliacao ? 'Aguardando reconciliação' : cadastroConcluido ? 'Produto cadastrado' : 'Salvar alterações'}
               </button>
             }
           />
@@ -457,30 +466,7 @@ export function ProductDetailModal({
       >
         {arquivamento.confirmacao ? arquivamento.confirmacao.corpo : (
         <div className="flex flex-col gap-6">
-          {aguardandoReconciliacao && (
-            <div
-              role="alert"
-              className="flex items-start gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold"
-              style={{ background: 'var(--chip)', border: '1px solid var(--danger)', color: 'var(--danger)' }}
-            >
-              <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden />
-              <span>
-                {aguardandoReconciliacao.mensagem} Salvar fica bloqueado nesta sessão até a conferência:
-                sincronize o catálogo e recarregue a página.
-              </span>
-            </div>
-          )}
-          {avisosDaGravacao && (
-            <output
-              className="flex items-start gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold"
-              style={{ background: 'var(--chip)', border: '1px solid var(--warning)', color: 'var(--warning)' }}
-            >
-              <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden />
-              <span>
-                Produto salvo, com pendência: {avisosDaGravacao.join(' ')}
-              </span>
-            </output>
-          )}
+          <AvisosDaGravacao reconciliacao={aguardandoReconciliacao?.mensagem ?? null} avisos={avisosDaGravacao} />
           {savedSuccess && (
             <output
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold"
