@@ -1,13 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { CheckCircle2, Copy, Save } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Save } from "lucide-react";
 import type { Produto, Cliente, Categoria } from '@/types';
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import { Pilula } from '@/components/ui/StatusPill';
 import { ErrorLogModal } from './ErrorLogModal';
 import { isProdutoSynced, validateProdutoForBling, sanitizeProductName } from '@/lib/utils';
-import { supabase } from '@/lib/supabaseClient';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import {
   buildProdutoRequest,
@@ -16,7 +15,6 @@ import {
   produtoSituacaoSchema,
   produtoTipoSchema,
   type ProdutoFormato,
-  type ProdutoRequest,
   type ProdutoSituacao,
   type ProdutoTipo,
 } from '@/lib/config/produtoContract';
@@ -25,6 +23,7 @@ import { lerObrigatoriosDoBling } from '@/components/produtos/obrigatoriosDoBlin
 import { ImagemDoProduto } from '@/components/produtos/ImagemDoProduto';
 import type { OperacoesDeFoto } from '@/components/produtos/fotoDoProduto';
 import { useArquivamentoDoProduto } from '@/components/produtos/arquivamentoDoProduto';
+import { gravarProduto } from '@/components/produtos/gravacaoDoProduto';
 
 /**
  * O detalhe e a edição de um produto, agora no `Modal` do Design System.
@@ -103,46 +102,6 @@ interface ProductDetailModalProps {
   onOpenChatwoot?: (phone?: string, name?: string) => void;
 }
 
-type ProdutoUpdatePayload = ProdutoRequest;
-
-/** Resultado do submit de `/api/produtos/update`, já com os campos que a UI precisa para reagir. */
-type SubmitProdutoResult =
-  | { readonly ok: true; readonly product: unknown }
-  | {
-      readonly ok: false;
-      readonly errorMessage: string;
-      readonly details: string;
-      readonly logs: string[];
-    };
-
-/** Envia o payload de produto para a API de sincronização, autenticado com o JWT da sessão atual. */
-async function submitProdutoUpdate(payload: ProdutoUpdatePayload): Promise<SubmitProdutoResult> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
-
-  const res = await fetchWithAuth('/api/produtos/update', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const resData = await res.json();
-
-  if (!res.ok || !resData.success) {
-    return {
-      ok: false,
-      errorMessage: resData.error || 'Erro ao processar sincronização.',
-      details: resData.details || 'Verifique as credenciais OAuth do Bling v3 no botão "Conectar APIs".',
-      logs: resData.logs || [`[${new Date().toISOString()}] HTTP Status: ${res.status}`],
-    };
-  }
-
-  return { ok: true, product: resData.product || payload };
-}
-
 /** O rótulo de um campo — a mesma mono maiúscula do resto do produto. */
 function Rotulo({ para, children }: { para: string; children: React.ReactNode }) {
   return (
@@ -199,6 +158,15 @@ export function ProductDetailModal({
   const [isCopied, setIsCopied] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  /** Salvo pela metade (saldo não confirmado…): fica na tela até a pessoa fechar. */
+  const [avisosDaGravacao, setAvisosDaGravacao] = useState<readonly string[] | null>(null);
+  /**
+   * Gravação indeterminada, por produto (`id`, ou `novo` no cadastro). Não é
+   * limpa ao fechar e reabrir: o modal fica montado na página, e reenviar
+   * poderia duplicar o produto no Bling. Sai quando a página recarrega —
+   * depois de sincronizar o catálogo e conferir.
+   */
+  const [indeterminada, setIndeterminada] = useState<{ readonly chave: string; readonly mensagem: string } | null>(null);
   const [fotoOcupada, setFotoOcupada] = useState(false);
   const arquivamento = useArquivamentoDoProduto({ aberto: isOpen, produto, bloqueada: isSaving || fotoOcupada, onArquivado, onClose });
 
@@ -208,6 +176,7 @@ export function ProductDetailModal({
   if (isOpen !== prevOpen || produto !== prevProduto) {
     setPrevOpen(isOpen);
     setPrevProduto(produto);
+    setAvisosDaGravacao(null);
     if (produto) {
       setNome(produto.nome || '');
       setCodigo(produto.codigo ?? '');
@@ -251,6 +220,8 @@ export function ProductDetailModal({
   });
 
   const isNew = !produto;
+  const chaveDaGravacao = produto?.id ?? 'novo';
+  const aguardandoReconciliacao = indeterminada?.chave === chaveDaGravacao ? indeterminada : null;
 
   useEffect(() => {
     let isMounted = true;
@@ -355,6 +326,7 @@ export function ProductDetailModal({
   };
 
   const handleSave = async () => {
+    if (aguardandoReconciliacao) return;
     const erroDeValidacao = validarAntesDeEnviar();
     if (erroDeValidacao) {
       setErrorLogData(erroDeValidacao);
@@ -366,6 +338,7 @@ export function ProductDetailModal({
 
     setIsSaving(true);
     setSavedSuccess(false);
+    setAvisosDaGravacao(null);
 
     try {
       // Montado pelo contrato compartilhado com a rota: uma divergência de
@@ -394,18 +367,19 @@ export function ProductDetailModal({
         categoriaId: categoriaId || undefined,
       });
 
-      const result = await submitProdutoUpdate(payload);
+      const result = await gravarProduto(payload);
+      setIsSaving(false);
 
-      if (!result.ok) {
-        // Exibir Modal com LOG Completo de Erro!
+      if (result._tag === 'Recusado' || result._tag === 'Indeterminado') {
+        if (result._tag === 'Indeterminado') setIndeterminada({ chave: chaveDaGravacao, mensagem: result.mensagem });
         setErrorLogData({
           isOpen: true,
-          title: isNew ? 'Falha ao Cadastrar Produto (Bling / Supabase)' : 'Falha ao Atualizar Produto',
-          errorMessage: result.errorMessage,
-          details: result.details,
-          logs: result.logs,
+          title: result._tag === 'Indeterminado'
+            ? 'Resultado não confirmado — não salve de novo'
+            : isNew ? 'Falha ao Cadastrar Produto (Bling / Supabase)' : 'Falha ao Atualizar Produto',
+          errorMessage: result.mensagem,
+          logs: [...result.logs],
         });
-        setIsSaving(false);
         return;
       }
 
@@ -414,7 +388,11 @@ export function ProductDetailModal({
       // `bling_id`, `categoria_id` e `unidade`. Quem chama relê.
       onSaved?.();
 
-      setIsSaving(false);
+      // Salvo pela metade: o aviso fica, e quem fecha é a pessoa.
+      if (result._tag === 'SalvoComAvisos') {
+        setAvisosDaGravacao(result.avisos);
+        return;
+      }
       setSavedSuccess(true);
       setTimeout(() => {
         setSavedSuccess(false);
@@ -465,12 +443,12 @@ export function ProductDetailModal({
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={isSaving || obrigatoriosDesconhecidos}
+                disabled={isSaving || obrigatoriosDesconhecidos || aguardandoReconciliacao !== null}
                 className="orbita-chip cursor-pointer"
                 style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
               >
                 <Save className="w-3.5 h-3.5" />
-                {isSaving ? 'Salvando…' : 'Salvar alterações'}
+                {isSaving ? 'Salvando…' : aguardandoReconciliacao ? 'Aguardando reconciliação' : 'Salvar alterações'}
               </button>
             }
           />
@@ -479,6 +457,30 @@ export function ProductDetailModal({
       >
         {arquivamento.confirmacao ? arquivamento.confirmacao.corpo : (
         <div className="flex flex-col gap-6">
+          {aguardandoReconciliacao && (
+            <div
+              role="alert"
+              className="flex items-start gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold"
+              style={{ background: 'var(--chip)', border: '1px solid var(--danger)', color: 'var(--danger)' }}
+            >
+              <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden />
+              <span>
+                {aguardandoReconciliacao.mensagem} Salvar fica bloqueado nesta sessão até a conferência:
+                sincronize o catálogo e recarregue a página.
+              </span>
+            </div>
+          )}
+          {avisosDaGravacao && (
+            <output
+              className="flex items-start gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold"
+              style={{ background: 'var(--chip)', border: '1px solid var(--warning)', color: 'var(--warning)' }}
+            >
+              <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden />
+              <span>
+                Produto salvo, com pendência: {avisosDaGravacao.join(' ')}
+              </span>
+            </output>
+          )}
           {savedSuccess && (
             <output
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold"
@@ -648,7 +650,9 @@ export function ProductDetailModal({
         errorMessage={errorLogData.errorMessage}
         details={errorLogData.details}
         logs={errorLogData.logs}
-        onRetry={handleSave}
+        // Indeterminado não tem "Tentar Novamente": reenviar poderia criar o
+        // produto duas vezes no Bling.
+        onRetry={aguardandoReconciliacao ? undefined : handleSave}
       />
     </>
   );

@@ -10,7 +10,7 @@ import {
   type ProdutoStorePort,
   type EventoDoProduto,
 } from './handler';
-import { buildProdutoRequest, produtoRequestSchema, saldoParaEnvio } from '@/lib/config/produtoContract';
+import { buildProdutoRequest, produtoRequestSchema, produtoUpdateResponseSchema, saldoParaEnvio } from '@/lib/config/produtoContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { ReconciliacaoDeProdutoNecessaria } from '@/repositories/reconciliacaoDeProduto';
 
@@ -516,6 +516,7 @@ describe('falha no Bling: recusa comprovada ≠ estado desconhecido (PRE-006B)',
     expect(resposta.status).toBe(502);
     expect(corpo.error).toContain('pode ter sido criado');
     expect(corpo.error).toContain('Não cadastre de novo');
+    expect(produtoUpdateResponseSchema.parse(corpo).reconciliacao).toEqual({ motivo: 'bling_sem_confirmacao', blingId: null });
     expect(store.gravados).toHaveLength(0);
     expect(auditoria.eventos.map((e) => e.evento)).toEqual([{
       acao: 'catalog.product_reconcile_required',
@@ -525,7 +526,7 @@ describe('falha no Bling: recusa comprovada ≠ estado desconhecido (PRE-006B)',
     }]);
   });
 
-  it('5xx na atualização também é desconhecido, e repetir a mesma edição é seguro', async () => {
+  it('5xx na atualização também é desconhecido, e a resposta pede conferência antes de editar de novo', async () => {
     const bling = fakeBling({ falhaAtualizar: 'erro interno', formaDaFalha: { type: 'SERVER_ERROR', status: 503 } });
     const auditoria = fakeAuditoria();
     const handler = createProdutoUpdateHandler(deps({ bling, auditar: auditoria.auditar }));
@@ -534,7 +535,8 @@ describe('falha no Bling: recusa comprovada ≠ estado desconhecido (PRE-006B)',
     const corpo = (await resposta.json()) as ProdutoResponseBody;
 
     expect(resposta.status).toBe(502);
-    expect(corpo.error).toContain('repetir a mesma edição é seguro');
+    expect(corpo.error).toContain('confira antes de editar de novo');
+    expect(corpo.reconciliacao).toEqual({ motivo: 'bling_sem_confirmacao', blingId: '4242' });
     expect(auditoria.eventos[0]!.evento).toMatchObject({
       acao: 'catalog.product_reconcile_required',
       recursoId: PRODUTO_LOCAL,
@@ -666,5 +668,34 @@ describe('saldoParaEnvio: o formulário só manda saldo alterado (PRE-006B)', ()
     expect(saldoParaEnvio('7', 3, false)).toEqual({ estoque: 7 });
     expect(saldoParaEnvio('0', undefined, true)).toEqual({ estoque: 0 });
     expect(saldoParaEnvio('', 2, false)).toEqual({ estoque: 0 });
+  });
+});
+
+describe('resposta estruturada para a tela (PRE-006B, revisão)', () => {
+  it('saldo não confirmado: sucesso com `saldo` e o aviso, no contrato que o modal lê', async () => {
+    const handler = createProdutoUpdateHandler(deps({ bling: fakeBling({ falhaSaldo: 'Depósito padrão não configurado' }) }));
+
+    const corpo = produtoUpdateResponseSchema.parse(await (await handler(requisicao(corpoValido({ estoque: 4 })))).json());
+
+    expect(corpo).toMatchObject({ success: true, saldo: 'nao_confirmado' });
+    expect(corpo.avisos?.join(' ')).toContain('Depósito padrão não configurado');
+    expect(corpo.reconciliacao).toBeUndefined();
+  });
+
+  it('Bling confirmou e o espelho falhou: reconciliação com o id do Bling', async () => {
+    const handler = createProdutoUpdateHandler(deps({ store: fakeStore({ erro: new Error('conexão perdida') }) }));
+
+    const corpo = produtoUpdateResponseSchema.parse(await (await handler(requisicao(corpoValido()))).json());
+
+    expect(corpo.reconciliacao).toEqual({ motivo: 'espelho_local_falhou', blingId: '4242' });
+  });
+
+  it('recusa comprovada não carrega reconciliação: corrigir e reenviar é o caminho', async () => {
+    const handler = createProdutoUpdateHandler(deps({ bling: fakeBling({ falhaCriar: 'Campo obrigatório' }) }));
+
+    const corpo = produtoUpdateResponseSchema.parse(await (await handler(requisicao(corpoValido()))).json());
+
+    expect(corpo.success).toBe(false);
+    expect(corpo.reconciliacao).toBeUndefined();
   });
 });

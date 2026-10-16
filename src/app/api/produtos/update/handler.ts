@@ -1,6 +1,13 @@
 import { NextResponse } from 'next/server';
 
-import { produtoRequestSchema, type ProdutoRequest } from '@/lib/config/produtoContract';
+import type { z } from 'zod';
+
+import {
+  produtoRequestSchema,
+  type desfechoDoSaldoSchema,
+  type MotivoDaReconciliacao,
+  type ProdutoRequest,
+} from '@/lib/config/produtoContract';
 import { classificarFalhaDeCriacaoNoBling } from '@/lib/integrations/bling/classificacaoDeFalhaDeCriacao';
 import { blingFailure, type BlingCallResult, type BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
@@ -87,7 +94,7 @@ export interface ProdutoStorePort {
 export type OperacaoNoBling = 'cadastro' | 'atualizacao';
 
 /** O que aconteceu com o saldo pedido pelo formulário. */
-export type DesfechoDoSaldo = 'nao_solicitado' | 'aplicado' | 'nao_confirmado';
+export type DesfechoDoSaldo = z.infer<typeof desfechoDoSaldoSchema>;
 
 /**
  * Evento de auditoria do produto. Metadata só com ids técnicos e desfecho —
@@ -126,7 +133,7 @@ export type EventoDoProduto =
       readonly correlationId: string;
       readonly metadata: {
         readonly operacao: OperacaoNoBling;
-        readonly motivo: 'bling_sem_confirmacao' | 'espelho_local_falhou';
+        readonly motivo: MotivoDaReconciliacao;
         readonly bling_id: string | null;
       };
     };
@@ -152,11 +159,17 @@ export interface ProdutoResponseBody {
   readonly success: boolean;
   readonly product?: ProdutoPersistido;
   readonly avisos?: readonly string[];
+  readonly saldo?: DesfechoDoSaldo;
   readonly error?: string;
+  /** Presente quando o resultado é indeterminado: a tela não oferece nova tentativa. */
+  readonly reconciliacao?: { readonly motivo: MotivoDaReconciliacao; readonly blingId: string | null };
 }
 
-function fail(error: string, status: number): NextResponse {
-  return NextResponse.json({ success: false, error } satisfies ProdutoResponseBody, { status });
+function fail(error: string, status: number, reconciliacao?: ProdutoResponseBody['reconciliacao']): NextResponse {
+  return NextResponse.json(
+    { success: false, error, ...(reconciliacao ? { reconciliacao } : {}) } satisfies ProdutoResponseBody,
+    { status },
+  );
 }
 
 function toBlingPayload(body: ProdutoRequest, categoriaBlingId: number | null): ProdutoBlingPayload {
@@ -276,7 +289,8 @@ function respostaDaFalhaNoBling(resolucao: Extract<ResolucaoBling, { _tag: 'Recu
   }
   return fail(operacao === 'cadastro'
     ? `O Bling não confirmou o cadastro do produto (${failure.message}) e ele pode ter sido criado. Não cadastre de novo: sincronize o catálogo e confira antes.`
-    : `O Bling não confirmou a atualização do produto (${failure.message}). Nada foi gravado no ORBITA; repetir a mesma edição é seguro.`, 502);
+    : `O Bling não confirmou a atualização do produto (${failure.message}). Nada foi gravado no ORBITA; sincronize o catálogo e confira antes de editar de novo.`,
+  502, { motivo: 'bling_sem_confirmacao', blingId: resolucao.blingId });
 }
 
 /** Auditoria sem mudar a resposta: o desfecho no Bling já está decidido. */
@@ -338,7 +352,7 @@ async function espelharNoOrbita(
       metadata: { produto_id: product.id, bling_id: resolucao.blingId, operacao: resolucao.operacao, saldo: resolucao.saldo },
     });
     return NextResponse.json(
-      { success: true, product, avisos: resolucao.avisos } satisfies ProdutoResponseBody,
+      { success: true, product, avisos: resolucao.avisos, saldo: resolucao.saldo } satisfies ProdutoResponseBody,
       { status: 200 },
     );
   } catch (error: unknown) {
@@ -354,6 +368,7 @@ async function espelharNoOrbita(
     return fail(
       `Produto salvo no Bling (id ${resolucao.blingId}), mas falhou ao gravar no ORBITA: ${causa}. Sincronize o catálogo para reconciliar.`,
       500,
+      { motivo: 'espelho_local_falhou', blingId: resolucao.blingId },
     );
   }
 }

@@ -151,6 +151,28 @@ Não há caller de DML do navegador a migrar.
    - Falha ao gravar a auditoria vai para o log técnico redigido (`registrarFalhaInterna`) e não altera a resposta de uma operação já decidida no Bling.
 5. **O detector do PRE-006A tinha pontos cegos.** Ele não reconhecia como navegador quem importa `./supabaseClient` por caminho relativo. Também não olhava `.from(<variável>)` nem o cliente com a sessão do usuário no servidor, que depende dos mesmos grants que o PRE-006D revoga. Os três agora são regras, com contraprova permanente nos próprios detectores.
 
+### Revisão do PR #114: a tela respeita o desfecho
+
+A revisão independente achou dois furos na tela; os dois foram corrigidos.
+
+1. **O modal oferecia retentativa num resultado indeterminado.** O `ErrorLogModal` mostrava "Tentar Novamente" e o botão principal continuava ativo depois de um `502` sem confirmação ou de um `500` com o Bling já confirmado. Repetir o cadastro podia duplicar o produto no ERP.
+   - A rota agora devolve `reconciliacao: { motivo, blingId }` no contrato compartilhado (`produtoUpdateResponseSchema`).
+   - O cliente classifica a resposta por esse estado, e não pelo texto (`src/components/produtos/gravacaoDoProduto.ts`). Também conta como indeterminado: rejeição de `fetch`, resposta que não é o JSON do contrato (como um `504` do gateway) e `5xx` sem estado.
+   - No indeterminado, o modal tira o "Tentar Novamente", desabilita o salvar ("Aguardando reconciliação") e mostra um alerta persistente.
+   - O bloqueio vale para aquele produto (ou para o cadastro novo) enquanto a página estiver aberta. Fechar e reabrir o modal não o libera; outro produto segue editável.
+2. **O sucesso parcial sumia.** Os `avisos` da rota não chegavam à tela, e o modal fechava em 1,5 s. Agora a rota informa `saldo`, e o modal mostra "Produto salvo, com pendência" com o aviso. O modal relê o catálogo e não fecha sozinho; quem fecha é a pessoa.
+
+**Contraprovas:** foram 9 sabotagens, e cada uma derrubou o teste correspondente:
+- "Tentar Novamente" de volta;
+- indeterminado sem bloqueio;
+- reabrir liberando o salvar;
+- reconciliação lida como recusa;
+- rede perdida lida como recusa;
+- `502` sem estado;
+- parcial fechando sozinho;
+- avisos não propagados;
+- rota sem `saldo`.
+
 ### Matriz de efeitos externos (17 casos)
 
 Efeitos tocados nesta fatia:

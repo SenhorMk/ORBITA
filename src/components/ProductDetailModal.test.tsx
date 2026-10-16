@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { ProductDetailModal } from './ProductDetailModal';
@@ -531,5 +531,183 @@ describe('ProductDetailModal — o saldo só vai quando a pessoa o alterou (PRE-
 
     await waitFor(() => expect(enviados).toHaveLength(1));
     expect(enviados[0].estoque).toBe(7);
+  });
+});
+
+describe('ProductDetailModal — resultado indeterminado bloqueia nova tentativa (PRE-006B, revisão)', () => {
+  beforeEach(() => {
+    fetchWithAuthMock.mockReset();
+    enviados.length = 0;
+  });
+
+  /** Rede em que o update responde `resposta` (ou lança `falha`). */
+  function redeComUpdate(resposta: { corpo: unknown; status: number } | { falha: Error }) {
+    fetchWithAuthMock.mockImplementation(async (url: string, options: RequestInit = {}) => {
+      if (url === '/api/categorias/sync') return json({ success: true, data: [] });
+      if (url.startsWith('/api/produtos/bling/')) return json({ success: true, obrigatorios: { tipo: 'P', situacao: 'A', formato: 'S', unidade: 'CX' } });
+      if (url === '/api/produtos/update') {
+        if (typeof options.body === 'string') enviados.push(JSON.parse(options.body));
+        if ('falha' in resposta) throw resposta.falha;
+        return json(resposta.corpo, resposta.status);
+      }
+      throw new Error(`Requisição não prevista: ${url}`);
+    });
+  }
+
+  const SEM_CONFIRMACAO = {
+    status: 502,
+    corpo: {
+      success: false,
+      error: 'O Bling não confirmou o cadastro do produto (tempo esgotado) e ele pode ter sido criado. Não cadastre de novo: sincronize o catálogo e confira antes.',
+      reconciliacao: { motivo: 'bling_sem_confirmacao', blingId: null },
+    },
+  };
+
+  function botaoBloqueado(): HTMLButtonElement {
+    // `hidden`: o log de erro aberto por cima deixa o modal de trás `aria-hidden`.
+    return screen.getByRole('button', { name: /Aguardando reconciliação/i, hidden: true }) as HTMLButtonElement;
+  }
+
+  async function cadastrarNovo(usuaria: ReturnType<typeof userEvent.setup>) {
+    await usuaria.type(document.getElementById('product-detail-nome') as HTMLInputElement, 'Rape Novo');
+    await usuaria.click(botaoSalvar());
+    await waitFor(() => expect(enviados).toHaveLength(1));
+  }
+
+  it('502 sem confirmação: sem "Tentar Novamente", salvar bloqueado e o aviso de reconciliação visível', async () => {
+    redeComUpdate(SEM_CONFIRMACAO);
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} />);
+
+    await cadastrarNovo(usuaria);
+
+    await waitFor(() => expect(screen.getAllByText(/Resultado não confirmado/i).length).toBeGreaterThan(0));
+    expect(screen.queryByRole('button', { name: /Tentar Novamente/i })).toBeNull();
+    expect(botaoBloqueado().disabled).toBe(true);
+    expect(screen.getByRole('alert', { hidden: true }).textContent).toContain('Não cadastre de novo');
+  });
+
+  it('fechar e reabrir na mesma sessão continua bloqueado, e nenhum segundo envio acontece', async () => {
+    redeComUpdate(SEM_CONFIRMACAO);
+    const usuaria = userEvent.setup();
+    const { rerender } = render(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} />);
+    await cadastrarNovo(usuaria);
+    await waitFor(() => expect(botaoBloqueado().disabled).toBe(true));
+
+    rerender(<ProductDetailModal isOpen={false} onClose={vi.fn()} produto={null} cliente={null} />);
+    rerender(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} />);
+
+    expect(botaoBloqueado().disabled).toBe(true);
+    fireEvent.click(botaoBloqueado());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(enviados).toHaveLength(1);
+  });
+
+  it('Bling confirmou e o espelho falhou (500): mesmo bloqueio, sem retentativa', async () => {
+    redeComUpdate({
+      status: 500,
+      corpo: {
+        success: false,
+        error: 'Produto salvo no Bling (id 14077064), mas falhou ao gravar no ORBITA. Sincronize o catálogo para reconciliar.',
+        reconciliacao: { motivo: 'espelho_local_falhou', blingId: '14077064' },
+      },
+    });
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => expect(botaoSalvar().disabled).toBe(false));
+    await usuaria.click(botaoSalvar());
+
+    await waitFor(() => expect(botaoBloqueado().disabled).toBe(true));
+    expect(screen.queryByRole('button', { name: /Tentar Novamente/i })).toBeNull();
+  });
+
+  it('resposta perdida na rede também é indeterminada', async () => {
+    redeComUpdate({ falha: new TypeError('Failed to fetch') });
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} />);
+
+    await cadastrarNovo(usuaria);
+
+    await waitFor(() => expect(botaoBloqueado().disabled).toBe(true));
+    expect(screen.queryByRole('button', { name: /Tentar Novamente/i })).toBeNull();
+  });
+
+  it('o bloqueio é do produto indeterminado: outro produto continua editável', async () => {
+    redeComUpdate(SEM_CONFIRMACAO);
+    const usuaria = userEvent.setup();
+    const { rerender } = render(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} />);
+    await cadastrarNovo(usuaria);
+    await waitFor(() => expect(botaoBloqueado().disabled).toBe(true));
+
+    rerender(<ProductDetailModal isOpen onClose={vi.fn()} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => expect((screen.getByRole('button', { name: /Salvar alterações/i, hidden: true }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('recusa comprovada mantém "Tentar Novamente" e o salvar liberado', async () => {
+    redeComUpdate({ status: 400, corpo: { success: false, error: 'O Bling recusou o cadastro do produto: Campo obrigatório' } });
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={vi.fn()} produto={null} cliente={null} />);
+
+    await cadastrarNovo(usuaria);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Tentar Novamente/i })).toBeTruthy());
+    expect(screen.queryByRole('button', { name: /Aguardando reconciliação/i, hidden: true })).toBeNull();
+  });
+});
+
+describe('ProductDetailModal — sucesso parcial fica visível (PRE-006B, revisão)', () => {
+  beforeEach(() => {
+    fetchWithAuthMock.mockReset();
+    enviados.length = 0;
+  });
+
+  function redeComSucesso(corpo: unknown) {
+    fetchWithAuthMock.mockImplementation(async (url: string, options: RequestInit = {}) => {
+      if (url === '/api/categorias/sync') return json({ success: true, data: [] });
+      if (url.startsWith('/api/produtos/bling/')) return json({ success: true, obrigatorios: { tipo: 'P', situacao: 'A', formato: 'S', unidade: 'CX' } });
+      if (url === '/api/produtos/update') {
+        if (typeof options.body === 'string') enviados.push(JSON.parse(options.body));
+        return json(corpo);
+      }
+      throw new Error(`Requisição não prevista: ${url}`);
+    });
+  }
+
+  it('saldo não confirmado: mostra "salvo, com pendência", relê o catálogo e não fecha sozinho', async () => {
+    redeComSucesso({
+      success: true,
+      saldo: 'nao_confirmado',
+      avisos: ['O produto 14077064 foi salvo no Bling, mas o saldo de estoque não foi confirmado: Depósito padrão não configurado. O estoque no ORBITA não foi alterado; sincronize para conferir.'],
+    });
+    const onClose = vi.fn();
+    const onSaved = vi.fn();
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={onClose} produto={SINCRONIZADO} cliente={null} onSaved={onSaved} />);
+
+    await waitFor(() => expect(botaoSalvar().disabled).toBe(false));
+    await usuaria.clear(document.getElementById('product-detail-estoque') as HTMLInputElement);
+    await usuaria.type(document.getElementById('product-detail-estoque') as HTMLInputElement, '9');
+    await usuaria.click(botaoSalvar());
+
+    await waitFor(() => expect(screen.getByText(/Produto salvo, com pendência/i)).toBeTruthy());
+    expect(screen.getByText(/Depósito padrão não configurado/i)).toBeTruthy();
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/Produto salvo, com pendência/i)).toBeTruthy();
+  });
+
+  it('sucesso completo continua fechando sozinho', async () => {
+    redeComSucesso({ success: true, saldo: 'nao_solicitado', avisos: [] });
+    const onClose = vi.fn();
+    const usuaria = userEvent.setup();
+    render(<ProductDetailModal isOpen onClose={onClose} produto={SINCRONIZADO} cliente={null} />);
+
+    await waitFor(() => expect(botaoSalvar().disabled).toBe(false));
+    await usuaria.click(botaoSalvar());
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1), { timeout: 3000 });
   });
 });
