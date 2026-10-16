@@ -1,4 +1,5 @@
 import type { RequestOrganizationScopeResult } from '../../../../lib/requestOrganizationContext';
+import { registrarFalhaInterna } from '../../../../lib/observability/falhaInterna';
 import { escopoTemCapacidade, type VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 import type {
   CategoryListResult,
@@ -21,10 +22,42 @@ export interface CategoryCatalogPort {
 /** Server-side organization resolver required by protected category handlers. */
 export type CategoryScopeResolver = (request: Request) => Promise<RequestOrganizationScopeResult>;
 
+/**
+ * Evento de auditoria da sincronização. Metadata só com contagens: nenhuma
+ * descrição de categoria nem corpo do Bling.
+ */
+export type EventoDeCategorias =
+  | {
+      readonly acao: 'catalog.categories_synced';
+      readonly correlationId: string;
+      readonly metadata: { readonly categorias: number };
+    }
+  | {
+      readonly acao: 'catalog.categories_sync_failed';
+      readonly correlationId: string;
+      readonly metadata: { readonly categorias_gravadas: number };
+    };
+
 /** Dependencies accepted by the category HTTP adapter. */
 export interface CategoryHandlerDependencies {
   readonly resolveScope: CategoryScopeResolver;
   readonly catalog: CategoryCatalogPort;
+  /** Trilha persistente (`recordAuditEvent`). Falhar aqui nunca muda a resposta. */
+  readonly auditar: (scope: VerifiedOrganizationScope, evento: EventoDeCategorias) => Promise<void>;
+  readonly correlationId: (request: Request) => string;
+}
+
+/** Auditoria sem mudar a resposta: a gravação já aconteceu (ou falhou) antes. */
+async function auditarSemInterromper(
+  dependencies: CategoryHandlerDependencies,
+  scope: VerifiedOrganizationScope,
+  evento: EventoDeCategorias,
+): Promise<void> {
+  try {
+    await dependencies.auditar(scope, evento);
+  } catch (erro: unknown) {
+    registrarFalhaInterna(`categorias.auditoria.${evento.acao}`, erro, { organizacaoId: scope.organizationId, atorId: scope.actorId });
+  }
 }
 
 /** Create protected category HTTP handlers over an injected catalog module. */
@@ -64,14 +97,25 @@ export function createCategoryHandlers(dependencies: CategoryHandlerDependencies
         return Response.json({ success: false, error: 'Acesso negado' }, { status: 403 });
       }
 
+      const correlationId = dependencies.correlationId(request);
       const result = await dependencies.catalog.sync(scopeResult.scope);
       if (result._tag === 'CategoryCatalogUnavailable') {
+        await auditarSemInterromper(dependencies, scopeResult.scope, {
+          acao: 'catalog.categories_sync_failed',
+          correlationId,
+          metadata: { categorias_gravadas: result.written },
+        });
         return Response.json(
           { success: false, error: 'Falha ao sincronizar categorias' },
           { status: 500 },
         );
       }
 
+      await auditarSemInterromper(dependencies, scopeResult.scope, {
+        acao: 'catalog.categories_synced',
+        correlationId,
+        metadata: { categorias: result.count },
+      });
       return Response.json({
         success: true,
         count: result.count,

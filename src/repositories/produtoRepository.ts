@@ -14,6 +14,9 @@ import { ReconciliacaoDeProdutoNecessaria } from './reconciliacaoDeProduto';
 export { ReconciliacaoDeProdutoNecessaria } from './reconciliacaoDeProduto';
 export type { MotivoDeReconciliacaoDeProduto } from './reconciliacaoDeProduto';
 
+/** O produto como a gravação o aceita: o saldo é opcional. */
+export type ProdutoParaGravar = Omit<Produto, 'estoque'> & { readonly estoque?: number };
+
 export class ProdutoRepository {
   async getAll(scope: VerifiedOrganizationScope): Promise<Produto[]> {
     const { data, error } = await supabaseServer
@@ -81,8 +84,10 @@ export class ProdutoRepository {
    *
    * `imagem_url` é tri-estado: `undefined` não vai no payload (o valor local
    * fica), `null` grava ausência confirmada, texto grava a imagem confirmada.
+   * `estoque` ausente também não vai: o saldo local fica como está (num
+   * cadastro novo, o padrão do banco).
    */
-  async upsert(scope: VerifiedOrganizationScope, produto: Produto): Promise<Produto> {
+  async upsert(scope: VerifiedOrganizationScope, produto: ProdutoParaGravar): Promise<Produto> {
     const payloadForUpsert = {
       ...produto,
       organizacao_id: scope.organizationId,

@@ -2,12 +2,14 @@ import { NextResponse } from 'next/server';
 
 import { organizationContextStatus } from '@/lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizationContext';
-import { organizationContextToScope } from '@/lib/verifiedOrganizationScope';
+import { organizationContextToScope, type VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { produtoRepository } from '@/repositories/produtoRepository';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
 import { descreverErro } from '@/lib/erroLegivel';
+import { getCorrelationId } from '@/lib/observability/correlation';
+import { recordAuditEvent } from '@/services/auditService';
 
 import {
   createProdutoUpdateHandler,
@@ -15,6 +17,7 @@ import {
   type ProdutoBlingPort,
   type ProdutoCategoriaPort,
   type ProdutoStorePort,
+  type EventoDoProduto,
 } from './handler';
 
 export type {
@@ -126,7 +129,7 @@ const store: ProdutoStorePort = {
       nome: produto.nome,
       codigo: produto.codigo ?? '',
       preco: produto.preco,
-      estoque: produto.estoque,
+      ...(produto.estoque !== undefined ? { estoque: produto.estoque } : {}),
       categoria_id: produto.categoriaId,
     });
 
@@ -141,6 +144,17 @@ const store: ProdutoStorePort = {
   },
 };
 
+/** Pela infraestrutura existente: catálogo validado e RPC que reconfere a membership do ator. */
+async function auditar(scope: VerifiedOrganizationScope, evento: EventoDoProduto): Promise<void> {
+  await recordAuditEvent(supabaseServer, scope, {
+    acao: evento.acao,
+    recurso: 'produto',
+    recursoId: evento.recursoId,
+    correlationId: evento.correlationId,
+    metadata: { ...evento.metadata },
+  });
+}
+
 export async function POST(request: Request): Promise<NextResponse> {
   const authorization = await auth.authorize(request);
   if (authorization._tag === 'Denied') return authorization.response;
@@ -150,6 +164,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     bling: blingProdutoAdapter(bling.forVerifiedOrganization(authorization.scope)),
     store,
     categorias,
+    auditar,
+    correlationId: getCorrelationId,
   });
 
   return handler(request);

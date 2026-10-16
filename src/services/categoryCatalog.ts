@@ -32,10 +32,15 @@ export type CategoryListResult =
   | { readonly _tag: 'CategoryListSucceeded'; readonly categories: readonly CategoryRecord[] }
   | { readonly _tag: 'CategoryCatalogUnavailable' };
 
-/** Result returned after synchronizing organization categories. */
+/**
+ * Result returned after synchronizing organization categories.
+ *
+ * A gravação é por página: uma falha no meio deixa as páginas anteriores
+ * gravadas, e `written` diz quantas — falha parcial, não "nada mudou".
+ */
 export type CategorySyncResult =
   | { readonly _tag: 'CategorySyncSucceeded'; readonly count: number }
-  | { readonly _tag: 'CategoryCatalogUnavailable' };
+  | { readonly _tag: 'CategoryCatalogUnavailable'; readonly written: number };
 
 /**
  * Coordinate organization-scoped category reads and provider synchronization.
@@ -99,7 +104,7 @@ export class CategoryCatalog {
         organizacaoId: scope.organizationId,
         atorId: scope.actorId,
       });
-      return { _tag: 'CategoryCatalogUnavailable' };
+      return { _tag: 'CategoryCatalogUnavailable', written: count };
     }
   }
 }

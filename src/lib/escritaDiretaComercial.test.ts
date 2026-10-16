@@ -32,13 +32,35 @@ function arquivos(dir: string): string[] {
   });
 }
 
-/** Do navegador: componente cliente ou quem importa o cliente Supabase do navegador. */
-function doNavegador(fonte: string): boolean {
-  return /^\s*['"]use client['"]/m.test(fonte) || /lib\/supabaseClient['"]/.test(fonte);
+/**
+ * Do navegador: componente cliente ou quem importa o cliente Supabase do
+ * navegador — por alias ou caminho relativo (`./supabaseClient`), que a
+ * versão do PRE-006A não enxergava.
+ */
+export function doNavegador(fonte: string): boolean {
+  return /^\s*['"]use client['"]/m.test(fonte) || /[/'"]supabaseClient['"]/.test(fonte);
+}
+
+/**
+ * Executa como o usuário, com a chave anônima e o token dele: passa por RLS e
+ * pelos grants de `authenticated`, como o navegador. Hoje só as rotas de
+ * organização e convite o usam.
+ */
+export function comSessaoDoUsuario(fonte: string): boolean {
+  return /\bcreateActorScopedSupabaseClient\b/.test(fonte);
+}
+
+/**
+ * `.from(<expressão>)` direto no cliente do banco: a tabela não é literal e o
+ * inventário não sabe qual é. `supabase.storage.from(...)` é Storage, e fica
+ * de fora.
+ */
+export function fromNaoLiteral(fonte: string): boolean {
+  return /\b(?:supabase|client|cliente)\s*\.\s*from\(\s*[^'"\s)]/.test(fonte);
 }
 
 /** Cada `.from('<tabela>')` do escopo com a cadeia até o próximo `;`. */
-function acessos(fonte: string): Array<{ tabela: string; cadeia: string }> {
+export function acessos(fonte: string): Array<{ tabela: string; cadeia: string }> {
   const encontrados: Array<{ tabela: string; cadeia: string }> = [];
   for (const m of fonte.matchAll(/\.from\(\s*['"]([a-z_]+)['"]\s*\)/g)) {
     const tabela = m[1]!;
@@ -50,9 +72,9 @@ function acessos(fonte: string): Array<{ tabela: string; cadeia: string }> {
   return encontrados;
 }
 
-const navegador = arquivos(path.join(RAIZ, 'src'))
-  .map((caminho) => ({ caminho: path.relative(RAIZ, caminho).split(path.sep).join('/'), fonte: readFileSync(caminho, 'utf8') }))
-  .filter(({ fonte }) => doNavegador(fonte));
+const fontes = arquivos(path.join(RAIZ, 'src'))
+  .map((caminho) => ({ caminho: path.relative(RAIZ, caminho).split(path.sep).join('/'), fonte: readFileSync(caminho, 'utf8') }));
+const navegador = fontes.filter(({ fonte }) => doNavegador(fonte));
 
 describe('escrita direta comercial pelo navegador (PRE-006A)', () => {
   it('o inventário enxerga os arquivos do navegador (o detector não está cego)', () => {
@@ -78,5 +100,54 @@ describe('escrita direta comercial pelo navegador (PRE-006A)', () => {
       if (tabelas.length > 0) leituras[caminho] = tabelas;
     }
     expect(leituras).toEqual(LEITURAS_DO_NAVEGADOR);
+  });
+});
+
+/**
+ * PRE-006B: catálogo e estoque preparados para o PRE-006D, que revoga o DML de
+ * `authenticated`. Além do navegador, nenhuma rota pode depender desse grant:
+ * quem executa como o usuário não toca as seis tabelas.
+ */
+describe('nenhum caminho com a sessão do usuário depende do DML de authenticated (PRE-006B)', () => {
+  it('o detector reconhece o cliente com a sessão do usuário (não está cego)', () => {
+    expect(fontes.filter(({ fonte }) => comSessaoDoUsuario(fonte)).map((a) => a.caminho)).toContain('src/app/api/organizacoes/route.ts');
+  });
+
+  it('quem executa como o usuário no servidor não acessa as seis tabelas', () => {
+    const acessosComSessao = fontes
+      .filter(({ fonte }) => comSessaoDoUsuario(fonte))
+      .flatMap(({ caminho, fonte }) => acessos(fonte).map(({ tabela }) => `${caminho} → ${tabela}`));
+    expect(acessosComSessao).toEqual([]);
+  });
+
+  it('nenhum arquivo do navegador consulta tabela por nome não literal', () => {
+    expect(navegador.filter(({ fonte }) => fromNaoLiteral(fonte)).map((a) => a.caminho)).toEqual([]);
+  });
+});
+
+/**
+ * Contraprova permanente: os detectores acusam as formas que o PRE-006A não
+ * via. Se um deles voltar a ficar cego, o teste correspondente falha.
+ */
+describe('os detectores acusam o que devem (contraprova)', () => {
+  it('import relativo do cliente do navegador conta como navegador', () => {
+    expect(doNavegador("import { supabase } from './supabaseClient';")).toBe(true);
+    expect(doNavegador("import { supabase } from '@/lib/supabaseClient';")).toBe(true);
+    expect(doNavegador("import { supabaseServer } from '@/lib/supabaseServer';")).toBe(false);
+  });
+
+  it('escrita encadeada é capturada com a tabela', () => {
+    const fonte = "await supabase.from('movimentacao_estoque').insert({ quantidade: 1 });";
+    expect(acessos(fonte)).toEqual([{ tabela: 'movimentacao_estoque', cadeia: ".insert({ quantidade: 1 })" }]);
+  });
+
+  it('tabela por variável é acusada; Storage não', () => {
+    expect(fromNaoLiteral('await supabase.from(tabela).update({ estoque: 0 });')).toBe(true);
+    expect(fromNaoLiteral("await supabase.storage.from(BUCKET).upload(p, f);")).toBe(false);
+    expect(fromNaoLiteral("await supabase.from('produtos').select('id');")).toBe(false);
+  });
+
+  it('cliente com a sessão do usuário é reconhecido', () => {
+    expect(comSessaoDoUsuario('const r = createActorScopedSupabaseClient(token);')).toBe(true);
   });
 });

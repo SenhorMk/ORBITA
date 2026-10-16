@@ -119,3 +119,54 @@ export type ProdutoRequestInput = z.input<typeof produtoRequestSchema>;
 export function buildProdutoRequest(input: ProdutoRequestInput): ProdutoRequest {
   return produtoRequestSchema.parse(input);
 }
+
+/**
+ * O saldo que o formulário envia: só no cadastro ou quando a pessoa o alterou.
+ *
+ * O saldo é um balanço absoluto no Bling. Reenviar o valor lido ao abrir a
+ * tela numa edição de nome ou preço desfaria as vendas feitas nesse
+ * meio-tempo — no Bling e no espelho local.
+ *
+ * @param digitado - O texto do campo de estoque.
+ * @param carregado - O estoque do produto quando a tela abriu (`undefined` no cadastro).
+ * @param cadastro - `true` quando o produto ainda não existe.
+ * @returns `{ estoque }` para espalhar no corpo, ou `{}` para não mexer no saldo.
+ */
+export function saldoParaEnvio(digitado: string, carregado: number | undefined, cadastro: boolean): { estoque?: number } {
+  const saldo = parseInt(digitado, 10) || 0;
+  return cadastro || saldo !== (carregado ?? 0) ? { estoque: saldo } : {};
+}
+
+/** O que aconteceu com o saldo pedido pelo formulário. */
+export const desfechoDoSaldoSchema = z.enum(['nao_solicitado', 'aplicado', 'nao_confirmado']);
+
+/**
+ * Por que a gravação ficou indeterminada:
+ *
+ * - `bling_sem_confirmacao`: timeout, `5xx`, `429` ou exceção de rede — o
+ *   Bling pode ter aplicado;
+ * - `espelho_local_falhou`: o Bling confirmou, o ORBITA não espelhou.
+ *
+ * Nos dois casos reenviar não é a recuperação: a recuperação é sincronizar o
+ * catálogo e conferir.
+ */
+export const motivoDaReconciliacaoSchema = z.enum(['bling_sem_confirmacao', 'espelho_local_falhou']);
+
+/**
+ * Corpo de `POST /api/produtos/update`, lido pelo modal com este mesmo
+ * schema. `reconciliacao` é o estado estruturado que a tela usa para bloquear
+ * a nova tentativa — a decisão não depende de comparar texto de erro.
+ */
+export const produtoUpdateResponseSchema = z.object({
+  success: z.boolean(),
+  avisos: z.array(z.string()).optional(),
+  saldo: desfechoDoSaldoSchema.optional(),
+  error: z.string().optional(),
+  reconciliacao: z.object({
+    motivo: motivoDaReconciliacaoSchema,
+    blingId: z.string().nullable(),
+  }).optional(),
+});
+
+export type ProdutoUpdateResponse = z.infer<typeof produtoUpdateResponseSchema>;
+export type MotivoDaReconciliacao = z.infer<typeof motivoDaReconciliacaoSchema>;

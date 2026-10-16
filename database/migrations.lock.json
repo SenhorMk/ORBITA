@@ -405,6 +405,11 @@
       "order": 81,
       "path": "../database/78_movimentacao_estoque_somente_por_organizacao.sql",
       "sha256": "9356eade79abb3e3c60b2437c317103cffd3db1d905365e0176d450fcd452de0"
+    },
+    {
+      "order": 82,
+      "path": "../database/79_eventos_de_auditoria_do_catalogo.sql",
+      "sha256": "a0a206c9111ae156da6829067b4b3eebb96c64b423bfa87a49007ecdffc7647c"
     }
   ],
   "references": [

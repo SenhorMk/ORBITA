@@ -131,6 +131,14 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   ['catalog.product_image_bling_sync_pending', 'catalog', 'info', 'user', 730, 'Foto do produto salva no ORBITA aguardando sincronização com o Bling (produto sem vínculo).', undefined, PROIBIDOS_DA_FOTO],
   ['catalog.product_image_bling_synced', 'catalog', 'info', 'user', 730, 'Foto do produto convergida no Bling: exatamente a foto do ORBITA, ou nenhuma imagem.', undefined, PROIBIDOS_DA_FOTO],
   ['catalog.product_image_bling_sync_failed', 'catalog', 'warning', 'user', 730, 'Sincronização da foto do produto com o Bling não confirmada; estado continua pendente.', undefined, PROIBIDOS_DA_FOTO],
+  // Cadastro de produto e sincronização de categorias (migration 79, PRE-006B).
+  // Metadata: ids técnicos, operação, desfecho e contagens — nunca nome, SKU,
+  // preço, descrição de categoria ou corpo do Bling.
+  ['catalog.product_saved', 'catalog', 'info', 'user', 730, 'Produto cadastrado ou atualizado no Bling e espelhado no ORBITA.'],
+  ['catalog.product_save_rejected', 'catalog', 'info', 'user', 730, 'O Bling recusou o cadastro ou a atualização do produto; nada foi gravado.'],
+  ['catalog.product_reconcile_required', 'catalog', 'critical', 'user', 730, 'Gravação do produto sem confirmação do Bling, ou confirmada lá e não espelhada no ORBITA.'],
+  ['catalog.categories_synced', 'catalog', 'info', 'user', 730, 'Categorias do Bling sincronizadas no ORBITA.'],
+  ['catalog.categories_sync_failed', 'catalog', 'warning', 'user', 730, 'Sincronização de categorias interrompida; as páginas anteriores à falha ficaram gravadas.'],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 
