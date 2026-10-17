@@ -6,7 +6,7 @@ import type { FinanceiroRepository } from './financeiroRepository';
 import type { PedidoRepository } from './pedidoRepository';
 import type { ProdutoRepository } from './produtoRepository';
 import type { bling } from '../services/bling';
-import type { IntegrationService } from '../services/integrationService';
+import type { vincularSacAoErp, RegistroDoSacPort } from '../services/integrationService';
 
 describe('privileged repository tenant scope', () => {
   it('requires a previously verified tenant for every service-role adapter', () => {
@@ -31,7 +31,9 @@ describe('privileged repository tenant scope', () => {
     // por organizacao, e `integracoes_bling` nao e legivel pelo `service_role`.
     expectTypeOf<Parameters<typeof bling.forVerifiedOrganization>[0]>()
       .toEqualTypeOf<VerifiedOrganizationScope>();
-    expectTypeOf<Parameters<IntegrationService['linkSacToErp']>[0]>()
+    expectTypeOf<Parameters<typeof vincularSacAoErp>[0]>()
+      .toEqualTypeOf<VerifiedOrganizationScope>();
+    expectTypeOf<Parameters<RegistroDoSacPort['registrar']>[0]>()
       .toEqualTypeOf<VerifiedOrganizationScope>();
   });
 

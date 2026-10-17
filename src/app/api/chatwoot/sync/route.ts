@@ -6,7 +6,10 @@ import { supabaseServer } from '../../../../lib/supabaseServer';
 import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
 import { normalizeToE164 } from '../../../../lib/utils';
-import { integrationService } from '../../../../services/integrationService';
+import { registroDoSacSupabase, vincularSacAoErp } from '../../../../services/integrationService';
+import { recordAuditEvent } from '../../../../services/auditService';
+import { criarAuditoriaComercial } from '../../../../services/auditoriaComercial';
+import { getCorrelationId } from '../../../../lib/observability/correlation';
 import { organizationContextToScope, type VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 
 export const dynamic = 'force-dynamic';
@@ -202,8 +205,18 @@ export async function POST(request: Request) {
       messagesCount += result.messages;
     }
 
-    // 2. Acionar Auto-Registro e Vínculo SAC-ERP
-    await integrationService.linkSacToErp(scope);
+    // 2. Auto-registro SAC → ERP: qualquer membro que sincroniza o SAC
+    // (`organization:access`), só cria cliente novo, sob trava, e audita.
+    const auditar = criarAuditoriaComercial((s, input) => recordAuditEvent(supabaseServer, s, input));
+    let clientes: { criados: number; falhas: number } | null = null;
+    try {
+      const vinculo = await vincularSacAoErp(scope, registroDoSacSupabase, auditar, getCorrelationId(request));
+      clientes = { criados: vinculo.criados, falhas: vinculo.falhas };
+    } catch (erro: unknown) {
+      // As conversas já foram espelhadas: a falha do vínculo não desfaz isso,
+      // e a resposta diz que ele não foi feito em vez de fingir sucesso.
+      console.error('❌ Erro no vínculo SAC-ERP:', erro instanceof Error ? erro.name : 'UnknownError');
+    }
 
     return NextResponse.json({
       success: true,
@@ -211,7 +224,8 @@ export async function POST(request: Request) {
         contacts: contactsCount,
         conversations: conversationsCount,
         messages: messagesCount,
-      }
+      },
+      clientes: clientes ?? { criados: 0, falhas: null, vinculo: 'nao_concluido' },
     });
 
   } catch (error: unknown) {

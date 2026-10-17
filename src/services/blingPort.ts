@@ -54,7 +54,8 @@ export interface BlingPort {
   getPedido(id: string): Promise<BlingPedido | null>;
   updatePedido(id: string, payload: unknown): Promise<unknown>;
   deletePedido(id: string): Promise<unknown>;
-  updateSituacaoPedido(idPedido: string | number, idSituacao: string | number): Promise<unknown>;
+  /** Falha tipada: a rota distingue recusa comprovada de desfecho desconhecido. */
+  updateSituacaoPedido(idPedido: string | number, idSituacao: string | number): Promise<BlingCallResult<void>>;
   /** Payload validado contra o schema oficial antes do envio. */
   criarPedidoVenda(payload: PedidoVendaPayload): Promise<BlingCallResult<{ id: string; alertas: readonly string[] }>>;
   /** Baixa de estoque vinculada ao pedido. */

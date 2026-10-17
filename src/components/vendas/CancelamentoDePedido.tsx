@@ -86,7 +86,11 @@ export function CancelamentoDePedido({
       const cancelData = await cancelRes.json();
       if (!cancelRes.ok) throw new Error(cancelData.error || 'Falha ao cancelar');
 
-      alert('Pedido cancelado e estoque alinhado com sucesso!');
+      // Cancelado com pendência de estoque não é sucesso completo: o aviso da
+      // rota (`estoque: 'requer_reconciliacao'`) chega à pessoa.
+      alert(typeof cancelData.warning === 'string'
+        ? `Pedido cancelado, com pendência: ${cancelData.warning}`
+        : 'Pedido cancelado e estoque alinhado com sucesso!');
       // Releitura, não recarregamento: a pessoa continua na aba Vendas &
       // Pedidos, com a mesma sessão e a mesma organização ativa.
       onCancelado?.();

@@ -6,6 +6,10 @@ import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope'
 import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
+import { saldosComprovados } from './saldosDoBling';
+import { getCorrelationId } from '@/lib/observability/correlation';
+import { recordAuditEvent } from '@/services/auditService';
+import { criarAuditoriaComercial } from '@/services/auditoriaComercial';
 
 import {
   createPedidoStatusHandler,
@@ -71,14 +75,19 @@ function supabasePedidoStatusStore(): PedidoStatusStorePort {
       }));
     },
 
-    async updateEstoqueProduto(scope: VerifiedOrganizationScope, produtoId: string, estoque: number): Promise<void> {
-      const { error } = await supabaseServer
-        .from('produtos')
-        .update({ estoque })
-        .eq('id', produtoId)
-        .eq('organizacao_id', scope.organizationId);
-
+    async alinharEstoque(scope: VerifiedOrganizationScope, produtoId: string, estoqueLido: number | null, saldoBling: number) {
+      const { data, error } = await supabaseServer.rpc('alinhar_estoque_ao_saldo_do_bling', {
+        p_organizacao_id: scope.organizationId,
+        p_ator_id: scope.actorId,
+        p_produto_id: produtoId,
+        p_estoque_lido: estoqueLido,
+        p_saldo_bling: saldoBling,
+      });
       if (error) throw error;
+      const linha = Array.isArray(data) ? data[0] : data;
+      const desfecho = (linha as { desfecho?: unknown } | null)?.desfecho;
+      if (desfecho === 'alinhado' || desfecho === 'ja_alinhado' || desfecho === 'divergiu' || desfecho === 'saldo_invalido') return desfecho;
+      throw new Error('alinhar_estoque_ao_saldo_do_bling devolveu um desfecho fora do contrato');
     },
   };
 }
@@ -86,28 +95,22 @@ function supabasePedidoStatusStore(): PedidoStatusStorePort {
 /**
  * Adapter do Bling.
  *
- * `getEstoquesSaldos` devolve a lista crua da API; o formato do saldo varia
- * entre `saldoFisicoTotal` e `saldoFisico` conforme o endpoint responde, e essa
- * normalização vive aqui — o handler recebe um mapa e não precisa saber disso.
+ * A leitura do saldo é `saldosComprovados`: só saldo explícito e inteiro entra
+ * no mapa, e ausência nunca vira zero. As situações vêm da própria conta
+ * (`obterSituacoesDePedidoDeVenda`), para o handler conferir o id pedido.
  */
 function blingPedidoStatusAdapter(client: BlingPort): PedidoStatusBlingPort {
   return {
-    async updateSituacaoPedido(blingPedidoId: string, situacaoId: number): Promise<void> {
-      await client.updateSituacaoPedido(blingPedidoId, situacaoId);
+    updateSituacaoPedido(blingPedidoId: string, situacaoId: number) {
+      return client.updateSituacaoPedido(blingPedidoId, situacaoId);
+    },
+
+    situacoes() {
+      return client.obterSituacoesDePedidoDeVenda();
     },
 
     async getSaldos(blingIds: readonly string[]): Promise<ReadonlyMap<string, number>> {
-      const saldosArray = await client.getEstoquesSaldos([...blingIds]);
-      const saldos = new Map<string, number>();
-      for (const item of saldosArray as Array<{
-        produto?: { id: number | string };
-        saldoFisicoTotal?: number;
-        saldoFisico?: number;
-      }>) {
-        if (item.produto?.id === undefined) continue;
-        saldos.set(String(item.produto.id), Number(item.saldoFisicoTotal ?? item.saldoFisico ?? 0));
-      }
-      return saldos;
+      return saldosComprovados(await client.getEstoquesSaldos([...blingIds]));
     },
   };
 }
@@ -143,6 +146,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     bling: blingPedidoStatusAdapter(bling.forVerifiedOrganization(scope)),
     aguardarProcessamentoBling: () =>
       new Promise((resolve) => setTimeout(resolve, ESPERA_PROCESSAMENTO_BLING_MS)),
+    auditar: criarAuditoriaComercial((s, input) => recordAuditEvent(supabaseServer, s, input)),
+    correlationId: getCorrelationId,
   });
 
   return handler(request);

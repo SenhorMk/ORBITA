@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
 
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
+import { supabaseServer } from '@/lib/supabaseServer';
+import { getCorrelationId } from '@/lib/observability/correlation';
+import { recordAuditEvent } from '@/services/auditService';
+import { criarAuditoriaComercial } from '@/services/auditoriaComercial';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
+import { comAuditoriaDaVenda } from './auditoriaDaVenda';
 import { criarManualOrderDependencies } from './dependencias';
 import { createManualOrderHandler, type ManualOrderAuthPort } from './handler';
 
@@ -41,10 +46,17 @@ export async function POST(request: Request): Promise<NextResponse> {
   const scopeResult = await resolveVerifiedOrganizationScope(request);
   if (scopeResult._tag !== 'RequestScopeResolved') return scopeResult.response;
   const { scope } = scopeResult;
-
+  // Sem exigência de `organization:manage`: o ticket 22 decidiu que um
+  // `member` vende (ver `ticket-22-fronteira-comercial.test.ts`). Isso diverge
+  // de `organizationCapabilitiesForRole` ("member só acessa") e ficou como
+  // decisão pendente da proprietária no inventário (PRE-006C). A trilha de
+  // auditoria registra o ator de cada venda.
+  const dependencias = criarManualOrderDependencies(scope);
+  const auditar = criarAuditoriaComercial((s, input) => recordAuditEvent(supabaseServer, s, input));
   const handler = createManualOrderHandler({
     auth: authFor(scope.actorId, scope),
-    ...criarManualOrderDependencies(scope),
+    ...dependencias,
+    store: comAuditoriaDaVenda(dependencias.store, auditar, getCorrelationId(request)),
   });
 
   return handler(request);

@@ -40,6 +40,8 @@ function deps(porta: ClienteBlingPort, store?: ClienteDependencies['store']): Cl
     auth: { async authorize() { return { _tag: 'Authorized', scope }; } },
     bling: porta,
     store: store ?? { async upsert(_s, c) { return { id: 'local-1', blingId: c.blingId, nome: c.nome }; }, async exclusaoVigenteNoBling() { return false; } },
+    auditar: async () => {},
+    correlationId: () => 'corr_teste',
   };
 }
 

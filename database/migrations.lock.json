@@ -410,6 +410,11 @@
       "order": 82,
       "path": "../database/79_eventos_de_auditoria_do_catalogo.sql",
       "sha256": "a0a206c9111ae156da6829067b4b3eebb96c64b423bfa87a49007ecdffc7647c"
+    },
+    {
+      "order": 83,
+      "path": "../database/80_comandos_de_clientes_e_pedidos.sql",
+      "sha256": "92ad6b16b4aafcd8fe1e0456b1d8664bf5f3e67e3c59a4d4dccb64826c8de8ef"
     }
   ],
   "references": [

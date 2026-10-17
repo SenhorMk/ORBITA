@@ -31,6 +31,9 @@ function escopo(organizationId: string, role: 'owner' | 'admin' | 'member'): Ver
 }
 
 /** Resolvedor que lê o bearer só para escolher qual escopo devolver. */
+/** Trilha descartada nos casos que não a exercitam. */
+const semTrilha = { auditar: async () => {}, correlationId: () => 'corr_teste' };
+
 const resolveScope = async (request: Request): Promise<RequestOrganizationScopeResult> => {
   const token = /^Bearer\s+(.+)$/iu.exec(request.headers.get('Authorization') ?? '')?.[1];
   const porToken: Readonly<Record<string, VerifiedOrganizationScope>> = {
@@ -79,6 +82,7 @@ describe('order-by-id HTTP handlers', () => {
       },
     };
     const handlers = createOrderByIdHandlers({
+      ...semTrilha,
       resolveScope,
       orders: new OrderAccess(store, provider),
     });
@@ -133,6 +137,7 @@ describe('order-by-id HTTP handlers', () => {
       },
     };
     const handlers = createOrderByIdHandlers({
+      ...semTrilha,
       resolveScope,
       orders: unavailableOrders,
     });
@@ -177,6 +182,7 @@ describe('order-by-id HTTP handlers', () => {
       },
     };
     const handlers = createOrderByIdHandlers({
+      ...semTrilha,
       resolveScope,
       orders: new OrderAccess(store, provider),
     });
@@ -222,6 +228,7 @@ describe('order-by-id HTTP handlers', () => {
       },
     };
     const handlers = createOrderByIdHandlers({
+      ...semTrilha,
       resolveScope,
       orders: unavailableOrders,
     });
@@ -269,6 +276,7 @@ describe('order-by-id HTTP handlers', () => {
       },
     };
     const handlers = createOrderByIdHandlers({
+      ...semTrilha,
       resolveScope,
       orders: new OrderAccess(store, provider),
     });
@@ -310,5 +318,80 @@ describe('order-by-id HTTP handlers', () => {
       success: false,
       error: 'Pedido não encontrado',
     });
+  });
+});
+
+describe('desfecho e auditoria das mutações de pedido (PRE-006C)', () => {
+  const owner = { headers: { Authorization: 'Bearer owner-a-token' } };
+
+  function montar(provider: Partial<OrderProvider>, deleteFalha = false) {
+    const eventos: Array<{ organizationId: string; acao: string; metadata: unknown }> = [];
+    let excluidosLocalmente = 0;
+    const store: OrderStore = {
+      async findByExternalId(scope, externalId) {
+        return scope.organizationId === ORG_A_ID && externalId === '9001' ? { externalId, localValue: { id: 'p1' } } : null;
+      },
+      async deleteByExternalId() {
+        if (deleteFalha) throw new Error('falhou');
+        excluidosLocalmente += 1;
+      },
+    };
+    const completo: OrderProvider = {
+      async read() { return { _tag: 'OrderProviderSucceeded', value: {} }; },
+      async update() { return { _tag: 'OrderProviderSucceeded', value: {} }; },
+      async remove() { return { _tag: 'OrderProviderSucceeded', value: undefined }; },
+      ...provider,
+    };
+    const handlers = createOrderByIdHandlers({
+      resolveScope,
+      orders: new OrderAccess(store, completo),
+      async auditar(scope, evento) { eventos.push({ organizationId: scope.organizationId, acao: evento.acao, metadata: evento.metadata }); },
+      correlationId: () => 'corr_pedido',
+    });
+    return { handlers, eventos, excluidos: () => excluidosLocalmente };
+  }
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+
+  it('exclusão concluída audita com a organização verificada', async () => {
+    const { handlers, eventos } = montar({});
+
+    const r = await handlers.DELETE(new Request('https://orbita.test/x', { method: 'DELETE', ...owner }), ctx('9001'));
+
+    expect(r.status).toBe(200);
+    expect(eventos).toEqual([{ organizationId: ORG_A_ID, acao: 'order.deleted', metadata: { bling_pedido_id: '9001' } }]);
+  });
+
+  it('apagado no Bling e não no ORBITA: parcial nomeado, e repetir conclui (Bling 404 → exclusão local)', async () => {
+    const parcial = montar({}, true);
+    const r = await parcial.handlers.DELETE(new Request('https://orbita.test/x', { method: 'DELETE', ...owner }), ctx('9001'));
+
+    expect(r.status).toBe(502);
+    expect(await r.json()).toMatchObject({ reconciliacao: { motivo: 'espelho_local_falhou' } });
+    expect(parcial.eventos.map((e) => e.metadata)).toEqual([{ bling_pedido_id: '9001', operacao: 'exclusao', motivo: 'espelho_local_falhou' }]);
+
+    const repeticao = montar({ async remove() { return { _tag: 'OrderProviderNotFound' }; } });
+    const r2 = await repeticao.handlers.DELETE(new Request('https://orbita.test/x', { method: 'DELETE', ...owner }), ctx('9001'));
+    expect(r2.status).toBe(200);
+    expect(repeticao.excluidos()).toBe(1);
+  });
+
+  it('edição sem confirmação do Bling: 502 e evento de reconciliação, nunca sucesso', async () => {
+    const { handlers, eventos } = montar({ async update() { return { _tag: 'OrderProviderUnavailable' }; } });
+
+    const r = await handlers.PUT(new Request('https://orbita.test/x', {
+      method: 'PUT', ...owner, body: JSON.stringify({ observacoes: 'x' }),
+    }), ctx('9001'));
+
+    expect(r.status).toBe(502);
+    expect(eventos.map((e) => e.acao)).toEqual(['order.reconcile_required']);
+  });
+
+  it('pedido de outra organização: 404 e nenhum evento', async () => {
+    const { handlers, eventos } = montar({});
+
+    const r = await handlers.DELETE(new Request('https://orbita.test/x', { method: 'DELETE', ...owner }), ctx('bling-de-outra-org'));
+
+    expect(r.status).toBe(404);
+    expect(eventos).toEqual([]);
   });
 });

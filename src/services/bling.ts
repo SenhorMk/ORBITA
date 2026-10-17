@@ -1373,8 +1373,15 @@ export class BlingClient implements BlingPort {
   // vinculada ao pedido — nunca por ajuste manual desvinculado.
 
 
-  // Alterar situação (status) de um pedido no Bling ERP
-  async updateSituacaoPedido(idPedido: string | number, idSituacao: string | number): Promise<unknown> {
+  /**
+   * Altera a situação do pedido (`PATCH /pedidos/vendas/{id}/situacoes/{idSituacao}`).
+   *
+   * Falha tipada (PRE-006C): a recusa do Bling chega com `type` e `status`,
+   * para a rota distinguir recusa comprovada de desfecho desconhecido. Antes
+   * a falha era uma exceção com o corpo cru na mensagem, e a rota respondia
+   * "Erro interno" tanto para a recusa quanto para o timeout.
+   */
+  async updateSituacaoPedido(idPedido: string | number, idSituacao: string | number): Promise<BlingCallResult<void>> {
     const url = `${this.baseUrl}/pedidos/vendas/${encodeURIComponent(String(idPedido))}/situacoes/${encodeURIComponent(String(idSituacao))}`;
     const response = await this.fetchWithAuth(url, {
       method: 'PATCH',
@@ -1382,24 +1389,9 @@ export class BlingClient implements BlingPort {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Erro na API Bling ao alterar situação do pedido (HTTP ${response.status}): ${errorText}`);
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
     }
-
-    // A resposta pode não ter um body JSON em 204 No Content, então tratamos isso
-    if (response.status === 204) {
-      return { success: true };
-    }
-
-    try {
-      return await response.json();
-    } catch (parseError) {
-      console.warn(
-        `Resposta HTTP ${response.status} ao alterar situação do pedido não trouxe um corpo JSON válido:`,
-        parseError,
-      );
-      return { success: true };
-    }
+    return { _tag: 'BlingOk', value: undefined };
   }
 
   /**

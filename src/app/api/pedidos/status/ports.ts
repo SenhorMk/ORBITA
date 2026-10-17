@@ -9,7 +9,10 @@
  */
 import type { NextResponse } from 'next/server';
 
+import type { BlingCallResult } from '@/lib/integrations/bling/pedidoVendaContract';
+import type { Situacao } from '@/lib/integrations/bling/situacoesContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+import type { AuditarComercial } from '@/services/auditoriaComercial';
 import type { Pedido } from '@/types';
 
 /**
@@ -44,8 +47,22 @@ export interface PedidoStatusStorePort {
   findProdutoIdsDoPedido(scope: VerifiedOrganizationScope, pedidoId: string): Promise<readonly string[]>;
   /** Produtos por id, com o saldo local que pode divergir do Bling. */
   findProdutosByIds(scope: VerifiedOrganizationScope, produtoIds: readonly string[]): Promise<readonly PedidoStatusProduto[]>;
-  updateEstoqueProduto(scope: VerifiedOrganizationScope, produtoId: string, estoque: number): Promise<void>;
+  /**
+   * Alinha o estoque local ao saldo do Bling **só se** ele ainda for o valor
+   * lido (`alinhar_estoque_ao_saldo_do_bling`, migration 80), e lança no
+   * livro o delta aplicado, na mesma transação. `divergiu`: o estoque mudou
+   * depois da leitura (venda manual, outra sincronização) e nada foi escrito.
+   */
+  alinharEstoque(
+    scope: VerifiedOrganizationScope,
+    produtoId: string,
+    estoqueLido: number | null,
+    saldoBling: number,
+  ): Promise<DesfechoDoAlinhamento>;
 }
+
+/** Desfecho do alinhamento de um produto. */
+export type DesfechoDoAlinhamento = 'alinhado' | 'ja_alinhado' | 'divergiu' | 'saldo_invalido';
 
 /**
  * As duas chamadas ao Bling desta rota.
@@ -63,9 +80,18 @@ export interface PedidoStatusBlingPort {
    * provado inteiro positivo antes de chegar aqui. Não há payload a conferir
    * contra o schema oficial porque este endpoint não tem corpo.
    */
-  updateSituacaoPedido(blingPedidoId: string, situacaoId: number): Promise<void>;
-  /** `GET /estoques/saldos?idsProdutos[]=…` — saldo físico atual por produto. */
+  updateSituacaoPedido(blingPedidoId: string, situacaoId: number): Promise<BlingCallResult<void>>;
+  /**
+   * `GET /estoques/saldos?idsProdutos[]=…` — saldo físico **comprovado** por
+   * produto. Produto sem saldo explícito e inteiro não está no mapa.
+   */
   getSaldos(blingIds: readonly string[]): Promise<ReadonlyMap<string, number>>;
+  /**
+   * As situações de pedido de venda **desta conta** (`obterSituacoesDePedidoDeVenda`):
+   * a autoridade sobre qual id existe e qual nome ele tem. Ids são por conta,
+   * e não se confundem com o código numérico de status do pedido.
+   */
+  situacoes(): Promise<BlingCallResult<readonly Situacao[]>>;
 }
 
 export interface PedidoStatusAuthPort {
@@ -91,6 +117,9 @@ export interface PedidoStatusDependencies {
    * um `setTimeout` perdido no meio do fluxo.
    */
   readonly aguardarProcessamentoBling: () => Promise<void>;
+  /** Trilha persistente; não lança (`criarAuditoriaComercial`). */
+  readonly auditar: AuditarComercial;
+  readonly correlationId: (request: Request) => string;
 }
 
 /** Corpo de resposta da rota, consumido por `OrderDetailModal`. */
@@ -99,5 +128,12 @@ export interface PedidoStatusResponseBody {
   readonly status?: string;
   /** Falha não-bloqueante: a situação mudou, o alinhamento de estoque não. */
   readonly warning?: string;
+  /** `requer_reconciliacao` quando algum produto não foi alinhado. */
+  readonly estoque?: 'alinhado' | 'requer_reconciliacao';
   readonly error?: string;
+  /**
+   * Resultado indeterminado (o Bling pode ter mudado a situação) ou parcial
+   * (mudou lá, não aqui). A tela não oferece repetir: confere antes.
+   */
+  readonly reconciliacao?: { readonly motivo: 'bling_sem_confirmacao' | 'espelho_local_falhou' };
 }
