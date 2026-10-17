@@ -413,7 +413,7 @@ Runbook de implantação e recuperação: [`docs/operations/pre-006d-runbook.md`
 - as contraprovas;
 - a medição de locks.
 
-**Não executado:** nada em banco remoto. O estado das migrations 75–80 no projeto remoto **não foi verificado** (sem credencial nesta sessão); a verificação, somente leitura, é a seção 3 do runbook.
+**Não executado:** nada em banco remoto. Atualização de 2026-10-17: o revisor mediu, somente leitura, o Orbita_Staging com 77 migrations registradas e 75–81 pendentes. O código publicado lá já é a `main` `fd196f0`. A implantação em dois marcos (75–80, depois 81) está no runbook.
 
 ### Matriz de privilégios efetivos (medida com `has_table_privilege`)
 

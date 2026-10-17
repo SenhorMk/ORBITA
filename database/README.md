@@ -40,8 +40,25 @@ closes that gap.
 
 ```bash
 npm run db:remoto:status  -- --url "<connection>"   # read-only, lists what is missing
-npm run db:remoto:aplicar -- --url "<connection>" --confirmar
+npm run db:remoto:status  -- --url "<connection>" --previa --ate-arquivo 80_comandos_de_clientes_e_pedidos.sql
+npm run db:remoto:aplicar -- --url "<connection>" --confirmar --ate-arquivo 80_comandos_de_clientes_e_pedidos.sql
 ```
+
+**Exact limit.** `--ate-arquivo <file.sql>` (the exact canonical file name) or
+`--ate-ordem <n>` (the ledger `order`, which differs from the file prefix: the
+`80_…` file is order 83) stops the plan at that migration, inclusive. Later
+migrations are neither executed nor recorded. `--previa` prints the ordered
+plan and what stays out, and writes nothing. The script refuses, before
+touching the database:
+- an unknown, ambiguous, valueless or already-applied limit;
+- a recorded checksum that differs from the ledger;
+- a record that is not a prefix of the ledger, or that the ledger does not know;
+- a local file whose bytes do not match the ledger checksum. It checks this
+  again right before applying each migration.
+
+Output shows only the target host and, on failure, the SQLSTATE and main
+message, never `DETAIL`. Staged rollouts follow
+[`docs/operations/pre-006d-runbook.md`](../docs/operations/pre-006d-runbook.md).
 
 The target is never defaulted: without `--url` or `SUPABASE_DB_URL` the script
 refuses to run. `--aplicar` without `--confirmar` also refuses. Each migration
@@ -61,7 +78,8 @@ npm run db:remoto:status -- --url "<connection>" --adotar --confirmar
 ```
 
 `--adotar` records the whole ledger as applied **without executing anything**.
-Using it in any other situation makes the record lie.
+Using it in any other situation makes the record lie, so the script refuses it
+once `public.migracoes_aplicadas` has any row.
 
 If a migration that is already recorded no longer matches its checksum, the
 script refuses everything and names the file. Editing an applied migration is

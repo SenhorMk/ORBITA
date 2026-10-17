@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -44,13 +45,42 @@ const SQL_LER_REGISTRO = 'select arquivo, sha256 from public.migracoes_aplicadas
 /** A tabela de registro existe? Perguntar é mais barato que criar sem precisar. */
 const SQL_REGISTRO_EXISTE = "select to_regclass('public.migracoes_aplicadas') is not null as existe";
 
+/** Dentro da transação: outra execução registrou esta migration enquanto isto rodava? */
+const SQL_JA_REGISTRADA = 'select 1 from public.migracoes_aplicadas where arquivo = $1';
+
+/** O nome canônico do arquivo, sem o caminho relativo do ledger. */
+function nomeDoArquivo(migracao) {
+  return path.basename(String(migracao.path));
+}
+
+/** SHA-256 dos bytes do arquivo — o mesmo cálculo de `database-ledger.mjs`. */
+function sha256(conteudo) {
+  return createHash('sha256').update(conteudo).digest('hex');
+}
+
+function caminhoDaMigracao(migracao) {
+  return path.resolve(path.dirname(SUPABASE_CONFIG_PATH), migracao.path);
+}
+
+/**
+ * Mensagem de falha do banco que pode ir para o relatório: o SQLSTATE e a
+ * mensagem principal. Nunca `detail` nem `where`, que é onde o Postgres põe
+ * valores de linha (dado pessoal) numa violação de constraint.
+ */
+function falhaRelatavel(causa) {
+  if (!causa || typeof causa !== 'object') return String(causa);
+  const codigo = typeof causa.code === 'string' ? `${causa.code} ` : '';
+  const mensagem = causa instanceof Error ? causa.message.split('\n')[0] : 'falha sem mensagem';
+  return `${codigo}${mensagem}`;
+}
+
 /**
  * Compara o ledger do repositório com o que o banco alvo registra.
  *
  * @param {object} options
  * @param {{ query: (sql: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }> }} options.client - Cliente já conectado.
  * @param {ReturnType<typeof readCanonicalLedger>} [options.ledgerResult] - Ledger canônico.
- * @returns {Promise<{ readonly _tag: 'ok', readonly value: { pendentes: Array<Record<string, unknown>>, aplicadas: number, divergentes: string[], registroAusente: boolean } } | { readonly _tag: 'err', readonly error: Readonly<Record<string, unknown>> }>}
+ * @returns {Promise<{ readonly _tag: 'ok', readonly value: { pendentes: Array<Record<string, unknown>>, aplicadas: number, divergentes: string[], registroAusente: boolean, foraDeOrdem: string[], desconhecidas: string[] } } | { readonly _tag: 'err', readonly error: Readonly<Record<string, unknown>> }>}
  */
 export async function estadoDasMigracoes({ client, ledgerResult = readCanonicalLedger() }) {
   if (ledgerResult._tag === 'err') return ledgerResult;
@@ -79,7 +109,111 @@ export async function estadoDasMigracoes({ client, ledgerResult = readCanonicalL
     if (registrada !== migracao.sha256) divergentes.push(migracao.path);
   }
 
-  return ok({ pendentes, aplicadas: registradas.size, divergentes, registroAusente });
+  // A cadeia é uma sequência: o que está aplicado tem de ser um prefixo do
+  // ledger. Uma pendente com alguma posterior já aplicada é lacuna, e um
+  // registro que o ledger não conhece é um banco de outra história.
+  const ultimaAplicada = Math.max(0, ...ledgerResult.value.migrations
+    .filter((m) => registradas.has(m.path)).map((m) => Number(m.order)));
+  const foraDeOrdem = pendentes.filter((m) => Number(m.order) < ultimaAplicada).map((m) => m.path);
+  const conhecidas = new Set(ledgerResult.value.migrations.map((m) => m.path));
+  const desconhecidas = [...registradas.keys()].filter((arquivo) => !conhecidas.has(arquivo));
+
+  return ok({ pendentes, aplicadas: registradas.size, divergentes, registroAusente, foraDeOrdem, desconhecidas });
+}
+
+/**
+ * Lê o limite da execução. Duas formas, nunca as duas juntas:
+ *
+ * - `--ate-arquivo <nome.sql>`: o nome canônico exato (`80_comandos_de_clientes_e_pedidos.sql`).
+ *   Só nome de arquivo: um número aqui seria ambíguo entre o prefixo do nome e
+ *   o ordinal do ledger, que são diferentes (o `80_…` é o ordinal 83).
+ * - `--ate-ordem <n>`: o `order` do ledger (`database/migrations.lock.json`).
+ *
+ * @param {readonly string[]} argv
+ * @returns {{ readonly _tag: 'ok', readonly value: { readonly _tag: 'SemLimite' } | { readonly _tag: 'Arquivo', readonly nome: string } | { readonly _tag: 'Ordem', readonly ordem: number } } | { readonly _tag: 'err', readonly error: Readonly<Record<string, unknown>> }}
+ */
+export function lerLimite(argv) {
+  const valor = (flag) => {
+    const i = argv.indexOf(flag);
+    if (i < 0) return undefined;
+    const v = argv[i + 1];
+    return v === undefined || v.startsWith('--') ? null : v;
+  };
+  const arquivo = valor('--ate-arquivo');
+  const ordem = valor('--ate-ordem');
+
+  if (arquivo !== undefined && ordem !== undefined) {
+    return err('LimiteAmbiguo', 'Use --ate-arquivo OU --ate-ordem, não os dois.');
+  }
+  if (arquivo === null || ordem === null) {
+    return err('LimiteSemValor', 'O limite precisa de um valor: --ate-arquivo <nome.sql> ou --ate-ordem <n>.');
+  }
+  if (arquivo !== undefined) {
+    if (!/^\d+_[a-z0-9_]+\.sql$/u.test(arquivo)) {
+      return err('LimiteInvalido', `--ate-arquivo espera o nome canônico exato do arquivo (ex.: 80_comandos_de_clientes_e_pedidos.sql), não "${arquivo}".`);
+    }
+    return ok({ _tag: 'Arquivo', nome: arquivo });
+  }
+  if (ordem !== undefined) {
+    if (!/^[1-9]\d*$/u.test(ordem)) return err('LimiteInvalido', `--ate-ordem espera um inteiro positivo, não "${ordem}".`);
+    return ok({ _tag: 'Ordem', ordem: Number(ordem) });
+  }
+  return ok({ _tag: 'SemLimite' });
+}
+
+/**
+ * O que uma execução vai aplicar, decidido antes de tocar no banco — e a mesma
+ * decisão que a prévia mostra.
+ *
+ * Recusa: registro remoto divergente do ledger, lacuna na sequência, registro
+ * que o ledger não conhece, limite inexistente, ambíguo ou já aplicado, e
+ * arquivo local cujo conteúdo não bate com o checksum do ledger. As
+ * posteriores ao limite ficam de fora — nem executadas, nem registradas.
+ *
+ * @param {object} options
+ * @param {{ pendentes: Array<Record<string, unknown>>, divergentes: string[], foraDeOrdem: string[], desconhecidas: string[] }} options.estado - Saída de `estadoDasMigracoes`.
+ * @param {{ _tag: 'SemLimite' } | { _tag: 'Arquivo', nome: string } | { _tag: 'Ordem', ordem: number }} options.limite - Saída de `lerLimite`.
+ * @param {Array<Record<string, unknown>>} options.ledger - `ledger.value.migrations`.
+ * @param {{ readFileSync: (caminho: string) => string | Buffer }} [options.fileSystem]
+ * @returns {{ readonly _tag: 'ok', readonly value: { plano: Array<Record<string, unknown>>, posteriores: Array<Record<string, unknown>> } } | { readonly _tag: 'err', readonly error: Readonly<Record<string, unknown>> }}
+ */
+export function planejarAplicacao({ estado, limite, ledger, fileSystem = fs }) {
+  if (estado.divergentes.length > 0) {
+    return err('RegistroDivergente', 'Há migration aplicada cujo checksum difere do ledger.', { arquivos: estado.divergentes });
+  }
+  if (estado.foraDeOrdem.length > 0 || estado.desconhecidas.length > 0) {
+    return err('SequenciaInesperada', 'O registro remoto não é um prefixo do ledger.', {
+      lacunas: estado.foraDeOrdem,
+      desconhecidas: estado.desconhecidas,
+    });
+  }
+
+  let plano = estado.pendentes;
+  if (limite._tag !== 'SemLimite') {
+    const candidatas = limite._tag === 'Arquivo'
+      ? ledger.filter((m) => nomeDoArquivo(m) === limite.nome)
+      : ledger.filter((m) => Number(m.order) === limite.ordem);
+    const descricao = limite._tag === 'Arquivo' ? limite.nome : `ordem ${limite.ordem}`;
+    if (candidatas.length === 0) return err('LimiteInexistente', `${descricao} não existe no ledger.`);
+    if (candidatas.length > 1) return err('LimiteAmbiguo', `${descricao} corresponde a ${candidatas.length} entradas do ledger.`);
+    const alvo = candidatas[0];
+    if (!estado.pendentes.some((m) => m.path === alvo.path)) {
+      return err('LimiteJaAplicado', `${descricao} já está aplicada; nada a fazer até ela.`);
+    }
+    plano = estado.pendentes.filter((m) => Number(m.order) <= Number(alvo.order));
+  }
+
+  for (const migracao of plano) {
+    const atual = sha256(fileSystem.readFileSync(caminhoDaMigracao(migracao)));
+    if (atual !== migracao.sha256) {
+      return err('ChecksumLocalDivergente', `${nomeDoArquivo(migracao)} no disco não bate com o ledger; regenere o ledger ou restaure o arquivo.`, {
+        arquivo: migracao.path,
+      });
+    }
+  }
+
+  const noPlano = new Set(plano.map((m) => m.path));
+  return ok({ plano, posteriores: estado.pendentes.filter((m) => !noPlano.has(m.path)) });
 }
 
 /**
@@ -98,11 +232,24 @@ export async function aplicarPendentes({ client, pendentes, fileSystem = fs, log
   const aplicadas = [];
 
   for (const migracao of pendentes) {
-    const caminho = path.resolve(path.dirname(SUPABASE_CONFIG_PATH), migracao.path);
-    const sql = fileSystem.readFileSync(caminho, 'utf8').replace(/^﻿/, '');
+    const bruto = fileSystem.readFileSync(caminhoDaMigracao(migracao));
+    // O arquivo pode ter mudado entre a prévia e a aplicação.
+    if (migracao.sha256 !== undefined && sha256(bruto) !== migracao.sha256) {
+      return err('ChecksumLocalDivergente', `${migracao.path} mudou no disco; nada dela foi aplicado`, {
+        arquivo: migracao.path, aplicadasAntes: aplicadas,
+      });
+    }
+    const sql = String(bruto).replace(/^﻿/, '');
 
     try {
       await client.query('begin');
+      // Outra execução pode ter registrado esta migration entretanto.
+      if ((await client.query(SQL_JA_REGISTRADA, [migracao.path])).rows.length > 0) {
+        await client.query('rollback');
+        return err('MigracaoJaRegistrada', `${migracao.path} foi registrada por outra execução; parei sem aplicá-la`, {
+          arquivo: migracao.path, aplicadasAntes: aplicadas,
+        });
+      }
       await client.query(sql);
       await client.query(
         SQL_REGISTRAR,
@@ -117,7 +264,7 @@ export async function aplicarPendentes({ client, pendentes, fileSystem = fs, log
         'MigracaoRemotaFalhou',
         `${migracao.path} falhou e foi revertida; as ${aplicadas.length} anteriores continuam aplicadas`,
         { arquivo: migracao.path, aplicadasAntes: aplicadas },
-        causa instanceof Error ? causa.message : String(causa),
+        falhaRelatavel(causa),
       );
     }
   }
@@ -133,6 +280,13 @@ export async function aplicarPendentes({ client, pendentes, fileSystem = fs, log
  */
 export async function adotarEstadoAtual({ client, ledgerResult = readCanonicalLedger() }) {
   if (ledgerResult._tag === 'err') return ledgerResult;
+
+  // Num banco que já registra migrations, adotar marcaria como aplicadas as
+  // pendentes sem executá-las — exatamente o que o registro existe para impedir.
+  const { rows: existe } = await client.query(SQL_REGISTRO_EXISTE);
+  if (existe[0]?.existe === true && (await client.query(SQL_LER_REGISTRO)).rows.length > 0) {
+    return err('AdocaoRecusada', 'Este banco já registra migrations aplicadas; adotar marcaria pendentes sem executá-las. Use --aplicar.');
+  }
 
   await client.query(DDL_REGISTRO);
   for (const migracao of ledgerResult.value.migrations) {
@@ -158,6 +312,11 @@ export function lerAlvo(argv, env) {
   return ok(url);
 }
 
+/** Linha do plano: ordinal do ledger, nome do arquivo e início do checksum. Nada do alvo. */
+function linhaDoPlano(prefixo, m) {
+  return `  ${prefixo}  ordem ${String(m.order).padStart(3)}  ${nomeDoArquivo(m)}  ${String(m.sha256).slice(0, 12)}`;
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve('scripts/migracoes-remotas.mjs')) {
   const { default: pg } = await import('pg');
 
@@ -166,14 +325,27 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve('scripts/m
     console.error(failureMessage(alvo.error));
     process.exit(1);
   }
+  const limite = lerLimite(process.argv);
+  if (limite._tag === 'err') {
+    console.error(failureMessage(limite.error));
+    process.exit(1);
+  }
 
   const aplicar = process.argv.includes('--aplicar');
   const adotar = process.argv.includes('--adotar');
   const confirmado = process.argv.includes('--confirmar');
+  const previa = process.argv.includes('--previa');
+  if (previa && (aplicar || adotar)) {
+    console.error('--previa é somente leitura; não combina com --aplicar nem --adotar.');
+    process.exit(1);
+  }
 
-  const client = new pg.Client({ connectionString: alvo.value, ssl: { rejectUnauthorized: false } });
+  // `sslmode=disable` só quando a URL pede (laboratório local); o padrão é TLS.
+  const semTls = new URL(alvo.value).searchParams.get('sslmode') === 'disable';
+  const client = new pg.Client({ connectionString: alvo.value, ssl: semTls ? false : { rejectUnauthorized: false } });
   await client.connect();
-  console.log(`Banco alvo: ${new URL(alvo.value).host}\n`);
+  // Só o host: a URL carrega usuário e senha, e não vai para nenhum relatório.
+  console.log(`Banco alvo (host): ${new URL(alvo.value).hostname}\n`);
 
   try {
     if (adotar) {
@@ -187,51 +359,53 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve('scripts/m
       process.exit(0);
     }
 
-    const estado = await estadoDasMigracoes({ client });
-    if (estado._tag === 'err') {
-      console.error(failureMessage(estado.error));
+    const ledger = readCanonicalLedger();
+    const estado = await estadoDasMigracoes({ client, ledgerResult: ledger });
+    if (estado._tag === 'err' || ledger._tag === 'err') {
+      console.error(failureMessage(estado._tag === 'err' ? estado.error : ledger.error));
       process.exit(1);
     }
 
-    const { pendentes, aplicadas, divergentes, registroAusente } = estado.value;
-
+    const { pendentes, aplicadas, registroAusente } = estado.value;
     if (registroAusente) {
       console.log('Este banco ainda nao tem registro de migracoes aplicadas.');
-      console.log('Se as migracoes ja foram aplicadas a mao, adote o estado atual: --adotar --confirmar\n');
+      console.log('Adotar o estado atual (--adotar) só vale se TODAS as migracoes ja foram aplicadas a mao.\n');
     }
+    console.log(`${aplicadas} aplicada(s), ${pendentes.length} pendente(s) no ledger.`);
 
-    if (divergentes.length > 0) {
-      console.error('Migrações já aplicadas cujo conteúdo mudou depois:');
-      for (const arquivo of divergentes) console.error(`  ${arquivo}`);
-      console.error('\nEditar migration aplicada é proibido. Crie uma nova, forward-only.');
+    const plano = planejarAplicacao({ estado: estado.value, limite: limite.value, ledger: ledger.value.migrations });
+    if (plano._tag === 'err') {
+      console.error(`\n${failureMessage(plano.error)}`);
+      for (const [chave, valor] of Object.entries(plano.error)) {
+        if (Array.isArray(valor) && valor.length > 0) console.error(`  ${chave}: ${valor.map((v) => path.basename(String(v))).join(', ')}`);
+      }
       process.exit(1);
     }
 
-    console.log(`${aplicadas} aplicada(s), ${pendentes.length} pendente(s).`);
-    for (const m of pendentes) console.log(`  pendente  ${m.path}`);
+    console.log(limite.value._tag === 'SemLimite' ? '\nPlano (sem limite: todas as pendentes):' : '\nPlano (até o limite, inclusive):');
+    for (const m of plano.value.plano) console.log(linhaDoPlano('aplicar ', m));
+    for (const m of plano.value.posteriores) console.log(linhaDoPlano('fica de fora', m));
 
-    if (pendentes.length === 0) {
+    if (plano.value.plano.length === 0) {
       console.log('\nBanco em dia com o repositório.');
       process.exit(0);
     }
-
-    if (!aplicar) {
-      console.log('\nSomente leitura. Para aplicar: --aplicar --confirmar');
-      process.exit(1);
+    if (previa || !aplicar) {
+      console.log('\nSomente leitura: nada foi executado. Para aplicar este plano: --aplicar --confirmar (com o mesmo limite).');
+      process.exit(previa ? 0 : 1);
     }
-
     if (!confirmado) {
       console.error('\n--aplicar executa DDL no banco acima. Repita com --confirmar.');
       process.exit(1);
     }
 
     console.log('');
-    const r = await aplicarPendentes({ client, pendentes });
+    const r = await aplicarPendentes({ client, pendentes: plano.value.plano });
     if (r._tag === 'err') {
       console.error(`\n${failureMessage(r.error)}`);
       process.exit(1);
     }
-    console.log(`\n${r.value.length} migração(ões) aplicada(s).`);
+    console.log(`\n${r.value.length} migração(ões) aplicada(s); ${plano.value.posteriores.length} posterior(es) não tocada(s).`);
   } finally {
     await client.end();
   }
