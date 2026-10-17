@@ -144,7 +144,8 @@ schema_paths = [
   "../database/77_contato_excluido_no_bling.sql",
   "../database/78_movimentacao_estoque_somente_por_organizacao.sql",
   "../database/79_eventos_de_auditoria_do_catalogo.sql",
-  "../database/80_comandos_de_clientes_e_pedidos.sql"
+  "../database/80_comandos_de_clientes_e_pedidos.sql",
+  "../database/81_revogar_dml_direto_comercial.sql"
 ]
 
 [db.seed]

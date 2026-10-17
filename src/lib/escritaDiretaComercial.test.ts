@@ -11,6 +11,10 @@ import { describe, expect, it } from 'vitest';
  * navegador grava nas seis tabelas — todas as mutações passam por rotas do
  * servidor com escopo verificado. Este teste impede que um caller novo
  * apareça sem entrar no inventário (e sem um comando do servidor).
+ *
+ * Desde o PRE-006D (migration 81) o banco também recusa: `authenticated` não
+ * tem mais INSERT/UPDATE/DELETE nas seis tabelas. Um caller novo do navegador
+ * falharia em produção com 42501; este teste o barra antes, no commit.
  */
 
 const TABELAS = ['produtos', 'categorias', 'movimentacao_estoque', 'clientes', 'pedidos', 'itens_pedido'] as const;
