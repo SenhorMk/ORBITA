@@ -5,7 +5,9 @@ Escopo: `produtos`, `categorias`, `movimentacao_estoque`, `clientes`,
 Atualizado pelo PRE-006B (base `6cb9d09`) para catálogo e estoque — ver
 a seção [PRE-006B](#pre-006b--catálogo-e-estoque-por-comando-autorizado) —
 e pelo PRE-006C (base `22ad2b5`) para clientes e pedidos — ver a seção
-[PRE-006C](#pre-006c--clientes-e-pedidos-por-comando-autorizado).
+[PRE-006C](#pre-006c--clientes-e-pedidos-por-comando-autorizado). O
+PRE-006D (base `9e4e3ca`, migration 81) revogou o DML do navegador — ver a
+seção [PRE-006D](#pre-006d--dml-direto-revogado).
 
 Fontes, todas executadas:
 - código em `src/` (varredura de `.from(...)`/`.rpc(...)`, rotas e repositórios);
@@ -68,6 +70,10 @@ Funções do banco que escrevem nas seis tabelas: todas executáveis **só** por
 
 Nenhuma RPC executável por `anon`/`authenticated` escreve nas seis tabelas.
 Os grants ficam intactos nesta fatia; a revogação é do PRE-006D.
+
+> **PRE-006D (migration 81):** a coluna "Grant DML de `authenticated`" acima é
+> o estado anterior. Depois da 81, `authenticated` só tem SELECT nas seis
+> tabelas — ver a matriz na seção PRE-006D.
 
 ## Achados
 
@@ -395,3 +401,102 @@ O auto-registro do SAC não tem efeito externo: só lê o espelho local do Chatw
   - O cliente com a sessão do usuário (`createActorScopedSupabaseClient`) não toca as seis tabelas, e o teste garante isso.
 - Até a revogação, um `member` com o próprio token ainda pode, pelo PostgREST, alterar pedido ou cliente da própria organização. A RLS impede outra organização.
 - Os espelhos do Bling (webhook e `/api/sync`) ainda gravam `produtos.estoque` sem lançamento no livro. É o espelho absoluto do ERP, fora das rotas de pedido deste ticket.
+
+## PRE-006D — DML direto revogado
+
+Base: `main` em `9e4e3ca`. Migration `database/81_revogar_dml_direto_comercial.sql`.
+Runbook de implantação e recuperação: [`docs/operations/pre-006d-runbook.md`](../operations/pre-006d-runbook.md).
+
+**Executado** no laboratório descartável (Windows, Docker, cadeia canônica com 84 migrations no ledger):
+- inventário de permissões antes e depois;
+- `npm run test:db`;
+- as contraprovas;
+- a medição de locks.
+
+**Não executado:** nada em banco remoto. O estado das migrations 75–80 no projeto remoto **não foi verificado** (sem credencial nesta sessão); a verificação, somente leitura, é a seção 3 do runbook.
+
+### Matriz de privilégios efetivos (medida com `has_table_privilege`)
+
+Legenda: S = SELECT, I = INSERT, U = UPDATE, D = DELETE, T = TRUNCATE.
+
+| Tabela (as seis) | Papel | Antes (01–80) | Depois (01–81) |
+|---|---|---|---|
+| produtos, categorias, clientes, pedidos, itens_pedido, movimentacao_estoque | `authenticated` | S I U D | **S** |
+| (idem) | `anon` | — | — |
+| (idem) | PUBLIC (ACL) | — | — |
+| (idem) | `service_role` | S I U D T | S I U D T |
+
+**Colunas.** Antes, `authenticated` tinha INSERT/UPDATE efetivos em 89 colunas (todas, vindas do grant de tabela). Depois, nenhuma, para `authenticated` e `anon`. A 81 revoga no nível da tabela, o que também revoga os grants de coluna.
+
+**Inalterados (medidos antes e depois):**
+- **Herança de papéis:** `authenticated` e `anon` são concedidos a `authenticator` (sem herança) e a `postgres`. Nenhum dos dois herda escrita de outro papel.
+- **Policies e RLS:** as 24 policies `*_org_{select,insert,update,delete}` continuam, só de `authenticated` e só por membership; RLS ligada nas seis.
+  - As de escrita ficam sem grant que as alcance, mas são mantidas: se um grant voltar por engano, o isolamento por organização ainda vale.
+  - Removê-las não traria proteção nova e tiraria essa segunda barreira.
+- **RPCs:** nenhuma das funções que escrevem nas seis tabelas é executável por `anon`, `authenticated` ou PUBLIC.
+  - Há 19 funções assim, entre elas `registrar_venda_manual`, `baixar_estoque_organizacao`, `alinhar_estoque_ao_saldo_do_bling`, `registrar_cliente_do_sac`, `arquivar_produto`, retenção, backfills e gatilhos de reserva.
+  - `rpc_criar_pedido_manual` (legado) não é executável por ninguém.
+  - As nove funções que `authenticated` executa (organização, convite, entitlements, encerramento — allowlist de `catalog_security`) não chamam nenhuma função que escreve nas seis tabelas e não montam SQL dinâmico. O teste 17 cobra isso.
+- **Gatilhos:** os das seis tabelas rodam como quem dispara (`service_role` nos fluxos legítimos) ou como definer. Nenhum gatilho de outra tabela escreve nas seis.
+- **Realtime:** nenhuma das seis tabelas é publicada.
+- **Privilégios padrão:** `supabase_admin` concede ALL a `anon`/`authenticated` em tabelas novas criadas **por ele** em `public`. Tabelas das migrations (dono `postgres`) não herdam isso: medido, `anon` sem nada. É um risco para tabela nova e está registrado abaixo.
+
+### Fluxos preservados
+
+O servidor escreve com `service_role` (todas as rotas, jobs e webhook) e mantém SELECT, INSERT, UPDATE e DELETE nas seis tabelas (teste 13). No laboratório, sob `service_role`:
+- baixa da venda manual;
+- alinhamento ao saldo do Bling;
+- livro de estoque com os dois movimentos;
+- gravação do repositório com filtro de organização (testes 23-26).
+
+O `test:db` completo passou com a 81: os pgTAP da venda manual, da reserva, das tentativas idempotentes, do SAC, do arquivamento, da foto e dos tombstones, e todos os ensaios de concorrência.
+
+A leitura das telas continua (testes 19-22):
+- o membro lê as seis tabelas da própria organização;
+- não lê nada de B;
+- quem não é membro não lê nada;
+- itens do pedido com o produto embutido funcionam.
+
+### Testes (`supabase/tests/final/escrita_direta_comercial.test.sql`, 28)
+
+O teste do PRE-006A foi atualizado, não apagado. O antigo caso 10 ("grants intactos") virou a nova invariante, e o isolamento por membership continua (14, 19-21).
+
+| # | Prova |
+|---|---|
+| 1-3 | owner, admin e member de A: INSERT, UPDATE, DELETE e TRUNCATE nas seis tabelas recusados por **privilégio** (a recusa por RLS conta como falha do teste) |
+| 4-6 | member não altera `produtos.estoque`; owner não forja movimentação; admin não apaga o livro |
+| 7 | anon: nenhuma escrita |
+| 8 | as seis tabelas idênticas (hash) depois de todas as tentativas |
+| 9-13 | matriz efetiva: `authenticated` só S; anon nada; PUBLIC sem ACL; nenhuma coluna gravável; `service_role` com DML |
+| 14-15 | policies só por organização; RLS ligada |
+| 16-17 | nenhuma RPC do navegador escreve, nem indiretamente nem por SQL dinâmico (funções de extensão excluídas) |
+| 18 | sem Realtime |
+| 19-22 | leitura das telas e isolamento |
+| 23-26 | comandos do servidor operando |
+| 27-28 | o navegador não forja auditoria nem baixa estoque por RPC |
+
+### Contraprovas (laboratório, num único banco, cada sabotagem revertida e o ACL conferido igual ao original)
+
+| Sabotagem | Detectada por |
+|---|---|
+| 1. `grant insert on clientes to authenticated` | 1, 2, 3, 9, 12 |
+| 2. `grant update (estoque) on produtos to authenticated` | 4, 8, 12 (e 23-25 em cascata) |
+| 3. `grant delete on movimentacao_estoque to authenticated` | 1, 2, 3, 6, 8, 9 |
+| 4. `grant execute on baixar_estoque_organizacao to authenticated` | 16, 28 |
+| 5. `grant insert (colunas) on movimentacao_estoque to authenticated` | 1, 2, 3, 5, 8, 12 |
+| 6. `revoke select on itens_pedido from authenticated` | o arquivo aborta com `permission denied for table itens_pedido` |
+| 7. `revoke execute on baixar_estoque_organizacao from service_role` | o arquivo aborta com `permission denied for function baixar_estoque_organizacao` |
+
+Rodada base: 28/28. Depois de reverter tudo: 28/28.
+
+A primeira rodada mostrou dois ajustes, ambos feitos no teste antes do commit:
+- **Recusa por RLS:** a sabotagem 1 passava nos casos 1-3 porque a RLS também responde 42501. Os blocos agora exigem a recusa por privilégio.
+- **pgTAP em `public`:** o caso 17 dependia de onde a extensão é instalada. Funções de extensão agora ficam de fora.
+
+### Riscos residuais
+
+- **Banco remoto:** a 81 só vale depois de aplicada, e as 75–80 podem não estar lá. Siga o runbook.
+- **Tabela nova:** os privilégios padrão de `supabase_admin` concedem ALL a `anon`/`authenticated` em tabela criada por ele. Uma tabela nova precisa de revogação explícita na própria migration; o `catalog_security` cobre que toda tabela gravável tenha RLS.
+- **SEC-01 fora do escopo comercial:** pela leitura do SQL, sem medição neste ticket, migrations antigas também concedem DML a `authenticated` em `titulos_financeiros`, `contas_financeiras`, `categorias_financeiras`, `fornecedores`, `documentos_fiscais`, `conexoes_integracao` e `organizacoes`. Algumas podem ter sido revogadas depois. Pertencem aos tickets donos (PRE-007A, PRE-008 e fiscal/integrações).
+- **Decisões do PRE-006C:** seguem pendentes e não mudam aqui (capacidade do SAC, venda manual por `member`, contato recriado pelo SAC, PUT em pedido `#MANUAL-`).
+- **E2E:** não executado, porque não há ambiente E2E descartável (as specs rodam contra o ambiente publicado e o Bling real). A evidência é o laboratório mais os testes de rota e de tela.

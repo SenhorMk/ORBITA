@@ -415,6 +415,11 @@
       "order": 83,
       "path": "../database/80_comandos_de_clientes_e_pedidos.sql",
       "sha256": "92ad6b16b4aafcd8fe1e0456b1d8664bf5f3e67e3c59a4d4dccb64826c8de8ef"
+    },
+    {
+      "order": 84,
+      "path": "../database/81_revogar_dml_direto_comercial.sql",
+      "sha256": "0ab53d29812dca1298363f96a1e14e0da18244c109c6d3d4c20c985a6a19de0f"
     }
   ],
   "references": [
