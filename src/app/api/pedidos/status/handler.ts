@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { classificarFalhaDeCriacaoNoBling } from '@/lib/integrations/bling/classificacaoDeFalhaDeCriacao';
 import { blingFailure, type BlingCallResult, type BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaContract';
+import type { Situacao } from '@/lib/integrations/bling/situacoesContract';
 import { logger, sanitizeErrorForLog } from '@/lib/observability/logger';
 import { mapBlingStatus } from '@/lib/utils';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
@@ -180,6 +181,32 @@ async function respostaDaFalhaNaSituacao(failure: BlingProviderFailure, situacao
   }, 502);
 }
 
+const normalizarNome = (nome: string) => nome.trim().toLocaleLowerCase('pt-BR');
+
+/**
+ * Confere o par (id, nome) contra as situações de pedido de venda da conta.
+ *
+ * Sem isto, o id ia ao Bling e o nome enviado pelo navegador decidia o status
+ * local: `{ id: <Em aberto>, nome: 'Atendido' }` deixava o Bling numa situação
+ * e o ORBITA noutra. Leitura falha não autoriza a mudança — nada sai daqui.
+ */
+async function confirmarSituacao(
+  bling: PedidoStatusBlingPort,
+  situacaoId: number,
+  nomeInformado: string,
+): Promise<Situacao | NextResponse> {
+  const lidas = await semExcecao(() => bling.situacoes());
+  if (lidas._tag === 'BlingFailed') {
+    return json({ error: 'Não foi possível confirmar a situação na conta do Bling. Nada foi alterado; tente de novo.' }, 502);
+  }
+  const situacao = lidas.value.find((s) => s.id === situacaoId);
+  if (!situacao) return json({ error: 'Situação não encontrada nas situações de venda desta conta do Bling.' }, 400);
+  if (normalizarNome(situacao.nome) !== normalizarNome(nomeInformado)) {
+    return json({ error: 'O nome da situação não corresponde ao id informado. Recarregue as situações e tente de novo.' }, 400);
+  }
+  return situacao;
+}
+
 export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
   const { auth, store, bling, aguardarProcessamentoBling, auditar } = deps;
 
@@ -212,11 +239,19 @@ export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
       const evento: Evento = (acao, metadata) =>
         auditar(scope, { acao, recurso: 'pedido', recursoId: pedidoId, correlationId, metadata: { pedido_id: pedidoId, ...metadata } });
 
+      // Antes de qualquer efeito: o id tem de existir na conta, com o nome que
+      // o navegador mostrou. Divergência ou leitura falha → nada é alterado.
+      const confirmacao = await confirmarSituacao(bling, novaSituacaoId, novaSituacaoNome);
+      if (confirmacao instanceof NextResponse) return confirmacao;
+      const situacaoConfirmada = confirmacao;
+
       // Timeout, conexão perdida, 5xx, 429: o Bling pode ter mudado a situação.
       const mudanca = await semExcecao(() => bling.updateSituacaoPedido(pedidoLocal.bling_id, novaSituacaoId));
       if (mudanca._tag === 'BlingFailed') return respostaDaFalhaNaSituacao(mudanca.failure, novaSituacaoId, evento);
 
-      const novoStatusCanonico = mapBlingStatus(novaSituacaoNome);
+      // O status local vem do nome que a conta confirmou para o id, nunca do
+      // texto do navegador (`confirmarSituacao`, antes da mutação).
+      const novoStatusCanonico = mapBlingStatus(situacaoConfirmada.nome);
       try {
         await store.savePedidoStatus(scope, pedidoLocal, novoStatusCanonico);
       } catch (err: unknown) {

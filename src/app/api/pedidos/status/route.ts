@@ -6,6 +6,7 @@ import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope'
 import { pedidoRepository } from '@/repositories/pedidoRepository';
 import { bling } from '@/services/bling';
 import type { BlingPort } from '@/services/blingPort';
+import { saldosComprovados } from './saldosDoBling';
 import { getCorrelationId } from '@/lib/observability/correlation';
 import { recordAuditEvent } from '@/services/auditService';
 import { criarAuditoriaComercial } from '@/services/auditoriaComercial';
@@ -94,9 +95,9 @@ function supabasePedidoStatusStore(): PedidoStatusStorePort {
 /**
  * Adapter do Bling.
  *
- * `getEstoquesSaldos` devolve a lista crua da API; o formato do saldo varia
- * entre `saldoFisicoTotal` e `saldoFisico` conforme o endpoint responde, e essa
- * normalização vive aqui — o handler recebe um mapa e não precisa saber disso.
+ * A leitura do saldo é `saldosComprovados`: só saldo explícito e inteiro entra
+ * no mapa, e ausência nunca vira zero. As situações vêm da própria conta
+ * (`obterSituacoesDePedidoDeVenda`), para o handler conferir o id pedido.
  */
 function blingPedidoStatusAdapter(client: BlingPort): PedidoStatusBlingPort {
   return {
@@ -104,18 +105,12 @@ function blingPedidoStatusAdapter(client: BlingPort): PedidoStatusBlingPort {
       return client.updateSituacaoPedido(blingPedidoId, situacaoId);
     },
 
+    situacoes() {
+      return client.obterSituacoesDePedidoDeVenda();
+    },
+
     async getSaldos(blingIds: readonly string[]): Promise<ReadonlyMap<string, number>> {
-      const saldosArray = await client.getEstoquesSaldos([...blingIds]);
-      const saldos = new Map<string, number>();
-      for (const item of saldosArray as Array<{
-        produto?: { id: number | string };
-        saldoFisicoTotal?: number;
-        saldoFisico?: number;
-      }>) {
-        if (item.produto?.id === undefined) continue;
-        saldos.set(String(item.produto.id), Number(item.saldoFisicoTotal ?? item.saldoFisico ?? 0));
-      }
-      return saldos;
+      return saldosComprovados(await client.getEstoquesSaldos([...blingIds]));
     },
   };
 }

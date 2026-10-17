@@ -75,6 +75,7 @@ function montarDeps(sobrescritas: {
   const bling: PedidoStatusBlingPort = {
     updateSituacaoPedido,
     getSaldos: vi.fn().mockResolvedValue(new Map<string, number>()),
+    situacoes: vi.fn().mockResolvedValue({ _tag: 'BlingOk', value: SITUACOES_DA_CONTA }),
     ...sobrescritas.bling,
   };
 
@@ -111,6 +112,13 @@ async function comLogCapturado(fn: () => Promise<Response>): Promise<{ resposta:
 }
 
 const CORPO_VALIDO = { pedidoId: PEDIDO_ID, novaSituacaoId: 9, novaSituacaoNome: 'Atendido' };
+
+/** As situações de venda desta conta, como `obterSituacoesDePedidoDeVenda` as devolve (ids por conta). */
+const SITUACOES_DA_CONTA = [
+  { id: 6, nome: 'Em aberto' },
+  { id: 9, nome: 'Atendido' },
+  { id: 12, nome: 'Cancelado' },
+];
 
 /** A resposta fixa quando o Bling confirmou e o ORBITA não gravou. */
 const ESPELHO_FALHOU = {
@@ -574,5 +582,108 @@ describe('POST /api/pedidos/status — desfechos e estoque (PRE-006C)', () => {
       acao: 'order.status_changed', recurso: 'pedido', recursoId: PEDIDO_ID, correlationId: 'corr_status',
       metadata: { pedido_id: PEDIDO_ID, situacao_id: 9, estoque: 'alinhado', produtos_alinhados: 0, produtos_pendentes: 0 },
     }]);
+  });
+});
+
+describe('POST /api/pedidos/status — a situação é confirmada pela conta (PRE-006C, revisão)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('id e nome que a conta confirma: muda no Bling e o status local vem do nome confirmado', async () => {
+    const { deps, updateSituacaoPedido, savePedidoStatus } = montarDeps();
+
+    const resposta = await createPedidoStatusHandler(deps)(corpo({ pedidoId: PEDIDO_ID, novaSituacaoId: 12, novaSituacaoNome: ' cancelado ' }));
+
+    expect(resposta.status).toBe(200);
+    expect(updateSituacaoPedido).toHaveBeenCalledWith('26735988980', 12);
+    expect(savePedidoStatus).toHaveBeenCalledWith(escopo, PEDIDO, 'Cancelado');
+  });
+
+  it('caminho da tela de cancelamento: o par que /api/bling/situacoes publicou passa', async () => {
+    const { deps, savePedidoStatus } = montarDeps();
+    const cancelado = SITUACOES_DA_CONTA.find((s) => s.nome === 'Cancelado')!;
+
+    const resposta = await createPedidoStatusHandler(deps)(corpo({ pedidoId: PEDIDO_ID, novaSituacaoId: cancelado.id, novaSituacaoNome: cancelado.nome }));
+
+    expect(resposta.status).toBe(200);
+    expect(savePedidoStatus).toHaveBeenCalledWith(escopo, PEDIDO, 'Cancelado');
+  });
+
+  it('id válido com nome adulterado: 400 antes de qualquer efeito, sem evento', async () => {
+    const { deps, updateSituacaoPedido, savePedidoStatus, alinharEstoque, eventos } = montarDeps();
+
+    // O id de "Em aberto" com o nome "Atendido": o Bling iria para um, o ORBITA para o outro.
+    const resposta = await createPedidoStatusHandler(deps)(corpo({ pedidoId: PEDIDO_ID, novaSituacaoId: 6, novaSituacaoNome: 'Atendido' }));
+
+    expect(resposta.status).toBe(400);
+    expect((await resposta.json()).error).toContain('não corresponde');
+    expect(updateSituacaoPedido).not.toHaveBeenCalled();
+    expect(savePedidoStatus).not.toHaveBeenCalled();
+    expect(alinharEstoque).not.toHaveBeenCalled();
+    expect(eventos).toEqual([]);
+  });
+
+  it('id que não existe na conta (por exemplo, um código numérico de status): 400, nada alterado', async () => {
+    const { deps, updateSituacaoPedido, savePedidoStatus } = montarDeps();
+
+    const resposta = await createPedidoStatusHandler(deps)(corpo({ pedidoId: PEDIDO_ID, novaSituacaoId: 999, novaSituacaoNome: 'Atendido' }));
+
+    expect(resposta.status).toBe(400);
+    expect(updateSituacaoPedido).not.toHaveBeenCalled();
+    expect(savePedidoStatus).not.toHaveBeenCalled();
+  });
+
+  it('falha ao ler as situações (tipada ou exceção): 502 sem mudança e sem situação inventada', async () => {
+    for (const situacoes of [
+      vi.fn().mockResolvedValue({ _tag: 'BlingFailed', failure: { _tag: 'BlingProviderFailure', type: 'SERVER_ERROR', status: 503, message: 'x', duplicateSale: false } }),
+      vi.fn().mockRejectedValue(new TypeError('fetch failed')),
+    ]) {
+      const { deps, updateSituacaoPedido, savePedidoStatus, eventos } = montarDeps({ bling: { situacoes } });
+
+      const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+      const json = await resposta.json();
+
+      expect(resposta.status).toBe(502);
+      expect(json.error).toContain('Nada foi alterado');
+      expect(json.reconciliacao).toBeUndefined();
+      expect(updateSituacaoPedido).not.toHaveBeenCalled();
+      expect(savePedidoStatus).not.toHaveBeenCalled();
+      expect(eventos).toEqual([]);
+    }
+  });
+});
+
+describe('POST /api/pedidos/status — saldo não comprovado não altera estoque (PRE-006C, revisão)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const comProduto = (estoque: number) => ({
+    findProdutoIdsDoPedido: vi.fn().mockResolvedValue(['p1']),
+    findProdutosByIds: vi.fn().mockResolvedValue([{ id: 'p1', blingId: '100', estoque }]),
+  });
+
+  it('produto sem saldo comprovado no mapa: nenhuma RPC de alinhamento e pendência de reconciliação', async () => {
+    const { deps, alinharEstoque } = montarDeps({
+      store: comProduto(5),
+      bling: { getSaldos: vi.fn().mockResolvedValue(new Map<string, number>()) },
+    });
+
+    const resposta = await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+
+    expect(alinharEstoque).not.toHaveBeenCalled();
+    expect(await resposta.json()).toMatchObject({ success: true, estoque: 'requer_reconciliacao' });
+  });
+
+  it('saldo zero informado pelo Bling é alinhado como zero', async () => {
+    const { deps, alinharEstoque } = montarDeps({
+      store: comProduto(5),
+      bling: { getSaldos: vi.fn().mockResolvedValue(new Map([['100', 0]])) },
+    });
+
+    await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+
+    expect(alinharEstoque).toHaveBeenCalledWith(escopo, 'p1', 5, 0);
   });
 });

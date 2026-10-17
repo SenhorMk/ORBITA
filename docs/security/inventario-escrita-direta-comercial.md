@@ -305,6 +305,21 @@ Base: `main` em `22ad2b5`. Ambiente de verificação: Windows local; laboratóri
    - O módulo comum `criarAuditoriaComercial` nunca lança. A falha da trilha vai para o log técnico redigido, sem transformar um efeito confirmado em falha reexecutável.
    - Na venda manual, a auditoria decora as duas portas do ledger (`comAuditoriaDaVenda`) e registra só o desfecho que o banco gravou.
 
+### Revisão do PR #115: saldo comprovado e situação confirmada
+
+1. **Saldo ausente virava zero.** O adapter fazia `Number(saldoFisicoTotal ?? saldoFisico ?? 0)`, e um produto sem saldo informado gerava uma saída de estoque.
+   - Agora `saldosComprovados` (`pedidos/status/saldosDoBling.ts`) só aceita saldo explícito e inteiro finito. O zero informado continua valendo.
+   - Fica fora do mapa e pendente de reconciliação: produto sem campo, `null`, texto, fração, formato desconhecido ou repetido com valores diferentes. Nenhuma RPC de alinhamento recebe saldo não comprovado.
+2. **O nome do navegador decidia o status local.** O id ia ao Bling e o `novaSituacaoNome` do navegador virava o status no ORBITA, então os dois podiam divergir.
+   - Agora a situação é confirmada pela conta antes de qualquer efeito, com `obterSituacoesDePedidoDeVenda`.
+   - Id fora da conta ou nome divergente → `400`. Falha na leitura → `502` "nada foi alterado". Nos três casos não há mudança no Bling nem evento.
+   - O status local vem do nome confirmado. Ids de situação são por conta e não se confundem com o código numérico de status.
+3. **Contraprovas:** cada sabotagem derrubou o teste correspondente.
+   - K1: reintroduzir `?? 0`.
+   - K2: voltar a confiar em `novaSituacaoNome`.
+   - K3: aceitar id fora da conta.
+   - K4: inventar situação quando a leitura falha.
+
 ### Decisões pendentes (não implementadas)
 
 1. **Capacidade do SAC.** O modelo tem só `organization:access` e `organization:manage`.

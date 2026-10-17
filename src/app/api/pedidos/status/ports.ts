@@ -10,6 +10,7 @@
 import type { NextResponse } from 'next/server';
 
 import type { BlingCallResult } from '@/lib/integrations/bling/pedidoVendaContract';
+import type { Situacao } from '@/lib/integrations/bling/situacoesContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import type { AuditarComercial } from '@/services/auditoriaComercial';
 import type { Pedido } from '@/types';
@@ -80,8 +81,17 @@ export interface PedidoStatusBlingPort {
    * contra o schema oficial porque este endpoint não tem corpo.
    */
   updateSituacaoPedido(blingPedidoId: string, situacaoId: number): Promise<BlingCallResult<void>>;
-  /** `GET /estoques/saldos?idsProdutos[]=…` — saldo físico atual por produto. */
+  /**
+   * `GET /estoques/saldos?idsProdutos[]=…` — saldo físico **comprovado** por
+   * produto. Produto sem saldo explícito e inteiro não está no mapa.
+   */
   getSaldos(blingIds: readonly string[]): Promise<ReadonlyMap<string, number>>;
+  /**
+   * As situações de pedido de venda **desta conta** (`obterSituacoesDePedidoDeVenda`):
+   * a autoridade sobre qual id existe e qual nome ele tem. Ids são por conta,
+   * e não se confundem com o código numérico de status do pedido.
+   */
+  situacoes(): Promise<BlingCallResult<readonly Situacao[]>>;
 }
 
 export interface PedidoStatusAuthPort {
