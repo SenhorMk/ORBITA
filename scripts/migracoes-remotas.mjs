@@ -3,7 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { readCanonicalLedger, SUPABASE_CONFIG_PATH } from './database-ledger.mjs';
+import { descreverErroReportavel, erroReportavel } from './erro-reportavel-do-banco.mjs';
+import { lerOpcoes } from './migracoes-remotas-opcoes.mjs';
 import { err, failureMessage, ok } from './script-result.mjs';
+
+export { erroReportavel } from './erro-reportavel-do-banco.mjs';
+export { lerLimite, lerOpcoes } from './migracoes-remotas-opcoes.mjs';
 
 /**
  * Estado das migrações num banco remoto, e aplicação das que faltam.
@@ -45,7 +50,16 @@ const SQL_LER_REGISTRO = 'select arquivo, sha256 from public.migracoes_aplicadas
 /** A tabela de registro existe? Perguntar é mais barato que criar sem precisar. */
 const SQL_REGISTRO_EXISTE = "select to_regclass('public.migracoes_aplicadas') is not null as existe";
 
-/** Dentro da transação: outra execução registrou esta migration enquanto isto rodava? */
+/**
+ * Exclusão mútua entre executores: trava consultiva de **transação**, pega
+ * logo depois do `begin` e antes de decidir executar. O Postgres a solta no
+ * `commit` ou no `rollback` — nunca fica pendurada se o processo morrer.
+ * Um segundo executor espera aqui e, ao entrar, relê o registro: o que o
+ * primeiro gravou já está commitado.
+ */
+const SQL_TRAVA_DA_FERRAMENTA = "select pg_advisory_xact_lock(hashtextextended('orbita:migracoes-remotas', 0))";
+
+/** Releitura depois da trava: outra execução já registrou esta migration? */
 const SQL_JA_REGISTRADA = 'select 1 from public.migracoes_aplicadas where arquivo = $1';
 
 /** O nome canônico do arquivo, sem o caminho relativo do ledger. */
@@ -62,17 +76,6 @@ function caminhoDaMigracao(migracao) {
   return path.resolve(path.dirname(SUPABASE_CONFIG_PATH), migracao.path);
 }
 
-/**
- * Mensagem de falha do banco que pode ir para o relatório: o SQLSTATE e a
- * mensagem principal. Nunca `detail` nem `where`, que é onde o Postgres põe
- * valores de linha (dado pessoal) numa violação de constraint.
- */
-function falhaRelatavel(causa) {
-  if (!causa || typeof causa !== 'object') return String(causa);
-  const codigo = typeof causa.code === 'string' ? `${causa.code} ` : '';
-  const mensagem = causa instanceof Error ? causa.message.split('\n')[0] : 'falha sem mensagem';
-  return `${codigo}${mensagem}`;
-}
 
 /**
  * Compara o ledger do repositório com o que o banco alvo registra.
@@ -119,46 +122,6 @@ export async function estadoDasMigracoes({ client, ledgerResult = readCanonicalL
   const desconhecidas = [...registradas.keys()].filter((arquivo) => !conhecidas.has(arquivo));
 
   return ok({ pendentes, aplicadas: registradas.size, divergentes, registroAusente, foraDeOrdem, desconhecidas });
-}
-
-/**
- * Lê o limite da execução. Duas formas, nunca as duas juntas:
- *
- * - `--ate-arquivo <nome.sql>`: o nome canônico exato (`80_comandos_de_clientes_e_pedidos.sql`).
- *   Só nome de arquivo: um número aqui seria ambíguo entre o prefixo do nome e
- *   o ordinal do ledger, que são diferentes (o `80_…` é o ordinal 83).
- * - `--ate-ordem <n>`: o `order` do ledger (`database/migrations.lock.json`).
- *
- * @param {readonly string[]} argv
- * @returns {{ readonly _tag: 'ok', readonly value: { readonly _tag: 'SemLimite' } | { readonly _tag: 'Arquivo', readonly nome: string } | { readonly _tag: 'Ordem', readonly ordem: number } } | { readonly _tag: 'err', readonly error: Readonly<Record<string, unknown>> }}
- */
-export function lerLimite(argv) {
-  const valor = (flag) => {
-    const i = argv.indexOf(flag);
-    if (i < 0) return undefined;
-    const v = argv[i + 1];
-    return v === undefined || v.startsWith('--') ? null : v;
-  };
-  const arquivo = valor('--ate-arquivo');
-  const ordem = valor('--ate-ordem');
-
-  if (arquivo !== undefined && ordem !== undefined) {
-    return err('LimiteAmbiguo', 'Use --ate-arquivo OU --ate-ordem, não os dois.');
-  }
-  if (arquivo === null || ordem === null) {
-    return err('LimiteSemValor', 'O limite precisa de um valor: --ate-arquivo <nome.sql> ou --ate-ordem <n>.');
-  }
-  if (arquivo !== undefined) {
-    if (!/^\d+_[a-z0-9_]+\.sql$/u.test(arquivo)) {
-      return err('LimiteInvalido', `--ate-arquivo espera o nome canônico exato do arquivo (ex.: 80_comandos_de_clientes_e_pedidos.sql), não "${arquivo}".`);
-    }
-    return ok({ _tag: 'Arquivo', nome: arquivo });
-  }
-  if (ordem !== undefined) {
-    if (!/^[1-9]\d*$/u.test(ordem)) return err('LimiteInvalido', `--ate-ordem espera um inteiro positivo, não "${ordem}".`);
-    return ok({ _tag: 'Ordem', ordem: Number(ordem) });
-  }
-  return ok({ _tag: 'SemLimite' });
 }
 
 /**
@@ -228,7 +191,6 @@ export function planejarAplicacao({ estado, limite, ledger, fileSystem = fs }) {
  * @param {(mensagem: string) => void} [options.log] - Saída de progresso.
  */
 export async function aplicarPendentes({ client, pendentes, fileSystem = fs, log = console.log }) {
-  await client.query(DDL_REGISTRO);
   const aplicadas = [];
 
   for (const migracao of pendentes) {
@@ -243,7 +205,9 @@ export async function aplicarPendentes({ client, pendentes, fileSystem = fs, log
 
     try {
       await client.query('begin');
-      // Outra execução pode ter registrado esta migration entretanto.
+      // Trava antes de decidir; o registro é criado e relido já sob ela.
+      await client.query(SQL_TRAVA_DA_FERRAMENTA);
+      await client.query(DDL_REGISTRO);
       if ((await client.query(SQL_JA_REGISTRADA, [migracao.path])).rows.length > 0) {
         await client.query('rollback');
         return err('MigracaoJaRegistrada', `${migracao.path} foi registrada por outra execução; parei sem aplicá-la`, {
@@ -259,12 +223,13 @@ export async function aplicarPendentes({ client, pendentes, fileSystem = fs, log
       aplicadas.push(migracao.path);
       log(`aplicada  ${migracao.path}`);
     } catch (causa) {
-      await client.query('rollback');
+      await client.query('rollback').catch(() => {});
+      const reportavel = erroReportavel(causa);
       return err(
         'MigracaoRemotaFalhou',
-        `${migracao.path} falhou e foi revertida; as ${aplicadas.length} anteriores continuam aplicadas`,
-        { arquivo: migracao.path, aplicadasAntes: aplicadas },
-        falhaRelatavel(causa),
+        `${nomeDoArquivo(migracao)} falhou e foi revertida (${descreverErroReportavel(reportavel)}); `
+          + `as ${aplicadas.length} anteriores continuam aplicadas`,
+        { arquivo: migracao.path, aplicadasAntes: aplicadas, ...reportavel },
       );
     }
   }
@@ -320,29 +285,35 @@ function linhaDoPlano(prefixo, m) {
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve('scripts/migracoes-remotas.mjs')) {
   const { default: pg } = await import('pg');
 
-  const alvo = lerAlvo(process.argv, process.env);
+  // Tudo validado antes de abrir conexão: nenhuma recusa acontece depois de
+  // uma escrita remota.
+  const opcoes = lerOpcoes(process.argv.slice(2));
+  if (opcoes._tag === 'err') {
+    console.error(failureMessage(opcoes.error));
+    process.exit(1);
+  }
+  const alvo = lerAlvo(opcoes.value.url === undefined ? [] : ['--url', opcoes.value.url], process.env);
   if (alvo._tag === 'err') {
     console.error(failureMessage(alvo.error));
     process.exit(1);
   }
-  const limite = lerLimite(process.argv);
-  if (limite._tag === 'err') {
-    console.error(failureMessage(limite.error));
-    process.exit(1);
-  }
-
-  const aplicar = process.argv.includes('--aplicar');
-  const adotar = process.argv.includes('--adotar');
-  const confirmado = process.argv.includes('--confirmar');
-  const previa = process.argv.includes('--previa');
-  if (previa && (aplicar || adotar)) {
-    console.error('--previa é somente leitura; não combina com --aplicar nem --adotar.');
-    process.exit(1);
-  }
+  const { aplicar, adotar, previa, confirmar: confirmado } = opcoes.value;
+  const limite = { value: opcoes.value.limite };
 
   // `sslmode=disable` só quando a URL pede (laboratório local); o padrão é TLS.
   const semTls = new URL(alvo.value).searchParams.get('sslmode') === 'disable';
   const client = new pg.Client({ connectionString: alvo.value, ssl: semTls ? false : { rejectUnauthorized: false } });
+  // Qualquer exceção não prevista (conexão, autenticação, consulta) sai só
+  // com o SQLSTATE e a categoria — nem mensagem nem pilha, que podem carregar
+  // usuário, host completo ou valor de linha.
+  process.on('uncaughtException', (causa) => {
+    console.error(`Falha inesperada (${descreverErroReportavel(erroReportavel(causa))}).`);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (causa) => {
+    console.error(`Falha inesperada (${descreverErroReportavel(erroReportavel(causa))}).`);
+    process.exit(1);
+  });
   await client.connect();
   // Só o host: a URL carrega usuário e senha, e não vai para nenhum relatório.
   console.log(`Banco alvo (host): ${new URL(alvo.value).hostname}\n`);
@@ -354,7 +325,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve('scripts/m
         process.exit(1);
       }
       const r = await adotarEstadoAtual({ client });
-      if (r._tag === 'err') throw new Error(failureMessage(r.error));
+      if (r._tag === 'err') {
+        console.error(failureMessage(r.error));
+        process.exit(1);
+      }
       console.log(`${r.value} migrações registradas como já aplicadas.`);
       process.exit(0);
     }

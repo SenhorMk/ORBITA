@@ -20,6 +20,7 @@ import { runArquivamentoRaceRehearsal } from './database-concurrency-arquivament
 import { runTombstoneRaceRehearsal } from './database-concurrency-tombstone.mjs';
 import { runContatoExcluidoRaceRehearsal } from './database-concurrency-contato.mjs';
 import { runComandosComerciaisRaceRehearsal } from './database-concurrency-comandos-comerciais.mjs';
+import { runMigracoesRemotasRaceRehearsal } from './database-concurrency-migracoes-remotas.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -49,6 +50,7 @@ let outcomeArquivamento;
 let outcomeTombstone;
 let outcomeContato;
 let outcomeComandosComerciais;
+let outcomeMigracoesRemotas;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -67,6 +69,7 @@ try {
     outcomeTombstone = started;
     outcomeContato = started;
     outcomeComandosComerciais = started;
+    outcomeMigracoesRemotas = started;
   } else {
     const alinhado = await alinharStubDeAuthComProducao();
     const applied = alinhado._tag === 'err' ? alinhado : await applyCanonicalMigrations({});
@@ -86,6 +89,7 @@ try {
       outcomeTombstone = applied;
       outcomeContato = applied;
       outcomeComandosComerciais = applied;
+      outcomeMigracoesRemotas = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
@@ -102,6 +106,7 @@ try {
       outcomeTombstone = await runTombstoneRaceRehearsal();
       outcomeContato = await runContatoExcluidoRaceRehearsal();
       outcomeComandosComerciais = await runComandosComerciaisRaceRehearsal();
+      outcomeMigracoesRemotas = await runMigracoesRemotasRaceRehearsal();
     }
   }
 } finally {
@@ -163,6 +168,7 @@ const relatos = [
   [outcomeTombstone, (v) => v.relato],
   [outcomeContato, (v) => v.relato],
   [outcomeComandosComerciais, (v) => v.relato],
+  [outcomeMigracoesRemotas, (v) => v.relato],
 ];
 
 const falhou = relatos.map(([outcome, resumo]) => relatar(outcome, resumo)).includes(true);

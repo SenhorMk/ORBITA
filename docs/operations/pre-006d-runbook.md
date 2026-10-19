@@ -55,15 +55,46 @@ A ferramenta recusa, antes de tocar no banco:
 - registro que não é prefixo do ledger (lacuna) ou que o ledger não conhece;
 - arquivo local diferente do checksum do ledger. Isso é conferido na prévia e de novo antes de cada aplicação.
 
-Na aplicação, se outra execução registrar a mesma migration, ela para sem
-reaplicar. As posteriores ao limite não são executadas nem registradas.
+As posteriores ao limite não são executadas nem registradas.
+
+**Dois executores ao mesmo tempo.** Cada migration roda assim:
+1. `begin`;
+2. trava consultiva de transação (`pg_advisory_xact_lock`), pega antes de
+   decidir executar;
+3. releitura do registro;
+4. o SQL;
+5. o registro;
+6. `commit`.
+
+O Postgres solta a trava no `commit` ou no `rollback`, inclusive se o processo
+morrer. Um segundo executor espera, entra, encontra o registro do primeiro e
+para com `MigracaoJaRegistrada`, sem executar o SQL.
+
+Isso foi provado com duas conexões reais no `test:db`
+(`scripts/database-concurrency-migracoes-remotas.mjs`): o SQL rodou uma vez e
+há um registro. Sem a trava, o mesmo ensaio mostrou o SQL executando duas vezes.
+
+**Opções.** Todas são lidas antes de qualquer conexão, e a ferramenta recusa:
+- opção desconhecida ou repetida (inclusive com o mesmo valor);
+- opção sem valor;
+- argumento solto;
+- `--ate-arquivo` com `--ate-ordem`;
+- `--adotar` com limite, com `--aplicar` ou com `--previa`;
+- `--previa` com `--aplicar`.
 
 `--adotar` agora é recusado em banco que já registra migrations: ele marcaria
 as pendentes sem executá-las. **Não usar `--adotar` no Staging.**
 
-A saída mostra só o host do alvo (nunca a URL, que carrega usuário e senha) e,
-em falha, só o SQLSTATE e a mensagem principal. Nunca o `DETAIL`, onde o
-Postgres põe valores de linha.
+A saída mostra só o host do alvo (nunca a URL, que carrega usuário e senha).
+Em falha, mostra o nome técnico da migration, o SQLSTATE validado e uma
+categoria de uma lista fechada (por exemplo `violacao_de_integridade` ou
+`tempo_de_lock_esgotado`).
+- **Nenhum texto do banco** sai: nem `message`, nem `DETAIL`, nem `HINT`, que
+  podem carregar valores de linha.
+- Uma exceção não prevista (conexão, autenticação) sai do mesmo jeito, sem
+  mensagem nem pilha.
+- O diagnóstico completo fica no log do próprio Postgres, consultado no painel
+  por quem opera.
 
 O ensaio ponta a ponta no laboratório (Staging simulado com 77 registradas)
 confirmou cada etapa:

@@ -8,9 +8,13 @@ import {
   aplicarPendentes,
   estadoDasMigracoes,
   lerAlvo,
+  erroReportavel,
   lerLimite,
+  lerOpcoes,
   planejarAplicacao,
 } from './migracoes-remotas.mjs';
+import { failureMessage } from './script-result.mjs';
+import { spawnSync } from 'node:child_process';
 
 const sha = (conteudo: string) => createHash('sha256').update(conteudo).digest('hex');
 
@@ -400,5 +404,110 @@ describe('limite exato da execução (Marco A / Marco B)', () => {
     expect(r._tag).toBe('err');
     expect(JSON.stringify(r)).toContain('23505');
     expect(JSON.stringify(r)).not.toContain('pessoa@exemplo.com');
+  });
+});
+
+describe('bloqueio 1 — exclusão mútua entre executores', () => {
+  it('cada migration: begin → trava de transação → registro relido → SQL → registro → commit', async () => {
+    const registradas = [...JA_APLICADAS];
+    const client = clienteFalso(registradas);
+
+    await aplicarPendentes({ client, pendentes: [CADEIA.value.migrations[2]!], fileSystem: disco(), log: () => {} });
+
+    const seq = client.executados;
+    const i = (trecho: string) => seq.findIndex((x) => x.includes(trecho));
+    expect(i('begin')).toBeGreaterThanOrEqual(0);
+    expect(i('pg_advisory_xact_lock')).toBeGreaterThan(i('begin'));
+    expect(i('select 1 from public.migracoes_aplicadas')).toBeGreaterThan(i('pg_advisory_xact_lock'));
+    expect(i('-- migration 78')).toBeGreaterThan(i('select 1 from public.migracoes_aplicadas'));
+    expect(i('commit')).toBeGreaterThan(i('-- migration 78'));
+    // A trava é de transação (xact): solta no commit/rollback, sem unlock manual.
+    expect(seq.some((x) => /pg_advisory_unlock|pg_advisory_lock\(/u.test(x))).toBe(false);
+  });
+});
+
+describe('bloqueio 2 — relatório sem texto do banco', () => {
+  const EMAIL = 'pessoa.sintetica@exemplo.test';
+
+  it('mensagem principal com e-mail sintético: o e-mail não aparece em nenhuma saída', async () => {
+    const client = {
+      executados: [] as string[],
+      query: vi.fn(async (sql: string) => {
+        if (sql.startsWith('-- migration')) {
+          throw Object.assign(new Error(`duplicate key value violates unique constraint for ${EMAIL}`), {
+            code: '23505', detail: `Key (email)=(${EMAIL}) already exists.`, hint: EMAIL, where: EMAIL,
+          });
+        }
+        return { rows: [] };
+      }),
+    };
+
+    const r = await aplicarPendentes({ client, pendentes: [CADEIA.value.migrations[2]!], fileSystem: disco(), log: () => {} });
+
+    expect(r._tag).toBe('err');
+    if (r._tag !== 'err') return;
+    const saidas = [JSON.stringify(r), failureMessage(r.error), String(r.error.message)];
+    for (const saida of saidas) expect(saida).not.toContain(EMAIL);
+    expect(r.error).toMatchObject({ sqlstate: '23505', categoria: 'violacao_de_integridade', arquivo: '../database/75_arquivamento_de_produto.sql' });
+    expect(failureMessage(r.error)).toContain('75_arquivamento_de_produto.sql');
+    expect(failureMessage(r.error)).toContain('SQLSTATE 23505');
+  });
+
+  it('erroReportavel: só SQLSTATE válido e categoria da lista fechada', () => {
+    expect(erroReportavel(Object.assign(new Error(EMAIL), { code: '42501' }))).toEqual({ sqlstate: '42501', categoria: 'permissao_insuficiente' });
+    expect(erroReportavel(Object.assign(new Error(EMAIL), { code: 'P0001' }))).toEqual({ sqlstate: 'P0001', categoria: 'erro_levantado_pela_migration' });
+    expect(erroReportavel(Object.assign(new Error(EMAIL), { code: `${EMAIL}` }))).toEqual({ sqlstate: null, categoria: 'falha_sem_sqlstate' });
+    expect(erroReportavel(new Error(EMAIL))).toEqual({ sqlstate: null, categoria: 'falha_sem_sqlstate' });
+    expect(JSON.stringify(erroReportavel(Object.assign(new Error(EMAIL), { code: 'ZZ999' })))).not.toContain(EMAIL);
+  });
+});
+
+describe('bloqueio 3 — opções repetidas ou incompatíveis são recusadas', () => {
+  const recusa = (argv: string[], tag: string) => expect(lerOpcoes(argv)).toMatchObject({ _tag: 'err', error: { _tag: tag } });
+
+  it('limite repetido', () => {
+    recusa(['--ate-arquivo', '80_comandos_de_clientes_e_pedidos.sql', '--ate-arquivo', '81_revogar_dml_direto_comercial.sql'], 'OpcaoRepetida');
+    recusa(['--ate-ordem', '83', '--ate-ordem', '84'], 'OpcaoRepetida');
+    // Repetido com o MESMO valor também: a intenção não é inequívoca.
+    recusa(['--ate-ordem', '83', '--ate-ordem', '83'], 'OpcaoRepetida');
+  });
+
+  it('--adotar com limite, com --aplicar ou com --previa', () => {
+    recusa(['--adotar', '--confirmar', '--ate-arquivo', '80_comandos_de_clientes_e_pedidos.sql'], 'CombinacaoIncompativel');
+    recusa(['--adotar', '--confirmar', '--ate-ordem', '83'], 'CombinacaoIncompativel');
+    recusa(['--adotar', '--aplicar', '--confirmar'], 'CombinacaoIncompativel');
+    recusa(['--adotar', '--previa'], 'CombinacaoIncompativel');
+  });
+
+  it('o que faria um pedido ser ignorado em silêncio', () => {
+    recusa(['--aplicar', '--previa'], 'CombinacaoIncompativel');
+    recusa(['--aplicar', '--aplicar', '--confirmar'], 'OpcaoRepetida');
+    recusa(['--url', 'postgresql://a', '--url', 'postgresql://b'], 'OpcaoRepetida');
+    recusa(['--url'], 'AlvoSemValor');
+    recusa(['--ate-limite', '83'], 'OpcaoDesconhecida');
+    recusa(['--ate-arquivo=80_comandos_de_clientes_e_pedidos.sql'], 'OpcaoDesconhecida');
+    recusa(['--ate-arquivo', '80_comandos_de_clientes_e_pedidos.sql', '81_revogar_dml_direto_comercial.sql'], 'ArgumentoInesperado');
+    recusa(['80_comandos_de_clientes_e_pedidos.sql'], 'ArgumentoInesperado');
+  });
+
+  it('a combinação válida dos marcos passa', () => {
+    expect(lerOpcoes(['--aplicar', '--url', 'postgresql://alvo', '--confirmar', '--ate-arquivo', '80_comandos_de_clientes_e_pedidos.sql']))
+      .toMatchObject({ _tag: 'ok', value: { aplicar: true, confirmar: true, adotar: false, previa: false, limite: { _tag: 'Arquivo', nome: '80_comandos_de_clientes_e_pedidos.sql' } } });
+  });
+
+  it('a CLI recusa antes de conectar: o alvo nem é tentado', () => {
+    // Porta local fechada: se a CLI conectasse, a falha seria de conexão.
+    const alvo = 'postgresql://ninguem:segredo@127.0.0.1:9/nada?sslmode=disable';
+    for (const [extra, recusa] of [
+      [['--aplicar', '--ate-ordem', '83', '--ate-ordem', '84'], '--ate-ordem informada mais de uma vez.'],
+      [['--adotar', '--confirmar', '--ate-arquivo', '80_comandos_de_clientes_e_pedidos.sql'], '--adotar marca o ledger inteiro'],
+    ] as const) {
+      const r = spawnSync(process.execPath, ['scripts/migracoes-remotas.mjs', '--url', alvo, ...extra], { encoding: 'utf8' });
+      const saida = `${r.stdout}${r.stderr}`;
+      expect(r.status).toBe(1);
+      expect(saida).toContain(recusa);
+      expect(saida).not.toMatch(/Banco alvo|Falha inesperada|ECONNREFUSED/u);
+      expect(saida).not.toContain('segredo');
+    }
   });
 });

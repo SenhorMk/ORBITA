@@ -56,8 +56,17 @@ touching the database:
 - a local file whose bytes do not match the ledger checksum. It checks this
   again right before applying each migration.
 
-Output shows only the target host and, on failure, the SQLSTATE and main
-message, never `DETAIL`. Staged rollouts follow
+Every option is parsed before connecting. Unknown, repeated or valueless
+options, stray arguments, both limits together, `--adotar` with a limit,
+`--aplicar` or `--previa`, and `--previa` with `--aplicar` are refused.
+
+Each migration takes a transaction-level advisory lock right after `begin`,
+re-reads the record and only then runs, so two operators never execute the
+same SQL.
+
+Output shows only the target host. On failure it shows the migration file, a
+validated SQLSTATE and a fixed category, never database text (`message`,
+`DETAIL`, `HINT`). Staged rollouts follow
 [`docs/operations/pre-006d-runbook.md`](../docs/operations/pre-006d-runbook.md).
 
 The target is never defaulted: without `--url` or `SUPABASE_DB_URL` the script
