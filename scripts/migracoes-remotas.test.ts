@@ -12,6 +12,7 @@ import {
   lerLimite,
   lerOpcoes,
   planejarAplicacao,
+  prepararConexao,
 } from './migracoes-remotas.mjs';
 import { failureMessage } from './script-result.mjs';
 import { spawnSync } from 'node:child_process';
@@ -509,5 +510,50 @@ describe('bloqueio 3 — opções repetidas ou incompatíveis são recusadas', (
       expect(saida).not.toMatch(/Banco alvo|Falha inesperada|ECONNREFUSED/u);
       expect(saida).not.toContain('segredo');
     }
+  });
+});
+
+describe('alvo malformado — a URL nunca vaza', () => {
+  const SENHA = 'Senha-Sintetica-7f3a9c';
+
+  it('a CLI recusa a URL inválida sem ecoar senha, URL, pilha ou input', () => {
+    // Malformadas de jeitos diferentes: host com colchete aberto, porta não numérica.
+    for (const alvo of [
+      `postgresql://ninguem:${SENHA}@[127.0.0.1/nada?sslmode=disable`,
+      `postgresql://ninguem:${SENHA}@127.0.0.1:porta/nada?sslmode=disable`,
+    ]) {
+      for (const origem of ['argumento', 'ambiente'] as const) {
+        const argv = origem === 'argumento' ? ['--url', alvo] : [];
+        const env = { ...process.env, SUPABASE_DB_URL: origem === 'ambiente' ? alvo : '' };
+        const r = spawnSync(process.execPath, ['scripts/migracoes-remotas.mjs', ...argv, '--previa'], { encoding: 'utf8', env });
+        const saida = `${r.stdout}${r.stderr}`;
+        // Vazamento primeiro: é o que este teste existe para pegar.
+        expect(saida).not.toContain(SENHA);
+        expect(saida).not.toContain(alvo);
+        expect(saida).not.toMatch(/ERR_INVALID_URL|input:|\bat .+\.mjs:\d+/u);
+        expect(r.status).toBe(1);
+        expect(saida).toContain('Alvo inválido');
+      }
+    }
+  });
+
+  it('prepararConexao: erro reportável só com categoria, sem causa nem URL', () => {
+    class Cliente { constructor(readonly config: unknown) {} }
+    const alvo = `postgresql://ninguem:${SENHA}@[127.0.0.1/nada`;
+    const r = prepararConexao(alvo, Cliente);
+    expect(r).toMatchObject({ _tag: 'err', error: { _tag: 'AlvoInvalido' } });
+    expect(r._tag === 'err' && 'cause' in r.error).toBe(false);
+    expect(JSON.stringify(r)).not.toContain(SENHA);
+
+    // Construtor do driver que recusa a configuração: mesma recusa, sem a causa.
+    const recusa = prepararConexao('postgresql://ninguem:x@127.0.0.1/nada', class {
+      constructor() { throw Object.assign(new TypeError(`bad ${SENHA}`), { input: SENHA }); }
+    });
+    expect(recusa).toMatchObject({ _tag: 'err', error: { _tag: 'AlvoInvalido' } });
+    expect(JSON.stringify(recusa)).not.toContain(SENHA);
+
+    const valido = prepararConexao(`postgresql://ninguem:${SENHA}@db.exemplo.test:5432/nada?sslmode=disable`, Cliente);
+    expect(valido).toMatchObject({ _tag: 'ok', value: { host: 'db.exemplo.test' } });
+    expect(valido._tag === 'ok' && (valido.value.client as Cliente).config).toMatchObject({ ssl: false });
   });
 });

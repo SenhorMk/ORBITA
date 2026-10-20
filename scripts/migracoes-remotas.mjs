@@ -277,12 +277,46 @@ export function lerAlvo(argv, env) {
   return ok(url);
 }
 
+/**
+ * Interpreta o alvo e constrói o cliente sem deixar a URL escapar.
+ *
+ * `new URL` e o parser do driver lançam com a URL inteira no erro (`input`,
+ * mensagem, pilha), e a URL carrega a senha. Qualquer falha aqui vira uma
+ * recusa fixa, sem a causa.
+ *
+ * @param {string} url - Conexão PostgreSQL, possivelmente com senha.
+ * @param {new (config: Record<string, unknown>) => unknown} Client - Construtor do driver.
+ * @returns {{ readonly _tag: 'ok', readonly value: { client: unknown, host: string } } | { readonly _tag: 'err', readonly error: Readonly<Record<string, unknown>> }}
+ */
+export function prepararConexao(url, Client) {
+  try {
+    const alvo = new URL(url);
+    // `sslmode=disable` só quando a URL pede (laboratório local); o padrão é TLS.
+    const semTls = alvo.searchParams.get('sslmode') === 'disable';
+    const client = new Client({ connectionString: url, ssl: semTls ? false : { rejectUnauthorized: false } });
+    return ok({ client, host: alvo.hostname });
+  } catch {
+    return err('AlvoInvalido', 'Alvo inválido: a URL de conexão não pôde ser interpretada (o valor não é exibido).');
+  }
+}
+
 /** Linha do plano: ordinal do ledger, nome do arquivo e início do checksum. Nada do alvo. */
 function linhaDoPlano(prefixo, m) {
   return `  ${prefixo}  ordem ${String(m.order).padStart(3)}  ${nomeDoArquivo(m)}  ${String(m.sha256).slice(0, 12)}`;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve('scripts/migracoes-remotas.mjs')) {
+  // Instalados antes de qualquer interpretação do alvo: uma exceção não prevista
+  // (URL, conexão, autenticação, consulta) sai só com o SQLSTATE e a categoria —
+  // nem mensagem, nem pilha, nem `input`, que podem carregar a URL com senha.
+  process.on('uncaughtException', (causa) => {
+    console.error(`Falha inesperada (${descreverErroReportavel(erroReportavel(causa))}).`);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (causa) => {
+    console.error(`Falha inesperada (${descreverErroReportavel(erroReportavel(causa))}).`);
+    process.exit(1);
+  });
   const { default: pg } = await import('pg');
 
   // Tudo validado antes de abrir conexão: nenhuma recusa acontece depois de
@@ -300,23 +334,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve('scripts/m
   const { aplicar, adotar, previa, confirmar: confirmado } = opcoes.value;
   const limite = { value: opcoes.value.limite };
 
-  // `sslmode=disable` só quando a URL pede (laboratório local); o padrão é TLS.
-  const semTls = new URL(alvo.value).searchParams.get('sslmode') === 'disable';
-  const client = new pg.Client({ connectionString: alvo.value, ssl: semTls ? false : { rejectUnauthorized: false } });
-  // Qualquer exceção não prevista (conexão, autenticação, consulta) sai só
-  // com o SQLSTATE e a categoria — nem mensagem nem pilha, que podem carregar
-  // usuário, host completo ou valor de linha.
-  process.on('uncaughtException', (causa) => {
-    console.error(`Falha inesperada (${descreverErroReportavel(erroReportavel(causa))}).`);
+  const conexao = prepararConexao(alvo.value, pg.Client);
+  if (conexao._tag === 'err') {
+    console.error(failureMessage(conexao.error));
     process.exit(1);
-  });
-  process.on('unhandledRejection', (causa) => {
-    console.error(`Falha inesperada (${descreverErroReportavel(erroReportavel(causa))}).`);
-    process.exit(1);
-  });
+  }
+  const { client } = conexao.value;
   await client.connect();
   // Só o host: a URL carrega usuário e senha, e não vai para nenhum relatório.
-  console.log(`Banco alvo (host): ${new URL(alvo.value).hostname}\n`);
+  console.log(`Banco alvo (host): ${conexao.value.host}\n`);
 
   try {
     if (adotar) {
