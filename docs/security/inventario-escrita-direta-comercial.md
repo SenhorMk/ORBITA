@@ -498,5 +498,6 @@ A primeira rodada mostrou dois ajustes, ambos feitos no teste antes do commit:
 - **Banco remoto:** a 81 só vale depois de aplicada, e as 75–80 podem não estar lá. Siga o runbook.
 - **Tabela nova:** os privilégios padrão de `supabase_admin` concedem ALL a `anon`/`authenticated` em tabela criada por ele. Uma tabela nova precisa de revogação explícita na própria migration; o `catalog_security` cobre que toda tabela gravável tenha RLS.
 - **SEC-01 fora do escopo comercial:** pela leitura do SQL, sem medição neste ticket, migrations antigas também concedem DML a `authenticated` em `titulos_financeiros`, `contas_financeiras`, `categorias_financeiras`, `fornecedores`, `documentos_fiscais`, `conexoes_integracao` e `organizacoes`. Algumas podem ter sido revogadas depois. Pertencem aos tickets donos (PRE-007A, PRE-008 e fiscal/integrações).
+  - **PRE-007A (migration 82):** as quatro financeiras foram medidas e revogadas; ver [`inventario-escrita-direta-financeira.md`](inventario-escrita-direta-financeira.md).
 - **Decisões do PRE-006C:** seguem pendentes e não mudam aqui (capacidade do SAC, venda manual por `member`, contato recriado pelo SAC, PUT em pedido `#MANUAL-`).
 - **E2E:** não executado, porque não há ambiente E2E descartável (as specs rodam contra o ambiente publicado e o Bling real). A evidência é o laboratório mais os testes de rota e de tela.
