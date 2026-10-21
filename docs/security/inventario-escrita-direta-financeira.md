@@ -147,6 +147,8 @@ foram conferidos por hash, iguais no fim.
 | cancelamento sem a chamada de auditoria | 31–34 |
 | cancelamento sem conferir `pedido_id` | 35 |
 | cancelamento falhando por outro erro que não a auditoria | 32 |
+| a 82 **sem o REVOKE**, aplicada sobre S84 | a própria migration aborta: `P0001 PRE-007A: authenticated ainda escreve em public.titulos_financeiros` |
+| a 82 sem o REVOKE **e** sem a autoverificação | aplica, e o pgTAP derruba 1–7, 9, 10, 13 e 20 |
 | `revoke select on titulos_financeiros from authenticated` | o arquivo aborta (`permission denied for table titulos_financeiros`) |
 | `revoke execute on excluir_lancamento_interno_auditado from service_role` | o arquivo aborta (`permission denied for function …`) |
 
@@ -154,7 +156,9 @@ A primeira rodada mostrou três furos no próprio teste, corrigidos antes do com
 - um 42501 de outra tabela, `tentativas_conta_pagar`, contava como negação;
 - os casos 23 e 24 aceitavam um 42501 da tabela em vez da função.
 
-**Contraprovas de aplicação (fatia 2):** cinco sabotagens, todas detectadas, com os arquivos restaurados idênticos.
+**Contraprovas de aplicação (fatia 2):** sete sabotagens, todas detectadas, com os arquivos restaurados idênticos.
+- cancelamento sem a sonda antes do Bling;
+- sonda que aceita qualquer erro diferente de `PGRST202`;
 - `DELETE` direto no repositório;
 - auditoria depois do efeito;
 - falha da auditoria engolida;
@@ -163,7 +167,7 @@ A primeira rodada mostrou três furos no próprio teste, corrigidos antes do com
 
 ## Riscos residuais
 
-- **Ordem de implantação** (ver o runbook): Marco A → Marco B → mesclar a fatia 1 → aplicar a 82 pela `main` → mesclar a fatia 2.
+- **Ordem de implantação** (ver o runbook, seção 1, com GO/NO-GO por passo e a matriz S77–S85 × main/fatia 1/fatia 2 provada com o ledger cortado): Marco A → Marco B → mesclar a fatia 1 → aplicar a 82 pela `main` → mesclar a fatia 2.
   - A fatia 1 não muda o código publicado; com ou sem a 82 ele é compatível.
   - Se a fatia 2 for publicada sem a 82 por engano, o cancelamento recusa antes do Bling (`Unavailable`), e a exclusão responde 500 sem apagar.
 - **Banco remoto:** a 82 só vale depois de aplicada, e só pode ser aplicada depois dos Marcos A (75–80) e B (81).
