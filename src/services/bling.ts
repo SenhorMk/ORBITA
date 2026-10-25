@@ -13,8 +13,10 @@ import type {
   ListagemDeContasPagar,
   ContaPagarRemota,
   ContatoBlingEntrada,
+  ContatoLegadoEntrada,
   ProdutoBlingEntrada,
 } from './blingPort';
+import { dadosFiscaisDoContatoSchema, type ContatoTipo, type IndicadorIe } from '../lib/config/clienteContract';
 import {
   blingFailure,
   parseBlingFailure,
@@ -866,31 +868,30 @@ export class BlingClient implements BlingPort {
    * Os nomes de campo são os do OpenAPI oficial: `telefone` e `indicadorIe`.
    * Campos inexistentes no schema (como `fone` ou `contribuinte`) seriam
    * aceitos pelo Bling e descartados em silêncio.
+   *
+   * `tipo` e `indicadorIe` vão como vieram, e sem eles nada é enviado
+   * (PRE-010). Não há padrão nem dedução pelo documento: um CNPJ não diz se a
+   * empresa é contribuinte, isenta ou não contribuinte de ICMS, e um `9`
+   * inventado é tão errado quanto um `1` inventado.
    */
-  async createContato(payload: { nome: string; email?: string; telefone?: string; cnpj?: string; tipo?: string; indicadorIe?: number; cep?: string; endereco?: string; numero?: string; bairro?: string; cidade?: string; uf?: string }): Promise<unknown> {
+  async createContato(payload: ContatoLegadoEntrada): Promise<unknown> {
+    const fiscal = dadosFiscaisDoContatoSchema.safeParse({ tipo: payload.tipo, indicadorIe: payload.indicadorIe });
+    if (!fiscal.success) {
+      throw new Error('Contato sem tipo de pessoa e tipo de contribuinte escolhidos: nada foi enviado ao Bling.');
+    }
+
     const url = `${this.baseUrl}/contatos`;
     const bodyPayload: Record<string, unknown> = {
       nome: payload.nome,
       situacao: 'A',
-      tipo: payload.tipo || 'F',           // F = Pessoa Física (padrão)
-      indicadorIe: payload.indicadorIe !== undefined ? payload.indicadorIe : 9,     // 9 = Não contribuinte ICMS (padrão seguro)
+      tipo: fiscal.data.tipo,
+      indicadorIe: fiscal.data.indicadorIe,
     };
 
     // Campos opcionais — só adicionar se tiverem valor
     if (payload.email) bodyPayload.email = payload.email;
     if (payload.telefone) bodyPayload.telefone = payload.telefone;
-
-    if (payload.cnpj) {
-      bodyPayload.numeroDocumento = payload.cnpj;
-      // Se CNPJ tem 14 dígitos e UI não enviou explicitamente, inferir
-      if (!payload.tipo || payload.indicadorIe === undefined) {
-        const cleanDoc = payload.cnpj.replace(/\D/g, '');
-        if (cleanDoc.length === 14) {
-          if (!payload.tipo) bodyPayload.tipo = 'J';
-          if (payload.indicadorIe === undefined) bodyPayload.indicadorIe = 1; // Contribuinte ICMS
-        }
-      }
-    }
+    if (payload.cnpj) bodyPayload.numeroDocumento = payload.cnpj;
 
     // Endereço
     const enderecoPayload: Record<string, unknown> = {};
@@ -1254,19 +1255,32 @@ export class BlingClient implements BlingPort {
     return { _tag: 'BlingOk', value: escolhida.id };
   }
 
-  /** Cadastra o contato e devolve o id, com falha tipada em vez de exceção. */
+  /**
+   * Cadastra o contato e devolve o id, com falha tipada em vez de exceção.
+   *
+   * Sem tipo de pessoa e indicador de IE válidos, recusa antes do `POST`.
+   */
   async criarContatoParaVenda(input: {
     nome: string;
     email: string | null;
     telefone: string | null;
     documento: string | null;
+    tipo: ContatoTipo;
+    indicadorIe: IndicadorIe;
   }): Promise<BlingCallResult<{ id: number }>> {
+    const fiscal = dadosFiscaisDoContatoSchema.safeParse({ tipo: input.tipo, indicadorIe: input.indicadorIe });
+    if (!fiscal.success) {
+      return blingFailure('VALIDATION_ERROR', 0, 'O cliente não tem tipo de pessoa e tipo de contribuinte escolhidos no cadastro.');
+    }
+
     try {
       const criado = (await this.createContato({
         nome: input.nome,
         email: input.email ?? undefined,
         telefone: input.telefone ?? undefined,
         cnpj: input.documento ?? undefined,
+        tipo: fiscal.data.tipo,
+        indicadorIe: fiscal.data.indicadorIe,
       })) as { data?: { id?: number | string } };
 
       const id = Number(criado?.data?.id);
