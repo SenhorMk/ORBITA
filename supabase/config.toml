@@ -148,7 +148,8 @@ schema_paths = [
   "../database/81_revogar_dml_direto_comercial.sql",
   "../database/82_revogar_dml_direto_financeiro.sql",
   "../database/83_revogar_dml_direto_fiscal.sql",
-  "../database/84_proteger_conexoes_de_integracao.sql"
+  "../database/84_proteger_conexoes_de_integracao.sql",
+  "../database/85_identidade_local_chatwoot.sql"
 ]
 
 [db.seed]

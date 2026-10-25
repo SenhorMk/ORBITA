@@ -435,6 +435,11 @@
       "order": 87,
       "path": "../database/84_proteger_conexoes_de_integracao.sql",
       "sha256": "4c38472fa64f321338ac9504f797bf57cdfe2cd1fca0154b66d8d23beef1bdd1"
+    },
+    {
+      "order": 88,
+      "path": "../database/85_identidade_local_chatwoot.sql",
+      "sha256": "a0278814d8e33598f589f3b5b5006c8988c110c94652674abc22f3b92295bfa8"
     }
   ],
   "references": [
