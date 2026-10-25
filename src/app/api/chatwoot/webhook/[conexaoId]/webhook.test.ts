@@ -221,6 +221,47 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
     expect(await res.json()).toEqual({ success: false, error: 'Inbox não identificada' });
   });
 
+  it('PRE-008: conexão desligada recusa a entrega assinada, sem mapping, inbox nem efeito', async () => {
+    connections[CONEXAO_A]!.status = 'desconectado';
+    mockUpsert.mockClear();
+    mockRpc.mockClear();
+    const inboxesAntes = insertedInboxRows.length;
+    try {
+      const body = JSON.stringify({
+        event: 'message_created',
+        account: { id: 1 },
+        id: 502,
+        content: 'mensagem depois de desligar',
+        inbox: { id: 7 },
+        conversation: { id: 207, inbox_id: 7, contact: { id: 107 } },
+        sender: { id: 107, type: 'contact' },
+      });
+      const { signature, timestamp } = signBody(SECRET_A, body);
+      const res = await postWebhook(CONEXAO_A, body, { signature, timestamp });
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ success: false, error: 'Conexão Chatwoot desligada' });
+      expect(insertedInboxRows).toHaveLength(inboxesAntes);
+      expect(mockRpc).not.toHaveBeenCalled();
+      expect(mockUpsert).not.toHaveBeenCalled();
+    } finally {
+      connections[CONEXAO_A]!.status = 'conectado';
+    }
+  });
+
+  it('PRE-008: conexão desligada com assinatura inválida responde 401, sem revelar o estado', async () => {
+    connections[CONEXAO_A]!.status = 'desconectado';
+    try {
+      const body = JSON.stringify({ event: 'message_created', account: { id: 1 } });
+      const { signature, timestamp } = signBody('segredo-errado', body);
+      const res = await postWebhook(CONEXAO_A, body, { signature, timestamp });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ success: false, error: 'Assinatura inválida' });
+    } finally {
+      connections[CONEXAO_A]!.status = 'conectado';
+    }
+  });
+
   it('processes a valid signed event, auto-registers the inbox mapping and marks it processed', async () => {
     mockInboxRegisterResult = { evento_id: 'evt-a1', status: 'received', is_duplicate: false, cached_response: null };
     mockUpsert.mockClear();

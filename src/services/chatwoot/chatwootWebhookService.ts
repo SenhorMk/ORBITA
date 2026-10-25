@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { credentialsVault, redactSensitiveData } from '@/lib/integrations/credentialsVault';
+import { conexaoDesligada } from '@/lib/integrations/conexaoDesligada';
 import { chatwootInboxService, generateChatwootIdempotencyKey } from '@/services/chatwootInboxService';
 import { registerChatwootInboxIfNeeded } from '@/services/chatwoot/chatwootInboxRegistration';
 import { parseOptionalInt, persistWebhookEffects } from '@/services/chatwoot/chatwootWebhookPersistence';
@@ -139,6 +140,15 @@ async function authenticateWebhookRequest(delivery: RawDelivery): Promise<Authen
 
   // A partir daqui, conexaoId/organizacao_id são autoridade: a assinatura provou
   // conhecimento do segredo específico desta conexão.
+
+  // Conexão desligada não produz efeito novo, mesmo com assinatura válida. A
+  // recusa vem depois da assinatura para não revelar o estado da conexão a
+  // quem não conhece o segredo.
+  if (conexaoDesligada(connection.status)) {
+    console.warn('⚠️ Webhook Chatwoot: entrega recusada, conexão desligada.');
+    return denied(403, 'Conexão Chatwoot desligada');
+  }
+
   let rawPayload: unknown;
   try {
     rawPayload = JSON.parse(rawBody);

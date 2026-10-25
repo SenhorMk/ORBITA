@@ -4,6 +4,7 @@ import { authorizeSignedServiceTenant } from '../../../../lib/auth';
 import { descreverErro } from '../../../../lib/erroLegivel';
 import { blingVaultCredentialsSchema } from '../../../../lib/config/blingCredentialsContract';
 import { credentialsVault } from '../../../../lib/integrations/credentialsVault';
+import { conexaoDesligada } from '../../../../lib/integrations/conexaoDesligada';
 
 /**
  * Resolução do tenant do webhook do Bling a partir do cofre de credenciais.
@@ -16,7 +17,9 @@ import { credentialsVault } from '../../../../lib/integrations/credentialsVault'
  * `POST /api/bling/connect` usa para **escrever**: renomear uma chave quebra as
  * duas pontas de uma vez, em vez de silenciar uma delas.
  *
- * Para autenticar, as conexões Bling de todas as organizações são candidatas;
+ * Para autenticar, as conexões Bling de todas as organizações são candidatas,
+ * menos as desligadas (PRE-008): o evento assinado por uma delas não casa com
+ * ninguém e é recusado sem efeito;
  * a primeira cujo secret confere o HMAC define a organização
  * (`authorizeSignedServiceTenant`).
  */
@@ -56,12 +59,12 @@ export function createSupabaseBlingWebhookTenantStore(
     async listConnections() {
       const { data, error } = await supabase
         .from('conexoes_integracao')
-        .select('id, organizacao_id')
+        .select('id, organizacao_id, status')
         .eq('provedor', 'bling');
       if (error) throw new Error(error.message);
       return (data || [])
-        .filter((row): row is { id: string; organizacao_id: string } =>
-          typeof row?.id === 'string' && typeof row?.organizacao_id === 'string')
+        .filter((row): row is { id: string; organizacao_id: string; status: unknown } =>
+          typeof row?.id === 'string' && typeof row?.organizacao_id === 'string' && !conexaoDesligada(row.status))
         .map((row) => ({ id: row.id, organizacaoId: row.organizacao_id }));
     },
 
