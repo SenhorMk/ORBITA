@@ -425,6 +425,11 @@
       "order": 85,
       "path": "../database/82_revogar_dml_direto_financeiro.sql",
       "sha256": "35d0340a3ca99e4a2b3e583a4d3617ecb90dabec73f63ee5815406a38f99fcc8"
+    },
+    {
+      "order": 86,
+      "path": "../database/83_revogar_dml_direto_fiscal.sql",
+      "sha256": "a1973f54bec9a9633f734603f195d0cf3d57ff647c15b4ada50b565896e9430e"
     }
   ],
   "references": [

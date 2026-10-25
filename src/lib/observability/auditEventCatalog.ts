@@ -153,6 +153,11 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   ['order.reconcile_required', 'orders', 'critical', 'user', 1825, 'Operação de pedido sem confirmação do Bling, ou confirmada lá e não refletida no ORBITA.'],
   ['order.manual_sale_recorded', 'orders', 'info', 'user', 1825, 'Venda manual registrada no Bling e no ORBITA.'],
   ['order.manual_sale_unresolved', 'orders', 'critical', 'user', 1825, 'Venda manual sem desfecho confirmado; tentativa bloqueada até a reconciliação.'],
+  // NF-e emitida (migration 83, PRE-007B). Gravado pela RPC
+  // `registrar_documento_fiscal_emitido` na mesma transação do documento.
+  // Metadata: ids técnicos, situação e operação — nunca a chave de acesso,
+  // destinatário, itens, valores ou corpo do Bling.
+  ['fiscal.document_issued', 'fiscal', 'info', 'user', 1825, 'NF-e emitida no Bling e registrada no ORBITA.', undefined, ['chave_acesso', 'xml_url', 'danfe_url']],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 
