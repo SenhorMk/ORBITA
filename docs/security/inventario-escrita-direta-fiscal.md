@@ -19,7 +19,7 @@ Nada foi executado em banco remoto.
 
 As regras viram teste em dois lugares:
 - `src/lib/escritaDiretaFiscal.test.ts`: o que o navegador e o servidor fazem;
-- `supabase/tests/final/escrita_direta_fiscal.test.sql` (34 casos): o que o banco concede.
+- `supabase/tests/final/escrita_direta_fiscal.test.sql` (36 casos): o que o banco concede.
 
 ## 1. Navegador (chave anônima + sessão do usuário)
 
@@ -103,11 +103,11 @@ auditoria, e há uma sonda antes do Bling.
 | Usuário sem capability | pgTAP 3–5 (`member` sem DML); `ticket-22-fronteira-fiscal.test.ts` (rota: `member` → 403, Bling não chamado) |
 | Entrada inválida | pgTAP 26–28 (pedido nulo, número em branco → `22023`; situação fora do contrato → `23514`) |
 | Fluxo autorizado e auditado | pgTAP 29–30 (nota na organização, com o ator, e um evento sem a chave); fatia 2: `nfe-registro-auditado.test.ts` |
-| Falha de auditoria aborta a mutação | pgTAP 23–24 (`0:0`: nem nota, nem evento) |
+| Falha de auditoria aborta a mutação | pgTAP 23–24 (nota nova: a falha tem de ser a recusa anti-forjamento, `P0001` com a mensagem exata; depois, `0:0`: nem nota, nem evento) e 34–35 (nota existente: a mesma recusa, e a linha fica idêntica por hash, sem evento) |
 | Leitura conforme papel | pgTAP 19–21 |
 | Navegador e sessão do usuário sem acesso; gravador e caller fixados | `escritaDiretaFiscal.test.ts` |
 | A `main` sem a fatia 2 continua compatível com a 83 | pgTAP 33 (upsert direto com `service_role`) e o `test:db` completo |
-| A sonda não tem efeito | pgTAP 34 |
+| A sonda não tem efeito | pgTAP 36 |
 
 **Contraprovas SQL**, rodadas no laboratório. Cada sabotagem foi aplicada
 dentro da transação do teste e desfeita pelo `rollback`.
@@ -118,7 +118,8 @@ dentro da transação do teste e desfeita pelo `rollback`.
 | `grant update (status) on documentos_fiscais to authenticated` | 5, 6, 8, 12 |
 | `grant delete on documentos_fiscais to anon` | 7, 10 |
 | `grant execute on registrar_documento_fiscal_emitido to authenticated` | 16, 22 |
-| registro sem a chamada de auditoria | 23, 24, 30, 32 |
+| registro sem a chamada de auditoria | 23, 24, 30, 32, 34, 35 |
+| registro falhando por outro erro (divisão por zero no lugar da auditoria) | 23: a falha não é a recusa esperada |
 | policy legada com `auth.uid()` recriada | 14 |
 | a 83 **sem o REVOKE**, aplicada sobre S85 | a própria migration aborta: `P0001 PRE-007B: authenticated ainda escreve em public.documentos_fiscais` |
 | a 83 sem o REVOKE **e** sem a autoverificação | aplica, e o pgTAP derruba 1–6, 8, 9, 12 e 19 |
@@ -140,4 +141,5 @@ dentro da transação do teste e desfeita pelo `rollback`.
 - **Ordem de implantação:** ver o runbook. Merge do #118 → aplicar a 82 → validar → mesclar a fatia 1 → aplicar a 83 → validar → mesclar a fatia 2.
 - **Data API:** a negação foi provada no Postgres com os papéis e claims que o PostgREST usa (`set role authenticated` + `request.jwt.claim.*`), sem subir o PostgREST: o `[api]` do laboratório está desligado.
 - **E2E:** não executado; não há ambiente E2E descartável, e a emissão real exige o Bling.
+- **A sonda só prova que a função existe.** Ela recusa os argumentos nulos antes de tocar `registrar_evento_auditoria` ou o catálogo. Se a auditoria falhar por outro motivo depois da emissão, por exemplo a membership do ator revogada durante a requisição, a nota sai no Bling e a rota cai no 500 `compensation_required`. É o mesmo desenho do PRE-007A, e o mesmo desfecho de antes para qualquer falha de banco depois do Bling.
 - **Catálogo no TypeScript:** o evento é gravado pelo SQL, com metadata fixa (`bling_id`, `pedido_id`, `status`, `operacao`), sem passar por `assertValidCatalogEvent`. Os campos proibidos declarados no catálogo (`chave_acesso`, `xml_url`, `danfe_url`) não chegam ao metadata; o pgTAP 30 confere a ausência da chave.

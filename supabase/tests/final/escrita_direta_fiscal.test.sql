@@ -13,12 +13,13 @@
 --   grant update (status) on public.documentos_fiscais to authenticated     → 5, 6, 8, 12
 --   grant delete on public.documentos_fiscais to anon                       → 7, 10
 --   grant execute on registrar_documento_fiscal_emitido to authenticated    → 16, 22
---   registrar sem a chamada de auditoria                                    → 23, 24, 30, 32
+--   registrar sem a chamada de auditoria                                    → 23, 24, 30, 32, 34, 35
+--   registrar falhando por outro erro (divisão por zero no lugar da auditoria) → 23
 --   recriar a policy legada `organização OR user_id = auth.uid()`           → 14
 
 begin;
 
-select plan(34);
+select plan(36);
 
 -- ----------------------------------------------------------------------------
 -- Duas organizações; em A, owner, admin e member. Uma NF-e em cada uma.
@@ -256,18 +257,19 @@ select throws_ok(
 reset role;
 
 -- ----------------------------------------------------------------------------
--- 23-34. Comando do servidor: escopo da organização e auditoria obrigatória.
+-- 23-36. Comando do servidor: escopo da organização e auditoria obrigatória.
 -- ----------------------------------------------------------------------------
 set local role service_role;
 set local request.jwt.claim.role = 'service_role';
 
 -- Ator sem membership: `registrar_evento_auditoria` recusa o evento, e o
 -- INSERT da mesma transação é desfeito.
-select throws_like(
+select throws_ok(
     $$select public.registrar_documento_fiscal_emitido('d7b00000-0000-4000-8000-00000000000a',
         'd7b00000-0000-4000-8000-0000000000c1', 'd7b00000-0000-4000-8000-0000000000e2',
         'nfe-7b-2', '1002', 'chave-sintetica-a2', 'Emitida', 'corr_t7b_falha')$$,
-    '%evento de auditoria recusado (anti-forjamento cross-tenant)%', '23. auditoria recusada: o registro da nota falha');
+    'P0001', 'Ator d7b00000-0000-4000-8000-0000000000c1 não pertence à organização d7b00000-0000-4000-8000-00000000000a — evento de auditoria recusado (anti-forjamento cross-tenant)',
+    '23. auditoria recusada: o registro da nota falha com a recusa anti-forjamento, não com outro erro');
 select is(
     (select count(*)::int from public.documentos_fiscais where bling_id = 'nfe-7b-2')
       || ':' || (select count(*)::int from public.eventos_auditoria_sistema where correlation_id = 'corr_t7b_falha'),
@@ -333,12 +335,27 @@ with gravadas as (
 select is((select count(*)::int from gravadas), 1,
           '33. compatibilidade: o upsert direto da main anterior (service_role, organização do escopo) segue funcionando');
 
+-- 34-35. A mesma recusa no caminho de atualização: a nota existente não muda.
+create temp table retrato_da_nota as
+select md5(d::text) as hash from public.documentos_fiscais d where d.id = 'd7b00000-0000-4000-8000-0000000000f1';
+select throws_ok(
+    $$select public.registrar_documento_fiscal_emitido('d7b00000-0000-4000-8000-00000000000a',
+        'd7b00000-0000-4000-8000-0000000000c1', 'd7b00000-0000-4000-8000-0000000000e1',
+        'nfe-7b-1', '1001', 'chave-sintetica-a', 'Cancelada', 'corr_t7b_falha_upd')$$,
+    'P0001', 'Ator d7b00000-0000-4000-8000-0000000000c1 não pertence à organização d7b00000-0000-4000-8000-00000000000a — evento de auditoria recusado (anti-forjamento cross-tenant)',
+    '34. auditoria recusada sobre uma nota existente: falha com a recusa anti-forjamento');
+select is(
+    (select (select md5(d::text) from public.documentos_fiscais d where d.id = 'd7b00000-0000-4000-8000-0000000000f1')
+              = (select hash from retrato_da_nota))::text
+      || ':' || (select count(*)::int from public.eventos_auditoria_sistema where correlation_id = 'corr_t7b_falha_upd'),
+    'true:0', '35. e a nota continua idêntica, sem evento');
+
 -- A sonda da fatia 2: chamar com argumentos nulos recusa com 22023 antes de
 -- qualquer leitura ou escrita.
 select throws_ok(
     $$select public.registrar_documento_fiscal_emitido(null, null, null, null, null, null, null, null)$$,
     '22023', 'Organizacao, ator e pedido sao obrigatorios.',
-    '34. sonda: argumentos nulos são recusados com 22023, sem efeito');
+    '36. sonda: argumentos nulos são recusados com 22023, sem efeito');
 
 reset role;
 

@@ -58,9 +58,9 @@ runbook do PRE-007A).
 
 | Código \ Banco | S84 | S85 | S86 |
 |---|---|---|---|
-| `main` pós-PRE-007A | inalcançável pela ordem do PRE-007A: faltam as duas RPCs dele | **compatível**: contrato completo; os cinco pgTAP finais da `main` verdes. O do PRE-007B dá 16 falhas porque afirma o estado depois da 83, não por incompatibilidade | **compatível**: contrato completo; os seis pgTAP finais verdes (170) |
-| fatia 1 | inalcançável pela ordem. Contrato completo, salvo o evento `fiscal.document_issued`, que só existe no catálogo e que nenhum código emite | **compatível** (passo 7): o mesmo, e o evento continua sem emissor | **compatível** (passos 8–9): contrato completo; 170/170; `test:db` inteiro verde (2 ciclos e concorrência) |
-| fatia 2 | inalcançável. Falta a RPC: a emissão responde 503 antes do Bling | inalcançável. Mesmo comportamento do S84 | **compatível** (passo 10): contrato completo; 170/170; testes de rota da fatia 2 |
+| `main` pós-PRE-007A | inalcançável pela ordem do PRE-007A: faltam as duas RPCs dele | **compatível**: contrato completo; os cinco pgTAP finais da `main` verdes. O do PRE-007B falha em 16 casos e para no 29, onde a RPC ainda não existe: ele afirma o estado depois da 83, e isso não é incompatibilidade | **compatível**: contrato completo; os seis pgTAP finais verdes (172) |
+| fatia 1 | inalcançável pela ordem. Contrato completo, salvo o evento `fiscal.document_issued`, que só existe no catálogo e que nenhum código emite | **compatível** (passo 7): o mesmo, e o evento continua sem emissor | **compatível** (passos 8–9): contrato completo; 172/172; `test:db` inteiro verde (2 ciclos e concorrência) |
+| fatia 2 | inalcançável. Falta a RPC: a emissão responde 503 antes do Bling | inalcançável. Mesmo comportamento do S84 | **compatível** (passo 10): contrato completo; 172/172; testes de rota da fatia 2 |
 
 **O caminho do runbook:** (`main` pós-PRE-007A, S85) → passo 7 (fatia 1, S85)
 → passo 8 (fatia 1, S86) → passo 10 (fatia 2, S86). Todas as células do caminho são compatíveis.
