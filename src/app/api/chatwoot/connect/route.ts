@@ -7,6 +7,9 @@ import { organizationContextToScope } from '@/lib/verifiedOrganizationScope';
 import { ChatwootCredentialsPayloadSchema } from '@/services/chatwoot/chatwootPort';
 import { resolveChatwootWebhookUrl, chatwootWebhookPath } from '@/lib/config/appBaseUrl';
 import { organizacaoEsperadaDivergente, ORGANIZACAO_ESPERADA_DIVERGENTE } from '@/lib/integrations/organizacaoEsperada';
+import { auditarConexao } from '@/services/auditoriaDeConexao';
+import { getCorrelationId } from '@/lib/observability/correlation';
+import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 
 export const dynamic = 'force-dynamic';
 
@@ -141,6 +144,18 @@ export async function POST(request: Request) {
       .maybeSingle();
     if (findError) throw findError;
     const conexaoId = await gravarCredenciaisDoChatwoot(scope.organizationId, existing?.id ?? null, parsed.data);
+
+    // Rastro da configuração (PRE-008), com a mesma regra do Bling: a conexão
+    // está `pendente`, então a falha da auditoria fica no log.
+    try {
+      await auditarConexao(supabaseServer, scope, 'integration.connection_configured', {
+        provedor: 'chatwoot', conexaoId, status: 'pendente', correlationId: getCorrelationId(request),
+      });
+    } catch (falha) {
+      registrarFalhaInterna('integration.connection_configured', falha, {
+        organizacaoId: scope.organizationId, atorId: scope.actorId,
+      });
+    }
 
     return NextResponse.json({
       success: true,

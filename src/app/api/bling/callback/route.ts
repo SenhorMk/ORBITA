@@ -70,10 +70,12 @@ async function resolveProductionCredentials(
  *
  * 1. garantir a linha em `pendente`, só para obter o `id`;
  * 2. gravar os tokens cifrados no cofre (um único upsert da credencial inteira);
- * 3. só então declarar `conectado`, com a evidência de saúde zerada.
+ * 3. registrar `integration.connection_authorized` (PRE-008): sem rastro, não
+ *    há reativação;
+ * 4. só então declarar `conectado`, com a evidência de saúde zerada.
  *
  * Uma falha em 2 deixa `pendente`: a tela diz "Configurado, falta autorizar",
- * que é a verdade. Uma falha em 3 deixa tokens gravados sob um `pendente` —
+ * que é a verdade. Uma falha em 3 ou 4 deixa tokens gravados sob um `pendente` —
  * o estado afirma menos do que existe, e refazer a autorização não causa dano.
  * Qualquer falha lança, e o callback responde com página de erro.
  */
@@ -83,6 +85,7 @@ export async function persistOrganizationTokens(
   productionLogger: ProductionLogger,
   organizacaoId: string,
   input: PersistBlingTokensInput,
+  registrarAutorizacao: (conexaoId: string) => Promise<void>,
 ): Promise<void> {
   const { data: conn, error: connErr } = await supabaseServer
     .from('conexoes_integracao')
@@ -115,6 +118,13 @@ export async function persistOrganizationTokens(
     token_expires_at: input.expiresAt,
   });
   productionLogger.info('bling_callback.credentials_saved', { subsystem: 'app', provider: 'bling' });
+
+  try {
+    await registrarAutorizacao(String(conn.id));
+  } catch {
+    productionLogger.error('bling_callback.audit_failed', { subsystem: 'app', provider: 'bling' });
+    throw new Error('Falha ao auditar a autorizacao Bling da organizacao');
+  }
 
   // Com os tokens no cofre, e so agora, a conexao pode se dizer conectada. A
   // evidencia de saude nasce limpa: autorizar nao e ter sido verificado.
@@ -179,6 +189,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   const { exchangeBlingAuthorizationCode } = await import('../../../../services/blingOAuth');
   const { credentialsVault } = await import('../../../../lib/integrations/credentialsVault');
   const { logger: productionLogger } = await import('../../../../lib/observability/logger');
+  const { auditarAutorizacaoOAuth } = await import('../../../../services/auditoriaDeConexao');
 
   const handler = createBlingCallbackHandler({
     oauthTransactionStore: createSupabaseOAuthTransactionStore(supabaseServer),
@@ -189,7 +200,15 @@ export async function GET(request: Request): Promise<NextResponse> {
     ),
     persistTokens: async (input) => {
       if (input.organizacaoId) {
-        await persistOrganizationTokens(supabaseServer, credentialsVault, productionLogger, input.organizacaoId, input);
+        const organizacaoId = input.organizacaoId;
+        await persistOrganizationTokens(
+          supabaseServer, credentialsVault, productionLogger, organizacaoId, input,
+          (conexaoId) => auditarAutorizacaoOAuth(
+            supabaseServer,
+            { organizationId: organizacaoId, actorId: input.userId },
+            { provedor: 'bling', conexaoId, status: 'conectado', correlationId: input.correlationId },
+          ),
+        );
       }
       // O espelho legado é best-effort, então a sua falha não pode derrubar
       // uma conexão já gravada no cofre da organização — que é o que decide

@@ -5,6 +5,9 @@ import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizati
 import { organizationContextStatus } from '@/lib/organizationAuthorization';
 import { organizationContextToScope, type VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { organizacaoEsperadaDivergente, ORGANIZACAO_ESPERADA_DIVERGENTE } from '@/lib/integrations/organizacaoEsperada';
+import { auditarConexao } from '@/services/auditoriaDeConexao';
+import { getCorrelationId } from '@/lib/observability/correlation';
+import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 import {
   blingCredentialsPayloadSchema,
   buildBlingVaultCredentials,
@@ -244,6 +247,19 @@ export async function POST(request: Request) {
     );
 
     await confirmarClientIdDoBling(authorization.scope, conexaoId, parsedBody.payload.clientId);
+
+    // Rastro da configuração (PRE-008). As credenciais já estão gravadas e a
+    // conexão está `pendente`: nada foi ativado, então uma falha da auditoria
+    // fica no log em vez de desdizer uma gravação que aconteceu.
+    try {
+      await auditarConexao(supabaseServer, authorization.scope, 'integration.connection_configured', {
+        provedor: 'bling', conexaoId, status: 'pendente', correlationId: getCorrelationId(request),
+      });
+    } catch (falha) {
+      registrarFalhaInterna('integration.connection_configured', falha, {
+        organizacaoId: authorization.scope.organizationId, atorId: authorization.scope.actorId,
+      });
+    }
 
     return NextResponse.json({ success: true, conexaoId, status });
   } catch (error: unknown) {

@@ -24,7 +24,19 @@ const ENTRADA: PersistBlingTokensInput = {
   accessToken: 'access-sintetico',
   refreshToken: 'refresh-sintetico',
   expiresAt: '2026-09-10T13:00:00Z',
+  correlationId: 'corr-callback-1',
 };
+
+/** Auditoria que aceita, registrando a conexão auditada e em que ponto das escritas aconteceu. */
+function auditoriaFalsa(supabase?: { escritas: readonly unknown[] }) {
+  const auditadas: Array<{ conexaoId: string; escritasAntes: number }> = [];
+  const registrar = async (conexaoId: string) => {
+    auditadas.push({ conexaoId, escritasAntes: supabase?.escritas.length ?? 0 });
+  };
+  return { registrar, auditadas };
+}
+
+const auditoriaOk = auditoriaFalsa().registrar;
 
 /** Uma escrita feita contra `conexoes_integracao`, na ordem em que aconteceu. */
 interface Escrita {
@@ -83,7 +95,7 @@ describe('persistOrganizationTokens — conectado é a última escrita', () => {
     const supabase = supabaseFalso();
     const cofre = cofreFalso(null);
 
-    await persistOrganizationTokens(supabase.client, cofre.vault, loggerFalso, ORG_ID, ENTRADA);
+    await persistOrganizationTokens(supabase.client, cofre.vault, loggerFalso, ORG_ID, ENTRADA, auditoriaOk);
 
     // A linha nasce pendente; só a última escrita a declara conectada.
     expect(supabase.escritas[0]).toMatchObject({ op: 'upsert', values: { status: 'pendente' } });
@@ -95,7 +107,7 @@ describe('persistOrganizationTokens — conectado é a última escrita', () => {
   it('a autorização nasce sem evidência de saúde: autorizar não é ter sido verificado', async () => {
     const supabase = supabaseFalso();
 
-    await persistOrganizationTokens(supabase.client, cofreFalso(null).vault, loggerFalso, ORG_ID, ENTRADA);
+    await persistOrganizationTokens(supabase.client, cofreFalso(null).vault, loggerFalso, ORG_ID, ENTRADA, auditoriaOk);
 
     expect(supabase.escritas.at(-1)?.values).toMatchObject({
       last_health_check_at: null,
@@ -108,7 +120,7 @@ describe('persistOrganizationTokens — conectado é a última escrita', () => {
     const cofre = cofreFalso(new Error('cofre indisponível'));
 
     await expect(
-      persistOrganizationTokens(supabase.client, cofre.vault, loggerFalso, ORG_ID, ENTRADA),
+      persistOrganizationTokens(supabase.client, cofre.vault, loggerFalso, ORG_ID, ENTRADA, auditoriaOk),
     ).rejects.toThrow();
 
     // Nenhuma escrita declarou `conectado`, e a linha ficou em `pendente` — a
@@ -124,9 +136,46 @@ describe('persistOrganizationTokens — conectado é a última escrita', () => {
     const supabase = supabaseFalso({ falharNoUpdate: true });
 
     await expect(
-      persistOrganizationTokens(supabase.client, cofreFalso(null).vault, loggerFalso, ORG_ID, ENTRADA),
+      persistOrganizationTokens(supabase.client, cofreFalso(null).vault, loggerFalso, ORG_ID, ENTRADA, auditoriaOk),
     ).rejects.toThrow();
 
     expect(supabase.linha.status).toBe('pendente');
+  });
+
+  describe('reconexão auditada (PRE-008)', () => {
+    it('a autorização é auditada depois do cofre e antes de declarar conectado', async () => {
+      const supabase = supabaseFalso();
+      const auditoria = auditoriaFalsa(supabase);
+
+      await persistOrganizationTokens(supabase.client, cofreFalso(null).vault, loggerFalso, ORG_ID, ENTRADA, auditoria.registrar);
+
+      // Uma escrita (o upsert `pendente`) antes da auditoria; o `conectado` vem depois.
+      expect(auditoria.auditadas).toEqual([{ conexaoId: 'conexao-1', escritasAntes: 1 }]);
+      expect(supabase.escritas.at(-1)).toMatchObject({ op: 'update', values: { status: 'conectado' } });
+    });
+
+    it('sem rastro não há reativação: a auditoria recusada deixa a conexão pendente', async () => {
+      const supabase = supabaseFalso();
+      const recusar = async () => {
+        throw new Error('Ator não pertence à organização — evento de auditoria recusado');
+      };
+
+      await expect(
+        persistOrganizationTokens(supabase.client, cofreFalso(null).vault, loggerFalso, ORG_ID, ENTRADA, recusar),
+      ).rejects.toThrow();
+
+      expect(supabase.escritas.every((escrita) => escrita.values.status !== 'conectado')).toBe(true);
+      expect(supabase.linha.status).toBe('pendente');
+    });
+
+    it('o cofre falhando, nem se audita uma autorização que não aconteceu', async () => {
+      const auditoria = auditoriaFalsa();
+
+      await expect(
+        persistOrganizationTokens(supabaseFalso().client, cofreFalso(new Error('cofre')).vault, loggerFalso, ORG_ID, ENTRADA, auditoria.registrar),
+      ).rejects.toThrow();
+
+      expect(auditoria.auditadas).toEqual([]);
+    });
   });
 });
