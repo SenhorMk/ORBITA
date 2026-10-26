@@ -47,6 +47,8 @@ export interface PersistBlingTokensInput {
   readonly accessToken: string;
   readonly refreshToken: string;
   readonly expiresAt: string;
+  /** Correlação da requisição do callback, para o evento de auditoria da autorização. */
+  readonly correlationId: string;
 }
 
 /** Explicit dependencies for the Bling callback handler; production wiring lives in `route.ts`'s `GET`. */
@@ -198,6 +200,7 @@ async function exchangeAndPersistTokens(
       accessToken: tokenData.access_token,
       refreshToken: tokenData.refresh_token,
       expiresAt,
+      correlationId,
     });
   } catch (causa) {
     logger.error('bling_callback.token_persist_failed', {
