@@ -256,3 +256,25 @@ describe('contraprovas: store que não filtra a conexão ou busca o id global', 
     expect(store.porIdLocal('conversa', b1.conversaIdLocal)!.status).toBe('open');
   });
 });
+
+describe('revisão: status do webhook só em conversa com conexão comprovada', () => {
+  it('conversa legada em quarentena não muda com o status de nenhuma conexão da organização', async () => {
+    const store = new EspelhoChatwootFake();
+    const contato = store.semear('contato', { id: 61, organizacao_id: ORG_A, conexao_id: null, name: 'legado' });
+    const legada = store.semear('conversa', { id: 60, organizacao_id: ORG_A, conexao_id: null, contact_id: 61, contato_id_local: contato, status: 'open' });
+    for (const escopo of [A1, A2]) {
+      await expect(atualizarStatusDaConversa(store, escopo, 60, 'resolved')).resolves.toEqual({ _tag: 'ConexaoNaoComprovada' });
+    }
+    expect(store.porIdLocal('conversa', legada)).toMatchObject({ status: 'open', conexao_id: null });
+    expect(store.chamadas.filter((c) => c.operacao === 'atualizar')).toEqual([]);
+  });
+
+  it('a dona comprovada aplica; outra conexão da organização com o mesmo id remoto não', async () => {
+    const store = new EspelhoChatwootFake();
+    const a2 = await arvore(store, A2, 'A2');
+    await expect(atualizarStatusDaConversa(store, A1, 50, 'resolved')).resolves.toEqual({ _tag: 'ConversaNaoEspelhada' });
+    await expect(atualizarStatusDaConversa(store, A2, 50, 'resolved')).resolves.toEqual({ _tag: 'StatusAplicado', conversaIdLocal: a2.conversaIdLocal });
+    await expect(atualizarStatusDaConversa(store, A2, 50, 'resolved')).resolves.toEqual({ _tag: 'StatusAplicado', conversaIdLocal: a2.conversaIdLocal });
+    expect(store.porIdLocal('conversa', a2.conversaIdLocal)!.status).toBe('resolved');
+  });
+});

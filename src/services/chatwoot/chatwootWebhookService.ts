@@ -218,6 +218,7 @@ async function processStatusChangedEvent(
       event: 'conversation_status_changed',
       ...(desfecho?._tag === 'StatusAplicado' ? { conversaIdLocal: desfecho.conversaIdLocal } : {}),
       ...(desfecho?._tag === 'ConversaNaoEspelhada' ? { ignorado: 'conversa_nao_espelhada' } : {}),
+      ...(desfecho?._tag === 'ConexaoNaoComprovada' ? { ignorado: 'conexao_nao_comprovada' } : {}),
     });
   }
   return { status: 200, body: { success: true } };

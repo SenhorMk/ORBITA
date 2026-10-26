@@ -124,13 +124,14 @@ export class EspelhoChatwootFake implements EspelhoChatwootStore {
     escopo: EscopoDaConexaoChatwoot,
     idLocal: string,
     campos: Readonly<Record<string, unknown>>,
+    opcoes?: { readonly somenteConexaoProvada?: boolean },
   ) {
     this.chamadas.push({ operacao: 'atualizar', recurso });
     const injetada = this.falhaInjetada();
     if (injetada) return falha<number>(injetada);
     const tabela = this.linhas[recurso];
     const indice = tabela.findIndex((l) => l.id_local === idLocal && l.organizacao_id === escopo.organizacaoId
-      && (l.conexao_id === escopo.conexaoId || l.conexao_id === null));
+      && (l.conexao_id === escopo.conexaoId || (l.conexao_id === null && !opcoes?.somenteConexaoProvada)));
     if (indice < 0) return ok(0);
     const atual = tabela[indice]!;
     const nova = { ...atual, ...campos } as LinhaDoEspelho;

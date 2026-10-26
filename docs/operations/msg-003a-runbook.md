@@ -37,6 +37,11 @@ O id remoto aparece só no adapter, no resolver e como dado da linha.
 5. Mensagem cuja conversa não está espelhada na conexão → `PaiNaoEspelhado`;
    status de conversa não espelhada → `conversa_nao_espelhada` no inbox, sem
    criar a conversa.
+6. Status de conversa legada sem conexão comprovada → `conexao_nao_comprovada`
+   no inbox, sem alterar a linha: o evento de status não prova de qual
+   instalação ela veio. O `update` de status também exige `conexao_id = <conexão
+   do escopo>` (`atualizar(..., { somenteConexaoProvada: true })`). Achado da
+   revisão independente, reproduzido no Postgres antes da correção.
 
 Falhas: `IdentidadeNaoEncontrada`, `IdentidadeAmbigua`,
 `IdentidadeDeOutraConexao`, `PaiNaoEspelhado`, `VinculoRecusado` (23503),

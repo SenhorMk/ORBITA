@@ -73,15 +73,17 @@ export function criarEspelhoChatwootSupabase(supabase: SupabaseClient): EspelhoC
       return inserida.success ? { _tag: 'StoreOk', valor: inserida.data.id_local } : falhou('resposta_invalida');
     },
 
-    async atualizar(recurso, escopo, idLocal, campos) {
+    async atualizar(recurso, escopo, idLocal, campos, opcoes) {
       if (!escopoValido(escopo) || !uuid.safeParse(idLocal).success) return falhou('escopo_invalido');
-      const { data, error } = await supabase
+      const filtro = supabase
         .from(TABELA_DO_RECURSO[recurso])
         .update(campos)
         .eq('organizacao_id', escopo.organizacaoId)
-        .eq('id_local', idLocal)
-        .or(daConexaoOuLegado(escopo))
-        .select('id_local');
+        .eq('id_local', idLocal);
+      const { data, error } = await (opcoes?.somenteConexaoProvada
+        ? filtro.eq('conexao_id', escopo.conexaoId)
+        : filtro.or(daConexaoOuLegado(escopo))
+      ).select('id_local');
       if (error) return falhou(error.code);
       return { _tag: 'StoreOk', valor: Array.isArray(data) ? data.length : 0 };
     },

@@ -486,6 +486,20 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
       expect(espelho.store.linhas.mensagem.filter((l) => l.id_externo === '923')).toEqual([expect.objectContaining({ content: 'editada' })]);
     });
 
+    it('revisão: status para conversa legada sem conexão comprovada não a altera e registra conexao_nao_comprovada', async () => {
+      mockRpc.mockClear();
+      const contato = espelho.store.semear('contato', { id: 931, organizacao_id: ORG_A, conexao_id: null, name: 'legado' });
+      espelho.store.semear('conversa', { id: 930, organizacao_id: ORG_A, conexao_id: null, contact_id: 931, contato_id_local: contato, status: 'open' });
+      const body = JSON.stringify({
+        event: 'conversation_status_changed', account: { id: 1 }, inbox: { id: 1 }, conversation: { id: 930, inbox_id: 1, status: 'resolved' },
+      });
+      expect((await entregar(CONEXAO_A, SECRET_A, body, 'evt-status-legado')).status).toBe(200);
+      expect(espelho.store.linhas.conversa.find((l) => l.id_externo === '930')).toMatchObject({ conexao_id: null, status: 'open' });
+      expect(conclusao('evt-status-legado')).toEqual([expect.objectContaining({
+        p_status: 'processed', p_response_body: expect.objectContaining({ ignorado: 'conexao_nao_comprovada' }),
+      })]);
+    });
+
     it('status de B para a conversa 802 de A não toca A e registra conversa_nao_espelhada', async () => {
       mockRpc.mockClear();
       const body = JSON.stringify({
