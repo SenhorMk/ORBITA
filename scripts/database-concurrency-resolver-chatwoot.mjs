@@ -7,10 +7,13 @@ import { esperar, observarBloqueioNoPostgres } from './database-concurrency.mjs'
  * do store de espelhos (`src/services/chatwoot/espelhoChatwootSupabase.ts`)
  * localizam e gravam pelo UUID local sem misturar instalações:
  *
- * 1. duas escritas da MESMA conexão criando o contato 5: a segunda espera e
+ * Os ids ficam na faixa 330000+: a PK global ainda vale e o ensaio do MSG-002
+ * deixa os contatos 5, 21 etc. no mesmo banco.
+ *
+ * 1. duas escritas da MESMA conexão criando o mesmo contato: a segunda espera e
  *    recebe 23505; relendo pelo resolver, encontra a linha da primeira e a
  *    atualiza — uma linha, um UUID (o caminho de retry do `gravar`);
- * 2. a organização B criando o mesmo contato 5 enquanto A grava: B espera,
+ * 2. a organização B criando o mesmo contato enquanto A grava: B espera,
  *    recebe 23505 e, relendo no seu escopo, não encontra nada — colisão
  *    tipada; a linha de A fica intacta;
  * 3. duas instalações da mesma organização adotando a mesma linha legada sem
@@ -92,15 +95,15 @@ async function corridas(ctx) {
   const { admin, clientB } = ctx;
   const mesmaConexao = await correr({
     ...ctx,
-    sqlA: SQL_INSERIR_CONTATO, paramsA: [5, ORG_A, CONEXAO_A1, 'pelo webhook'],
-    sqlB: SQL_INSERIR_CONTATO, paramsB: [5, ORG_A, CONEXAO_A1, 'pelo sync'],
+    sqlA: SQL_INSERIR_CONTATO, paramsA: [330005, ORG_A, CONEXAO_A1, 'pelo webhook'],
+    sqlB: SQL_INSERIR_CONTATO, paramsB: [330005, ORG_A, CONEXAO_A1, 'pelo sync'],
   });
   if (mesmaConexao._tag === 'err') return mesmaConexao;
-  const relida = await resolver(clientB, 'chatwoot_contacts', ORG_A, CONEXAO_A1, 5);
+  const relida = await resolver(clientB, 'chatwoot_contacts', ORG_A, CONEXAO_A1, 330005);
   const retry = relida.length === 1
     ? await executar(clientB, SQL_ATUALIZAR_CONTATO, [ORG_A, relida[0].id_local, CONEXAO_A1, 'pelo sync'])
     : { ok: false };
-  const contato5 = (await admin.query('select id_local, name from public.chatwoot_contacts where id = 5')).rows;
+  const contato5 = (await admin.query('select id_local, name from public.chatwoot_contacts where id = 330005')).rows;
   if (mesmaConexao.value.b.ok || mesmaConexao.value.b.code !== '23505' || !retry.ok || retry.linhas.length !== 1
       || contato5.length !== 1 || contato5[0].id_local !== mesmaConexao.value.a[0].id_local || contato5[0].name !== 'pelo sync') {
     return err('ResolverChatwootRaceDuplicou', 'Duas escritas da mesma conexão não convergiram para uma linha', { b: mesmaConexao.value.b, contato5 });
@@ -108,19 +111,19 @@ async function corridas(ctx) {
 
   const outraOrganizacao = await correr({
     ...ctx,
-    sqlA: SQL_INSERIR_CONTATO, paramsA: [6, ORG_A, CONEXAO_A1, 'de A'],
-    sqlB: SQL_INSERIR_CONTATO, paramsB: [6, ORG_B, CONEXAO_B1, 'de B'],
+    sqlA: SQL_INSERIR_CONTATO, paramsA: [330006, ORG_A, CONEXAO_A1, 'de A'],
+    sqlB: SQL_INSERIR_CONTATO, paramsB: [330006, ORG_B, CONEXAO_B1, 'de B'],
   });
   if (outraOrganizacao._tag === 'err') return outraOrganizacao;
-  const noEscopoDeB = await resolver(clientB, 'chatwoot_contacts', ORG_B, CONEXAO_B1, 6);
-  const contato6 = (await admin.query('select organizacao_id, name from public.chatwoot_contacts where id = 6')).rows;
+  const noEscopoDeB = await resolver(clientB, 'chatwoot_contacts', ORG_B, CONEXAO_B1, 330006);
+  const contato6 = (await admin.query('select organizacao_id, name from public.chatwoot_contacts where id = 330006')).rows;
   if (outraOrganizacao.value.b.ok || outraOrganizacao.value.b.code !== '23505' || noEscopoDeB.length !== 0
       || contato6.length !== 1 || contato6[0].organizacao_id !== ORG_A || contato6[0].name !== 'de A') {
     return err('ResolverChatwootRaceMisturou', 'B encontrou ou tomou o contato 6 de A', { b: outraOrganizacao.value.b, noEscopoDeB, contato6 });
   }
 
   const legado = (await admin.query(
-    "insert into public.chatwoot_contacts (id, organizacao_id, name) values (21, $1, 'Sync antigo') returning id_local", [ORG_A],
+    "insert into public.chatwoot_contacts (id, organizacao_id, name) values (330021, $1, 'Sync antigo') returning id_local", [ORG_A],
   )).rows[0].id_local;
   const adocao = await correr({
     ...ctx,
@@ -128,7 +131,7 @@ async function corridas(ctx) {
     sqlB: SQL_ATUALIZAR_CONTATO, paramsB: [ORG_A, legado, CONEXAO_A2, 'adotado por A2'],
   });
   if (adocao._tag === 'err') return adocao;
-  const contato21 = (await admin.query('select id_local, conexao_id, name from public.chatwoot_contacts where id = 21')).rows[0];
+  const contato21 = (await admin.query('select id_local, conexao_id, name from public.chatwoot_contacts where id = 330021')).rows[0];
   if (!adocao.value.b.ok || adocao.value.b.linhas.length !== 0 || contato21.conexao_id !== CONEXAO_A1
       || contato21.id_local !== legado || contato21.name !== 'adotado por A1') {
     return err('ResolverChatwootRaceTrocouAdocao', 'A segunda instalação adotou a linha já provada na primeira', { b: adocao.value.b, contato21 });
@@ -144,21 +147,21 @@ async function corridas(ctx) {
 /** 4: vínculo com pai de outra conexão e escrita do navegador. */
 async function recusas(admin) {
   await admin.query(
-    "insert into public.chatwoot_contacts (id, organizacao_id, conexao_id, name) values (7, $1, $2, 'contato de A1')",
+    "insert into public.chatwoot_contacts (id, organizacao_id, conexao_id, name) values (330007, $1, $2, 'contato de A1')",
     [ORG_A, CONEXAO_A1],
   );
   await admin.query(
-    "insert into public.chatwoot_conversations (id, organizacao_id, conexao_id, contact_id, status) values (70, $1, $2, 7, 'open')",
+    "insert into public.chatwoot_conversations (id, organizacao_id, conexao_id, contact_id, status) values (330070, $1, $2, 330007, 'open')",
     [ORG_A, CONEXAO_A1],
   );
-  const conversaA1 = (await resolver(admin, 'chatwoot_conversations', ORG_A, CONEXAO_A1, 70))[0].id_local;
+  const conversaA1 = (await resolver(admin, 'chatwoot_conversations', ORG_A, CONEXAO_A1, 330070))[0].id_local;
   await admin.query('set role service_role');
   const cruzada = await executar(admin,
     `insert into public.chatwoot_messages (id, id_externo, organizacao_id, conexao_id, conversation_id, conversa_id_local, content)
-     values (700, '700', $1, $2, 70, $3, 'cruzada')`, [ORG_A, CONEXAO_A2, conversaA1]);
+     values (330700, '330700', $1, $2, 330070, $3, 'cruzada')`, [ORG_A, CONEXAO_A2, conversaA1]);
   await admin.query('reset role');
   await admin.query('set role authenticated');
-  const navegador = await executar(admin, SQL_INSERIR_CONTATO, [8, ORG_A, CONEXAO_A1, 'pelo navegador']);
+  const navegador = await executar(admin, SQL_INSERIR_CONTATO, [330008, ORG_A, CONEXAO_A1, 'pelo navegador']);
   await admin.query('reset role');
   if (cruzada.ok || cruzada.code !== '23503' || navegador.ok || navegador.code !== '42501') {
     return err('ResolverChatwootRecusaFalhou', 'Vínculo cruzado ou escrita do navegador não foi recusado', { cruzada, navegador });
