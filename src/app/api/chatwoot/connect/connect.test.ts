@@ -126,6 +126,65 @@ describe('POST /api/chatwoot/connect', () => {
     expect(res.status).toBe(400);
   });
 
+  describe('organização do corpo (PRE-008)', () => {
+    const credenciais = { api_token: 'tok-123', account_id: '42', webhook_secret: 'wh-secret-value' };
+
+    it('organizacao_esperada que não é texto é entrada inválida, e nada é gravado', async () => {
+      escritas.length = 0;
+      mockUpsertCreds.mockClear();
+      for (const organizacao_esperada of [123, { id: 'org-1' }, ['org-1'], '']) {
+        const res = await callConnect({ ...credenciais, organizacao_esperada });
+        expect(res.status).toBe(400);
+      }
+      expect(escritas).toEqual([]);
+      expect(mockUpsertCreds).not.toHaveBeenCalled();
+    });
+
+    it('outra organização no corpo não é autoridade: 409, sem escrita', async () => {
+      escritas.length = 0;
+      mockUpsertCreds.mockClear();
+      const res = await callConnect({ ...credenciais, organizacao_esperada: 'org-2' });
+      expect(res.status).toBe(409);
+      expect(escritas).toEqual([]);
+      expect(mockUpsertCreds).not.toHaveBeenCalled();
+    });
+
+    it('organizacao_id no corpo é ignorado: grava na organização da sessão', async () => {
+      existingConnection = null;
+      escritas.length = 0;
+      mockUpsertCreds.mockClear();
+      const res = await callConnect({ ...credenciais, organizacao_id: 'org-2', organizacao_esperada: 'org-1' });
+      expect(res.status).toBe(200);
+      expect(escritas).toEqual([{ op: 'insert', values: expect.objectContaining({ organizacao_id: 'org-1' }) }]);
+      expect(mockUpsertCreds).toHaveBeenCalledWith('org-1', 'new-conexao-id', credenciais);
+    });
+
+    it('a resposta nunca devolve token nem segredo', async () => {
+      existingConnection = null;
+      const res = await callConnect({ ...credenciais, organizacao_esperada: 'org-1' });
+      const texto = JSON.stringify(await res.json());
+      expect(texto).not.toContain('tok-123');
+      expect(texto).not.toContain('wh-secret-value');
+    });
+
+    it('nem o log de uma falha do cofre leva token ou segredo', async () => {
+      existingConnection = null;
+      const logs = [vi.spyOn(console, 'error'), vi.spyOn(console, 'warn'), vi.spyOn(console, 'log')];
+      for (const espiao of logs) espiao.mockImplementation(() => undefined);
+      mockUpsertCreds.mockRejectedValueOnce(new Error('cofre indisponível'));
+      try {
+        const res = await callConnect({ ...credenciais, organizacao_esperada: 'org-1' });
+        expect(res.status).toBe(500);
+        const registrado = JSON.stringify(logs.flatMap((espiao) => espiao.mock.calls));
+        expect(registrado).toContain('cofre indisponível');
+        expect(registrado).not.toContain('tok-123');
+        expect(registrado).not.toContain('wh-secret-value');
+      } finally {
+        for (const espiao of logs) espiao.mockRestore();
+      }
+    });
+  });
+
   it('creates a new connection and stores encrypted credentials', async () => {
     existingConnection = null;
     mockUpsertCreds.mockClear();
