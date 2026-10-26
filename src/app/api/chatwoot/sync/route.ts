@@ -1,7 +1,21 @@
 import { NextResponse } from 'next/server';
 import { ChatwootAdapter } from '../../../../services/chatwoot/chatwootAdapter';
 import { registerChatwootInboxIfNeeded } from '../../../../services/chatwoot/chatwootInboxRegistration';
-import type { ChatwootConversation, ChatwootMessage } from '../../../../services/chatwoot/chatwootPort';
+import type { ChatwootConversation } from '../../../../services/chatwoot/chatwootPort';
+import {
+  mapChatwootChannel,
+  mapChatwootMessageType,
+  senderTypeConhecido,
+} from '../../../../services/chatwoot/chatwootWebhookPersistence';
+import {
+  gravarContato,
+  gravarConversa,
+  gravarMensagem,
+  type EscopoDeEscritaChatwoot,
+} from '../../../../services/chatwoot/espelhoChatwoot';
+import { criarEspelhoChatwootSupabase } from '../../../../services/chatwoot/espelhoChatwootSupabase';
+import { FalhaDeIdentidadeChatwootError } from '../../../../services/chatwoot/identidadeChatwoot';
+import { logger } from '../../../../lib/observability/logger';
 import { supabaseServer } from '../../../../lib/supabaseServer';
 import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
@@ -14,99 +28,12 @@ import { organizationContextToScope, type VerifiedOrganizationScope } from '../.
 
 export const dynamic = 'force-dynamic';
 
-function mapChatwootChannel(channelStr?: string): string {
-  if (!channelStr) return 'Channel::Whatsapp';
-
-  const upper = channelStr.toUpperCase();
-  if (upper.includes('WHATSAPP')) return 'Channel::Whatsapp';
-  if (upper.includes('WEBWIDGET') || upper.includes('WEB_WIDGET') || upper.includes('WEB')) return 'Channel::WebWidget';
-  if (upper.includes('API')) return 'Channel::Api';
-  if (upper.includes('EMAIL')) return 'Channel::Email';
-  if (upper.includes('TELEGRAM')) return 'Channel::Telegram';
-  if (upper.includes('SMS')) return 'Channel::Sms';
-  if (upper.includes('TWITTER')) return 'Channel::TwitterProfile';
-  if (upper.includes('FACEBOOK')) return 'Channel::FacebookPage';
-
-  return 'Channel::Whatsapp';
-}
-
-type ChatwootPersistenceTable = 'chatwoot_contacts' | 'chatwoot_conversations' | 'chatwoot_messages';
-
-/** Grava no escopo verificado e na conexão do adapter: sem `conexao_id`, a
- * linha nasce sem prova de instalação e o MSG-002 a deixa em quarentena. */
-async function upsertChatwootRecord(
-  scope: VerifiedOrganizationScope,
-  conexaoId: string,
-  table: ChatwootPersistenceTable,
-  record: Readonly<Record<string, unknown>>,
-) {
-  return supabaseServer.from(table).upsert({
-    ...record,
-    user_id: scope.actorId,
-    organizacao_id: scope.organizationId,
-    conexao_id: conexaoId,
-  });
-}
-
-/** Sincroniza o contato remetente de uma conversa. Retorna `true` quando persistido com sucesso. */
-async function syncChatwootContact(
-  scope: VerifiedOrganizationScope,
-  conexaoId: string,
-  sender: NonNullable<NonNullable<ChatwootConversation['meta']>['sender']>,
-): Promise<boolean> {
-  const contactId = sender.id;
-  const { error: contactError } = await upsertChatwootRecord(scope, conexaoId, 'chatwoot_contacts', {
-    id: contactId,
-    name: sender.name || 'Cliente Sem Nome',
-    email: sender.email || null,
-    phone_number: sender.phone_number || null,
-    phone_normalizado: normalizeToE164(sender.phone_number || undefined),
-    avatar_url: sender.avatar_url || sender.thumbnail || null,
-  });
-
-  if (contactError) {
-    console.error(`❌ Erro ao salvar contato ${contactId}:`, contactError);
-    return false;
-  }
-  return true;
-}
-
-/** Sincroniza a conversa (com canal mapeado) associada a um contato já persistido. */
-async function syncChatwootConversation(
-  scope: VerifiedOrganizationScope,
-  conexaoId: string,
-  rawConv: ChatwootConversation,
-  contactId: number,
-): Promise<boolean> {
-  const { error: convError } = await upsertChatwootRecord(scope, conexaoId, 'chatwoot_conversations', {
-    id: rawConv.id,
-    display_id: rawConv.display_id,
-    contact_id: contactId,
-    status: rawConv.status || 'open',
-    inbox_id: rawConv.inbox_id || null,
-    channel: mapChatwootChannel(rawConv.meta?.channel || rawConv.channel_type),
-    updated_at: new Date().toISOString(),
-  });
-
-  if (convError) {
-    console.error(`❌ Erro ao salvar conversa ${rawConv.id}:`, convError);
-    return false;
-  }
-  return true;
-}
-
-/** Normaliza o `message_type` bruto do Chatwoot para o enum local. */
-function mapChatwootMessageType(rawType: ChatwootMessage['message_type']): 'incoming' | 'outgoing' | 'system' | 'template' {
-  if (rawType === 1 || rawType === 'outgoing' || rawType === '1') return 'outgoing';
-  if (rawType === 2 || rawType === 'system' || rawType === '2') return 'system';
-  if (rawType === 3 || rawType === 'template' || rawType === '3') return 'template';
-  return 'incoming';
-}
+const espelho = criarEspelhoChatwootSupabase(supabaseServer);
 
 /** Sincroniza todas as mensagens de uma conversa. Retorna a contagem de mensagens persistidas. */
 async function syncChatwootMessages(
   adapter: ChatwootAdapter,
-  scope: VerifiedOrganizationScope,
+  escopo: EscopoDeEscritaChatwoot,
   conversationId: number,
 ): Promise<number> {
   const messagesResult = await adapter.getMessages(conversationId);
@@ -117,29 +44,36 @@ async function syncChatwootMessages(
 
   let messagesCount = 0;
   for (const rawMsg of messagesResult.data) {
-    let senderType = rawMsg.sender?.type || null;
-    if (senderType && !['contact', 'user', 'agent'].includes(senderType)) {
-      senderType = null;
+    try {
+      await gravarMensagem(espelho, escopo, {
+        idExterno: rawMsg.id,
+        conversaIdExterno: conversationId,
+        conteudo: rawMsg.content || '',
+        tipo: mapChatwootMessageType(rawMsg.message_type),
+        remetenteNome: rawMsg.sender?.name || null,
+        remetenteId: rawMsg.sender?.id || null,
+        remetenteTipo: senderTypeConhecido(rawMsg.sender?.type),
+        criadaEm: rawMsg.created_at || new Date().toISOString(),
+      }, 'sobrescrever');
+      messagesCount++;
+    } catch (erro: unknown) {
+      registrarRecusa(escopo, erro);
     }
-
-    const { error: msgError } = await upsertChatwootRecord(scope, adapter.conexaoId, 'chatwoot_messages', {
-      id: rawMsg.id,
-      conversation_id: conversationId,
-      content: rawMsg.content || '',
-      message_type: mapChatwootMessageType(rawMsg.message_type),
-      sender_name: rawMsg.sender?.name || null,
-      sender_id: rawMsg.sender?.id || null,
-      sender_type: senderType,
-      created_at: rawMsg.created_at || new Date().toISOString(),
-    });
-
-    if (msgError) {
-      console.error(`❌ Erro ao salvar mensagem ${rawMsg.id}:`, msgError);
-      continue;
-    }
-    messagesCount++;
   }
   return messagesCount;
+}
+
+/** Uma recusa de identidade pula o registro e é registrada; outra falha sobe. */
+function registrarRecusa(escopo: EscopoDeEscritaChatwoot, erro: unknown): void {
+  if (!(erro instanceof FalhaDeIdentidadeChatwootError)) throw erro;
+  logger.warn('chatwoot.identidade.recusada', {
+    subsystem: 'provider',
+    organizacaoId: escopo.organizacaoId,
+    conexaoId: escopo.conexaoId,
+    origem: 'sync',
+    recurso: erro.recurso,
+    outcome: erro.falha,
+  });
 }
 
 /** Sincroniza uma única conversa (registro de inbox, contato, conversa e mensagens). */
@@ -161,13 +95,41 @@ async function syncChatwootConversationTree(
   const sender = rawConv.meta?.sender;
   if (!sender) return { contacts: 0, conversations: 0, messages: 0 };
 
-  const contactSynced = await syncChatwootContact(scope, adapter.conexaoId, sender);
-  if (!contactSynced) return { contacts: 0, conversations: 0, messages: 0 };
+  // Sempre a organização verificada e a conexão do adapter, fixadas no início:
+  // trocar a organização ativa durante o sync não muda onde ele grava.
+  const escopo = { organizacaoId: scope.organizationId, conexaoId: adapter.conexaoId, atorId: scope.actorId };
 
-  const conversationSynced = await syncChatwootConversation(scope, adapter.conexaoId, rawConv, sender.id);
-  if (!conversationSynced) return { contacts: 1, conversations: 0, messages: 0 };
+  let contatoIdLocal: string;
+  try {
+    contatoIdLocal = await gravarContato(espelho, escopo, {
+      idExterno: sender.id,
+      nome: sender.name || 'Cliente Sem Nome',
+      email: sender.email || null,
+      telefone: sender.phone_number || null,
+      telefoneNormalizado: normalizeToE164(sender.phone_number || undefined),
+      avatarUrl: sender.avatar_url || sender.thumbnail || null,
+    });
+  } catch (erro: unknown) {
+    registrarRecusa(escopo, erro);
+    return { contacts: 0, conversations: 0, messages: 0 };
+  }
 
-  const messages = await syncChatwootMessages(adapter, scope, rawConv.id);
+  try {
+    await gravarConversa(espelho, escopo, {
+      idExterno: rawConv.id,
+      contatoIdLocal,
+      contatoIdExterno: sender.id,
+      displayId: rawConv.display_id ?? null,
+      status: rawConv.status || 'open',
+      inboxId: rawConv.inbox_id || null,
+      canal: mapChatwootChannel(rawConv.meta?.channel || rawConv.channel_type),
+    });
+  } catch (erro: unknown) {
+    registrarRecusa(escopo, erro);
+    return { contacts: 1, conversations: 0, messages: 0 };
+  }
+
+  const messages = await syncChatwootMessages(adapter, escopo, rawConv.id);
   return { contacts: 1, conversations: 1, messages };
 }
 

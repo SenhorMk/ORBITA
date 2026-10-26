@@ -7,6 +7,15 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'server-key-12345678901234567890';
 process.env.ENCRYPTION_KEY = 'ab'.repeat(32);
 
 import { encrypt } from '@/lib/crypto';
+import type { EspelhoChatwootFake } from '@/services/__testkit__/espelhoChatwootFake';
+
+/** Espelhos em memória com as regras do banco (PK global até o MSG-004). */
+const espelho = vi.hoisted(() => ({ store: null as unknown as EspelhoChatwootFake }));
+vi.mock('@/services/chatwoot/espelhoChatwootSupabase', async () => {
+  const { EspelhoChatwootFake: Fake } = await import('@/services/__testkit__/espelhoChatwootFake');
+  espelho.store = new Fake();
+  return { criarEspelhoChatwootSupabase: () => espelho.store };
+});
 
 const ORG_A = '22222222-2222-4222-8222-222222222222';
 const ORG_B = '33333333-3333-4333-8333-333333333333';
@@ -251,7 +260,7 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
       expect(await res.json()).toEqual({ success: false, error: 'Conexão Chatwoot desligada' });
       expect(insertedInboxRows).toHaveLength(inboxesAntes);
       expect(mockRpc).not.toHaveBeenCalled();
-      expect(mockUpsert).not.toHaveBeenCalled();
+      expect(espelho.store?.chamadas ?? []).toHaveLength(0);
     } finally {
       connections[CONEXAO_A]!.status = 'conectado';
     }
@@ -278,7 +287,7 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
       expect(await res.json()).toEqual({ success: false, error: 'Escopo organizacional inválido' });
       expect(insertedInboxRows).toHaveLength(inboxesAntes);
       expect(mockRpc).not.toHaveBeenCalled();
-      expect(mockUpsert).not.toHaveBeenCalled();
+      expect(espelho.store?.chamadas ?? []).toHaveLength(0);
     } finally {
       erro.mockRestore();
     }
@@ -326,10 +335,24 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
     expect(insertedInboxRows).toContainEqual(
       expect.objectContaining({ organizacao_id: ORG_A, conexao_id: CONEXAO_A, inbox_id: 1, account_id: '1' }),
     );
-    expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({ organizacao_id: ORG_A, id: 101 }));
+    const contato = espelho.store.linhas.contato.find((l) => l.organizacao_id === ORG_A && l.id_externo === '101');
+    const conversa = espelho.store.linhas.conversa.find((l) => l.organizacao_id === ORG_A && l.id_externo === '201');
+    const mensagem = espelho.store.linhas.mensagem.find((l) => l.organizacao_id === ORG_A && l.id_externo === '501');
+    expect(contato).toMatchObject({ conexao_id: CONEXAO_A, user_id: OWNER_A });
+    expect(conversa).toMatchObject({ conexao_id: CONEXAO_A, contato_id_local: contato!.id_local });
+    expect(mensagem).toMatchObject({ conexao_id: CONEXAO_A, conversa_id_local: conversa!.id_local, content: 'Olá atendente' });
+    // O inbox guarda o desfecho pelo UUID local; o id remoto não sai do adapter/resolver.
     expect(mockRpc).toHaveBeenCalledWith(
       'concluir_evento_inbox_chatwoot',
-      expect.objectContaining({ p_evento_id: 'evt-a1', p_status: 'processed' }),
+      expect.objectContaining({
+        p_evento_id: 'evt-a1',
+        p_status: 'processed',
+        p_response_body: expect.objectContaining({
+          contatoIdLocal: contato!.id_local,
+          conversaIdLocal: conversa!.id_local,
+          mensagemIdLocal: mensagem!.id_local,
+        }),
+      }),
     );
   });
 
@@ -365,8 +388,9 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
         expect.objectContaining({ conexao_id: CONEXAO_B, organizacao_id: ORG_B }),
       ]),
     );
-    expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({ organizacao_id: ORG_B, id: 555 }));
-    expect(mockUpsert).not.toHaveBeenCalledWith(expect.objectContaining({ organizacao_id: ORG_A, id: 555 }));
+    expect(espelho.store.linhas.contato.filter((l) => l.id_externo === '555')).toEqual([
+      expect.objectContaining({ organizacao_id: ORG_B, conexao_id: CONEXAO_B }),
+    ]);
   });
 
   it('replays a duplicate delivery as a no-op, returning the cached response without new side effects', async () => {
@@ -391,5 +415,94 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ success: true, cached: true });
     expect(mockUpsert).not.toHaveBeenCalled();
+    expect(espelho.store.linhas.mensagem.filter((l) => l.id_externo === '501')).toHaveLength(1);
+  });
+
+  describe('MSG-003A: identidade local por organização + conexão', () => {
+    function evento(extra: Record<string, unknown>) {
+      return JSON.stringify({ event: 'message_created', account: { id: 1 }, inbox: { id: 1 }, ...extra });
+    }
+    async function entregar(conexaoId: string, segredo: string, body: string, eventoId: string, status = 'received') {
+      mockInboxRegisterResult = { evento_id: eventoId, status, is_duplicate: status !== 'received', cached_response: null };
+      const { signature, timestamp } = signBody(segredo, body);
+      return postWebhook(conexaoId, body, { signature, timestamp });
+    }
+    const conclusao = (eventoId: string) => mockRpc.mock.calls
+      .filter(([fn, args]) => fn === 'concluir_evento_inbox_chatwoot' && (args as { p_evento_id: string }).p_evento_id === eventoId)
+      .map(([, args]) => args as { p_status: string; p_error: string | null; p_response_body: Record<string, unknown> | null });
+
+    it('B com os mesmos ids remotos de A é recusada com 409 tipado, A intacta e o evento de B fica failed', async () => {
+      mockRpc.mockClear();
+      const conversa = { id: 802, inbox_id: 1, status: 'open', contact: { id: 801, name: 'Cliente A 801' } };
+      expect((await entregar(CONEXAO_A, SECRET_A, evento({ id: 803, content: 'de A', conversation: conversa }), 'evt-803a'))
+        .status).toBe(200);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const res = await entregar(CONEXAO_B, SECRET_B, evento({
+          id: 803, content: 'de B', conversation: { ...conversa, contact: { id: 801, name: 'Cliente B 801' } },
+        }), 'evt-803b');
+        expect(res.status).toBe(409);
+        expect(await res.json()).toEqual({ success: false, error: 'Identidade Chatwoot não resolvida', motivo: 'IdentidadeDeOutraConexao' });
+        // Evento de falha redigido: recurso e desfecho, sem id remoto nem conteúdo.
+        const linha = warn.mock.calls.map(([m]) => String(m)).find((m) => m.includes('chatwoot.identidade.recusada'))!;
+        expect(JSON.parse(linha)).toMatchObject({ organizacaoId: ORG_B, conexaoId: CONEXAO_B, recurso: 'contato', outcome: 'IdentidadeDeOutraConexao' });
+        expect(linha).not.toMatch(/801|Cliente B/u);
+      } finally {
+        warn.mockRestore();
+      }
+      expect(conclusao('evt-803b')).toEqual([expect.objectContaining({ p_status: 'failed', p_error: 'Identidade Chatwoot não resolvida (contato: IdentidadeDeOutraConexao)' })]);
+      for (const recurso of ['contato', 'conversa', 'mensagem'] as const) {
+        expect(espelho.store.linhas[recurso].filter((l) => ['801', '802', '803'].includes(l.id_externo))).toEqual([
+          expect.objectContaining({ organizacao_id: ORG_A, conexao_id: CONEXAO_A }),
+        ]);
+      }
+      expect(espelho.store.linhas.contato.find((l) => l.id_externo === '801')!.name).toBe('Cliente A 801');
+    });
+
+    it('mensagem antes da conversa: 409 PaiNaoEspelhado sem gravar; o reprocessamento grava uma vez', async () => {
+      mockRpc.mockClear();
+      const cedo = evento({ id: 913, content: 'chegou cedo', conversation: { id: 912, inbox_id: 1 } });
+      const res = await entregar(CONEXAO_A, SECRET_A, cedo, 'evt-913');
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ motivo: 'PaiNaoEspelhado' });
+      expect(espelho.store.linhas.mensagem.filter((l) => l.id_externo === '913')).toHaveLength(0);
+      expect(conclusao('evt-913')).toEqual([expect.objectContaining({ p_status: 'failed' })]);
+
+      const conversa = { id: 912, inbox_id: 1, status: 'open', contact: { id: 911, name: 'Cliente 911' } };
+      expect((await entregar(CONEXAO_A, SECRET_A, evento({ id: 914, content: 'abre a conversa', conversation: conversa }), 'evt-914')).status).toBe(200);
+
+      // A mesma entrega volta (falhou antes): o inbox a reprocessa.
+      expect((await entregar(CONEXAO_A, SECRET_A, cedo, 'evt-913', 'failed')).status).toBe(200);
+      expect((await entregar(CONEXAO_A, SECRET_A, cedo, 'evt-913', 'failed')).status).toBe(200);
+      const mensagens = espelho.store.linhas.mensagem.filter((l) => l.id_externo === '913');
+      expect(mensagens).toHaveLength(1);
+      expect(mensagens[0]).toMatchObject({ conexao_id: CONEXAO_A, content: 'chegou cedo' });
+    });
+
+    it('message_updated antes de message_created: a criação atrasada não desfaz a edição', async () => {
+      const conversa = { id: 922, inbox_id: 1, status: 'open', contact: { id: 921, name: 'Cliente 921' } };
+      await entregar(CONEXAO_A, SECRET_A, evento({ event: 'message_updated', id: 923, content: 'editada', conversation: conversa }), 'evt-923u');
+      await entregar(CONEXAO_A, SECRET_A, evento({ id: 923, content: 'original', conversation: conversa }), 'evt-923c');
+      expect(espelho.store.linhas.mensagem.filter((l) => l.id_externo === '923')).toEqual([expect.objectContaining({ content: 'editada' })]);
+    });
+
+    it('status de B para a conversa 802 de A não toca A e registra conversa_nao_espelhada', async () => {
+      mockRpc.mockClear();
+      const body = JSON.stringify({
+        event: 'conversation_status_changed', account: { id: 1 }, inbox: { id: 1 }, conversation: { id: 802, inbox_id: 1, status: 'resolved' },
+      });
+      expect((await entregar(CONEXAO_B, SECRET_B, body, 'evt-status-b')).status).toBe(200);
+      expect(espelho.store.linhas.conversa.find((l) => l.id_externo === '802')).toMatchObject({ organizacao_id: ORG_A, status: 'open' });
+      expect(conclusao('evt-status-b')).toEqual([expect.objectContaining({
+        p_status: 'processed', p_response_body: expect.objectContaining({ ignorado: 'conversa_nao_espelhada' }),
+      })]);
+
+      expect((await entregar(CONEXAO_A, SECRET_A, body, 'evt-status-a')).status).toBe(200);
+      const conversa = espelho.store.linhas.conversa.find((l) => l.id_externo === '802')!;
+      expect(conversa.status).toBe('resolved');
+      expect(conclusao('evt-status-a')).toEqual([expect.objectContaining({
+        p_response_body: expect.objectContaining({ conversaIdLocal: conversa.id_local }),
+      })]);
+    });
   });
 });

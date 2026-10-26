@@ -22,6 +22,9 @@ MSG-003A; a contração das chaves globais é do MSG-004.
 | `inbox_eventos_chatwoot`, outbox, retenção (51), titular (50) | não guardam id de espelho como chave | nenhum |
 | Navegador | só `SELECT` nos espelhos (RLS por membership) | conferido pela autoverificação |
 
+> Atualização do MSG-003A: webhook, sync e o status do webhook já gravam e
+> localizam pelo UUID local; ver `docs/operations/msg-003a-runbook.md`.
+
 Diferença com a documentação histórica: o plano cita a `main e71354e`; o código
 atual já grava `conexao_id` no webhook e já tem o mapeamento de inbox validado
 (PRE-008). A lacuna real era o sync e a falta de imutabilidade da organização.
