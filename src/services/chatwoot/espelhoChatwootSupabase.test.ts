@@ -85,6 +85,21 @@ describe('store Supabase dos espelhos: toda consulta leva organização e conex�
     ]);
   });
 
+  it('o status atualiza só linha com a conexão do escopo comprovada: sem o caso legado', async () => {
+    const { cliente, chamadas } = clienteGravador({ data: [], error: null });
+    const resultado = await criarEspelhoChatwootSupabase(cliente)
+      .atualizar('conversa', ESCOPO, ID_LOCAL, { status: 'resolved' }, { somenteConexaoProvada: true });
+    expect(resultado).toEqual({ _tag: 'StoreOk', valor: 0 });
+    expect(chamadas).toEqual([
+      ['from', 'chatwoot_conversations'],
+      ['update', { status: 'resolved' }],
+      ['eq', 'organizacao_id', ORG],
+      ['eq', 'id_local', ID_LOCAL],
+      ['eq', 'conexao_id', CONEXAO],
+      ['select', 'id_local'],
+    ]);
+  });
+
   it('escopo fora do formato UUID não chega ao filtro `or` (sem injeção de filtro)', async () => {
     const { cliente, chamadas } = clienteGravador({ data: [], error: null });
     const store = criarEspelhoChatwootSupabase(cliente);
