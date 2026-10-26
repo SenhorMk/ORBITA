@@ -183,3 +183,19 @@ transação; a auditoria entra antes da última, e a falha dela deixa
 - adapter sem a checagem;
 - `organizacao_esperada` voltando a aceitar qualquer coisa (`.catch(undefined)`);
 - a guarda de organização esperada desligada.
+
+## Cobertura pedida pela proprietária
+
+pgTAP = `supabase/tests/final/conexoes_de_integracao.test.sql` (fatia de banco).
+
+| Item | Prova |
+|---|---|
+| Reatribuir `organizacao_id`, account, inbox ou segredo com o token do navegador | pgTAP 5–13: status, `client_id`, organização (membro de A e B), DELETE, INSERT, mapping de inbox (move e claim) e credencial. A account do Chatwoot vive no cofre (12) e em `chatwoot_inboxes.account_id` (10, 11); nenhuma das duas é gravável pelo navegador |
+| Conexão compartilhada entre duas organizações | pgTAP 7 e 24–26 (nem navegador nem servidor movem conexão, credencial ou inbox), 27 (inbox de B na conexão de A), 31 (credencial de A na conexão de B); webhook com `inbox_id = 1` em A e em B sem mistura (`webhook.test.ts`, já existia) |
+| Reconexão sem prova de posse da conta | Só o OAuth do Bling declara `conectado`, e só com a transação OAuth consumida (`callback.test.ts`, já existia); na fatia de auditoria, o ator ainda membro é exigido e a autorização é auditada antes (`persistencia-atomica.test.ts`, `auditoriaDeConexao.test.ts`). O connect do Chatwoot nunca declara `conectado` ("salvar credenciais não declara a instância conectada", já existia); a posse é provada a cada entrega pelo HMAC e pelo `account_id` do cofre (`webhook.test.ts`). O navegador não declara `conectado` (pgTAP 5, 9) |
+| Associação indevida de inbox | pgTAP 11, 27, 28 (inbox na conexão Bling), 29; webhook com `account_id` diferente do cofre → 403 (já existia) |
+| Desconexão com operações pendentes | Não há consumidor de outbox para o Chatwoot hoje: o envio é inline. Com a conexão desligada, o envio registra a tentativa como falha, não chama o Chatwoot nem grava mensagem (`chatwoot/send/desligada.test.ts`, novo); a entrega inbound é recusada antes do inbox (`webhook.test.ts`); mapping e credencial ficam (pgTAP 32–33). Uma entrega que já passou da checagem quando a pausa acontece termina normalmente: não há lock entre as duas (risco residual) |
+| Revogação que não quebra funcionalidade autorizada | pgTAP 23 (reconexão pelo servidor) e 35; os seis pgTAP anteriores verdes em S87 e o `test:db` inteiro; o detector prova que nenhum caller escreve com o token do usuário; as suítes de rota de connect, callback, webhook e sync seguem verdes |
+| Autenticação de webhooks, cofre e tokens | Chatwoot: assinatura ausente, inválida, adulterada, timestamp e `account_id` (`webhook.test.ts`); Bling: HMAC por conexão, corpo adulterado, cofre indisponível (`tenants.test.ts`); cofre e espelho legado ilegíveis pelo navegador (pgTAP 12, 13); segredo fora da resposta e do log (`connect.test.ts`) |
+| Dono da organização perde o acesso | Webhook do Chatwoot: 403 sem mapping, inbox nem efeito (`webhook.test.ts`, novo); webhook do Bling: 403 (`webhook.test.ts` do Bling, já existia); callback OAuth com o ator fora da organização: a conexão fica `pendente` (fatia de auditoria); as rotas de connect exigem sessão e `organization:manage` (401/403, já existia). A integração não passa a agir em nome de outro membro |
+| Preservação de callbacks, sincronizações e operações existentes | Matriz S77–S87 (contrato e pgTAP); suítes completas verdes nas três fatias; `merge-tree` código × auditoria limpo |
