@@ -268,46 +268,44 @@ export interface ChatwootInbox {
   updated_at?: string;
 }
 
+/**
+ * Espelhos do Chatwoot como o navegador os vê (MSG-003B): a referência é só o
+ * UUID local. O id do Chatwoot fica no servidor (adapter e resolver).
+ */
 export interface ChatwootContact {
-  id: number;
-  user_id?: string;
+  id_local: string;
   organizacao_id?: string;
-  conexao_id?: string;
+  conexao_id?: string | null;
   name: string;
-  email?: string;
-  phone_number?: string;
-  phone_normalizado?: string; // soft-link clientes
-  avatar_url?: string;
+  email?: string | null;
+  phone_number?: string | null;
+  phone_normalizado?: string | null; // soft-link clientes
+  avatar_url?: string | null;
   created_at?: string;
   updated_at?: string;
 }
 
 export interface ChatwootConversation {
-  id: number;
-  user_id?: string;
+  id_local: string;
   organizacao_id?: string;
-  conexao_id?: string;
-  display_id: number;
-  contact_id: number;
+  conexao_id?: string | null;
+  contato_id_local: string | null;
   status: string;
-  inbox_id?: number;
-  channel?: string;
+  channel?: string | null;
   updated_at?: string;
   created_at?: string;
   // Enriquecido
-  contact?: ChatwootContact;
+  contact?: ChatwootContact | null;
 }
 
 export interface ChatwootMessage {
-  id: number;
-  user_id?: string;
+  id_local: string;
   organizacao_id?: string;
-  conexao_id?: string;
-  conversation_id: number;
+  conexao_id?: string | null;
+  conversa_id_local: string | null;
   content: string;
   message_type: 'incoming' | 'outgoing' | 'template' | 'system' | 'activity' | '0' | '1' | '2' | '3';
-  sender_name?: string;
-  sender_id?: number | null;
+  sender_name?: string | null;
   sender_type?: 'contact' | 'user' | 'agent' | null;
   created_at?: string;
   updated_at?: string;

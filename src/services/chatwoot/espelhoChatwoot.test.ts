@@ -12,6 +12,7 @@ import {
   FalhaDeIdentidadeChatwootError,
   resolverIdExterno,
   resolverIdLocal,
+  resolverPorIdLocal,
 } from '@/services/chatwoot/identidadeChatwoot';
 
 const ORG_A = 'a0000000-0000-4000-8000-00000000000a';
@@ -254,5 +255,26 @@ describe('contraprovas: store que não filtra a conexão ou busca o id global', 
     await expect(atualizarStatusDaConversa(store, A1, 50, 'resolved')).rejects.toBeInstanceOf(FalhaDeIdentidadeChatwootError);
     expect(store.porIdLocal('contato', b1.contatoIdLocal)!.name).toBe('Contato B1');
     expect(store.porIdLocal('conversa', b1.conversaIdLocal)!.status).toBe('open');
+  });
+});
+
+describe('MSG-003B: tradução da referência do navegador (UUID local)', () => {
+  it('o UUID de A2 resolve a conexão A2 e o id remoto dela; o de B não resolve na sessão de A', async () => {
+    const store = new EspelhoChatwootFake({ pkGlobal: false });
+    await arvore(store, A1, 'A1');
+    const a2 = await arvore(store, A2, 'A2');
+    const b1 = await arvore(store, B1, 'B1');
+    await expect(resolverPorIdLocal(store, ORG_A, 'conversa', a2.conversaIdLocal)).resolves.toEqual({
+      _tag: 'IdLocalDaConexao', escopo: { organizacaoId: ORG_A, conexaoId: CONEXAO_A2 }, idExterno: 50,
+    });
+    await expect(resolverPorIdLocal(store, ORG_A, 'conversa', b1.conversaIdLocal)).resolves.toEqual({ _tag: 'IdLocalNaoTraduzido', falha: 'IdentidadeNaoEncontrada' });
+  });
+
+  it('linha legada sem conexão provada não é traduzida; banco fora é StoreIndisponivel', async () => {
+    const store = new EspelhoChatwootFake();
+    const legado = store.semear('conversa', { id: 50, organizacao_id: ORG_A, conexao_id: null, contact_id: 5, status: 'open' });
+    await expect(resolverPorIdLocal(store, ORG_A, 'conversa', legado)).resolves.toEqual({ _tag: 'IdLocalNaoTraduzido', falha: 'ConexaoNaoComprovada' });
+    store.falharProxima = '08006';
+    await expect(resolverPorIdLocal(store, ORG_A, 'conversa', legado)).resolves.toEqual({ _tag: 'IdLocalNaoTraduzido', falha: 'StoreIndisponivel' });
   });
 });

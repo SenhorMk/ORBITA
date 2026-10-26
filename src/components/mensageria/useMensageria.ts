@@ -112,7 +112,7 @@ export function useMensageria(
       : null;
 
   const chaveDaConversa =
-    chaveDoContexto !== null && selecionada !== null ? `${chaveDoContexto}#${selecionada.id}` : null;
+    chaveDoContexto !== null && selecionada !== null ? `${chaveDoContexto}#${selecionada.id_local}` : null;
 
   const [estado, setEstado] = useState<EstadoDaConversa | null>(null);
   const estadoAtual = chaveDaConversa !== null && estado?.chave === chaveDaConversa ? estado : null;
@@ -138,7 +138,7 @@ export function useMensageria(
   const lerHistorico = useCallback(async () => {
     const chave = chaveDaConversaRef.current;
     const organizacaoId = selecao?.id;
-    const conversaId = selecionada?.id;
+    const conversaId = selecionada?.id_local;
     if (chave === null || organizacaoId === undefined || conversaId === undefined) return;
     try {
       const mensagens = await espelho.lerMensagens(organizacaoId, conversaId);
@@ -151,7 +151,7 @@ export function useMensageria(
         erro: detalhe || 'Não foi possível ler o histórico desta conversa.',
       }));
     }
-  }, [alterar, espelho, selecao?.id, selecionada?.id]);
+  }, [alterar, espelho, selecao?.id, selecionada?.id_local]);
 
   // A leitura do histórico, **uma vez por chave**. O estado é trocado por um
   // vazio na mesma passada em que a chave muda: é isso que faz o histórico
@@ -192,7 +192,7 @@ export function useMensageria(
     };
   }, [espelho, organizacaoId, recarregarConversas]);
 
-  const conversaId = selecionada?.id ?? null;
+  const conversaId = selecionada?.id_local ?? null;
   useEffect(() => {
     setTempoRealDeMensagens(false);
     if (organizacaoId === null || conversaId === null || chaveDaConversa === null) return;
@@ -235,7 +235,7 @@ export function useMensageria(
         const resposta = await fetchWithAuth('/api/chatwoot/status', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversationId: conversa.id, status: novoStatus }),
+          body: JSON.stringify({ conversaId: conversa.id_local, status: novoStatus }),
         });
         if (!resposta.ok) {
           const falha = await falhaDaResposta(resposta);
@@ -252,7 +252,7 @@ export function useMensageria(
         // resposta da conversa 1 não pode reescrever o cabeçalho da conversa 2.
         if (chaveDaConversaRef.current !== chave) return;
         setSelecionadaCarimbada((anterior) =>
-          anterior?.conversa.id === conversa.id
+          anterior?.conversa.id_local === conversa.id_local
             ? { chave: anterior.chave, conversa: { ...anterior.conversa, status: novoStatus } }
             : anterior,
         );

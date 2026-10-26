@@ -5,39 +5,48 @@ import { supabaseServer } from '../../../../lib/supabaseServer';
 import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
 import { organizationContextToScope, type VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
+import { criarEspelhoChatwootSupabase } from '../../../../services/chatwoot/espelhoChatwootSupabase';
+import { resolverPorIdLocal, type FalhaDeIdentidadeChatwoot } from '../../../../services/chatwoot/identidadeChatwoot';
 
 export const dynamic = 'force-dynamic';
 const conversationStatusSchema = z.enum(['open', 'resolved', 'pending']);
 
-type UpdateConversationStatusResult = 'updated' | 'not-found' | 'unconfigured' | { failed: string };
+/** O navegador referencia a conversa só pelo UUID local; id remoto não é aceito. */
+const StatusSchema = z.object({
+  conversaId: z.string().uuid(),
+  status: conversationStatusSchema,
+});
+
+const espelho = criarEspelhoChatwootSupabase(supabaseServer);
+
+type UpdateConversationStatusResult =
+  | 'updated'
+  | 'unconfigured'
+  | { readonly naoTraduzida: FalhaDeIdentidadeChatwoot }
+  | { readonly failed: string };
 
 async function updateConversationStatus(
   scope: VerifiedOrganizationScope,
-  conversationId: number,
+  conversaId: string,
   status: z.infer<typeof conversationStatusSchema>,
 ): Promise<UpdateConversationStatusResult> {
-  const { data: existingConv, error: convCheckError } = await supabaseServer
-    .from('chatwoot_conversations')
-    .select('id')
-    .eq('id', conversationId)
-    .eq('organizacao_id', scope.organizationId)
-    .maybeSingle();
-  if (convCheckError || !existingConv) return 'not-found';
+  // Organização da sessão; conexão e id remoto da própria conversa, no servidor.
+  const conversa = await resolverPorIdLocal(espelho, scope.organizationId, 'conversa', conversaId);
+  if (conversa._tag === 'IdLocalNaoTraduzido') return { naoTraduzida: conversa.falha };
 
-  const adapter = await ChatwootAdapter.forScope(scope);
+  const adapter = await ChatwootAdapter.forScope(scope, conversa.escopo.conexaoId);
   if (!adapter) return 'unconfigured';
 
-  const toggleResult = await adapter.toggleConversationStatus(conversationId, status);
+  const toggleResult = await adapter.toggleConversationStatus(conversa.idExterno, status);
   if (toggleResult._tag !== 'ChatwootSuccess') {
     return { failed: toggleResult.message || toggleResult.reason };
   }
 
-  const { error } = await supabaseServer
-    .from('chatwoot_conversations')
-    .update({ status, updated_at: new Date().toISOString() })
-    .eq('id', conversationId)
-    .eq('organizacao_id', scope.organizationId);
-  if (error) throw error;
+  const atualizacao = await espelho.atualizar('conversa', conversa.escopo, conversaId, {
+    status,
+    updated_at: new Date().toISOString(),
+  });
+  if (atualizacao._tag === 'StoreFalhou') throw new Error('O status mudou no Chatwoot, mas o espelho local não foi atualizado.');
   return 'updated';
 }
 
@@ -53,23 +62,21 @@ export async function POST(request: Request) {
       );
     }
 
-    const { conversationId, status } = await request.json();
-
-    const parsedConversationId = Number(conversationId);
-    const parsedStatus = conversationStatusSchema.safeParse(status);
-    if (!Number.isSafeInteger(parsedConversationId) || parsedConversationId <= 0 || !parsedStatus.success) {
+    const parsed = StatusSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
       return NextResponse.json(
-        { success: false, error: 'Parâmetros conversationId e status são obrigatórios.' },
+        { success: false, error: 'Parâmetros conversaId (UUID local) e status são obrigatórios.' },
         { status: 400 }
       );
     }
 
     const scope = organizationContextToScope(contextResult.context);
-    const result = await updateConversationStatus(scope, parsedConversationId, parsedStatus.data);
-    if (result === 'not-found') {
+    const result = await updateConversationStatus(scope, parsed.data.conversaId, parsed.data.status);
+    if (typeof result === 'object' && 'naoTraduzida' in result) {
+      const naoEncontrada = result.naoTraduzida === 'IdentidadeNaoEncontrada';
       return NextResponse.json(
-        { success: false, error: 'Conversa não encontrada' },
-        { status: 404 }
+        { success: false, error: naoEncontrada ? 'Conversa não encontrada' : 'Conversa sem identidade Chatwoot resolvida', motivo: result.naoTraduzida },
+        { status: naoEncontrada ? 404 : result.naoTraduzida === 'StoreIndisponivel' ? 503 : 422 }
       );
     }
     if (result === 'unconfigured') {

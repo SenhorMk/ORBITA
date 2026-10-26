@@ -31,21 +31,25 @@ vi.mock('@/lib/supabaseClient', () => ({ supabase: {} }));
 const ORG_A: SelecaoDeOrganizacao = { id: 'org-a', versao: 1 };
 const ORG_B: SelecaoDeOrganizacao = { id: 'org-b', versao: 2 };
 
-function conversa(id: number, nome: string, status = 'open'): ChatwootConversation {
+/** UUIDs locais sintéticos: a tela nunca vê o id do Chatwoot (MSG-003B). */
+const uuidDaConversa = (n: number) => `c0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const uuidDoContato = (n: number) => `d0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const uuidDaMensagem = (n: number) => `e0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+function conversa(n: number, nome: string, status = 'open'): ChatwootConversation {
   return {
-    id,
-    display_id: id,
-    contact_id: id,
+    id_local: uuidDaConversa(n),
+    contato_id_local: uuidDoContato(n),
     status,
     updated_at: '2026-09-10T12:00:00.000Z',
-    contact: { id, name: nome, phone_number: `+551199999${1000 + id}` },
+    contact: { id_local: uuidDoContato(n), name: nome, phone_number: `+551199999${1000 + n}` },
   };
 }
 
-function mensagem(id: number, conversationId: number, content: string, criadaEm: string): ChatwootMessage {
+function mensagem(n: number, conversa: number, content: string, criadaEm: string): ChatwootMessage {
   return {
-    id,
-    conversation_id: conversationId,
+    id_local: uuidDaMensagem(n),
+    conversa_id_local: uuidDaConversa(conversa),
     content,
     message_type: 'incoming',
     sender_name: 'Cliente',
@@ -55,7 +59,7 @@ function mensagem(id: number, conversationId: number, content: string, criadaEm:
 
 interface LeituraPendente<T> {
   readonly organizacaoId: string;
-  readonly conversaId?: number;
+  readonly conversaId?: string;
   readonly responder: (valor: T) => void;
   readonly falhar: (mensagem: string) => void;
 }
@@ -63,7 +67,7 @@ interface LeituraPendente<T> {
 interface Assinatura {
   readonly tipo: 'conversas' | 'mensagens';
   readonly organizacaoId: string;
-  readonly conversaId?: number;
+  readonly conversaId?: string;
   readonly aoInserir?: (mensagem: ChatwootMessage) => void;
   readonly aoEstado: (ativo: boolean) => void;
   ativa: boolean;
@@ -255,7 +259,7 @@ describe('MensageriaDesktop — leitura do histórico', () => {
     await abrir('Ana');
 
     expect(mensagens).toHaveLength(1);
-    expect(mensagens[0]).toMatchObject({ organizacaoId: 'org-a', conversaId: 1 });
+    expect(mensagens[0]).toMatchObject({ organizacaoId: 'org-a', conversaId: uuidDaConversa(1) });
   });
 
   it('trocar de conversa some com o histórico anterior antes de o novo chegar', async () => {
@@ -302,7 +306,7 @@ describe('MensageriaDesktop — leitura do histórico', () => {
 
     const vivas = assinaturas.filter((a) => a.ativa && a.tipo === 'mensagens');
     expect(vivas).toHaveLength(1);
-    expect(vivas[0]).toMatchObject({ organizacaoId: 'org-a', conversaId: 2 });
+    expect(vivas[0]).toMatchObject({ organizacaoId: 'org-a', conversaId: uuidDaConversa(2) });
   });
 });
 
@@ -396,7 +400,7 @@ describe('MensageriaDesktop — envio', () => {
 
   it('o envio bem-sucedido confirma a mensagem uma vez só', async () => {
     const fetchWithAuth = vi.fn().mockResolvedValue(
-      respostaJson({ success: true, message: { id: 55, created_at: '2026-09-10T12:05:00.000Z' } }),
+      respostaJson({ success: true, message: { id_local: uuidDaMensagem(55), created_at: '2026-09-10T12:05:00.000Z' } }),
     );
     await abrirComposer(fetchWithAuth);
 
@@ -406,6 +410,34 @@ describe('MensageriaDesktop — envio', () => {
     await waitFor(() => expect(screen.queryByText('Enviando…')).not.toBeInTheDocument());
     expect(screen.getAllByText('já está a caminho')).toHaveLength(1);
     expect(screen.getByLabelText('Mensagem')).toHaveValue('');
+  });
+
+  it('MSG-003B: o envio referencia a conversa só pelo UUID local', async () => {
+    const fetchWithAuth = vi.fn().mockResolvedValue(
+      respostaJson({ success: true, message: { id_local: uuidDaMensagem(56), created_at: '2026-09-10T12:05:00.000Z' } }),
+    );
+    await abrirComposer(fetchWithAuth);
+
+    await userEvent.type(screen.getByLabelText('Mensagem'), 'segue o código');
+    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
+
+    await waitFor(() => expect(fetchWithAuth).toHaveBeenCalledTimes(1));
+    const [url, init] = fetchWithAuth.mock.calls[0]!;
+    expect(url).toBe('/api/chatwoot/send');
+    expect(JSON.parse(init.body)).toEqual({ conversaId: uuidDaConversa(1), content: 'segue o código' });
+  });
+
+  it('MSG-003B: resposta só com o id numérico do Chatwoot não confirma a entrega', async () => {
+    const fetchWithAuth = vi.fn().mockResolvedValue(
+      respostaJson({ success: true, message: { id: 55, created_at: '2026-09-10T12:05:00.000Z' } }),
+    );
+    await abrirComposer(fetchWithAuth);
+
+    await userEvent.type(screen.getByLabelText('Mensagem'), 'confirmado?');
+    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
+
+    await waitFor(() => expect(screen.getByText('Não enviada')).toBeInTheDocument());
+    expect(screen.getByText('O servidor respondeu em um formato inesperado.')).toBeInTheDocument();
   });
 
   it('a indisponibilidade da integração bloqueia o envio e é dita como tal', async () => {
@@ -501,6 +533,8 @@ describe('MensageriaDesktop — resolver e reabrir', () => {
     await abrir('Ana');
     await responder(mensagens, []);
     await userEvent.click(screen.getByRole('button', { name: 'Marcar resolvida' }));
+    // MSG-003B: o status também referencia a conversa só pelo UUID local.
+    expect(JSON.parse(fetchWithAuth.mock.calls[0]![1].body)).toEqual({ conversaId: uuidDaConversa(1), status: 'resolved' });
 
     await abrir('Bruno');
     await responder(mensagens, []);

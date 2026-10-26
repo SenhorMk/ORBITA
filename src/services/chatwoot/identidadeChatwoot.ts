@@ -48,6 +48,15 @@ export interface EspelhoChatwootStore {
     escopo: EscopoDaConexaoChatwoot,
     idExterno: string,
   ): Promise<ResultadoDoStore<readonly CandidatoDeIdentidade[]>>;
+  /**
+   * A conexão do UUID local dentro da organização: `null` se o UUID não é da
+   * organização; `{ conexaoId: null }` se a linha ainda não tem conexão provada.
+   */
+  buscarConexaoPorIdLocal(
+    recurso: RecursoChatwoot,
+    organizacaoId: string,
+    idLocal: string,
+  ): Promise<ResultadoDoStore<{ readonly conexaoId: string | null } | null>>;
   /** O id remoto do UUID local, só na organização e na conexão do escopo. */
   buscarPorIdLocal(
     recurso: RecursoChatwoot,
@@ -76,6 +85,8 @@ export type FalhaDeIdentidadeChatwoot =
   | 'IdentidadeDeOutraConexao'
   /** O pai do registro não está espelhado nesta conexão (evento fora de ordem). */
   | 'PaiNaoEspelhado'
+  /** A linha existe, mas ainda não tem conexão provada (quarentena do MSG-002). */
+  | 'ConexaoNaoComprovada'
   /** O banco recusou o vínculo com o pai ou com a conexão. */
   | 'VinculoRecusado'
   /** O banco não respondeu; nada foi concluído. */
@@ -88,6 +99,14 @@ export type ResolucaoDeIdLocal =
 export type ResolucaoDeIdExterno =
   | { readonly _tag: 'IdExternoResolvido'; readonly idExterno: number }
   | { readonly _tag: 'IdExternoNaoResolvido'; readonly falha: FalhaDeIdentidadeChatwoot };
+
+export type ResolucaoPorIdLocal =
+  | {
+      readonly _tag: 'IdLocalDaConexao';
+      readonly escopo: EscopoDaConexaoChatwoot;
+      readonly idExterno: number;
+    }
+  | { readonly _tag: 'IdLocalNaoTraduzido'; readonly falha: FalhaDeIdentidadeChatwoot };
 
 /** Falha tipada que atravessa a camada de aplicação sem carregar ids nem conteúdo. */
 export class FalhaDeIdentidadeChatwootError extends Error {
@@ -131,4 +150,26 @@ export async function resolverIdExterno(
   const idExterno = Number(busca.valor);
   if (!Number.isSafeInteger(idExterno)) return { _tag: 'IdExternoNaoResolvido', falha: 'IdentidadeAmbigua' };
   return { _tag: 'IdExternoResolvido', idExterno };
+}
+
+/**
+ * A referência que chega do navegador é só o UUID local. A organização vem da
+ * sessão verificada; a conexão é a da própria linha nessa organização, e o id
+ * remoto sai do resolver nessa conexão. UUID de outra organização, adulterado
+ * ou ainda sem conexão provada não é traduzido.
+ */
+export async function resolverPorIdLocal(
+  store: EspelhoChatwootStore,
+  organizacaoId: string,
+  recurso: RecursoChatwoot,
+  idLocal: string,
+): Promise<ResolucaoPorIdLocal> {
+  const conexao = await store.buscarConexaoPorIdLocal(recurso, organizacaoId, idLocal);
+  if (conexao._tag === 'StoreFalhou') return { _tag: 'IdLocalNaoTraduzido', falha: 'StoreIndisponivel' };
+  if (conexao.valor === null) return { _tag: 'IdLocalNaoTraduzido', falha: 'IdentidadeNaoEncontrada' };
+  if (conexao.valor.conexaoId === null) return { _tag: 'IdLocalNaoTraduzido', falha: 'ConexaoNaoComprovada' };
+  const escopo = { organizacaoId, conexaoId: conexao.valor.conexaoId };
+  const externo = await resolverIdExterno(store, escopo, recurso, idLocal);
+  if (externo._tag === 'IdExternoNaoResolvido') return { _tag: 'IdLocalNaoTraduzido', falha: externo.falha };
+  return { _tag: 'IdLocalDaConexao', escopo, idExterno: externo.idExterno };
 }

@@ -272,9 +272,9 @@ function ListaDeConversas({
 
         {visiveis.map((conversa) => (
           <LinhaDeConversa
-            key={conversa.id}
+            key={conversa.id_local}
             conversa={conversa}
-            aberta={selecionada?.id === conversa.id}
+            aberta={selecionada?.id_local === conversa.id_local}
             aoAbrir={() => mensageria.selecionar(conversa)}
           />
         ))}
@@ -453,7 +453,7 @@ function Historico({ mensageria }: { readonly mensageria: Mensageria }) {
       )}
 
       {historico.map((mensagem) => (
-        <Bolha key={mensagem.id} mensagem={mensagem} />
+        <Bolha key={mensagem.id_local} mensagem={mensagem} />
       ))}
 
       {otimistas.map((otimista) => (
@@ -576,7 +576,7 @@ export function MensageriaDesktop({
     const alvo = finalDoTelefone(telefoneParaAbrir ?? undefined);
     if (alvo === '' || conversas === null || atendidoRef.current === alvo) return;
     atendidoRef.current = alvo;
-    const encontrada = conversas.find((c) => finalDoTelefone(c.contact?.phone_number) === alvo);
+    const encontrada = conversas.find((c) => finalDoTelefone(c.contact?.phone_number ?? undefined) === alvo);
     if (encontrada) selecionar(encontrada);
   }, [conversas, selecionar, telefoneParaAbrir]);
 
