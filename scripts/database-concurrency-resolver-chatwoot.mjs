@@ -21,11 +21,17 @@ import { esperar, observarBloqueioNoPostgres } from './database-concurrency.mjs'
  *    `update` não casa mais — zero linhas, a conexão provada não troca;
  * 4. mensagem ligada à conversa de outra conexão é recusada (23503) e o
  *    `authenticated` não escreve nos espelhos (42501);
- * 5. numa simulação da contração do MSG-004 (desfeita no fim), três
- *    instalações com os mesmos ids 5/50/500 gravam espelhos distintos e o
- *    resolver devolve exatamente um UUID por escopo. Contraprovas na mesma
- *    simulação: sem o filtro de conexão a busca fica ambígua (2) e por id
- *    global encontra as três; um `update` legado por `id` tocaria as três.
+ * 5. PRE-008 × MSG-002: desligar a conexão e reativá-la pelo mesmo `update`
+ *    da rota de connect, com o evento de auditoria pela RPC real, mantém o
+ *    `conexao_id` e a associação de identidades: o resolver devolve os mesmos
+ *    UUIDs e o vínculo conversa → contato continua o mesmo;
+ * 6. numa simulação da contração do MSG-004 (desfeita no fim), três
+ *    instalações com os mesmos ids 5/50/500 gravam espelhos distintos (a
+ *    escrita do webhook), o replay do sync atualiza cada uma pelo seu UUID sem
+ *    tocar as outras, e o resolver devolve exatamente um UUID por escopo.
+ *    Contraprovas na mesma simulação: sem o filtro de conexão a busca fica
+ *    ambígua (2) e por id global encontra as três; um `update` legado por `id`
+ *    tocaria as três.
  */
 
 const ORG_A = 'e3300000-0000-4000-8000-00000000000a';
@@ -33,6 +39,7 @@ const ORG_B = 'e3300000-0000-4000-8000-00000000000b';
 const CONEXAO_A1 = 'e3300000-0000-4000-8000-0000000000c1';
 const CONEXAO_A2 = 'e3300000-0000-4000-8000-0000000000c2';
 const CONEXAO_B1 = 'e3300000-0000-4000-8000-0000000000c3';
+const OWNER_A = 'e3300000-0000-4000-8000-0000000000a1';
 
 /** `buscarPorIdExterno`: organização + id remoto + (conexão do escopo ou legado). */
 const SQL_RESOLVER = (tabela) => `select id_local, conexao_id from public.${tabela}
@@ -56,6 +63,8 @@ async function semear(client) {
        ($3, $5, 'chatwoot', 'Principal', 'conectado')`,
     [CONEXAO_A1, CONEXAO_A2, CONEXAO_B1, ORG_A, ORG_B],
   );
+  await client.query("insert into auth.users (id, email) values ($1, 'owner-resolver@orbita.test')", [OWNER_A]);
+  await client.query("insert into public.membros_organizacao (organizacao_id, user_id, papel) values ($1, $2, 'owner')", [ORG_A, OWNER_A]);
 }
 
 async function executar(client, sql, params) {
@@ -169,7 +178,54 @@ async function recusas(admin) {
   return ok({ resumo: `mensagem na conversa de outra conexão → ${cruzada.code}; authenticated grava → ${navegador.code}` });
 }
 
-/** 5: modelo depois da contração, desfeito por rollback. */
+/** `upsertChatwootConnection` da rota de connect: a reativação reaproveita a linha. */
+const SQL_REATIVAR_CONEXAO = `update public.conexoes_integracao
+  set status = 'pendente', last_health_check_at = null, last_health_error = null, updated_at = now()
+  where id = $1 and organizacao_id = $2 returning id`;
+/** `auditarConexao` → `recordAuditEvent` → a RPC da migration 36. */
+const SQL_AUDITAR_REATIVACAO = `select public.registrar_evento_auditoria($1, $2, 'integration.connection_configured',
+  'conexoes_integracao', $3::text, 'msg-003a-ciclo', null, null, '{"provedor":"chatwoot","status":"pendente"}'::jsonb) as evento`;
+
+/** 5: desligar e reativar a conexão não desfaz a associação de identidades. */
+async function cicloDaConexao(admin) {
+  await admin.query("insert into public.chatwoot_contacts (id, organizacao_id, conexao_id, name) values (330040, $1, $2, 'antes do ciclo')", [ORG_A, CONEXAO_A1]);
+  await admin.query("insert into public.chatwoot_conversations (id, organizacao_id, conexao_id, contact_id, status) values (330041, $1, $2, 330040, 'open')", [ORG_A, CONEXAO_A1]);
+  const antes = {
+    contato: (await resolver(admin, 'chatwoot_contacts', ORG_A, CONEXAO_A1, 330040))[0].id_local,
+    conversa: (await resolver(admin, 'chatwoot_conversations', ORG_A, CONEXAO_A1, 330041))[0].id_local,
+  };
+  // Como o `supabaseServer`: papel `service_role` e o claim que a RPC de auditoria confere.
+  await admin.query('set role service_role');
+  await admin.query("select set_config('request.jwt.claim.role', 'service_role', false)");
+  try {
+    await admin.query("update public.conexoes_integracao set status = 'desconectado' where id = $1", [CONEXAO_A1]);
+    const reativada = await admin.query(SQL_REATIVAR_CONEXAO, [CONEXAO_A1, ORG_A]);
+    const evento = await admin.query(SQL_AUDITAR_REATIVACAO, [ORG_A, OWNER_A, CONEXAO_A1]);
+    const depois = {
+      contato: await resolver(admin, 'chatwoot_contacts', ORG_A, CONEXAO_A1, 330040),
+      conversa: await resolver(admin, 'chatwoot_conversations', ORG_A, CONEXAO_A1, 330041),
+    };
+    const vinculo = (await admin.query(
+      'select contato_id_local, conexao_id from public.chatwoot_conversations where id_local = $1', [antes.conversa])).rows[0];
+    const auditado = (await admin.query(
+      "select count(*)::int as n from public.eventos_auditoria_sistema where organizacao_id = $1 and acao = 'integration.connection_configured' and recurso_id = $2",
+      [ORG_A, CONEXAO_A1])).rows[0].n;
+    if (reativada.rows[0]?.id !== CONEXAO_A1 || !evento.rows[0]?.evento || auditado !== 1
+        || depois.contato.length !== 1 || depois.contato[0].id_local !== antes.contato
+        || depois.conversa.length !== 1 || depois.conversa[0].id_local !== antes.conversa
+        || vinculo.contato_id_local !== antes.contato || vinculo.conexao_id !== CONEXAO_A1) {
+      return err('ResolverChatwootCicloPerdeuIdentidade', 'A reativação auditada mudou a conexão ou a associação de identidades', {
+        reativada: reativada.rows, auditado, depois, vinculo,
+      });
+    }
+    return ok({ resumo: `desligar → reativar auditado (${auditado} evento) mantém conexão, UUIDs e vínculo conversa → contato` });
+  } finally {
+    await admin.query("select set_config('request.jwt.claim.role', '', false)");
+    await admin.query('reset role');
+  }
+}
+
+/** 6: modelo depois da contração, desfeito por rollback. */
 async function posContracao(admin) {
   await admin.query('BEGIN');
   try {
@@ -197,6 +253,17 @@ async function posContracao(admin) {
         `insert into public.chatwoot_messages (id, id_externo, organizacao_id, conexao_id, conversation_id, conversa_id_local, content)
          values (500500, '500500', $1, $2, 500050, $3, $4) returning id_local`, [org, conexao, conversa, `de ${conexao}`])).rows[0].id_local);
     }
+    // O replay do sync em cada instalação: resolve no seu escopo e atualiza pelo UUID.
+    for (const [org, conexao] of escopos) {
+      const [linha] = await resolver(admin, 'chatwoot_messages', org, conexao, 500500);
+      await admin.query(
+        `update public.chatwoot_messages set content = $4
+          where organizacao_id = $1 and id_local = $2 and (conexao_id = $3 or conexao_id is null)`,
+        [org, linha.id_local, conexao, `sync de ${conexao}`]);
+    }
+    const conteudos = (await admin.query(
+      "select id_local, conexao_id, content from public.chatwoot_messages where id_externo = '500500'")).rows;
+    const syncIsolado = conteudos.length === 3 && conteudos.every((l) => l.content === `sync de ${l.conexao_id}`);
     const resolvidos = [];
     for (const [org, conexao] of escopos) resolvidos.push(await resolver(admin, 'chatwoot_messages', org, conexao, 500500));
     const semFiltroDeConexao = (await admin.query(
@@ -206,12 +273,13 @@ async function posContracao(admin) {
 
     const distintos = new Set(mensagens).size === 3
       && resolvidos.every((linhas, i) => linhas.length === 1 && linhas[0].id_local === mensagens[i]);
-    if (!distintos || semFiltroDeConexao !== 2 || global !== 3 || updateLegado !== 3) {
+    if (!distintos || !syncIsolado || semFiltroDeConexao !== 2 || global !== 3 || updateLegado !== 3) {
       return err('ResolverChatwootPosContracaoFalhou', 'O resolver não separou as instalações ou a contraprova não reproduziu o defeito', {
-        distintos, semFiltroDeConexao, global, updateLegado,
+        distintos, syncIsolado, semFiltroDeConexao, global, updateLegado,
       });
     }
-    return ok({ resumo: `pós-contração: 3 instalações, 3 UUIDs, 1 por escopo; contraprovas sem conexão=${semFiltroDeConexao}, `
+    return ok({ resumo: 'pós-contração: 3 instalações, 3 UUIDs, 1 por escopo, replay do sync isolado; '
+      + `contraprovas sem conexão=${semFiltroDeConexao}, `
       + `global=${global}, update por id=${updateLegado}` });
   } finally {
     await admin.query('ROLLBACK');
@@ -238,7 +306,7 @@ export async function runResolverChatwootRaceRehearsal({
     await clientB.query('set role service_role');
 
     const resumos = [];
-    for (const etapa of [() => corridas({ admin, clientA, clientB, timeoutDeObservacaoMs }), () => recusas(admin), () => posContracao(admin)]) {
+    for (const etapa of [() => corridas({ admin, clientA, clientB, timeoutDeObservacaoMs }), () => recusas(admin), () => cicloDaConexao(admin), () => posContracao(admin)]) {
       const resultado = await etapa();
       if (resultado._tag === 'err') return resultado;
       resumos.push(resultado.value.resumo);

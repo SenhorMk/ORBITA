@@ -156,4 +156,41 @@ describe('POST /api/chatwoot/sync depois do MSG-004 (sem PK global)', () => {
     expect(porOrg(ORG_A).content).toBe(`oi de ${ORG_A}`);
     expect(porOrg(ORG_B).content).toBe(`oi de ${ORG_B}`);
   });
+
+  it('três instalações (A, segunda de A, B) com os ids 5/50/500 por webhook e sync, com replays, não se misturam', async () => {
+    const { persistWebhookEffects } = await import('../../../../services/chatwoot/chatwootWebhookPersistence');
+    const CONEXAO_A2 = '11111111-1111-4111-8111-111111111112';
+    const webhookA2 = (conteudo: string, evento: 'message_created' | 'message_updated' = 'message_created') =>
+      persistWebhookEffects(estado.store, { organizacaoId: ORG_A, conexaoId: CONEXAO_A2, atorId: ATOR }, {
+        event: evento,
+        account: { id: 1 },
+        id: 500,
+        content: conteudo,
+        conversation: { id: 50, inbox_id: 1, contact: { id: 5, name: 'Contato da segunda' } },
+      } as never, 1);
+
+    await Promise.all([webhookA2('da segunda'), sincronizar(ORG_A)]);
+    await sincronizar(ORG_B);
+    // Reprocessamento e evento atrasado: a criação repetida não apaga a edição.
+    await webhookA2('editada na segunda', 'message_updated');
+    await webhookA2('da segunda');
+    await sincronizar(ORG_A);
+    await sincronizar(ORG_B);
+
+    for (const recurso of ['contato', 'conversa', 'mensagem'] as const) expect(estado.store.linhas[recurso]).toHaveLength(3);
+    const daConexao = (conexao: string) => {
+      const mensagem = estado.store.linhas.mensagem.find((l) => l.conexao_id === conexao)!;
+      const conversa = estado.store.porIdLocal('conversa', mensagem.conversa_id_local as string)!;
+      const contato = estado.store.porIdLocal('contato', conversa.contato_id_local as string)!;
+      return { mensagem, conversa, contato };
+    };
+    for (const [conexao, org, conteudo] of [
+      [CONEXAO_A, ORG_A, `oi de ${ORG_A}`], [CONEXAO_A2, ORG_A, 'editada na segunda'], [CONEXAO_B, ORG_B, `oi de ${ORG_B}`],
+    ] as const) {
+      const arvore = daConexao(conexao);
+      expect(arvore.mensagem).toMatchObject({ organizacao_id: org, content: conteudo });
+      expect(arvore.conversa).toMatchObject({ organizacao_id: org, conexao_id: conexao });
+      expect(arvore.contato).toMatchObject({ organizacao_id: org, conexao_id: conexao });
+    }
+  });
 });

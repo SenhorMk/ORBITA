@@ -93,11 +93,31 @@ resolve a mesma linha pelo resolver e não duplica.
 - `src/app/api/chatwoot/sync/sync.test.ts`: A/B nos dois modelos, re-sync,
   adoção legada, troca de organização durante o sync, sync + webhook
   concorrentes.
+- `src/app/api/chatwoot/sync/sync.test.ts` (modelo pós-MSG-004): três
+  instalações (A, segunda de A, B) com os ids 5/50/500 por webhook e sync,
+  concorrentes, com reprocessamento e `message_updated` antes do
+  `message_created`: três árvores, nenhuma mistura.
 - `scripts/database-concurrency-resolver-chatwoot.mjs` (em `test:db`), contra
   Postgres real com bloqueio observado: corrida da mesma conexão converge,
   B nunca toma a linha de A, adoção legada não troca de instalação, vínculo
-  cruzado → 23503, `authenticated` → 42501, simulação pós-contração com 3
-  UUIDs e contraprovas (sem conexão = 2, global = 3, update por id = 3).
+  cruzado → 23503, `authenticated` → 42501; PRE-008 × MSG-002: desligar e
+  reativar a conexão pelo `update` da rota de connect, com o evento de
+  auditoria pela RPC real, mantém `conexao_id`, UUIDs e o vínculo conversa →
+  contato; simulação pós-contração com 3 instalações, replay do sync isolado e
+  contraprovas (sem conexão = 2, global = 3, update por id = 3).
+
+## 6a. Integração com o PRE-008 (combinação #125 + #127 + #128)
+
+- Webhook em conexão desligada (PRE-008) não chega ao store de identidade
+  (MSG-002/003A): o teste do PRE-008 em `webhook.test.ts` agora confere que o
+  store não recebeu nenhuma chamada.
+- A reativação (`POST /api/chatwoot/connect`) reaproveita a mesma linha de
+  `conexoes_integracao`; não existe rota de disconnect (desligar é
+  `status = 'desconectado'` no servidor). Como `conexao_id` não muda, a
+  associação de identidades sobrevive ao ciclo — provado no ensaio acima.
+- O adapter (`ChatwootAdapter.forScope`) recusa conexão desligada; o sync usa a
+  conexão do adapter, então não grava por conexão desligada.
+- Nenhum conflito semântico encontrado; nada foi corrigido na integração.
 
 Limitações: o webhook e o sync são exercitados com fakes do Chatwoot e do
 store; o store real é provado pelas mesmas instruções SQL no laboratório, não
