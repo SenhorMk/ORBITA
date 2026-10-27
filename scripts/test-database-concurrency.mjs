@@ -22,6 +22,7 @@ import { runContatoExcluidoRaceRehearsal } from './database-concurrency-contato.
 import { runComandosComerciaisRaceRehearsal } from './database-concurrency-comandos-comerciais.mjs';
 import { runMigracoesRemotasRaceRehearsal } from './database-concurrency-migracoes-remotas.mjs';
 import { runIdentidadeChatwootRaceRehearsal } from './database-concurrency-identidade-chatwoot.mjs';
+import { runOutboxRaceRehearsal } from './database-concurrency-outbox.mjs';
 import { runResolverChatwootRaceRehearsal } from './database-concurrency-resolver-chatwoot.mjs';
 import { failureMessage } from './script-result.mjs';
 
@@ -54,6 +55,7 @@ let outcomeContato;
 let outcomeComandosComerciais;
 let outcomeMigracoesRemotas;
 let outcomeIdentidadeChatwoot;
+let outcomeOutbox;
 let outcomeResolverChatwoot;
 try {
   const started = executeSupabaseStep(start);
@@ -75,6 +77,7 @@ try {
     outcomeComandosComerciais = started;
     outcomeMigracoesRemotas = started;
     outcomeIdentidadeChatwoot = started;
+    outcomeOutbox = started;
     outcomeResolverChatwoot = started;
   } else {
     const alinhado = await alinharStubDeAuthComProducao();
@@ -97,6 +100,7 @@ try {
       outcomeComandosComerciais = applied;
       outcomeMigracoesRemotas = applied;
       outcomeIdentidadeChatwoot = applied;
+      outcomeOutbox = applied;
       outcomeResolverChatwoot = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
@@ -116,6 +120,7 @@ try {
       outcomeComandosComerciais = await runComandosComerciaisRaceRehearsal();
       outcomeMigracoesRemotas = await runMigracoesRemotasRaceRehearsal();
       outcomeIdentidadeChatwoot = await runIdentidadeChatwootRaceRehearsal();
+      outcomeOutbox = await runOutboxRaceRehearsal();
       outcomeResolverChatwoot = await runResolverChatwootRaceRehearsal();
     }
   }
@@ -180,6 +185,7 @@ const relatos = [
   [outcomeComandosComerciais, (v) => v.relato],
   [outcomeMigracoesRemotas, (v) => v.relato],
   [outcomeIdentidadeChatwoot, (v) => v.relato],
+  [outcomeOutbox, (v) => v.relato],
   [outcomeResolverChatwoot, (v) => v.relato],
 ];
 

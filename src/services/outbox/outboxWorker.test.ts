@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { runOutboxWorkerOnce, drainOutboxWorker, generateWorkerId, type OutboxWorkerDeps } from './outboxWorker';
-import type { ClaimedOutboxEvent } from '@/services/outboxService';
+import type { ClaimedOutboxEvent, OutboxStatus } from '@/services/outboxService';
+import type { DesfechoDoDespacho } from './desfechoDoEfeito';
 
 const fakeSupabase = {} as unknown as SupabaseClient;
 
@@ -18,15 +19,24 @@ function claimedEvent(overrides: Partial<ClaimedOutboxEvent> = {}): ClaimedOutbo
     lease_owner: 'worker-1',
     lease_expires_at: new Date(Date.now() + 300_000).toISOString(),
     correlation_id: 'corr_1',
+    fencing_token: 7,
     ...overrides,
   };
 }
 
-// Fakes for the outbox data-access seam — real behavior (SKIP LOCKED, lease
-// ownership, backoff) is proven by pgTAP against the real database in
-// supabase/tests/database/outbox_lease_correlacao.test.sql. Here we prove
-// the worker's own orchestration logic (order of operations, dispatch
-// routing, no-adapter handling, no silent swallow) in isolation.
+const STATUS_DO_DESFECHO: Record<DesfechoDoDespacho['_tag'], OutboxStatus> = {
+  Confirmado: 'sent',
+  NaoEnviado: 'failed_transient',
+  Recusado: 'dead_letter',
+  Desconhecido: 'unknown',
+};
+
+// Fakes for the outbox data-access seam — the real state machine (SKIP
+// LOCKED, fencing, CAS, reaper) is proven by pgTAP against the real database
+// in supabase/tests/final/efeito_ambiguo_na_outbox.test.sql, and the failure
+// matrix runs against a stateful fake in matrizDeFalhas.test.ts. Here we
+// prove the worker's own orchestration (order of operations, what reaches
+// the adapter, what is recorded).
 function makeFakeOutbox() {
   const calls: string[] = [];
   const releaseExpiredLeases = vi.fn(async () => {
@@ -37,15 +47,15 @@ function makeFakeOutbox() {
     calls.push('claimBatch');
     return [] as ClaimedOutboxEvent[];
   });
-  const completeClaimedSent = vi.fn(async () => {
-    calls.push('completeClaimedSent');
+  const startDispatch = vi.fn(async () => {
+    calls.push('startDispatch');
     return true;
   });
-  const completeClaimedFailed = vi.fn(async () => {
-    calls.push('completeClaimedFailed');
-    return true;
+  const concludeAttempt = vi.fn(async (_s: unknown, _p: unknown, desfecho: DesfechoDoDespacho): Promise<OutboxStatus | null> => {
+    calls.push(`concludeAttempt:${desfecho._tag}`);
+    return STATUS_DO_DESFECHO[desfecho._tag];
   });
-  return { calls, releaseExpiredLeases, claimBatch, completeClaimedSent, completeClaimedFailed };
+  return { calls, releaseExpiredLeases, claimBatch, startDispatch, concludeAttempt };
 }
 
 describe('runOutboxWorkerOnce', () => {
@@ -56,138 +66,115 @@ describe('runOutboxWorkerOnce', () => {
   });
 
   it('releases expired leases before claiming a new batch (crash recovery ordering)', async () => {
-    await runOutboxWorkerOnce({
-      supabase: fakeSupabase,
-      workerId: 'worker-1',
-      providers: {},
-      outbox: fakeOutbox,
-    });
+    await runOutboxWorkerOnce({ supabase: fakeSupabase, workerId: 'worker-1', providers: {}, outbox: fakeOutbox });
 
     expect(fakeOutbox.calls[0]).toBe('releaseExpiredLeases');
     expect(fakeOutbox.calls[1]).toBe('claimBatch');
   });
 
-  it('dispatches a claimed event to its provider adapter and marks it sent on success', async () => {
-    const event = claimedEvent();
-    fakeOutbox.claimBatch.mockResolvedValueOnce([event]);
-    const adapter = vi.fn(async () => ({ success: true as const, responseBody: { id: 999 } }));
-
-    const summary = await runOutboxWorkerOnce({
-      supabase: fakeSupabase,
-      workerId: 'worker-1',
-      providers: { chatwoot: adapter },
-      outbox: fakeOutbox,
+  it('records in_flight before calling the adapter and concludes under the same fencing token', async () => {
+    fakeOutbox.claimBatch.mockResolvedValueOnce([claimedEvent()]);
+    const adapter = vi.fn(async (): Promise<DesfechoDoDespacho> => {
+      fakeOutbox.calls.push('adapter');
+      return { _tag: 'Confirmado', recibo: '999' };
     });
 
-    expect(adapter).toHaveBeenCalledWith(event);
-    expect(fakeOutbox.completeClaimedSent).toHaveBeenCalledWith(fakeSupabase, 'worker-1', 'evt-1', { id: 999 });
-    expect(summary).toEqual({ claimed: 1, sent: 1, failedTransient: 0, deadLettered: 0, reaped: 0 });
-  });
+    const summary = await runOutboxWorkerOnce({ supabase: fakeSupabase, workerId: 'worker-1', providers: { chatwoot: adapter }, outbox: fakeOutbox });
 
-  it('marks a failing event as failed_transient when attempts remain', async () => {
-    const event = claimedEvent({ attempts: 0, max_attempts: 5 });
-    fakeOutbox.claimBatch.mockResolvedValueOnce([event]);
-    const adapter = vi.fn(async () => ({ success: false as const, error: new Error('503 Service Unavailable') }));
-
-    const summary = await runOutboxWorkerOnce({
-      supabase: fakeSupabase,
-      workerId: 'worker-1',
-      providers: { chatwoot: adapter },
-      outbox: fakeOutbox,
-    });
-
-    expect(fakeOutbox.completeClaimedFailed).toHaveBeenCalledWith(
+    expect(fakeOutbox.calls).toEqual(['releaseExpiredLeases', 'startDispatch', 'adapter', 'concludeAttempt:Confirmado']);
+    expect(fakeOutbox.startDispatch).toHaveBeenCalledWith(fakeSupabase, 'evt-1', 'worker-1', 7);
+    expect(fakeOutbox.concludeAttempt).toHaveBeenCalledWith(
       fakeSupabase,
-      'worker-1',
-      'evt-1',
-      expect.any(Error),
-      0,
+      { eventoId: 'evt-1', workerId: 'worker-1', fencingToken: 7 },
+      { _tag: 'Confirmado', recibo: '999' },
     );
-    expect(summary.failedTransient).toBe(1);
-    expect(summary.deadLettered).toBe(0);
+    expect(summary.sent).toBe(1);
   });
 
-  it('counts a failure at max_attempts as dead-lettered instead of retryable', async () => {
-    const event = claimedEvent({ attempts: 4, max_attempts: 5 });
-    fakeOutbox.claimBatch.mockResolvedValueOnce([event]);
-    const adapter = vi.fn(async () => ({ success: false as const, error: new Error('permanent failure') }));
+  it('never calls the adapter when the dispatch could not be recorded (lost lease)', async () => {
+    fakeOutbox.claimBatch.mockResolvedValueOnce([claimedEvent()]);
+    fakeOutbox.startDispatch.mockResolvedValueOnce(false);
+    const adapter = vi.fn();
 
-    const summary = await runOutboxWorkerOnce({
-      supabase: fakeSupabase,
-      workerId: 'worker-1',
-      providers: { chatwoot: adapter },
-      outbox: fakeOutbox,
-    });
+    const summary = await runOutboxWorkerOnce({ supabase: fakeSupabase, workerId: 'worker-1', providers: { chatwoot: adapter }, outbox: fakeOutbox });
 
-    expect(summary.failedTransient).toBe(0);
-    expect(summary.deadLettered).toBe(1);
+    expect(adapter).not.toHaveBeenCalled();
+    expect(fakeOutbox.concludeAttempt).not.toHaveBeenCalled();
+    expect(summary.fenced).toBe(1);
   });
 
-  it('dead-letters an event with no registered provider adapter, without ever attempting delivery', async () => {
-    const event = claimedEvent({ destination: 'bling' });
-    fakeOutbox.claimBatch.mockResolvedValueOnce([event]);
-    const chatwootAdapter = vi.fn();
-
-    const summary = await runOutboxWorkerOnce({
-      supabase: fakeSupabase,
-      workerId: 'worker-1',
-      providers: { chatwoot: chatwootAdapter },
-      outbox: fakeOutbox,
-    });
-
-    expect(chatwootAdapter).not.toHaveBeenCalled();
-    expect(fakeOutbox.completeClaimedFailed).toHaveBeenCalledWith(
-      fakeSupabase,
-      'worker-1',
-      'evt-1',
-      expect.objectContaining({ message: expect.stringContaining('nenhum adapter') }),
-      0,
-    );
-    expect(summary.deadLettered).toBe(1);
-  });
-
-  it('never crashes and never fabricates success when the provider adapter throws', async () => {
-    const event = claimedEvent();
-    fakeOutbox.claimBatch.mockResolvedValueOnce([event]);
-    const adapter = vi.fn(async () => {
+  it('records an adapter exception after dispatch as unknown, never as a retryable failure', async () => {
+    fakeOutbox.claimBatch.mockResolvedValueOnce([claimedEvent()]);
+    const adapter = vi.fn(async (): Promise<DesfechoDoDespacho> => {
       throw new Error('ECONNRESET');
     });
-
-    const summary = await expect(
-      runOutboxWorkerOnce({
-        supabase: fakeSupabase,
-        workerId: 'worker-1',
-        providers: { chatwoot: adapter },
-        outbox: fakeOutbox,
-      }),
-    ).resolves.toBeDefined();
-
-    expect(fakeOutbox.completeClaimedSent).not.toHaveBeenCalled();
-    expect(fakeOutbox.completeClaimedFailed).toHaveBeenCalled();
-    void summary;
-  });
-
-  it('processes multiple claimed events independently in one pass', async () => {
-    const eventA = claimedEvent({ evento_id: 'evt-a', destination: 'chatwoot' });
-    const eventB = claimedEvent({ evento_id: 'evt-b', destination: 'bling' });
-    fakeOutbox.claimBatch.mockResolvedValueOnce([eventA, eventB]);
-    const chatwootAdapter = vi.fn(async () => ({ success: true as const }));
-    const blingAdapter = vi.fn(async () => ({ success: true as const }));
+    const aoFicarDesconhecido = vi.fn(async () => {});
 
     const summary = await runOutboxWorkerOnce({
-      supabase: fakeSupabase,
-      workerId: 'worker-1',
-      providers: { chatwoot: chatwootAdapter, bling: blingAdapter },
-      outbox: fakeOutbox,
+      supabase: fakeSupabase, workerId: 'worker-1', providers: { chatwoot: adapter }, outbox: fakeOutbox, aoFicarDesconhecido,
     });
 
-    expect(summary.sent).toBe(2);
-    expect(chatwootAdapter).toHaveBeenCalledTimes(1);
-    expect(blingAdapter).toHaveBeenCalledTimes(1);
+    expect(fakeOutbox.concludeAttempt).toHaveBeenCalledWith(
+      fakeSupabase,
+      expect.anything(),
+      expect.objectContaining({ _tag: 'Desconhecido', motivo: 'falha_apos_despacho' }),
+    );
+    expect(summary).toMatchObject({ unknown: 1, failedTransient: 0, sent: 0 });
+    expect(aoFicarDesconhecido).toHaveBeenCalledTimes(1);
+  });
+
+  it('records an outcome outside the contract (confirmed without receipt) as unknown', async () => {
+    fakeOutbox.claimBatch.mockResolvedValueOnce([claimedEvent()]);
+    const adapter = vi.fn(async () => ({ _tag: 'Confirmado', recibo: '   ' }) as DesfechoDoDespacho);
+
+    const summary = await runOutboxWorkerOnce({ supabase: fakeSupabase, workerId: 'worker-1', providers: { chatwoot: adapter }, outbox: fakeOutbox });
+
+    expect(fakeOutbox.calls).not.toContain('concludeAttempt:Confirmado');
+    expect(summary).toMatchObject({ unknown: 1, sent: 0 });
+  });
+
+  it('refuses a destination with no adapter from the claim, without dispatching', async () => {
+    fakeOutbox.claimBatch.mockResolvedValueOnce([claimedEvent({ destination: 'bling' })]);
+    const chatwootAdapter = vi.fn();
+
+    const summary = await runOutboxWorkerOnce({ supabase: fakeSupabase, workerId: 'worker-1', providers: { chatwoot: chatwootAdapter }, outbox: fakeOutbox });
+
+    expect(chatwootAdapter).not.toHaveBeenCalled();
+    expect(fakeOutbox.startDispatch).not.toHaveBeenCalled();
+    expect(fakeOutbox.concludeAttempt).toHaveBeenCalledWith(
+      fakeSupabase,
+      expect.anything(),
+      expect.objectContaining({ _tag: 'Recusado', codigo: 'sem_adapter' }),
+    );
+    expect(summary.deadLettered).toBe(1);
+  });
+
+  it('counts a conclusion refused by the fencing CAS and does not report it as sent', async () => {
+    fakeOutbox.claimBatch.mockResolvedValueOnce([claimedEvent()]);
+    fakeOutbox.concludeAttempt.mockResolvedValueOnce(null);
+    const adapter = vi.fn(async (): Promise<DesfechoDoDespacho> => ({ _tag: 'Confirmado', recibo: '1' }));
+
+    const summary = await runOutboxWorkerOnce({ supabase: fakeSupabase, workerId: 'worker-1', providers: { chatwoot: adapter }, outbox: fakeOutbox });
+
+    expect(summary).toMatchObject({ sent: 0, fenced: 1 });
+  });
+
+  it('keeps going when the unknown-effect audit fails', async () => {
+    fakeOutbox.claimBatch.mockResolvedValueOnce([claimedEvent({ evento_id: 'a' }), claimedEvent({ evento_id: 'b' })]);
+    const adapter = vi.fn(async (): Promise<DesfechoDoDespacho> => ({ _tag: 'Desconhecido', motivo: 'timeout', erro: 'x' }));
+
+    const summary = await runOutboxWorkerOnce({
+      supabase: fakeSupabase, workerId: 'worker-1', providers: { chatwoot: adapter }, outbox: fakeOutbox,
+      aoFicarDesconhecido: async () => { throw new Error('auditoria fora'); },
+    });
+
+    expect(summary.unknown).toBe(2);
   });
 });
 
 describe('drainOutboxWorker', () => {
+  const confirma = async (): Promise<DesfechoDoDespacho> => ({ _tag: 'Confirmado', recibo: '1' });
+
   it('stops looping once a pass claims nothing (queue drained)', async () => {
     const fakeOutbox = makeFakeOutbox();
     fakeOutbox.claimBatch
@@ -195,13 +182,7 @@ describe('drainOutboxWorker', () => {
       .mockResolvedValueOnce([claimedEvent({ evento_id: 'evt-2' })])
       .mockResolvedValueOnce([]);
 
-    const deps: OutboxWorkerDeps = {
-      supabase: fakeSupabase,
-      workerId: 'worker-1',
-      providers: { chatwoot: async () => ({ success: true }) },
-      outbox: fakeOutbox,
-    };
-
+    const deps: OutboxWorkerDeps = { supabase: fakeSupabase, workerId: 'worker-1', providers: { chatwoot: confirma }, outbox: fakeOutbox };
     const summaries = await drainOutboxWorker(deps, { maxIterations: 10 });
 
     expect(summaries).toHaveLength(3);
@@ -227,12 +208,7 @@ describe('drainOutboxWorker', () => {
     fakeOutbox.claimBatch.mockResolvedValue([claimedEvent()]);
 
     const summaries = await drainOutboxWorker(
-      {
-        supabase: fakeSupabase,
-        workerId: 'worker-1',
-        providers: { chatwoot: async () => ({ success: true }) },
-        outbox: fakeOutbox,
-      },
+      { supabase: fakeSupabase, workerId: 'worker-1', providers: { chatwoot: confirma }, outbox: fakeOutbox },
       { maxIterations: 3 },
     );
 

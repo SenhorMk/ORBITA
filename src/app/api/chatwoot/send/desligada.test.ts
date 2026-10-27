@@ -16,8 +16,9 @@ const CONEXAO_A = '11111111-1111-4111-8111-111111111111';
 const CONVERSA_A = 'c0000000-0000-4000-8000-000000000201';
 
 const enqueue = vi.fn().mockResolvedValue({ eventoId: 'evt-1' });
-const markFailed = vi.fn().mockResolvedValue(undefined);
-const markSent = vi.fn();
+const claimOne = vi.fn().mockResolvedValue(1);
+const startDispatch = vi.fn();
+const concludeAttempt = vi.fn().mockResolvedValue('dead_letter');
 const lerCredenciais = vi.fn();
 const escritasEmMensagens: unknown[] = [];
 
@@ -29,7 +30,12 @@ vi.mock('../../../../lib/requestOrganizationContext', () => ({
 }));
 
 vi.mock('../../../../services/outboxService', () => ({
-  outboxService: { enqueue: (...a: unknown[]) => enqueue(...a), markFailed: (...a: unknown[]) => markFailed(...a), markSent },
+  outboxService: {
+    enqueue: (...a: unknown[]) => enqueue(...a),
+    claimOne: (...a: unknown[]) => claimOne(...a),
+    startDispatch: (...a: unknown[]) => startDispatch(...a),
+    concludeAttempt: (...a: unknown[]) => concludeAttempt(...a),
+  },
 }));
 
 vi.mock('../../../../lib/integrations/credentialsVault', () => ({
@@ -77,9 +83,13 @@ describe('POST /api/chatwoot/send com a conexão desligada (PRE-008)', () => {
 
       expect(res.status).toBe(409);
       expect(enqueue).toHaveBeenCalledTimes(1);
-      expect(markFailed).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ organizationId: ORG_A }),
-        'chatwoot-http-inline-send', 'evt-1', 'Chatwoot não configurado para esta organização', 0);
-      expect(markSent).not.toHaveBeenCalled();
+      expect(claimOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ organizationId: ORG_A }),
+        'evt-1', 'chatwoot-http-inline-send');
+      // Recusa a partir do claim: nada foi despachado.
+      expect(startDispatch).not.toHaveBeenCalled();
+      expect(concludeAttempt).toHaveBeenCalledWith(expect.anything(),
+        { eventoId: 'evt-1', workerId: 'chatwoot-http-inline-send', fencingToken: 1 },
+        expect.objectContaining({ _tag: 'Recusado', codigo: 'nao_configurado' }));
       expect(lerCredenciais).not.toHaveBeenCalled();
       expect(rede).not.toHaveBeenCalled();
       expect(escritasEmMensagens).toEqual([]);

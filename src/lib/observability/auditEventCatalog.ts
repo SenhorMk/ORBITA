@@ -164,6 +164,12 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   // e status resultante — nunca token, segredo ou credencial do cofre.
   ['integration.connection_configured', 'integrations', 'info', 'user', 1825, 'Credenciais de integração gravadas pela API; a conexão volta a pendente.', undefined, ['api_token', 'webhook_secret']],
   ['integration.connection_authorized', 'integrations', 'info', 'user', 1825, 'Autorização OAuth concluída; a conexão passa a conectado.', undefined, ['api_token', 'webhook_secret']],
+  // Efeito externo ambíguo na outbox (migration 86, MSG-007). Metadata: id do
+  // evento, destino, tipo, motivo e desfecho — nunca o payload nem o conteúdo.
+  ['outbox.effect_unknown', 'integrations', 'critical', 'system', 1825, 'Efeito externo sem confirmação: pode ter acontecido; bloqueado para retry até reconciliar.', undefined, ['payload', 'content']],
+  ['outbox.effect_reconciled', 'integrations', 'warning', 'user', 1825, 'Efeito desconhecido reconciliado por pessoa autorizada.', undefined, ['payload', 'content']],
+  ['outbox.replay_authorized', 'integrations', 'warning', 'user', 1825, 'Replay autorizado de efeito provado como não aplicado.', undefined, ['payload', 'content']],
+  ['outbox.replay_refused', 'integrations', 'info', 'user', 1825, 'Pedido de replay recusado: efeito sem prova de não aplicação.', undefined, ['payload', 'content']],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 
