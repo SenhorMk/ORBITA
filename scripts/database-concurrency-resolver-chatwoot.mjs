@@ -1,24 +1,25 @@
 import { createLocalDatabaseClient } from './local-database-client.mjs';
 import { err, ok } from './script-result.mjs';
-import { esperar, observarBloqueioNoPostgres } from './database-concurrency.mjs';
+import { correr as correrBase, executar, fabricarLegado as fabricar, semEsperar as semEsperarBase } from './database-concurrency-chatwoot.mjs';
 
 /**
- * MSG-003A. Prova contra Postgres real, como `service_role`, que as instruções
- * do store de espelhos (`src/services/chatwoot/espelhoChatwootSupabase.ts`)
- * localizam e gravam pelo UUID local sem misturar instalações:
+ * MSG-003A, no schema contraído do MSG-004. Prova contra Postgres real, como
+ * `service_role`, que as instruções do store de espelhos
+ * (`src/services/chatwoot/espelhoChatwootSupabase.ts`) localizam e gravam pelo
+ * UUID local sem misturar instalações:
  *
- * Os ids ficam na faixa 330000+: a PK global ainda vale e o ensaio do MSG-002
- * deixa os contatos 5, 21 etc. no mesmo banco.
+ * Os ids ficam na faixa 330000+ para não cruzar com os do ensaio do MSG-002.
+ * Linhas legadas (sem conexão, anteriores ao MSG-004) são fabricadas com o
+ * gatilho de identidade desligado: depois do MSG-004 nenhuma escrita as cria.
  *
  * 1. duas escritas da MESMA conexão criando o mesmo contato: a segunda espera e
  *    recebe 23505; relendo pelo resolver, encontra a linha da primeira e a
  *    atualiza — uma linha, um UUID (o caminho de retry do `gravar`);
- * 2. a organização B criando o mesmo contato enquanto A grava: B espera,
- *    recebe 23505 e, relendo no seu escopo, não encontra nada — colisão
- *    tipada; a linha de A fica intacta;
+ * 2. a organização B criando o mesmo contato enquanto A grava: B não espera
+ *    (sem chave global) e grava o seu; cada escopo resolve só a sua linha;
  * 3. duas instalações da mesma organização adotando a mesma linha legada sem
- *    conexão: a segunda espera e, depois do commit, o filtro de conexão do
- *    `update` não casa mais — zero linhas, a conexão provada não troca;
+ *    conexão, provada em A1 pelo inbox: A1 adota; A2 espera e, depois do
+ *    commit, o filtro de conexão do `update` não casa mais — zero linhas;
  * 4. mensagem ligada à conversa de outra conexão é recusada (23503) e o
  *    `authenticated` não escreve nos espelhos (42501);
  * 5. PRE-008 × MSG-002: desligar a conexão e reativá-la pelo mesmo `update`
@@ -28,11 +29,11 @@ import { esperar, observarBloqueioNoPostgres } from './database-concurrency.mjs'
  * 6. o webhook de status não altera conversa sem conexão comprovada: legada em
  *    quarentena, duas conexões da mesma organização, conexão que não prova a
  *    posse, id remoto coincidente, repetição e concorrência;
- * 7. numa simulação da contração do MSG-004 (desfeita no fim), três
- *    instalações com os mesmos ids 5/50/500 gravam espelhos distintos (a
- *    escrita do webhook), o replay do sync atualiza cada uma pelo seu UUID sem
- *    tocar as outras, e o resolver devolve exatamente um UUID por escopo.
- *    Contraprovas na mesma simulação: sem o filtro de conexão a busca fica
+ * 7. no schema contraído (transação desfeita no fim), três instalações com os
+ *    mesmos ids 5/50/500 gravam espelhos distintos (a escrita do webhook), o
+ *    replay do sync atualiza cada uma pelo seu UUID sem tocar as outras, e o
+ *    resolver devolve exatamente um UUID por escopo.
+ *    Contraprovas: sem o filtro de conexão a busca fica
  *    ambígua (2) e por id global encontra as três; um `update` legado por `id`
  *    tocaria as três.
  */
@@ -68,35 +69,15 @@ async function semear(client) {
   );
   await client.query("insert into auth.users (id, email) values ($1, 'owner-resolver@orbita.test')", [OWNER_A]);
   await client.query("insert into public.membros_organizacao (organizacao_id, user_id, papel) values ($1, $2, 'owner')", [ORG_A, OWNER_A]);
+  // O inbox 330 só existe em A1: prova de conexão para a adoção legada (3).
+  await client.query("insert into public.chatwoot_inboxes (organizacao_id, conexao_id, inbox_id, account_id) values ($1, $2, 330, '1')",
+    [ORG_A, CONEXAO_A1]);
 }
 
-async function executar(client, sql, params) {
-  try {
-    return { ok: true, linhas: (await client.query(sql, params)).rows };
-  } catch (cause) {
-    return { ok: false, code: cause && typeof cause === 'object' && 'code' in cause ? String(cause.code) : undefined };
-  }
-}
-
-/** A abre transação e executa; B dispara sem esperar; o Postgres mostra B bloqueada; só então A commita. */
-async function correr({ admin, clientA, clientB, sqlA, paramsA, sqlB, paramsB, timeoutDeObservacaoMs }) {
-  await clientA.query('BEGIN');
-  const a = await executar(clientA, sqlA, paramsA);
-  if (!a.ok) {
-    await clientA.query('ROLLBACK');
-    return err('ResolverChatwootRaceInicioFalhou', 'A primeira escrita falhou antes da concorrência', { a });
-  }
-  const pidDeB = (await clientB.query('select pg_backend_pid() as pid')).rows[0].pid;
-  const promiseB = executar(clientB, sqlB, paramsB);
-  const observacao = await observarBloqueioNoPostgres(admin, pidDeB, { timeoutMs: timeoutDeObservacaoMs });
-  if (!observacao.observado) {
-    await clientA.query('ROLLBACK').catch(() => {});
-    const bSeJaResolveu = await Promise.race([promiseB, esperar(50).then(() => undefined)]);
-    return err('ResolverChatwootRaceNaoBloqueou', 'B nunca apareceu esperando um Lock', { bSeJaResolveu });
-  }
-  await clientA.query('COMMIT');
-  return ok({ a: a.linhas, b: await promiseB, waitEvent: observacao.waitEvent });
-}
+const ROTULO = { rotulo: 'ResolverChatwootRace' };
+const correr = (ctx) => correrBase({ ...ctx, ...ROTULO });
+const semEsperar = (ctx) => semEsperarBase({ ...ctx, ...ROTULO });
+const fabricarLegado = (client, linha) => fabricar(client, { organizacao: ORG_A, ...linha });
 
 async function resolver(client, tabela, organizacao, conexao, idExterno) {
   return (await client.query(SQL_RESOLVER(tabela), [organizacao, String(idExterno), conexao])).rows;
@@ -121,22 +102,28 @@ async function corridas(ctx) {
     return err('ResolverChatwootRaceDuplicou', 'Duas escritas da mesma conexão não convergiram para uma linha', { b: mesmaConexao.value.b, contato5 });
   }
 
-  const outraOrganizacao = await correr({
+  const outraOrganizacao = await semEsperar({
     ...ctx,
     sqlA: SQL_INSERIR_CONTATO, paramsA: [330006, ORG_A, CONEXAO_A1, 'de A'],
     sqlB: SQL_INSERIR_CONTATO, paramsB: [330006, ORG_B, CONEXAO_B1, 'de B'],
   });
   if (outraOrganizacao._tag === 'err') return outraOrganizacao;
+  const noEscopoDeA = await resolver(clientB, 'chatwoot_contacts', ORG_A, CONEXAO_A1, 330006);
   const noEscopoDeB = await resolver(clientB, 'chatwoot_contacts', ORG_B, CONEXAO_B1, 330006);
-  const contato6 = (await admin.query('select organizacao_id, name from public.chatwoot_contacts where id = 330006')).rows;
-  if (outraOrganizacao.value.b.ok || outraOrganizacao.value.b.code !== '23505' || noEscopoDeB.length !== 0
-      || contato6.length !== 1 || contato6[0].organizacao_id !== ORG_A || contato6[0].name !== 'de A') {
-    return err('ResolverChatwootRaceMisturou', 'B encontrou ou tomou o contato 6 de A', { b: outraOrganizacao.value.b, noEscopoDeB, contato6 });
+  const contato6 = (await admin.query(
+    'select id_local, organizacao_id, name from public.chatwoot_contacts where id = 330006 order by name')).rows;
+  if (!outraOrganizacao.value.b.ok || contato6.length !== 2
+      || noEscopoDeA.length !== 1 || noEscopoDeA[0].id_local !== outraOrganizacao.value.a[0].id_local
+      || noEscopoDeB.length !== 1 || noEscopoDeB[0].id_local !== outraOrganizacao.value.b.linhas[0].id_local
+      || contato6[0].name !== 'de A' || contato6[0].organizacao_id !== ORG_A
+      || contato6[1].name !== 'de B' || contato6[1].organizacao_id !== ORG_B) {
+    return err('ResolverChatwootRaceMisturou', 'Os contatos 330006 de A e B não coexistiram cada um no seu escopo', {
+      b: outraOrganizacao.value.b, noEscopoDeA, noEscopoDeB, contato6,
+    });
   }
 
-  const legado = (await admin.query(
-    "insert into public.chatwoot_contacts (id, organizacao_id, name) values (330021, $1, 'Sync antigo') returning id_local", [ORG_A],
-  )).rows[0].id_local;
+  // Legado do sync antigo, com a conversa no inbox 330 (só de A1): A1 tem a prova.
+  const legado = await fabricarLegado(admin, { contato: 330021, conversa: 330210, inbox: 330 });
   const adocao = await correr({
     ...ctx,
     sqlA: SQL_ATUALIZAR_CONTATO, paramsA: [ORG_A, legado, CONEXAO_A1, 'adotado por A1'],
@@ -151,7 +138,7 @@ async function corridas(ctx) {
 
   return ok({
     resumo: `mesma conexão (wait_event=${mesmaConexao.value.waitEvent}) → 23505 → releitura → 1 linha; `
-      + `outra organização (wait_event=${outraOrganizacao.value.waitEvent}) → 23505 → 0 no escopo de B; `
+      + 'outra organização sem esperar → duas linhas, uma por escopo; '
       + `adoção legada (wait_event=${adocao.value.waitEvent}) → 0 linhas para A2`,
   });
 }
@@ -259,9 +246,8 @@ const conversaPorId = async (client, id) => (await client.query(
 async function statusSemProva(ctx) {
   const { admin, clientA, clientB } = ctx;
   // a/b. Conversas legadas da organização A, sem conexão provada (sem inbox mapeado).
-  await admin.query(`insert into public.chatwoot_contacts (id, organizacao_id, name) values (330061, $1, 'legado'), (330063, $1, 'legado 2')`, [ORG_A]);
-  await admin.query(`insert into public.chatwoot_conversations (id, organizacao_id, contact_id, status, inbox_id)
-    values (330060, $1, 330061, 'open', 999), (330062, $1, 330063, 'open', 998)`, [ORG_A]);
+  await fabricarLegado(admin, { contato: 330061, conversa: 330060, inbox: 999 });
+  await fabricarLegado(admin, { contato: 330063, conversa: 330062, inbox: 998 });
   // d. A conversa 330064 é provada na segunda instalação de A.
   await admin.query("insert into public.chatwoot_contacts (id, organizacao_id, conexao_id, name) values (330065, $1, $2, 'de A2')", [ORG_A, CONEXAO_A2]);
   await admin.query("insert into public.chatwoot_conversations (id, organizacao_id, conexao_id, contact_id, status) values (330064, $1, $2, 330065, 'open')", [ORG_A, CONEXAO_A2]);
@@ -316,36 +302,31 @@ async function statusSemProva(ctx) {
   if (quarentena !== 2) falhas.push(`pré-condição: ${quarentena} conversa(s) legada(s) na quarentena, esperado 2`);
 
   // O mecanismo, sem a guarda do fluxo: o `update` estrito não alcança a linha
-  // legada; o filtro antigo alcançava (contraprova, desfeita por rollback).
+  // legada. O filtro antigo a alcança (contraprova pelo predicado); desde o
+  // MSG-004 o banco também recusa o conteúdo numa organização com duas
+  // instalações (23514), em vez de aplicá-lo.
   await clientA.query('BEGIN');
   const estrito = (await clientA.query(SQL_STATUS, [ORG_A, legada.id_local, CONEXAO_A1, 'resolved'])).rowCount;
-  const semProva = (await clientA.query(SQL_STATUS_SEM_PROVA, [ORG_A, legada.id_local, CONEXAO_A1, 'resolved'])).rowCount;
+  const alcancada = (await clientA.query(
+    'select count(*)::int as n from public.chatwoot_conversations where organizacao_id = $1 and id_local = $2 and (conexao_id = $3 or conexao_id is null)',
+    [ORG_A, legada.id_local, CONEXAO_A1])).rows[0].n;
+  const semProva = await executar(clientA, SQL_STATUS_SEM_PROVA, [ORG_A, legada.id_local, CONEXAO_A1, 'resolved']);
   await clientA.query('ROLLBACK');
-  if (estrito !== 0 || semProva !== 1) falhas.push(`mecanismo: update estrito=${estrito} (esperado 0), contraprova=${semProva} (esperado 1)`);
+  if (estrito !== 0 || alcancada !== 1 || semProva.ok || semProva.code !== '23514') {
+    falhas.push(`mecanismo: update estrito=${estrito} (esperado 0), filtro antigo alcança=${alcancada} (esperado 1), banco=${semProva.code} (esperado 23514)`);
+  }
   if (falhas.length > 0) {
     return err('ResolverChatwootStatusSemProva', 'O webhook de status alterou conversa sem conexão comprovada', { falhas, finais });
   }
   return ok({ resumo: `status sem prova de conexão: legada intocada por A1, A2 e corrida (quarentena=${quarentena}), `
     + `id de A2 vindo de A1/B ignorado, dona aplica e repete, corrida da dona (wait_event=${dona.value.waitEvent}) serializada; `
-    + 'update estrito na legada=0, contraprova com o filtro antigo=1' });
+    + 'update estrito na legada=0; o filtro antigo alcança a legada (1) e o banco recusa (23514)' });
 }
 
-/** 7: modelo depois da contração, desfeito por rollback. */
+/** 7: o schema contraído, com três instalações; desfeito por rollback. */
 async function posContracao(admin) {
   await admin.query('BEGIN');
   try {
-    await admin.query(`
-      alter table public.chatwoot_messages drop constraint chatwoot_messages_conversation_id_fkey;
-      alter table public.chatwoot_conversations drop constraint chatwoot_conversations_contact_id_fkey;
-      alter table public.chatwoot_contacts drop constraint chatwoot_contacts_pkey cascade;
-      alter table public.chatwoot_conversations drop constraint chatwoot_conversations_pkey cascade;
-      alter table public.chatwoot_messages drop constraint chatwoot_messages_pkey cascade;
-      drop index public.uq_chatwoot_contacts_org_id;
-      drop index public.uq_chatwoot_conversations_org_id;
-      drop index public.uq_chatwoot_messages_org_id;
-      alter table public.chatwoot_conversations disable trigger trg_sync_chatwoot_conversations_organizacao;
-      alter table public.chatwoot_messages disable trigger trg_sync_chatwoot_messages_organizacao;
-      discard plans;`);
     await admin.query('set local role service_role');
     const escopos = [[ORG_A, CONEXAO_A1], [ORG_A, CONEXAO_A2], [ORG_B, CONEXAO_B1]];
     const mensagens = [];
@@ -383,7 +364,7 @@ async function posContracao(admin) {
         distintos, syncIsolado, semFiltroDeConexao, global, updateLegado,
       });
     }
-    return ok({ resumo: 'pós-contração: 3 instalações, 3 UUIDs, 1 por escopo, replay do sync isolado; '
+    return ok({ resumo: 'schema contraído: 3 instalações, 3 UUIDs, 1 por escopo, replay do sync isolado; '
       + `contraprovas sem conexão=${semFiltroDeConexao}, `
       + `global=${global}, update por id=${updateLegado}` });
   } finally {

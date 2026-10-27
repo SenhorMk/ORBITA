@@ -1,18 +1,20 @@
 -- identidade_local_chatwoot.test.sql
--- MSG-002, contra o schema canônico completo (migration 85).
+-- MSG-002 (identidade local) e MSG-004 (contração), contra o schema canônico
+-- completo.
 --
 -- Duas instalações do Chatwoot numeram contatos, conversas e mensagens a partir
--- do mesmo id. No ORBITA: cada linha ganha um UUID local que não muda, a
+-- do mesmo id. No ORBITA: cada linha tem um UUID local que não muda e é a PK, a
 -- identidade remota é única por organização + conexão, um vínculo local nunca
--- atravessa organização nem conexão, e a escrita legada (o webhook e o sync de
--- hoje) continua funcionando e preenche o modelo novo sozinha. Enquanto a PK
--- legada existir (até o MSG-004), o id remoto repetido é recusado em vez de
--- mover a linha de uma organização ou instalação para outra; sem ela (simulado
--- em 37-44), as duas instalações coexistem pelas chaves novas.
+-- atravessa organização nem conexão. Depois do MSG-004 o id remoto repetido
+-- coexiste em outra organização ou instalação (7-11, 37-43) em vez de ser
+-- recusado, e linha nova sem conexão provada é recusada (21-25): não nasce mais
+-- quarentena. Linhas legadas (anteriores ao MSG-004) são fabricadas com o
+-- gatilho desligado para provar o backfill (26-30).
 --
 -- REINTRODUZIR O DEFEITO (contraprovas executadas aqui, em savepoints):
---   drop trigger trg_organizacao_do_chatwoot_contato_imutavel  → 33: B toma o contato 5 de A
---   drop constraint fk_chatwoot_conversations_contato_local    → 34: conversa de A liga no contato de B
+--   drop trigger trg_organizacao_do_chatwoot_contato_imutavel  → 33: B toma o contato 12 de A
+--   drop constraint fk_chatwoot_conversations_contato_local
+--     + gatilho trg_sync_chatwoot_conversations_organizacao       → 34: conversa de A liga no contato de B
 --   resolver de vínculo sem o filtro de conexão                → 35-36: a instalação 2 liga no contato da 1
 --   drop index uq_chatwoot_contacts_identidade_remota          → 44: a mesma identidade remota duas vezes
 
@@ -35,9 +37,12 @@ insert into public.conexoes_integracao (id, organizacao_id, provedor, nome, stat
     ('e2000000-0000-4000-8000-0000000000c2', 'e2000000-0000-4000-8000-00000000000a', 'chatwoot', 'Segunda', 'conectado'),
     ('e2000000-0000-4000-8000-0000000000c3', 'e2000000-0000-4000-8000-00000000000b', 'chatwoot', 'Principal', 'conectado'),
     ('e2000000-0000-4000-8000-0000000000c4', 'e2000000-0000-4000-8000-00000000000a', 'bling', 'Principal', 'conectado');
--- A e B expõem o inbox 1; o mapeamento é por organização.
+-- O inbox 1 existe nas três instalações (o mapeamento é por conexão); o inbox
+-- 2 só em c1.
 insert into public.chatwoot_inboxes (organizacao_id, conexao_id, inbox_id, account_id) values
     ('e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c1', 1, '1'),
+    ('e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c2', 1, '2'),
+    ('e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c1', 2, '1'),
     ('e2000000-0000-4000-8000-00000000000b', 'e2000000-0000-4000-8000-0000000000c3', 1, '1');
 
 -- Veneno para a falha no meio do lote (26-27): só dispara com a marca abaixo.
@@ -69,6 +74,7 @@ create temp table retrato as
 select (select row(c.*)::text from public.chatwoot_contacts c where c.id = 5) as contato_a,
        (select id_local from public.chatwoot_contacts where id = 5) as contato_a_local,
        (select id_local from public.chatwoot_contacts where id = 7) as contato_b_local,
+       (select id_local from public.chatwoot_conversations where id = 50) as conversa_a_local,
        (select id_local from public.chatwoot_messages where id = 500) as mensagem_a_local;
 
 -- ----------------------------------------------------------------------------
@@ -90,35 +96,39 @@ select is((select count(distinct id_local)::int from (select id_local from publi
           '6. seis linhas, seis UUIDs distintos');
 
 -- ----------------------------------------------------------------------------
--- 7-12. Colisão de id remoto com a PK legada: a outra instalação é recusada e
--- a linha existente não muda.
+-- 7-12. O mesmo id remoto em outra organização ou instalação coexiste; nada
+-- da instalação existente muda.
 -- ----------------------------------------------------------------------------
-select throws_ok(
+select lives_ok(
     $$insert into public.chatwoot_contacts (id, organizacao_id, conexao_id, name)
-      values (5, 'e2000000-0000-4000-8000-00000000000b', 'e2000000-0000-4000-8000-0000000000c3', 'Contato B com id de A')
-      on conflict (id) do update set organizacao_id = excluded.organizacao_id, conexao_id = excluded.conexao_id, name = excluded.name$$,
-    '23514', null, '7. upsert do contato 5 vindo de B não move o contato 5 de A');
-select throws_ok(
+      values (5, 'e2000000-0000-4000-8000-00000000000b', 'e2000000-0000-4000-8000-0000000000c3', 'Contato B 5')$$,
+    '7. o contato 5 de B coexiste com o contato 5 de A');
+select lives_ok(
     $$insert into public.chatwoot_contacts (id, organizacao_id, conexao_id, name)
-      values (5, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c2', 'Contato da segunda instalação')
-      on conflict (id) do update set organizacao_id = excluded.organizacao_id, conexao_id = excluded.conexao_id, name = excluded.name$$,
-    '23514', null, '8. upsert do contato 5 vindo da segunda instalação de A não troca a conexão');
+      values (5, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c2', 'Contato A2')$$,
+    '8. a segunda instalação de A tem o seu próprio contato 5');
 select throws_ok(
-    $$insert into public.chatwoot_conversations (id, organizacao_id, conexao_id, contact_id, status)
-      values (51, 'e2000000-0000-4000-8000-00000000000b', 'e2000000-0000-4000-8000-0000000000c3', 5, 'open')$$,
+    format($$insert into public.chatwoot_conversations (id, organizacao_id, conexao_id, contact_id, contato_id_local, status)
+             values (51, 'e2000000-0000-4000-8000-00000000000b', 'e2000000-0000-4000-8000-0000000000c3', 5, %L, 'open')$$,
+           (select contato_a_local from retrato)),
     '23503', null, '9. conversa de B não aponta para o contato 5 de A');
-select throws_ok(
-    $$insert into public.chatwoot_conversations (id, organizacao_id, conexao_id, contact_id, status)
-      values (52, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c2', 5, 'open')$$,
-    '23503', 'O contato da conversa e de outra conexao Chatwoot ou e ambiguo.',
-    '10. conversa da segunda instalação não liga no contato 5 da primeira');
-select throws_ok(
-    $$insert into public.chatwoot_messages (id, organizacao_id, conexao_id, conversation_id, content)
-      values (501, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c2', 50, 'x')$$,
-    '23503', 'A conversa da mensagem e de outra conexao Chatwoot ou e ambigua.',
-    '11. mensagem da segunda instalação não entra na conversa 50 da primeira');
-select is((select row(c.*)::text from public.chatwoot_contacts c where c.id = 5), (select contato_a from retrato),
-          '12. o contato 5 de A ficou intacto depois das recusas');
+insert into public.chatwoot_conversations (id, organizacao_id, conexao_id, contact_id, status, inbox_id)
+values (50, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c2', 5, 'open', 1);
+insert into public.chatwoot_messages (id, organizacao_id, conexao_id, conversation_id, content)
+values (500, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c2', 50, 'mensagem de A2');
+select is((select v.contato_id_local from public.chatwoot_conversations v
+            where v.conexao_id = 'e2000000-0000-4000-8000-0000000000c2' and v.id_externo = '50'),
+          (select c.id_local from public.chatwoot_contacts c
+            where c.conexao_id = 'e2000000-0000-4000-8000-0000000000c2' and c.id_externo = '5'),
+          '10. a conversa 50 da segunda instalação liga no contato 5 da segunda, não da primeira');
+select is((select m.conversa_id_local from public.chatwoot_messages m
+            where m.conexao_id = 'e2000000-0000-4000-8000-0000000000c2' and m.id_externo = '500'),
+          (select v.id_local from public.chatwoot_conversations v
+            where v.conexao_id = 'e2000000-0000-4000-8000-0000000000c2' and v.id_externo = '50'),
+          '11. a mensagem 500 da segunda instalação entra na conversa 50 da segunda');
+select is((select row(c.*)::text from public.chatwoot_contacts c where c.id_local = (select contato_a_local from retrato)),
+          (select contato_a from retrato),
+          '12. o contato 5 de A1 ficou intacto');
 
 -- ----------------------------------------------------------------------------
 -- 13-18. Conexão errada e vínculo forjado.
@@ -134,16 +144,19 @@ select throws_ok(
     '23503', 'Espelho Chatwoot so aponta para conexao Chatwoot da mesma organizacao.',
     '14. contato não aponta para conexão Bling');
 select throws_ok(
-    format($$update public.chatwoot_conversations set contato_id_local = %L where id = 50$$, (select contato_b_local from retrato)),
+    format($$update public.chatwoot_conversations set contato_id_local = %L where id_local = %L$$,
+           (select contato_b_local from retrato), (select conversa_a_local from retrato)),
     '23503', null, '15. conversa de A não recebe o UUID do contato de B (FK composta)');
 select throws_ok(
-    $$update public.chatwoot_conversations set organizacao_id = 'e2000000-0000-4000-8000-00000000000b' where id = 50$$,
+    format($$update public.chatwoot_conversations set organizacao_id = 'e2000000-0000-4000-8000-00000000000b' where id_local = %L$$,
+           (select conversa_a_local from retrato)),
     '23514', null, '16. conversa não muda de organização');
 select throws_ok(
-    $$update public.chatwoot_messages set id_local = gen_random_uuid() where id = 500$$,
+    format($$update public.chatwoot_messages set id_local = gen_random_uuid() where id_local = %L$$, (select mensagem_a_local from retrato)),
     '23514', null, '17. UUID local não muda');
 select throws_ok(
-    $$update public.chatwoot_messages set conexao_id = 'e2000000-0000-4000-8000-0000000000c2' where id = 500$$,
+    format($$update public.chatwoot_messages set conexao_id = 'e2000000-0000-4000-8000-0000000000c2' where id_local = %L$$,
+           (select mensagem_a_local from retrato)),
     '23514', null, '18. mensagem não troca de instalação');
 
 -- ----------------------------------------------------------------------------
@@ -151,71 +164,76 @@ select throws_ok(
 -- ----------------------------------------------------------------------------
 insert into public.chatwoot_messages (id, organizacao_id, conexao_id, conversation_id, content, updated_at)
 values (500, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c1', 50, 'mensagem de A', now())
-on conflict (id) do update set organizacao_id = excluded.organizacao_id, conexao_id = excluded.conexao_id,
-    conversation_id = excluded.conversation_id, content = excluded.content, updated_at = excluded.updated_at;
-select is((select count(*)::int from public.chatwoot_messages where organizacao_id = 'e2000000-0000-4000-8000-00000000000a'), 1,
+on conflict (organizacao_id, conexao_id, id_externo) do update set conversation_id = excluded.conversation_id,
+    content = excluded.content, updated_at = excluded.updated_at;
+select is((select count(*)::int from public.chatwoot_messages
+            where organizacao_id = 'e2000000-0000-4000-8000-00000000000a' and conexao_id = 'e2000000-0000-4000-8000-0000000000c1'), 1,
           '19. replay da mensagem 500 não duplica');
-select is((select id_local from public.chatwoot_messages where id = 500), (select mensagem_a_local from retrato),
+select is((select id_local from public.chatwoot_messages
+            where conexao_id = 'e2000000-0000-4000-8000-0000000000c1' and id_externo = '500'), (select mensagem_a_local from retrato),
           '20. replay mantém o UUID local');
 
 -- ----------------------------------------------------------------------------
--- 21-25. O sync de hoje não informa a conexão. Conversa e mensagem a provam
--- pelo inbox; o contato fica em quarentena até o backfill achar a prova, que
--- não reinicia o `updated_at`.
+-- 21-25. Escrita sem conexão: só passa com prova única; senão é recusada e não
+-- nasce quarentena.
 -- ----------------------------------------------------------------------------
-insert into public.chatwoot_contacts (id, organizacao_id, name, updated_at)
-values (8, 'e2000000-0000-4000-8000-00000000000a', 'Contato do sync', '2026-01-01 00:00:00+00');
+select throws_ok(
+    $$insert into public.chatwoot_contacts (id, organizacao_id, name) values (8, 'e2000000-0000-4000-8000-00000000000a', 'sem conexão')$$,
+    '23514', 'Espelho Chatwoot novo exige organizacao e conexao provadas (public.chatwoot_contacts).',
+    '21. contato novo sem conexão é recusado');
 insert into public.chatwoot_conversations (id, organizacao_id, contact_id, status, inbox_id)
-values (80, 'e2000000-0000-4000-8000-00000000000a', 8, 'open', 1);
+values (80, 'e2000000-0000-4000-8000-00000000000a', 5, 'open', 2);
 insert into public.chatwoot_messages (id, organizacao_id, conversation_id, content)
-values (800, 'e2000000-0000-4000-8000-00000000000a', 80, 'pelo sync');
-
+values (800, 'e2000000-0000-4000-8000-00000000000a', 80, 'pela prova');
 select results_eq(
-    $$select v.conexao_id, m.conexao_id, v.contato_id_local = c.id_local
+    $$select v.conexao_id, v.contato_id_local, m.conexao_id
         from public.chatwoot_conversations v
-        join public.chatwoot_messages m on m.conversation_id = v.id
-        join public.chatwoot_contacts c on c.id = v.contact_id
-       where v.id = 80$$,
-    $$values ('e2000000-0000-4000-8000-0000000000c1'::uuid, 'e2000000-0000-4000-8000-0000000000c1'::uuid, true)$$,
-    '21. conversa e mensagem do sync provam a conexão pelo inbox e se ligam');
-select results_eq(
-    $$select tabela, motivo from public.chatwoot_identidade_em_quarentena$$,
-    $$values ('chatwoot_contacts'::text, 'conexao_nao_comprovada'::text)$$,
-    '22. o contato sem conexão fica em quarentena, legível');
-select results_eq(
-    $$select tabela, atualizadas, pendentes from public.backfill_identidade_local_chatwoot(100)$$,
-    $$values ('chatwoot_contacts'::text, 1, 0::bigint), ('chatwoot_conversations', 0, 0), ('chatwoot_messages', 0, 0)$$,
-    '23. o backfill resolve só o contato que agora tem prova');
-select results_eq(
-    $$select conexao_id, updated_at from public.chatwoot_contacts where id = 8$$,
-    $$values ('e2000000-0000-4000-8000-0000000000c1'::uuid, '2026-01-01 00:00:00+00'::timestamptz)$$,
-    '24. contato ganha a conexão das suas conversas sem trocar o updated_at');
-select is((select sum(atualizadas)::int from public.backfill_identidade_local_chatwoot(100)), 0,
-          '25. rodar de novo não faz nada (idempotente)');
+        join public.chatwoot_messages m on m.conversa_id_local = v.id_local
+       where v.id_externo = '80'$$,
+    format($$values ('e2000000-0000-4000-8000-0000000000c1'::uuid, %L::uuid, 'e2000000-0000-4000-8000-0000000000c1'::uuid)$$,
+           (select contato_a_local from retrato)),
+    '22. inbox 2 (só de c1) prova a conexão; conversa e mensagem ligam em c1');
+select throws_ok(
+    $$insert into public.chatwoot_conversations (id, organizacao_id, contact_id, status, inbox_id)
+      values (81, 'e2000000-0000-4000-8000-00000000000a', 5, 'open', 1)$$,
+    '23503', 'O contato da conversa e de outra conexao Chatwoot ou e ambiguo.',
+    '23. inbox 1 existe nas duas instalações de A: sem prova, recusado');
+select throws_ok(
+    $$insert into public.chatwoot_contacts (id, name) values (8, 'sem organização')$$,
+    '23514', null, '24. contato novo sem organização é recusado');
+select is((select count(*)::int from public.chatwoot_identidade_em_quarentena), 0,
+          '25. nenhuma escrita nova entrou em quarentena');
 
 -- ----------------------------------------------------------------------------
--- 26-30. Falha no meio de um lote desfaz o lote; o backfill parcial retoma de
--- onde parou.
+-- 26-30. Linhas legadas sem conexão (anteriores ao MSG-004, fabricadas com o
+-- gatilho desligado): falha no meio de um lote desfaz o lote; o backfill
+-- parcial retoma de onde parou.
 -- ----------------------------------------------------------------------------
-insert into public.chatwoot_contacts (id, organizacao_id, name) values
-    (9, 'e2000000-0000-4000-8000-00000000000a', 'Sync 9'),
-    (10, 'e2000000-0000-4000-8000-00000000000a', 'Sync 10'),
-    (11, 'e2000000-0000-4000-8000-00000000000a', 'Sync 11');
-insert into public.chatwoot_conversations (id, organizacao_id, contact_id, status, inbox_id) values
-    (90, 'e2000000-0000-4000-8000-00000000000a', 9, 'open', 1),
-    (100, 'e2000000-0000-4000-8000-00000000000a', 10, 'open', 1),
-    (110, 'e2000000-0000-4000-8000-00000000000a', 11, 'open', 1);
+reset role;
+alter table public.chatwoot_contacts disable trigger trg_vincula_identidade_local_chatwoot;
+alter table public.chatwoot_conversations disable trigger trg_vincula_identidade_local_chatwoot;
+insert into public.chatwoot_contacts (id, id_externo, organizacao_id, name) values
+    (9, '9', 'e2000000-0000-4000-8000-00000000000a', 'Sync 9'),
+    (10, '10', 'e2000000-0000-4000-8000-00000000000a', 'Sync 10'),
+    (11, '11', 'e2000000-0000-4000-8000-00000000000a', 'Sync 11');
+insert into public.chatwoot_conversations (id, id_externo, organizacao_id, contact_id, contato_id_local, status, inbox_id)
+select x.conversa, x.conversa::text, 'e2000000-0000-4000-8000-00000000000a', x.contato, c.id_local, 'open', 2
+  from (values (90, 9), (100, 10), (110, 11)) x(conversa, contato)
+  join public.chatwoot_contacts c on c.id = x.contato and c.organizacao_id = 'e2000000-0000-4000-8000-00000000000a';
+alter table public.chatwoot_contacts enable trigger trg_vincula_identidade_local_chatwoot;
+alter table public.chatwoot_conversations enable trigger trg_vincula_identidade_local_chatwoot;
+set local role service_role;
 
 set local msg002.veneno = 'on';
-select throws_ok($$select * from public.backfill_identidade_local_chatwoot(2)$$,
+select throws_ok($$select * from public.backfill_identidade_local_chatwoot(3)$$,
                  'XX000', 'falha injetada no meio do lote', '26. a falha no contato 10 aborta o lote');
-select is((select count(*)::int from public.chatwoot_contacts where id in (9, 10, 11) and conexao_id is null), 3,
-          '27. o contato 9, do mesmo lote, voltou atrás');
+select is((select count(*)::int from public.chatwoot_contacts where id_externo in ('9', '10', '11') and conexao_id is null), 3,
+          '27. os outros contatos do mesmo lote voltaram atrás');
 set local msg002.veneno = 'off';
 select is((select atualizadas from public.backfill_identidade_local_chatwoot(2) where tabela = 'chatwoot_contacts'), 2,
-          '28. lote de 2 processa 9 e 10');
-select is((select array_agg(id order by id) from public.chatwoot_contacts where conexao_id is null), array[11],
-          '29. o 11 continua pendente: backfill parcial');
+          '28. lote de 2 processa dois dos três');
+select is((select count(*)::int from public.chatwoot_contacts where conexao_id is null), 1,
+          '29. um continua pendente: backfill parcial');
 select is((select atualizadas from public.backfill_identidade_local_chatwoot(2) where tabela = 'chatwoot_contacts'), 1,
           '30. a chamada seguinte retoma e termina');
 
@@ -245,28 +263,34 @@ savepoint contraprova;
 insert into public.chatwoot_contacts (id, organizacao_id, conexao_id, name)
 values (12, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c1', 'Contato A 12');
 drop trigger trg_organizacao_do_chatwoot_contato_imutavel on public.chatwoot_contacts;
-insert into public.chatwoot_contacts (id, organizacao_id, conexao_id, name)
-values (12, 'e2000000-0000-4000-8000-00000000000b', 'e2000000-0000-4000-8000-0000000000c3', 'Contato B com id de A')
-on conflict (id) do update set organizacao_id = excluded.organizacao_id, conexao_id = null, name = excluded.name;
-select is((select organizacao_id from public.chatwoot_contacts where id = 12), 'e2000000-0000-4000-8000-00000000000b'::uuid,
+update public.chatwoot_contacts set organizacao_id = 'e2000000-0000-4000-8000-00000000000b', name = 'Contato B com id de A'
+ where id_externo = '12';
+select is((select organizacao_id from public.chatwoot_contacts where id_externo = '12'), 'e2000000-0000-4000-8000-00000000000b'::uuid,
           '33. CONTRAPROVA: sem a organização imutável, B toma o contato 12 de A');
 rollback to savepoint contraprova;
 
 alter table public.chatwoot_conversations drop constraint fk_chatwoot_conversations_contato_local;
-update public.chatwoot_conversations set contato_id_local = (select contato_b_local from retrato) where id = 50;
-select is((select contato_id_local from public.chatwoot_conversations where id = 50), (select contato_b_local from retrato),
-          '34. CONTRAPROVA: sem a FK composta, a conversa de A liga no contato de B');
+alter table public.chatwoot_conversations disable trigger trg_sync_chatwoot_conversations_organizacao;
+update public.chatwoot_conversations set contato_id_local = (select contato_b_local from retrato)
+ where id_local = (select conversa_a_local from retrato);
+select is((select contato_id_local from public.chatwoot_conversations where id_local = (select conversa_a_local from retrato)),
+          (select contato_b_local from retrato),
+          '34. CONTRAPROVA: sem a FK composta (e sem o gatilho da 27), a conversa de A liga no contato de B');
 rollback to savepoint contraprova;
 
+-- O contato 13 só existe em c1; a conversa 52 de c2 que o cita deveria ser recusada.
 create or replace function public.chatwoot_contato_local(p_organizacao_id uuid, p_conexao_id uuid, p_contact_id integer)
 returns uuid language sql stable security invoker set search_path = '' as $f$
     select c.id_local from public.chatwoot_contacts c
-     where c.id = p_contact_id and c.organizacao_id = p_organizacao_id;
+     where c.id_externo = p_contact_id::text and c.organizacao_id = p_organizacao_id;
 $f$;
 set local role service_role;
+insert into public.chatwoot_contacts (id, organizacao_id, conexao_id, name)
+values (13, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c1', 'Contato A 13');
 insert into public.chatwoot_conversations (id, organizacao_id, conexao_id, contact_id, status)
-values (52, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c2', 5, 'open');
-select is((select contato_id_local from public.chatwoot_conversations where id = 52), (select contato_a_local from retrato),
+values (52, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c2', 13, 'open');
+select is((select contato_id_local from public.chatwoot_conversations where id_externo = '52'),
+          (select id_local from public.chatwoot_contacts where id_externo = '13'),
           '35. CONTRAPROVA: sem o filtro de conexão, a conversa da instalação 2 liga no contato da 1');
 select isnt_empty($$select 1 from public.chatwoot_identidade_em_quarentena where motivo = 'conexao_divergente_do_contato'$$,
           '36. e a quarentena acusa a divergência que o filtro teria impedido');
@@ -275,35 +299,14 @@ rollback to savepoint contraprova;
 release savepoint contraprova;
 
 -- ----------------------------------------------------------------------------
--- 37-44. PROVA PRIORITÁRIA no modelo novo. Simula a contração do MSG-004 (sem
--- PK nem FK legadas por id e sem o gatilho legado que procura o pai só pelo
--- id): três instalações com os mesmos ids 5/50/500 coexistem e não se misturam.
+-- 37-44. PROVA PRIORITÁRIA no schema contraído: três instalações com os mesmos
+-- ids 5/50/500 coexistem e não se misturam.
 -- ----------------------------------------------------------------------------
 savepoint pos_contracao;
-alter table public.chatwoot_messages drop constraint chatwoot_messages_conversation_id_fkey;
-alter table public.chatwoot_conversations drop constraint chatwoot_conversations_contact_id_fkey;
-alter table public.chatwoot_contacts drop constraint chatwoot_contacts_pkey cascade;
-alter table public.chatwoot_conversations drop constraint chatwoot_conversations_pkey cascade;
-alter table public.chatwoot_messages drop constraint chatwoot_messages_pkey cascade;
--- (organizacao_id, id) também é chave legada: impede duas instalações na mesma
--- organização. O MSG-004 contrai junto com a PK.
-drop index public.uq_chatwoot_contacts_org_id;
-drop index public.uq_chatwoot_conversations_org_id;
-drop index public.uq_chatwoot_messages_org_id;
-alter table public.chatwoot_conversations disable trigger trg_sync_chatwoot_conversations_organizacao;
-alter table public.chatwoot_messages disable trigger trg_sync_chatwoot_messages_organizacao;
--- Os planos em cache das funções de vínculo citam os índices removidos.
-discard plans;
-
 set local role service_role;
-insert into public.chatwoot_contacts (id, organizacao_id, conexao_id, name) values
-    (5, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c2', 'Contato A2'),
-    (5, 'e2000000-0000-4000-8000-00000000000b', 'e2000000-0000-4000-8000-0000000000c3', 'Contato B 5');
 insert into public.chatwoot_conversations (id, organizacao_id, conexao_id, contact_id, status) values
-    (50, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c2', 5, 'open'),
     (50, 'e2000000-0000-4000-8000-00000000000b', 'e2000000-0000-4000-8000-0000000000c3', 5, 'open');
 insert into public.chatwoot_messages (id, organizacao_id, conexao_id, conversation_id, content) values
-    (500, 'e2000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-0000000000c2', 50, 'mensagem de A2'),
     (500, 'e2000000-0000-4000-8000-00000000000b', 'e2000000-0000-4000-8000-0000000000c3', 50, 'mensagem de B 500');
 
 select is((select count(distinct id_local)::int from public.chatwoot_contacts where id_externo = '5'), 3,

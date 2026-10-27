@@ -136,3 +136,7 @@ A simulação (itens 37–44 do pgTAP final) mostra o que precisa sair para duas
 instalações coexistirem: a PK `id` e as FKs legadas por id, **os índices
 `uq_chatwoot_*_org_id (organizacao_id, id)`** e os gatilhos da migration 27 que
 procuram o pai só pelo id. O CHECK `id_externo = id::text` também sai.
+
+> Atualização do MSG-004: feito, exceto o CHECK, mantido como coerência do eco
+> `id`; o inventário completo (inbox, eventos, retenção, baseline) está em
+> `docs/operations/msg-004-runbook.md`.

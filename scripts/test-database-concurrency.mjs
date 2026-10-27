@@ -23,6 +23,7 @@ import { runComandosComerciaisRaceRehearsal } from './database-concurrency-coman
 import { runMigracoesRemotasRaceRehearsal } from './database-concurrency-migracoes-remotas.mjs';
 import { runIdentidadeChatwootRaceRehearsal } from './database-concurrency-identidade-chatwoot.mjs';
 import { runResolverChatwootRaceRehearsal } from './database-concurrency-resolver-chatwoot.mjs';
+import { runContracaoChatwootRaceRehearsal } from './database-concurrency-contracao-chatwoot.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -55,6 +56,7 @@ let outcomeComandosComerciais;
 let outcomeMigracoesRemotas;
 let outcomeIdentidadeChatwoot;
 let outcomeResolverChatwoot;
+let outcomeContracaoChatwoot;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -76,6 +78,7 @@ try {
     outcomeMigracoesRemotas = started;
     outcomeIdentidadeChatwoot = started;
     outcomeResolverChatwoot = started;
+    outcomeContracaoChatwoot = started;
   } else {
     const alinhado = await alinharStubDeAuthComProducao();
     const applied = alinhado._tag === 'err' ? alinhado : await applyCanonicalMigrations({});
@@ -98,6 +101,7 @@ try {
       outcomeMigracoesRemotas = applied;
       outcomeIdentidadeChatwoot = applied;
       outcomeResolverChatwoot = applied;
+      outcomeContracaoChatwoot = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
@@ -117,6 +121,7 @@ try {
       outcomeMigracoesRemotas = await runMigracoesRemotasRaceRehearsal();
       outcomeIdentidadeChatwoot = await runIdentidadeChatwootRaceRehearsal();
       outcomeResolverChatwoot = await runResolverChatwootRaceRehearsal();
+      outcomeContracaoChatwoot = await runContracaoChatwootRaceRehearsal();
     }
   }
 } finally {
@@ -181,6 +186,7 @@ const relatos = [
   [outcomeMigracoesRemotas, (v) => v.relato],
   [outcomeIdentidadeChatwoot, (v) => v.relato],
   [outcomeResolverChatwoot, (v) => v.relato],
+  [outcomeContracaoChatwoot, (v) => v.relato],
 ];
 
 const falhou = relatos.map(([outcome, resumo]) => relatar(outcome, resumo)).includes(true);
