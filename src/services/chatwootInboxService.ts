@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import { SupabaseClient } from '@supabase/supabase-js';
+import { z } from 'zod';
+import type { ChatwootWebhookEvent } from './chatwoot/chatwootPort';
 import { redactSensitiveData } from '../lib/integrations/credentialsVault';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
@@ -21,57 +23,83 @@ export interface ChatwootInboxEventRecord {
   updated_at: string;
 }
 
-export interface RegisterChatwootInboxResult {
-  eventoId: string;
-  status: 'received' | 'processing' | 'processed' | 'failed' | 'ignored';
-  isDuplicate: boolean;
-  cachedResponse?: Record<string, unknown> | null;
+/** De onde veio a repetição reconhecida: a mesma entrega ou o mesmo evento em outra entrega. */
+export type DuplicataChatwoot = 'entrega' | 'evento';
+
+/** Desfecho tipado do aceite de uma entrega na inbox; só `EntregaAceita` permite o ACK. */
+export type AceiteDeEntregaChatwoot =
+  | {
+      readonly _tag: 'EntregaAceita';
+      readonly eventoId: string;
+      readonly status: ChatwootInboxEventRecord['status'];
+      readonly duplicata: DuplicataChatwoot | null;
+      readonly cachedResponse: Record<string, unknown> | null;
+    }
+  | { readonly _tag: 'EntregaConflitante' }
+  | { readonly _tag: 'ConexaoRecusada'; readonly motivo: 'fora_do_escopo' | 'desligada' }
+  | { readonly _tag: 'EntradaRecusada' }
+  | { readonly _tag: 'InboxIndisponivel'; readonly cause: string };
+
+const AceiteRowSchema = z.object({
+  evento_id: z.string().min(1),
+  status: z.enum(['received', 'processing', 'processed', 'failed', 'ignored']),
+  duplicata: z.enum(['entrega', 'evento']).nullable(),
+  cached_response: z.record(z.string(), z.unknown()).nullable(),
+});
+
+const RECUSA_POR_SQLSTATE: Readonly<Record<string, AceiteDeEntregaChatwoot>> = {
+  '23505': { _tag: 'EntregaConflitante' },
+  '42501': { _tag: 'ConexaoRecusada', motivo: 'fora_do_escopo' },
+  '55000': { _tag: 'ConexaoRecusada', motivo: 'desligada' },
+  '22023': { _tag: 'EntradaRecusada' },
+};
+
+/** Identificação da entrega que acompanha o evento: o delivery id (opcional no
+ * Chatwoot) e o timestamp coberto pela assinatura. */
+export interface EntregaChatwoot {
+  readonly deliveryId: string | null;
+  readonly timestampAssinado: string;
+}
+
+function digestEstavel(valor: unknown): string {
+  const canonico = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(canonico);
+    if (v && typeof v === 'object') {
+      return Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonico((v as Record<string, unknown>)[k])]));
+    }
+    return v;
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(canonico(valor) ?? null)).digest('hex').slice(0, 32);
 }
 
 /**
- * Computa uma chave determinística de idempotência para o evento Chatwoot.
- * Utiliza o tipo de evento e os identificadores canônicos do payload
- * (mensagem, conversa, status ou contato) para evitar duplicação em rede.
+ * Chave semântica (versão `v2`) do evento; o banco a combina com organização +
+ * conexão. `message_created` acontece uma vez por mensagem. Edição, status e os
+ * demais eventos se repetem de forma legítima (A→B→A, open→resolved→open→
+ * resolved), então a chave leva um marcador de revisão: o `updated_at` do
+ * provedor, senão o delivery id, senão o timestamp assinado. Na dúvida a chave
+ * separa: reprocessar uma repetição é idempotente no espelho, e engolir uma
+ * revisão perde a ocorrência.
  */
-export function generateChatwootIdempotencyKey(event: unknown, fallbackPrefix = 'chatwoot'): string {
-  if (typeof event === 'object' && event !== null) {
-    const record = event as Record<string, unknown>;
-    const eventName = String(record.event || record.type || '').trim().toLowerCase();
-    const conversation = record.conversation as Record<string, unknown> | undefined;
+export function chaveDoEventoChatwoot(evento: ChatwootWebhookEvent, entrega: EntregaChatwoot): string {
+  const marcador = (updatedAt: string | number | undefined) => {
+    if (updatedAt !== undefined && String(updatedAt) !== '') return `u${updatedAt}`;
+    return entrega.deliveryId ? `d${entrega.deliveryId}` : `t${entrega.timestampAssinado}`;
+  };
 
-    if (eventName === 'message_created' || eventName === 'message_updated') {
-      const msgId = record.id;
-      const convId = conversation?.id || record.conversation_id;
-      if (msgId !== undefined && msgId !== null) {
-        return `event_${eventName}_msg_${msgId}${convId ? `_conv_${convId}` : ''}`;
-      }
-    }
-
-    if (eventName === 'conversation_status_changed') {
-      const convId = conversation?.id || record.id;
-      const status = conversation?.status || record.status;
-      if (convId !== undefined && convId !== null) {
-        return `event_${eventName}_conv_${convId}_status_${status || 'unknown'}`;
-      }
-    }
-
-    if (eventName.includes('contact')) {
-      const contact = (record.contact || record.sender || record.data) as Record<string, unknown> | undefined;
-      const contactId = contact?.id || record.id;
-      if (contactId !== undefined && contactId !== null) {
-        return `event_${eventName}_contact_${contactId}`;
-      }
-    }
-
-    if (eventName && record.id !== undefined && record.id !== null) {
-      return `event_${eventName}_id_${record.id}`;
-    }
+  if (evento.event === 'message_created' && evento.id !== undefined) {
+    return `v2:message_created:msg:${evento.id}`;
   }
-
-  // Canonical SHA-256 do JSON serializado como fallback seguro
-  const serialized = typeof event === 'string' ? event : JSON.stringify(event || {});
-  const hash = crypto.createHash('sha256').update(serialized).digest('hex').substring(0, 32);
-  return `${fallbackPrefix}_hash_${hash}`;
+  if (evento.event === 'message_updated' && evento.id !== undefined) {
+    const conteudo = digestEstavel({ content: evento.content, message_type: evento.message_type, private: evento.private });
+    return `v2:message_updated:msg:${evento.id}:${marcador(evento.updated_at)}:${conteudo}`;
+  }
+  const conversa = evento.conversation;
+  if (evento.event === 'conversation_status_changed' && conversa?.id !== undefined) {
+    const revisao = marcador(conversa.updated_at ?? evento.updated_at);
+    return `v2:conversation_status_changed:conv:${conversa.id}:${conversa.status ?? 'unknown'}:${revisao}`;
+  }
+  return `v2:${evento.event}:${evento.id ?? 'sem-id'}:${marcador(evento.updated_at)}:${digestEstavel(evento)}`;
 }
 
 export class ChatwootInboxService {
@@ -89,45 +117,48 @@ export class ChatwootInboxService {
     if (error) throw new Error(`Falha ao validar escopo do evento Chatwoot: ${error.message}`);
     if (!data) throw new Error('Evento Chatwoot fora do escopo organizacional verificado.');
   }
+
   /**
-   * Registra o evento no inbox de forma atômica no banco de dados.
-   * Se o evento já existir para a organização, retorna isDuplicate = true e o resultado cacheado se houver.
+   * Aceita a entrega na inbox numa transação do banco: confere a conexão, grava
+   * o evento e a entrega com `on conflict` e só então devolve `EntregaAceita`.
+   * Qualquer outro desfecho não gravou nada e não pode virar ACK.
    */
-  async registerEvent(
+  async aceitarEntrega(
     supabase: SupabaseClient,
     scope: VerifiedOrganizationScope,
     params: {
-      conexaoId?: string | null;
-      inboxId?: number | null;
+      conexaoId: string;
+      inboxId: number | null;
+      deliveryId: string | null;
       idempotencyKey: string;
       eventType: string;
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
-  ): Promise<RegisterChatwootInboxResult> {
-    const { data, error } = await supabase.rpc('registrar_evento_inbox_chatwoot', {
+  ): Promise<AceiteDeEntregaChatwoot> {
+    const { data, error } = await supabase.rpc('aceitar_entrega_inbox_chatwoot', {
       p_organizacao_id: scope.organizationId,
-      p_conexao_id: params.conexaoId || null,
+      p_conexao_id: params.conexaoId,
       p_user_id: scope.actorId,
-      p_inbox_id: params.inboxId || null,
+      p_inbox_id: params.inboxId,
+      p_delivery_id: params.deliveryId,
       p_idempotency_key: params.idempotencyKey,
       p_event_type: params.eventType,
-      p_payload: (params.payload && typeof params.payload === 'object') ? params.payload : { raw: params.payload },
+      p_payload: params.payload,
     });
 
     if (error) {
-      throw new Error(`Falha ao registrar evento no inbox Chatwoot: ${error.message}`);
+      return RECUSA_POR_SQLSTATE[error.code ?? ''] ?? { _tag: 'InboxIndisponivel', cause: error.code || 'rpc-error' };
     }
 
-    const row = Array.isArray(data) ? data[0] : data;
-    if (!row) {
-      throw new Error('Nenhum retorno recebido da função de registro de inbox Chatwoot.');
-    }
+    const row = AceiteRowSchema.safeParse(Array.isArray(data) ? data[0] : data);
+    if (!row.success) return { _tag: 'InboxIndisponivel', cause: 'resposta-invalida' };
 
     return {
-      eventoId: row.evento_id,
-      status: row.status,
-      isDuplicate: Boolean(row.is_duplicate),
-      cachedResponse: row.cached_response || null,
+      _tag: 'EntregaAceita',
+      eventoId: row.data.evento_id,
+      status: row.data.status,
+      duplicata: row.data.duplicata,
+      cachedResponse: row.data.cached_response,
     };
   }
 

@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { lerCorpoLimitado } from '@/lib/http/corpoLimitado';
 import { handleChatwootWebhookDelivery } from '@/services/chatwoot/chatwootWebhookService';
 
 export const dynamic = 'force-dynamic';
 
 const conexaoIdParamSchema = z.string().uuid();
+
+/** Maior entrega aceita. Um evento de mensagem do Chatwoot tem poucos KiB. */
+const LIMITE_DO_CORPO_BYTES = 256 * 1024;
 
 interface RouteContext {
   readonly params: Promise<{ readonly conexaoId: string }>;
@@ -31,11 +35,17 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ success: false, error: 'Conexão inválida' }, { status: 404 });
   }
 
+  const corpo = await lerCorpoLimitado(request, LIMITE_DO_CORPO_BYTES);
+  if (corpo._tag === 'CorpoGrandeDemais') {
+    return NextResponse.json({ success: false, error: 'Payload grande demais' }, { status: 413 });
+  }
+
   const outcome = await handleChatwootWebhookDelivery({
     conexaoId: conexaoIdParsed.data,
-    rawBody: await request.text(),
+    rawBody: corpo.bytes,
     signatureHeader: request.headers.get('x-chatwoot-signature'),
     timestampHeader: request.headers.get('x-chatwoot-timestamp'),
+    deliveryHeader: request.headers.get('x-chatwoot-delivery'),
   });
 
   return NextResponse.json(outcome.body, { status: outcome.status });

@@ -46,9 +46,17 @@ let mockInboxRegisterResult = {
   cached_response: null as Record<string, unknown> | null,
 };
 
+/** Desfecho do contador de limite por conexão; `null` simula o store fora do ar. */
+let limitePermite: boolean | null = true;
+
 const mockRpc = vi.fn().mockImplementation((fnName: string) => {
-  if (fnName === 'registrar_evento_inbox_chatwoot') {
-    return Promise.resolve({ data: [mockInboxRegisterResult], error: null });
+  if (fnName === 'aceitar_entrega_inbox_chatwoot') {
+    const duplicata = mockInboxRegisterResult.is_duplicate ? 'evento' : null;
+    return Promise.resolve({ data: [{ ...mockInboxRegisterResult, duplicata }], error: null });
+  }
+  if (fnName === 'registrar_tentativa_limite_taxa') {
+    if (limitePermite === null) return Promise.resolve({ data: null, error: { message: 'connection refused' } });
+    return Promise.resolve({ data: [{ permitido: limitePermite, contagem: 1, reset_em: new Date(Date.now() + 60_000).toISOString() }], error: null });
   }
   if (fnName === 'concluir_evento_inbox_chatwoot') {
     return Promise.resolve({ data: null, error: null });
@@ -286,7 +294,8 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ success: false, error: 'Escopo organizacional inválido' });
       expect(insertedInboxRows).toHaveLength(inboxesAntes);
-      expect(mockRpc).not.toHaveBeenCalled();
+      // Só o contador de limite (depois da assinatura); nenhuma escrita na inbox.
+      expect(mockRpc.mock.calls.map(([fn]) => fn)).toEqual(['registrar_tentativa_limite_taxa']);
       expect(espelho.store?.chamadas ?? []).toHaveLength(0);
     } finally {
       erro.mockRestore();

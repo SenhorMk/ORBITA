@@ -19,7 +19,7 @@ import {
   blingInboxService,
 } from '@/services/blingInboxService';
 import {
-  generateChatwootIdempotencyKey,
+  chaveDoEventoChatwoot,
   chatwootInboxService,
 } from '@/services/chatwootInboxService';
 import {
@@ -307,23 +307,29 @@ describe('ORBITA End-to-End SaaS Lifecycle & Production Rehearsal (Ticket 44)', 
     });
 
     it('gera chave determinística e registra evento no Inbox do Chatwoot', async () => {
-      const key = generateChatwootIdempotencyKey({ event: 'message_created', id: '456', conversation: { id: 789 } });
-      expect(key).toBe('event_message_created_msg_456_conv_789');
+      const key = chaveDoEventoChatwoot(
+        { event: 'message_created', account: { id: 1 }, id: '456', conversation: { id: 789 } },
+        { deliveryId: null, timestampAssinado: '1700000000' },
+      );
+      expect(key).toBe('v2:message_created:msg:456');
 
+      const eventoId = '00000000-0000-4000-8000-000000000456';
       const rpcMock = vi.fn().mockResolvedValue({
-        data: [{ evento_id: 'cw-inbox-evt-2', status: 'received', is_duplicate: false, cached_response: null }],
+        data: [{ evento_id: eventoId, status: 'received', is_duplicate: false, duplicata: null, cached_response: null }],
         error: null,
       });
       const fakeClient = { rpc: rpcMock } as unknown as SupabaseClient;
 
-      const result = await chatwootInboxService.registerEvent(fakeClient, testScope, {
+      const result = await chatwootInboxService.aceitarEntrega(fakeClient, testScope, {
+        conexaoId: '00000000-0000-4000-8000-000000000789',
+        inboxId: 1,
+        deliveryId: null,
         idempotencyKey: key,
         eventType: 'message_created',
         payload: { content: 'Olá ORBITA' },
       });
 
-      expect(result.eventoId).toBe('cw-inbox-evt-2');
-      expect(result.isDuplicate).toBe(false);
+      expect(result).toMatchObject({ _tag: 'EntregaAceita', eventoId, duplicata: null });
     });
 
     it('enfileira mensagens no Outbox e classifica erros de integração (transitórios vs permanentes)', async () => {

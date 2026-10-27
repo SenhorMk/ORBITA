@@ -73,6 +73,9 @@ export const ChatwootWebhookEventSchema = z.object({
   message_type: z.union([z.string(), z.number()]).optional(),
   conversation_id: z.union([z.number(), z.string()]).optional(),
   created_at: z.string().optional(),
+  /** Versão do provedor, quando presente: marca a revisão do evento (MSG-005). */
+  updated_at: z.union([z.string(), z.number()]).optional(),
+  private: z.boolean().optional(),
   inbox: z.object({ id: z.union([z.number(), z.string()]).optional() }).optional(),
   conversation: z
     .object({
@@ -80,6 +83,7 @@ export const ChatwootWebhookEventSchema = z.object({
       display_id: z.union([z.number(), z.string()]).optional(),
       contact_id: z.union([z.number(), z.string()]).optional(),
       status: z.string().optional(),
+      updated_at: z.union([z.string(), z.number()]).optional(),
       inbox_id: z.union([z.number(), z.string()]).optional(),
       channel: z.string().optional(),
       contact: ChatwootWebhookContactFragmentSchema.optional(),
