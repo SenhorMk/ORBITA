@@ -51,6 +51,8 @@ interface AuthenticatedWebhookRequest {
 
 /** `X-Chatwoot-Delivery` é opcional; quando vem, tem de ser um identificador simples. */
 const DeliveryIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/);
+const SIGNATURE_FORMAT = /^sha256=[0-9a-f]{64}$/;
+const TIMESTAMP_FORMAT = /^[0-9]{1,12}$/;
 
 type AuthenticateWebhookResult =
   | { readonly ok: true; readonly request: AuthenticatedWebhookRequest }
@@ -141,6 +143,15 @@ function verifySignedDelivery(
 async function authenticateWebhookRequest(delivery: RawDelivery): Promise<AuthenticateWebhookResult> {
   const { conexaoId, rawBody, signatureHeader, timestampHeader, deliveryHeader } = delivery;
 
+  // 0. Formato barato antes de qualquer consulta, decifragem ou HMAC: o corpo já
+  //    veio limitado pela rota; aqui só cabeçalhos bem formados seguem adiante.
+  if (!signatureHeader || !timestampHeader) return denied(401, 'Assinatura ausente');
+  if (!SIGNATURE_FORMAT.test(signatureHeader) || !TIMESTAMP_FORMAT.test(timestampHeader)) {
+    return denied(401, 'Assinatura inválida');
+  }
+  const deliveryParsed = deliveryHeader === null ? null : DeliveryIdSchema.safeParse(deliveryHeader);
+  if (deliveryParsed && !deliveryParsed.success) return denied(400, 'Identificador de entrega inválido');
+
   // 1. Resolver a conexão ANTES de qualquer confiança — apenas para localizar o
   //    segredo que autentica a requisição. organizacao_id só vira autoridade
   //    depois que a assinatura for validada com o segredo desta conexão específica.
@@ -162,7 +173,6 @@ async function authenticateWebhookRequest(delivery: RawDelivery): Promise<Authen
 
   // 2. Validação de Assinatura HMAC OBRIGATÓRIA sobre o raw body (fail-closed),
   //    ANTES de qualquer parse, lookup adicional ou insert.
-  if (!signatureHeader || !timestampHeader) return denied(401, 'Assinatura ausente');
   if (!verifySignedDelivery(rawBody, signatureHeader, timestampHeader, webhookSecret)) {
     console.error('❌ Webhook Chatwoot: Assinatura inválida ou timestamp expirado.');
     return denied(401, 'Assinatura inválida');
@@ -187,9 +197,6 @@ async function authenticateWebhookRequest(delivery: RawDelivery): Promise<Authen
     const status = rateLimitDenialStatus(limite);
     return denied(status, status === 429 ? 'Limite de entregas excedido' : 'Serviço de limite indisponível');
   }
-
-  const deliveryParsed = deliveryHeader === null ? null : DeliveryIdSchema.safeParse(deliveryHeader);
-  if (deliveryParsed && !deliveryParsed.success) return denied(400, 'Identificador de entrega inválido');
 
   let rawPayload: unknown;
   try {
