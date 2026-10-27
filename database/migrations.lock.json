@@ -445,6 +445,11 @@
       "order": 89,
       "path": "../database/86_efeito_ambiguo_na_outbox.sql",
       "sha256": "2a0bc40fe54624372b956891d3af350e69619f805ce1703e6e73b32b1bdedd26"
+    },
+    {
+      "order": 90,
+      "path": "../database/87_contrair_chaves_globais_chatwoot.sql",
+      "sha256": "d0ec404b4f2ef5d503955513e86b5dc0e8b84eeee4f5087da007fa8fdb1a8f96"
     }
   ],
   "references": [

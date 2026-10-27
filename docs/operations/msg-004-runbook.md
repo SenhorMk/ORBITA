@@ -54,7 +54,7 @@ colunas é limpeza posterior.
 ## 3. GO/NO-GO (somente leitura, no alvo)
 
 ```sql
--- 1. ledger em 88 (85_identidade_local_chatwoot.sql) e colunas da 85
+-- 1. ledger em 89 (86_efeito_ambiguo_na_outbox.sql, MSG-007) e colunas da 85
 select count(*) from information_schema.columns
  where table_schema = 'public' and column_name = 'id_local'
    and table_name in ('chatwoot_contacts', 'chatwoot_conversations', 'chatwoot_messages');   -- 3
@@ -101,7 +101,7 @@ com S88 e com o schema contraído; o do MSG-003B também. Recomendado: publicar 
 código → GO/NO-GO → aplicar → validar → só então cadastrar a segunda instalação
 de qualquer organização.
 
-| Código \ Banco | S88 (até a 85) | contraído |
+| Código \ Banco | S89 (até a 86 do MSG-007) | contraído (S90) |
 |---|---|---|
 | MSG-003B (com a correção do 003A) | compatível (estado atual) | compatível: o mesmo id em outra instalação passa a gravar em vez de `IdentidadeDeOutraConexao` |
 | MSG-004 | compatível: `id_local` existe desde a 85; a RPC antiga ainda seleciona ids numéricos, que o preview trata como inexistentes (o adapter não está ligado a nenhuma rota) | compatível |
