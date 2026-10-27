@@ -100,10 +100,16 @@ rather than silently downgrading to a weaker check.
 - ORBITA sets a 10s per-request timeout (`AbortSignal.timeout`).
 - HTTP 429 is mapped to `ChatwootFailed { reason: 'rate-limited', retryAfterSeconds }`
   using the `Retry-After` response header (defaults to 60s when absent).
-- HTTP 5xx is mapped to `ChatwootFailed { reason: 'http', status }` and treated
-  as retryable by callers (outbox retry policy); HTTP 401/403 is mapped the
-  same tag but callers must treat it as **permanent** (credential problem,
-  requires reconnection) — see `chatwootAdapter.ts` for the exact
+- HTTP 5xx is mapped to `ChatwootFailed { reason: 'http', status }`; HTTP
+  401/403 is mapped the same tag but callers must treat it as **permanent**
+  (credential problem, requires reconnection) — see `chatwootAdapter.ts` for the
   `retryable: boolean` classification exposed alongside `reason`.
+- `retryable` is a read-path hint. For the message **creation** POST it never
+  decides a retry (MSG-007): the API has no idempotency key and does not document
+  that 429 or 5xx prove non-application, and `fetch` cannot tell a connection
+  failure before the request from one after it. The outbox maps the send result
+  with `desfechoDoEnvioChatwoot` (`services/outbox/desfechoDoEfeito.ts`): only a
+  definitive 4xx is a refusal; timeout, network, invalid response (including an
+  invalid 2xx), 429 and 5xx are `unknown`, which is never retried automatically.
 - Network failures and timeouts are distinguished (`reason: 'network'` vs
   `'timeout'`) so callers can apply different backoff.

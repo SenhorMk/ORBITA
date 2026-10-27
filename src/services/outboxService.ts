@@ -1,15 +1,19 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import { z } from 'zod';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { descreverErro } from '@/lib/erroLegivel';
+import type { DesfechoDoDespacho } from '@/services/outbox/desfechoDoEfeito';
 
 export type OutboxDestination = 'chatwoot' | 'bling' | 'webhook_externo';
 
 export type OutboxStatus =
   | 'pending'
   | 'processing'
+  | 'in_flight'
   | 'sent'
   | 'failed_transient'
-  | 'dead_letter';
+  | 'dead_letter'
+  | 'unknown';
 
 export type ErrorCategory =
   | 'transient'
@@ -41,22 +45,25 @@ export interface OutboxEventRecord {
   updated_at: string;
 }
 
-/** Row shape returned by `reivindicar_lote_outbox` (claim RPC) — snake_case
+/** Row shape returned by `reivindicar_tentativas_outbox` (claim RPC) — snake_case
  * as returned by Postgres, distinct from `OutboxEventRecord` because the
- * claim RPC returns a narrower projection (no `idempotency_key`/`user_id`). */
-export interface ClaimedOutboxEvent {
-  evento_id: string;
-  organizacao_id: string;
-  conexao_id: string | null;
-  destination: OutboxDestination;
-  event_type: string;
-  payload: Record<string, unknown>;
-  attempts: number;
-  max_attempts: number;
-  lease_owner: string;
-  lease_expires_at: string;
-  correlation_id: string | null;
-}
+ * claim RPC returns a narrower projection (no `idempotency_key`/`user_id`).
+ * `fencing_token` is the token of this claim: only it starts and concludes. */
+const ClaimedOutboxEventSchema = z.object({
+  evento_id: z.string().uuid(),
+  organizacao_id: z.string().uuid(),
+  conexao_id: z.string().uuid().nullable(),
+  destination: z.enum(['chatwoot', 'bling', 'webhook_externo']),
+  event_type: z.string(),
+  payload: z.record(z.string(), z.unknown()),
+  attempts: z.number().int(),
+  max_attempts: z.number().int(),
+  lease_owner: z.string(),
+  lease_expires_at: z.string(),
+  correlation_id: z.string().nullable(),
+  fencing_token: z.coerce.number().int().positive(),
+});
+export type ClaimedOutboxEvent = z.infer<typeof ClaimedOutboxEventSchema>;
 
 export interface RegisterOutboxResult {
   eventoId: string;
@@ -110,6 +117,11 @@ export function sanitizeErrorMessage(msg: string): string {
     .replace(/eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+/g, '[REDACTED_JWT]');
 }
 
+/**
+ * Categoria e mensagem redigida de um erro, por texto. Serve para relatório e
+ * saúde da conexão; NUNCA decide repetir um efeito da outbox — essa decisão é
+ * do desfecho tipado do adapter (`desfechoDoEfeito.ts`).
+ */
 export function classifyError(error: unknown): ClassifiedError {
   const rawMsg = descreverErro(error);
   const message = sanitizeErrorMessage(rawMsg);
@@ -161,7 +173,7 @@ export function calculateBackoffSeconds(
 export class OutboxService {
   private async assertRecordScope(
     supabase: SupabaseClient,
-    table: 'eventos_outbox' | 'conexoes_integracao',
+    table: 'conexoes_integracao',
     scope: VerifiedOrganizationScope,
     id: string,
   ): Promise<void> {
@@ -201,6 +213,7 @@ export class OutboxService {
     });
 
     if (error) {
+      if (error.code === '23505') throw new OutboxIntencaoDivergente();
       throw new Error(`Falha ao registrar evento no outbox: ${error.message}`);
     }
 
@@ -218,11 +231,10 @@ export class OutboxService {
 
   /**
    * Reivindica um lote de eventos pendentes/retryable para este worker.
-   * `workerId` identifica o dono do lease (não é autoridade de tenant — só
-   * serve para provar posse na conclusão e para observabilidade). Cada
-   * evento retornado carrega `lease_owner`/`lease_expires_at`: nenhum outro
-   * worker consegue reivindicar o mesmo evento enquanto o lease for válido
-   * (imposto no banco por `FOR UPDATE SKIP LOCKED`, não em memória).
+   * `workerId` identifica o dono do lease (não é autoridade de tenant). Cada
+   * evento volta com o `fencing_token` da posse, que o banco sobe a cada
+   * reivindicação: só ele inicia o despacho e conclui. Exclusão mútua por
+   * `FOR UPDATE SKIP LOCKED` no banco, não em memória.
    */
   async claimBatch(
     supabase: SupabaseClient,
@@ -233,7 +245,7 @@ export class OutboxService {
     if (!workerId || workerId.trim().length === 0) {
       throw new Error('workerId é obrigatório para reivindicar lote do outbox.');
     }
-    const { data, error } = await supabase.rpc('reivindicar_lote_outbox', {
+    const { data, error } = await supabase.rpc('reivindicar_tentativas_outbox', {
       p_worker_id: workerId,
       p_limit: limit,
       p_lease_ttl_sec: leaseTtlSeconds,
@@ -243,135 +255,71 @@ export class OutboxService {
       throw new Error(`Falha ao reivindicar lote do outbox: ${error.message}`);
     }
 
-    return (data || []) as ClaimedOutboxEvent[];
+    return ClaimedOutboxEventSchema.array().parse(data ?? []);
   }
 
   /**
-   * Marca um evento como enviado. Exige `workerId` = dono do lease vigente;
-   * se o lease expirou (ou pertence a outro worker), o RPC retorna `false`
-   * sem aplicar nenhuma mudança — impede que um worker "zumbi" duplique o
-   * efeito de outro worker que já retomou o mesmo evento.
+   * Reivindica um evento da organização verificada (envio inline). Devolve o
+   * fencing token da posse, ou `null` se o evento não estava na fila — por
+   * exemplo, porque já está em voo ou desconhecido.
    */
-  async markSent(
+  async claimOne(
     supabase: SupabaseClient,
     scope: VerifiedOrganizationScope,
-    workerId: string,
     eventoId: string,
-    responseBody?: Record<string, unknown> | null,
-  ): Promise<boolean> {
-    await this.assertRecordScope(supabase, 'eventos_outbox', scope, eventoId);
-    const { data, error } = await supabase.rpc('concluir_evento_outbox', {
+    workerId: string,
+    leaseTtlSeconds = 60,
+  ): Promise<number | null> {
+    const { data, error } = await supabase.rpc('reivindicar_evento_outbox', {
+      p_organizacao_id: scope.organizationId,
       p_evento_id: eventoId,
       p_worker_id: workerId,
-      p_status: 'sent',
-      p_response_body: responseBody || null,
-      p_error: null,
-      p_error_category: null,
-      p_retry_delay_sec: 0,
+      p_lease_ttl_sec: leaseTtlSeconds,
     });
-
-    if (error) {
-      console.error('❌ outbox markSent falhou:', error.message);
-      return false;
-    }
-    return data === true;
-  }
-
-  async markFailed(
-    supabase: SupabaseClient,
-    scope: VerifiedOrganizationScope,
-    workerId: string,
-    eventoId: string,
-    error: unknown,
-    currentAttempts = 0,
-  ): Promise<boolean> {
-    const classified = classifyError(error);
-    const retryDelay = calculateBackoffSeconds(currentAttempts);
-    const status = classified.isTransient ? 'failed_transient' : 'dead_letter';
-
-    await this.assertRecordScope(supabase, 'eventos_outbox', scope, eventoId);
-    const { data, error: rpcError } = await supabase.rpc('concluir_evento_outbox', {
-      p_evento_id: eventoId,
-      p_worker_id: workerId,
-      p_status: status,
-      p_response_body: null,
-      p_error: classified.message,
-      p_error_category: classified.category,
-      p_retry_delay_sec: retryDelay,
-    });
-
-    if (rpcError) {
-      console.error('❌ outbox markFailed falhou:', rpcError.message);
-      return false;
-    }
-    return data === true;
+    if (error) throw new Error(`Falha ao reivindicar evento do outbox: ${error.message}`);
+    const linhas = z.array(z.object({ fencing_token: z.coerce.number().int().positive() })).parse(data ?? []);
+    return linhas[0]?.fencing_token ?? null;
   }
 
   /**
-   * Variantes usadas pelo worker de outbox em lote (`outboxWorker`), que
-   * opera como `service_role` sobre eventos de múltiplas organizações numa
-   * única chamada — não existe um único ator/sessão verificada para todo o
-   * lote. A autoridade explícita aqui não é `VerifiedOrganizationScope`: é a
-   * posse do lease (`workerId` conferido dentro de `concluir_evento_outbox`,
-   * que só aceita o dono do lease vigente) somada ao fato de `eventoId` já
-   * ter sido resolvido para uma organização real pelo próprio RPC de claim
-   * (nunca um id vindo de input não verificado). Fora do worker, prefira
-   * `markSent`/`markFailed`, que exigem escopo organizacional verificado.
+   * Último passo antes da rede: grava `in_flight` e a tentativa. `false` quando
+   * a posse não é mais deste token — o chamador não pode despachar.
    */
-  async completeClaimedSent(
-    supabase: SupabaseClient,
-    workerId: string,
-    eventoId: string,
-    responseBody?: Record<string, unknown> | null,
-  ): Promise<boolean> {
-    const { data, error } = await supabase.rpc('concluir_evento_outbox', {
+  async startDispatch(supabase: SupabaseClient, eventoId: string, workerId: string, fencingToken: number): Promise<boolean> {
+    const { data, error } = await supabase.rpc('iniciar_despacho_outbox', {
       p_evento_id: eventoId,
       p_worker_id: workerId,
-      p_status: 'sent',
-      p_response_body: responseBody || null,
-      p_error: null,
-      p_error_category: null,
-      p_retry_delay_sec: 0,
+      p_fencing_token: fencingToken,
     });
-    if (error) {
-      console.error('❌ outbox worker: falha ao marcar sent:', error.message);
-      return false;
-    }
-    return data === true;
-  }
-
-  async completeClaimedFailed(
-    supabase: SupabaseClient,
-    workerId: string,
-    eventoId: string,
-    error: unknown,
-    currentAttempts = 0,
-  ): Promise<boolean> {
-    const classified = classifyError(error);
-    const retryDelay = calculateBackoffSeconds(currentAttempts);
-    const status = classified.isTransient ? 'failed_transient' : 'dead_letter';
-
-    const { data, error: rpcError } = await supabase.rpc('concluir_evento_outbox', {
-      p_evento_id: eventoId,
-      p_worker_id: workerId,
-      p_status: status,
-      p_response_body: null,
-      p_error: classified.message,
-      p_error_category: classified.category,
-      p_retry_delay_sec: retryDelay,
-    });
-    if (rpcError) {
-      console.error('❌ outbox worker: falha ao marcar failed:', rpcError.message);
-      return false;
-    }
+    if (error) throw new Error(`Falha ao iniciar despacho do outbox: ${error.message}`);
     return data === true;
   }
 
   /**
-   * Recuperação de crash: devolve eventos travados em `processing` com lease
-   * expirado para `failed_transient`/`dead_letter` (respeitando
-   * `max_attempts`). Deve ser chamada antes de reivindicar um novo lote —
-   * mesmo padrão de `releaseExpiredLeases` já usado em `syncJobRepository`.
+   * Grava o desfecho por compare-and-set de dono, token e lease. Devolve o
+   * status gravado, ou `null` quando a posse já não é deste token (lease
+   * vencida, reaper, outro dono): nada muda e o efeito, se houve, fica para a
+   * reconciliação. Erro de banco é lançado, nunca convertido em sucesso.
+   */
+  async concludeAttempt(
+    supabase: SupabaseClient,
+    posse: { readonly eventoId: string; readonly workerId: string; readonly fencingToken: number },
+    desfecho: DesfechoDoDespacho,
+  ): Promise<OutboxStatus | null> {
+    const { data, error } = await supabase.rpc('concluir_tentativa_outbox', {
+      p_evento_id: posse.eventoId,
+      p_worker_id: posse.workerId,
+      p_fencing_token: posse.fencingToken,
+      ...parametrosDoDesfecho(desfecho),
+    });
+    if (error) throw new Error(`Falha ao concluir tentativa do outbox: ${error.message}`);
+    return StatusConcluidoSchema.parse(data);
+  }
+
+  /**
+   * Recuperação de crash: `processing` vencido nunca despachou e volta à fila;
+   * `in_flight` vencido pode ter despachado e vira `unknown`. Deve ser chamada
+   * antes de reivindicar um novo lote.
    */
   async releaseExpiredLeases(
     supabase: SupabaseClient,
@@ -437,3 +385,46 @@ export class OutboxService {
 }
 
 export const outboxService = new OutboxService();
+
+/** Mesma chave de idempotência com outra intenção: o banco recusa com 23505. */
+export class OutboxIntencaoDivergente extends Error {
+  constructor() {
+    super('A chave de idempotência já pertence a outra intenção.');
+    this.name = 'OutboxIntencaoDivergente';
+  }
+}
+
+const STATUS = z.enum(['pending', 'processing', 'in_flight', 'sent', 'failed_transient', 'dead_letter', 'unknown']);
+const StatusConcluidoSchema = STATUS.nullable();
+
+
+/** Os parâmetros da conclusão para cada desfecho; nenhum campo é inventado. */
+function parametrosDoDesfecho(desfecho: DesfechoDoDespacho) {
+  switch (desfecho._tag) {
+    case 'Confirmado':
+      return { p_desfecho: 'confirmado', p_recibo_ref: desfecho.recibo, p_resposta: desfecho.resposta ?? null };
+    case 'NaoEnviado':
+      return {
+        p_desfecho: 'nao_enviado',
+        p_motivo: desfecho.prova,
+        p_erro: sanitizeErrorMessage(desfecho.erro),
+        p_categoria: 'transient',
+        p_retry_delay_sec: desfecho.retryAfterSeconds ?? 10,
+      };
+    case 'Recusado':
+      return {
+        p_desfecho: 'recusado',
+        p_motivo: desfecho.codigo,
+        p_erro: sanitizeErrorMessage(desfecho.erro),
+        p_categoria: desfecho.categoria,
+      };
+    case 'Desconhecido':
+      return {
+        p_desfecho: 'desconhecido',
+        p_motivo: desfecho.motivo,
+        p_erro: sanitizeErrorMessage(desfecho.erro),
+        p_categoria: 'transient',
+      };
+  }
+}
+

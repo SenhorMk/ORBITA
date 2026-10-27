@@ -22,6 +22,7 @@ import { runContatoExcluidoRaceRehearsal } from './database-concurrency-contato.
 import { runComandosComerciaisRaceRehearsal } from './database-concurrency-comandos-comerciais.mjs';
 import { runMigracoesRemotasRaceRehearsal } from './database-concurrency-migracoes-remotas.mjs';
 import { runIdentidadeChatwootRaceRehearsal } from './database-concurrency-identidade-chatwoot.mjs';
+import { runOutboxRaceRehearsal } from './database-concurrency-outbox.mjs';
 import { runResolverChatwootRaceRehearsal } from './database-concurrency-resolver-chatwoot.mjs';
 import { runContracaoChatwootRaceRehearsal } from './database-concurrency-contracao-chatwoot.mjs';
 import { failureMessage } from './script-result.mjs';
@@ -55,6 +56,7 @@ let outcomeContato;
 let outcomeComandosComerciais;
 let outcomeMigracoesRemotas;
 let outcomeIdentidadeChatwoot;
+let outcomeOutbox;
 let outcomeResolverChatwoot;
 let outcomeContracaoChatwoot;
 try {
@@ -77,6 +79,7 @@ try {
     outcomeComandosComerciais = started;
     outcomeMigracoesRemotas = started;
     outcomeIdentidadeChatwoot = started;
+    outcomeOutbox = started;
     outcomeResolverChatwoot = started;
     outcomeContracaoChatwoot = started;
   } else {
@@ -100,6 +103,7 @@ try {
       outcomeComandosComerciais = applied;
       outcomeMigracoesRemotas = applied;
       outcomeIdentidadeChatwoot = applied;
+      outcomeOutbox = applied;
       outcomeResolverChatwoot = applied;
       outcomeContracaoChatwoot = applied;
     } else {
@@ -120,6 +124,7 @@ try {
       outcomeComandosComerciais = await runComandosComerciaisRaceRehearsal();
       outcomeMigracoesRemotas = await runMigracoesRemotasRaceRehearsal();
       outcomeIdentidadeChatwoot = await runIdentidadeChatwootRaceRehearsal();
+      outcomeOutbox = await runOutboxRaceRehearsal();
       outcomeResolverChatwoot = await runResolverChatwootRaceRehearsal();
       outcomeContracaoChatwoot = await runContracaoChatwootRaceRehearsal();
     }
@@ -185,6 +190,7 @@ const relatos = [
   [outcomeComandosComerciais, (v) => v.relato],
   [outcomeMigracoesRemotas, (v) => v.relato],
   [outcomeIdentidadeChatwoot, (v) => v.relato],
+  [outcomeOutbox, (v) => v.relato],
   [outcomeResolverChatwoot, (v) => v.relato],
   [outcomeContracaoChatwoot, (v) => v.relato],
 ];

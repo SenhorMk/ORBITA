@@ -440,6 +440,11 @@
       "order": 88,
       "path": "../database/85_identidade_local_chatwoot.sql",
       "sha256": "a0278814d8e33598f589f3b5b5006c8988c110c94652674abc22f3b92295bfa8"
+    },
+    {
+      "order": 89,
+      "path": "../database/86_efeito_ambiguo_na_outbox.sql",
+      "sha256": "2a0bc40fe54624372b956891d3af350e69619f805ce1703e6e73b32b1bdedd26"
     }
   ],
   "references": [

@@ -376,6 +376,8 @@ function BolhaNaoConfirmada({
   readonly aoRecuperar: () => void;
 }) {
   const falhou = otimista.estado === 'falhou';
+  const incerta = otimista.estado === 'incerta';
+  const cor = falhou ? 'var(--danger)' : incerta ? 'var(--warning)' : 'var(--line)';
   return (
     <article
       className="flex flex-col max-w-[min(560px,78%)] self-end"
@@ -384,15 +386,22 @@ function BolhaNaoConfirmada({
         padding: '10px 13px',
         borderRadius: 16,
         background: 'transparent',
-        border: `1px dashed ${falhou ? 'var(--danger)' : 'var(--line)'}`,
+        border: `1px dashed ${cor}`,
       }}
     >
-      <span className="orbita-eyebrow" style={{ color: falhou ? 'var(--danger)' : 'var(--txt3)' }}>
-        {falhou ? 'Não enviada' : 'Enviando…'}
+      <span className="orbita-eyebrow" style={{ color: falhou || incerta ? cor : 'var(--txt3)' }}>
+        {falhou ? 'Não enviada' : incerta ? 'Entrega não confirmada' : 'Enviando…'}
       </span>
       <p className="m-0" style={{ font: '400 12.5px/1.5 var(--font-archivo), sans-serif', color: 'var(--txt2)' }}>
         {otimista.conteudo}
       </p>
+      {incerta && (
+        // Sem "Recuperar texto": reenviar daqui criaria uma segunda mensagem
+        // se a primeira chegou. A decisão é de quem confere no Chatwoot.
+        <output className="m-0 block" style={{ fontSize: 11, color: 'var(--txt2)' }}>
+          {otimista.erro}
+        </output>
+      )}
       {falhou && (
         <>
           <p className="m-0" role="alert" style={{ fontSize: 11, color: 'var(--danger)' }}>

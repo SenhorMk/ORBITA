@@ -5,12 +5,29 @@ import { supabaseServer } from '../../../../lib/supabaseServer';
 import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
 import { outboxService } from '../../../../services/outboxService';
-import { organizationContextToScope } from '../../../../lib/verifiedOrganizationScope';
+import { organizationContextToScope, type VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
 import { gravarMensagem, type EscopoDeEscritaChatwoot } from '../../../../services/chatwoot/espelhoChatwoot';
 import { criarEspelhoChatwootSupabase } from '../../../../services/chatwoot/espelhoChatwootSupabase';
 import { resolverPorIdLocal, type FalhaDeIdentidadeChatwoot } from '../../../../services/chatwoot/identidadeChatwoot';
+import { desfechoDeFalhaAposDespacho, desfechoDoEnvioChatwoot, type DesfechoDoDespacho } from '../../../../services/outbox/desfechoDoEfeito';
+import { recordSystemAuditEvent } from '../../../../services/auditService';
 
 export const dynamic = 'force-dynamic';
+
+/** Dono fixo do envio inline; a posse é provada pelo fencing token, não pelo nome. */
+const INLINE_SEND_WORKER_ID = 'chatwoot-http-inline-send';
+
+/** Rastro do efeito ambíguo, sem payload nem conteúdo. Falhar aqui não muda a resposta. */
+async function registrarEfeitoDesconhecido(eventoId: string, organizationId: string, desfecho: DesfechoDoDespacho) {
+  await recordSystemAuditEvent(supabaseServer, {
+    organizationId,
+    source: 'worker',
+    acao: 'outbox.effect_unknown',
+    recurso: 'outbox_evento',
+    recursoId: eventoId,
+    metadata: { destino: 'chatwoot', tipo: 'message.send', motivo: desfecho._tag === 'Desconhecido' ? desfecho.motivo : 'sem_recibo_gravado' },
+  }).catch(() => console.error('❌ outbox: auditoria do efeito desconhecido falhou.'));
+}
 
 function resolveMessageType(rawType: unknown): 'incoming' | 'outgoing' | 'system' | 'template' {
   if (rawType === 'incoming' || rawType === 0 || rawType === '0') return 'incoming';
@@ -76,6 +93,63 @@ async function saveMessageLocally(
   return mensagemIdLocal;
 }
 
+const JA_REGISTRADO = 'Este envio já está registrado e não pode ser repetido.';
+
+/**
+ * Envio inline com o mesmo protocolo do worker (MSG-007): reivindicar, gravar
+ * `in_flight` antes da rede e concluir por compare-and-set do fencing token.
+ * Só um recibo gravado confirma; o resto vira a resposta HTTP do desfecho. O
+ * consumidor real, que tira este envio da requisição, é do MSG-008.
+ */
+async function despacharPelaOutbox(
+  scope: VerifiedOrganizationScope,
+  conexaoId: string,
+  eventoId: string,
+  conversaIdExterno: number,
+  content: string,
+): Promise<{ readonly _tag: 'Confirmado'; readonly mensagem: ChatwootApiMessageResponse } | { readonly _tag: 'Responder'; readonly resposta: NextResponse }> {
+  const responder = (corpo: Record<string, unknown>, status: number) =>
+    ({ _tag: 'Responder' as const, resposta: NextResponse.json({ success: false, ...corpo }, { status }) });
+
+  const fencingToken = await outboxService.claimOne(supabaseServer, scope, eventoId, INLINE_SEND_WORKER_ID);
+  if (fencingToken === null) return responder({ error: JA_REGISTRADO }, 409);
+  const posse = { eventoId, workerId: INLINE_SEND_WORKER_ID, fencingToken };
+
+  // O adapter é o da conexão da conversa: credenciais de outra instalação nunca.
+  const adapter = await ChatwootAdapter.forScope(scope, conexaoId);
+  if (!adapter) {
+    await outboxService.concludeAttempt(supabaseServer, posse, {
+      _tag: 'Recusado', categoria: 'permanent', codigo: 'nao_configurado', erro: 'Chatwoot não configurado para esta organização.',
+    });
+    return responder({ error: 'Integração Chatwoot não configurada' }, 409);
+  }
+
+  if (!(await outboxService.startDispatch(supabaseServer, eventoId, INLINE_SEND_WORKER_ID, fencingToken))) {
+    return responder({ error: JA_REGISTRADO }, 409);
+  }
+  // Daqui em diante o pedido pode ter saído: nenhuma exceção vira 500 com
+  // "tente de novo". Sem desfecho gravado, o reaper leva o evento a `unknown`.
+  const sendResult = await adapter.sendMessage(conversaIdExterno, content).catch(() => null);
+  const desfecho = sendResult ? desfechoDoEnvioChatwoot(sendResult) : desfechoDeFalhaAposDespacho();
+  const gravado = await outboxService.concludeAttempt(supabaseServer, posse, desfecho).catch(() => null);
+
+  if (desfecho._tag === 'Recusado' && gravado === 'dead_letter') {
+    const status = sendResult?._tag === 'ChatwootFailed' && sendResult.status ? sendResult.status : 502;
+    return responder({ desfecho: 'recusado', error: `O Chatwoot recusou a mensagem (${desfecho.codigo}).` }, status);
+  }
+  if (sendResult?._tag !== 'ChatwootSuccess' || gravado !== 'sent') {
+    // Sem recibo gravado, o efeito pode ter acontecido: o navegador não pode
+    // tratar como falha repetível. 202 = aceito, desfecho pendente.
+    await registrarEfeitoDesconhecido(eventoId, scope.organizationId, desfecho);
+    return responder({
+      desfecho: 'desconhecido',
+      eventoId,
+      error: 'Não foi possível confirmar a entrega. A mensagem pode ter chegado: não reenvie; confira em Integrações.',
+    }, 202);
+  }
+  return { _tag: 'Confirmado', mensagem: sendResult.data };
+}
+
 export async function POST(request: Request) {
   try {
     const contextResult = await resolveActiveRequestOrganizationContext(request);
@@ -116,33 +190,9 @@ export async function POST(request: Request) {
       payload: { conversaIdLocal: conversaId, conexaoId: escopo.conexaoId, content },
     });
 
-    // Envio síncrono inline (não passa por reivindicar_lote_outbox/lease):
-    // o identificador de worker é fixo e só serve para auditoria — o evento
-    // nunca está em `processing` neste caminho, então a checagem de posse de
-    // lease em `concluir_evento_outbox` não se aplica aqui.
-    const INLINE_SEND_WORKER_ID = 'chatwoot-http-inline-send';
-
-    // O adapter é o da conexão da conversa: credenciais de outra instalação nunca.
-    const adapter = await ChatwootAdapter.forScope(scope, escopo.conexaoId);
-    if (!adapter) {
-      await outboxService.markFailed(supabaseServer, scope, INLINE_SEND_WORKER_ID, outboxRecord.eventoId, 'Chatwoot não configurado para esta organização', 0);
-      return NextResponse.json({ success: false, error: 'Integração Chatwoot não configurada' }, { status: 409 });
-    }
-
-    const sendResult = await adapter.sendMessage(conversa.idExterno, content);
-    if (sendResult._tag !== 'ChatwootSuccess') {
-      await outboxService.markFailed(supabaseServer, scope, INLINE_SEND_WORKER_ID, outboxRecord.eventoId, sendResult.message || sendResult.reason, 0);
-      return NextResponse.json(
-        { success: false, error: sendResult.message || `Falha ao enviar mensagem no Chatwoot (${sendResult.reason})` },
-        { status: sendResult.status || 502 },
-      );
-    }
-
-    const rawMsg: ChatwootApiMessageResponse = sendResult.data;
-    await outboxService.markSent(supabaseServer, scope, INLINE_SEND_WORKER_ID, outboxRecord.eventoId, {
-      id: rawMsg.id,
-      created_at: rawMsg.created_at,
-    });
+    const envio = await despacharPelaOutbox(scope, escopo.conexaoId, outboxRecord.eventoId, conversa.idExterno, content);
+    if (envio._tag === 'Responder') return envio.resposta;
+    const rawMsg = envio.mensagem;
 
     const mensagemIdLocal = await saveMessageLocally(rawMsg, escopo, { idLocal: conversaId, idExterno: conversa.idExterno }, content);
 

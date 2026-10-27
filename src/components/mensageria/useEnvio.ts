@@ -64,12 +64,12 @@ export function useEnvio(
     }));
 
     void (async () => {
-      const marcarFalha = (falha: FalhaDaAcao) =>
+      const marcarFalha = (falha: FalhaDaAcao, estado: 'falhou' | 'incerta' = 'falhou') =>
         alterar(chave, (anterior) => ({
           ...anterior,
           integracaoIndisponivel: falha.indisponivel ? falha.mensagem : anterior.integracaoIndisponivel,
           otimistas: anterior.otimistas.map((o) =>
-            o.id === idOtimista ? { ...o, estado: 'falhou' as const, erro: falha.mensagem } : o,
+            o.id === idOtimista ? { ...o, estado, erro: falha.mensagem } : o,
           ),
         }));
 
@@ -85,6 +85,15 @@ export function useEnvio(
           return;
         }
         const corpo = await resposta.json();
+        if (corpo?.desfecho === 'desconhecido') {
+          // O servidor registrou o envio como desconhecido: pode ter chegado.
+          // Nada de reenviar daqui; a reconciliação fica em Integrações.
+          marcarFalha({
+            mensagem: typeof corpo?.error === 'string' ? corpo.error : 'Não foi possível confirmar a entrega.',
+            indisponivel: false,
+          }, 'incerta');
+          return;
+        }
         if (corpo?.success !== true || typeof corpo?.message?.id_local !== 'string') {
           // O contrato existe e é `{ success, message }`. Sem o id, não há
           // identidade estável para deduplicar, e confirmar assim mesmo seria
