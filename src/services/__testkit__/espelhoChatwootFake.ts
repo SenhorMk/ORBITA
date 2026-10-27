@@ -11,7 +11,8 @@ import type {
  * Espelhos do Chatwoot em memória com as regras do banco que importam para a
  * identidade (migration 85): identidade remota única por organização +
  * conexão, FK composta para o pai pelo UUID local na mesma conexão, conexão
- * imutável depois de provada e, até o MSG-004, a PK global `id`.
+ * imutável depois de provada. `pkGlobal` reproduz a PK por `id` de antes do
+ * MSG-004 (migration 87), para os testes do modelo anterior.
  *
  * Os desvios (`semFiltroDeConexao`, `buscaGlobal`) existem para as
  * contraprovas: um store que não filtra precisa ser pego pelo resolver.
@@ -26,7 +27,7 @@ export type LinhaDoEspelho = Record<string, unknown> & {
 };
 
 export interface OpcoesDoFake {
-  /** `true` (padrão) = antes do MSG-004: `id` é PK global. */
+  /** `true` = antes do MSG-004: `id` é PK global. Padrão: o schema contraído. */
   readonly pkGlobal?: boolean;
   /** Sabotagem: a busca por id remoto ignora a conexão. */
   readonly semFiltroDeConexao?: boolean;
@@ -119,7 +120,7 @@ export class EspelhoChatwootFake implements EspelhoChatwootStore {
     const linha = { id_local: randomUUID(), ...dados } as LinhaDoEspelho;
     linha.id_externo = String(linha.id);
     const tabela = this.linhas[recurso];
-    if (this.opcoes.pkGlobal !== false && tabela.some((l) => l.id === linha.id)) return falha<string>('23505');
+    if (this.opcoes.pkGlobal === true && tabela.some((l) => l.id === linha.id)) return falha<string>('23505');
     if (tabela.some((l) => l.organizacao_id === linha.organizacao_id && l.conexao_id === linha.conexao_id
       && l.id_externo === linha.id_externo)) return falha<string>('23505');
     if (!this.vinculoValido(recurso, linha)) return falha<string>('23503');

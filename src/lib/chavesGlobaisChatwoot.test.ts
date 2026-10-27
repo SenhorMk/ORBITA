@@ -9,6 +9,10 @@ import { fontesDoProduto } from './__testkit__/escritaDireta';
  * (`espelhoChatwootSupabase.ts`), que recebe a tabela de `TABELA_DO_RECURSO`
  * e sempre filtra organização + conexão. Quem ainda nomeia as tabelas está
  * listado com o ticket que o migra; a lista só encolhe.
+ *
+ * MSG-004: o banco não tem mais chave pelo id do Chatwoot. Nenhum leitor dos
+ * espelhos filtra por `id`, `contact_id` ou `conversation_id`: o id remoto só
+ * vale com organização + conexão, como `id_externo`, dentro do store.
  */
 
 const NOMEIA_ESPELHO = /\bchatwoot_(contacts|conversations|messages)\b/;
@@ -21,8 +25,8 @@ const LEITORES_LEGADOS: Record<string, string> = {
   'src/components/mensageria/useMensageria.ts': 'comentário',
   // Lê os contatos da organização inteira para o vínculo SAC → ERP; não busca por id.
   'src/services/integrationService.ts': 'leitura por organização',
-  // Retenção por id legado, via RPC da migration 51: contração no MSG-004.
-  'src/services/privacy/adapters/retentionDbAdapter.ts': 'MSG-004',
+  // Retenção do contato pelo UUID local (MSG-004).
+  'src/services/privacy/adapters/retentionDbAdapter.ts': 'retenção por UUID local',
 };
 
 const fontes = fontesDoProduto();
@@ -70,6 +74,14 @@ describe('chaves globais dos espelhos do Chatwoot (MSG-003A)', () => {
     for (const caminho of ['src/components/mensageria/useEnvio.ts', 'src/components/mensageria/useMensageria.ts']) {
       const hook = fontes.find((f) => f.caminho === caminho)!.fonte;
       expect(hook, caminho).not.toMatch(/conversationId|(?:conversa|selecionada\??)\.id(?!_)/u);
+    }
+  });
+
+  it('ninguém consulta os espelhos pelo id remoto sem escopo (MSG-004)', () => {
+    const leitores = [...Object.keys(LEITORES_LEGADOS), 'src/services/chatwoot/espelhoChatwootSupabase.ts'];
+    for (const caminho of leitores) {
+      const fonte = fontes.find((f) => f.caminho === caminho)!.fonte;
+      expect(fonte, caminho).not.toMatch(/\.(eq|in|match|or)\(\s*['"`](id|contact_id|conversation_id)['"`.]/u);
     }
   });
 });

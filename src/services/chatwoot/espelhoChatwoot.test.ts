@@ -97,7 +97,7 @@ describe('instalações com o mesmo id remoto (modelo depois do MSG-004)', () =>
 
 describe('antes do MSG-004: o id global ainda é PK', () => {
   it('a segunda instalação com o mesmo id é recusada com falha tipada e A fica intacta', async () => {
-    const store = new EspelhoChatwootFake();
+    const store = new EspelhoChatwootFake({ pkGlobal: true });
     const a1 = await arvore(store, A1, 'A1');
     await expect(falhaDe(gravarContato(store, B1, contato(5, 'Contato B1')))).resolves.toEqual({ recurso: 'contato', falha: 'IdentidadeDeOutraConexao' });
     await expect(falhaDe(gravarContato(store, A2, contato(5, 'Contato A2')))).resolves.toEqual({ recurso: 'contato', falha: 'IdentidadeDeOutraConexao' });
@@ -171,7 +171,7 @@ describe('concorrência (intercalação determinística)', () => {
   });
 
   it('B cria o mesmo id enquanto A escreve: A recebe falha tipada, nunca a linha de B', async () => {
-    const store = new EspelhoChatwootFake();
+    const store = new EspelhoChatwootFake({ pkGlobal: true });
     store.antesDeInserir = () => {
       store.antesDeInserir = null;
       store.semear('contato', { id: 5, organizacao_id: ORG_B, conexao_id: CONEXAO_B1, name: 'de B' });
@@ -210,7 +210,7 @@ describe('legado durante a transição', () => {
   });
 
   it('linha legada de outra organização com o mesmo id não é adotada', async () => {
-    const store = new EspelhoChatwootFake();
+    const store = new EspelhoChatwootFake({ pkGlobal: true });
     store.semear('contato', { id: 21, organizacao_id: ORG_B, conexao_id: null, name: 'legado de B' });
     await expect(falhaDe(gravarContato(store, A1, contato(21, 'de A')))).resolves.toEqual({ recurso: 'contato', falha: 'IdentidadeDeOutraConexao' });
     expect(store.linhas.contato[0]).toMatchObject({ organizacao_id: ORG_B, conexao_id: null, name: 'legado de B' });

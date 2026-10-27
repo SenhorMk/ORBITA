@@ -83,7 +83,7 @@ export type FalhaDeIdentidadeChatwoot =
   | 'IdentidadeNaoEncontrada'
   /** Mais de uma linha candidata: nunca se escolhe uma. */
   | 'IdentidadeAmbigua'
-  /** O id já pertence a outra conexão ou organização (chave global até o MSG-004). */
+  /** A linha é de outra conexão ou organização: o banco recusou trocar a sua instalação. */
   | 'IdentidadeDeOutraConexao'
   /** O pai do registro não está espelhado nesta conexão (evento fora de ordem). */
   | 'PaiNaoEspelhado'
