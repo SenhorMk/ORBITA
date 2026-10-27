@@ -75,6 +75,9 @@ Funções do banco que citam as tabelas, medidas em S86. Nenhuma é executável 
 `authenticated` ou `anon`:
 - `acquire_conexao_token_lock`, `release_conexao_token_lock`, `acquire_bling_token_lock` (security invoker, só `service_role`);
 - `atualizar_saude_conexao`, `concluir_evento_outbox`, `executar_encerramento_definitivo` (security definer, só `service_role`);
+  desde a migration 86 (MSG-007), `concluir_evento_outbox` não existe mais: a conclusão é
+  `concluir_tentativa_outbox`, por compare-and-set de dono, fencing token e lease, e
+  atualiza a saúde só da conexão da mesma organização do evento;
 - backfills `migrar_bling_para_organizacoes`, `migrar_bling_conexoes_organizacao_contabilizado`, `migrar_chatwoot_para_organizacoes`;
 - gatilho `fn_sync_credenciais_integracao` (recusa credencial de outra organização com `23503`).
 
