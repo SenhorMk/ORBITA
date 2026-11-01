@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import crypto from 'node:crypto';
 
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project-ref.supabase.co';
@@ -49,7 +49,50 @@ let mockInboxRegisterResult = {
 /** Desfecho do contador de limite por conexão; `null` simula o store fora do ar. */
 let limitePermite: boolean | null = true;
 
-const mockRpc = vi.fn().mockImplementation((fnName: string) => {
+/**
+ * Inbox fiel (MSG-005): mesma regra da função `aceitar_entrega_inbox_chatwoot`
+ * — evento único por conexão + chave, entrega única por conexão + delivery id,
+ * delivery id reaproveitado com outra chave recusado sem gravar nada.
+ */
+const inboxFiel = {
+  ligada: false,
+  falha: null as { code: string; message: string } | null,
+  eventos: new Map<string, { id: string; chave: string; status: string; response_body: Record<string, unknown> | null }>(),
+  entregas: new Map<string, string>(),
+  aceitar(args: Record<string, unknown>) {
+    if (this.falha) return { data: null, error: this.falha };
+    const conexao = String(args.p_conexao_id);
+    const chave = String(args.p_idempotency_key);
+    const existente = this.eventos.get(`${conexao}|${chave}`);
+    let duplicata: 'entrega' | 'evento' | null = existente ? 'evento' : null;
+    if (args.p_delivery_id) {
+      const anterior = this.entregas.get(`${conexao}|${String(args.p_delivery_id)}`);
+      if (anterior !== undefined && anterior !== chave) return { data: null, error: { code: '23505', message: 'reutilizado' } };
+      if (anterior !== undefined) duplicata = 'entrega';
+      this.entregas.set(`${conexao}|${String(args.p_delivery_id)}`, chave);
+    }
+    const evento = existente ?? { id: `evt-fiel-${this.eventos.size + 1}`, chave, status: 'received', response_body: null };
+    this.eventos.set(`${conexao}|${chave}`, evento);
+    return {
+      data: [{ evento_id: evento.id, status: evento.status, is_duplicate: duplicata !== null, duplicata, cached_response: evento.response_body }],
+      error: null,
+    };
+  },
+  concluir(args: Record<string, unknown>) {
+    const evento = [...this.eventos.values()].find((e) => e.id === args.p_evento_id);
+    if (evento) {
+      evento.status = String(args.p_status);
+      if (args.p_status === 'processed') evento.response_body = args.p_response_body as Record<string, unknown>;
+    }
+  },
+};
+
+const mockRpc = vi.fn().mockImplementation((fnName: string, args: Record<string, unknown>) => {
+  if (inboxFiel.ligada && fnName === 'aceitar_entrega_inbox_chatwoot') return Promise.resolve(inboxFiel.aceitar(args));
+  if (inboxFiel.ligada && fnName === 'concluir_evento_inbox_chatwoot') {
+    inboxFiel.concluir(args);
+    return Promise.resolve({ data: null, error: null });
+  }
   if (fnName === 'aceitar_entrega_inbox_chatwoot') {
     const duplicata = mockInboxRegisterResult.is_duplicate ? 'evento' : null;
     return Promise.resolve({ data: [{ ...mockInboxRegisterResult, duplicata }], error: null });
@@ -536,5 +579,220 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
         p_response_body: expect.objectContaining({ conversaIdLocal: conversaDe('802', CONEXAO_A).id_local }),
       })]);
     });
+  });
+});
+
+describe('MSG-005: aceite na inbox com dedup de entrega e revisão antes do ACK', () => {
+  const CONVERSA = { id: 960, inbox_id: 1, status: 'open', contact: { id: 961, name: 'Cliente 961' } };
+
+  function corpo(extra: Record<string, unknown>): string {
+    return JSON.stringify({ event: 'message_created', account: { id: 1 }, inbox: { id: 1 }, conversation: CONVERSA, ...extra });
+  }
+
+  async function entregar(
+    body: string | Buffer,
+    opcoes: { delivery?: string; segredo?: string; conexao?: string; timestamp?: number; corpoAssinado?: string | Buffer } = {},
+  ) {
+    const { POST } = await import('./route');
+    const timestamp = String(opcoes.timestamp ?? Math.floor(Date.now() / 1000));
+    const assinado = opcoes.corpoAssinado ?? body;
+    const hex = crypto.createHmac('sha256', opcoes.segredo ?? SECRET_A).update(`${timestamp}.`).update(assinado).digest('hex');
+    const headers: Record<string, string> = { 'x-chatwoot-signature': `sha256=${hex}`, 'x-chatwoot-timestamp': timestamp };
+    if (opcoes.delivery) headers['x-chatwoot-delivery'] = opcoes.delivery;
+    const conexaoId = opcoes.conexao ?? CONEXAO_A;
+    const req = new Request(`https://orbita.test/api/chatwoot/webhook/${conexaoId}`, { method: 'POST', headers, body: typeof body === 'string' ? body : new Uint8Array(body) });
+    return POST(req, { params: Promise.resolve({ conexaoId }) });
+  }
+
+  const chamadas = (fn: string) => mockRpc.mock.calls.filter(([nome]) => nome === fn).map(([, args]) => args as Record<string, unknown>);
+  const mensagens = (id: string) => espelho.store.linhas.mensagem.filter((l) => l.id_externo === id && l.conexao_id === CONEXAO_A);
+
+  beforeEach(() => {
+    inboxFiel.ligada = true;
+    inboxFiel.falha = null;
+    inboxFiel.eventos.clear();
+    inboxFiel.entregas.clear();
+    limitePermite = true;
+    mockRpc.mockClear();
+  });
+  afterEach(() => {
+    inboxFiel.ligada = false;
+    limitePermite = true;
+  });
+
+  it('o mesmo delivery id várias vezes: um evento, efeito uma vez, resposta gravada nas repetições', async () => {
+    const body = corpo({ id: 9601, content: 'primeira' });
+    const respostas = [];
+    for (let i = 0; i < 3; i += 1) respostas.push(await entregar(body, { delivery: 'del-9601' }));
+    expect(respostas.map((r) => r.status)).toEqual([200, 200, 200]);
+    expect(inboxFiel.eventos.size).toBe(1);
+    expect(mensagens('9601')).toHaveLength(1);
+    expect(chamadas('concluir_evento_inbox_chatwoot')).toHaveLength(1);
+  });
+
+  it('ACK perdido: a reentrega devolve o resultado gravado e não repete o efeito', async () => {
+    const body = corpo({ id: 9602, content: 'ack perdido' });
+    expect((await entregar(body, { delivery: 'del-9602' })).status).toBe(200);
+    const efeitosAntes = espelho.store.chamadas.length;
+    const reentrega = await entregar(body, { delivery: 'del-9602', timestamp: Math.floor(Date.now() / 1000) + 30 });
+    expect(reentrega.status).toBe(200);
+    expect(await reentrega.json()).toMatchObject({ success: true, event: 'message_created' });
+    expect(espelho.store.chamadas.length).toBe(efeitosAntes);
+  });
+
+  it('entrega sem delivery id: aceita; o message_created repetido é deduplicado pela identidade lógica', async () => {
+    const body = corpo({ id: 9603, content: 'sem id de entrega' });
+    expect((await entregar(body)).status).toBe(200);
+    expect((await entregar(body, { timestamp: Math.floor(Date.now() / 1000) + 5 })).status).toBe(200);
+    expect(chamadas('aceitar_entrega_inbox_chatwoot').map((a) => a.p_delivery_id)).toEqual([null, null]);
+    expect(inboxFiel.eventos.size).toBe(1);
+    expect(mensagens('9603')).toHaveLength(1);
+  });
+
+  it('message_created duplicado em entregas diferentes: um evento', async () => {
+    const body = corpo({ id: 9604, content: 'criada' });
+    await entregar(body, { delivery: 'del-9604-a' });
+    await entregar(body, { delivery: 'del-9604-b' });
+    expect(inboxFiel.eventos.size).toBe(1);
+  });
+
+  it('message_updated com duas revisões: as duas são aceitas e a última prevalece no espelho', async () => {
+    await entregar(corpo({ id: 9605, content: 'v0' }), { delivery: 'del-9605-c' });
+    await entregar(corpo({ event: 'message_updated', id: 9605, content: 'v1' }), { delivery: 'del-9605-u1' });
+    await entregar(corpo({ event: 'message_updated', id: 9605, content: 'v2' }), { delivery: 'del-9605-u2' });
+    // A volta ao conteúdo anterior também é revisão legítima.
+    await entregar(corpo({ event: 'message_updated', id: 9605, content: 'v1' }), { delivery: 'del-9605-u3' });
+    expect(inboxFiel.eventos.size).toBe(4);
+    expect(mensagens('9605')).toEqual([expect.objectContaining({ content: 'v1' })]);
+  });
+
+  it('status repetido separado por outras transições: open → resolved → open → resolved, quatro ocorrências processadas', async () => {
+    await entregar(corpo({ id: 9606, content: 'abre' }), { delivery: 'del-9606' });
+    const sequencia = ['open', 'resolved', 'open', 'resolved'];
+    for (const [i, status] of sequencia.entries()) {
+      const body = JSON.stringify({
+        event: 'conversation_status_changed', account: { id: 1 }, inbox: { id: 1 }, conversation: { ...CONVERSA, status },
+      });
+      expect((await entregar(body, { delivery: `del-9606-s${i}` })).status).toBe(200);
+    }
+    const eventosDeStatus = [...inboxFiel.eventos.values()].filter((e) => e.chave.startsWith('v2:conversation_status_changed'));
+    expect(eventosDeStatus).toHaveLength(4);
+    expect(eventosDeStatus.every((e) => e.status === 'processed')).toBe(true);
+    expect(espelho.store.linhas.conversa.find((l) => l.id_externo === '960' && l.conexao_id === CONEXAO_A)?.status).toBe('resolved');
+  });
+
+  it('fora de ordem: a segunda edição chega antes da primeira e as duas ficam na inbox', async () => {
+    await entregar(corpo({ id: 9607, content: 'base' }), { delivery: 'del-9607-c' });
+    expect((await entregar(corpo({ event: 'message_updated', id: 9607, content: 'r2', updated_at: '2026-10-27T10:00:02Z' }),
+      { delivery: 'del-9607-r2' })).status).toBe(200);
+    expect((await entregar(corpo({ event: 'message_updated', id: 9607, content: 'r1', updated_at: '2026-10-27T10:00:01Z' }),
+      { delivery: 'del-9607-r1' })).status).toBe(200);
+    expect([...inboxFiel.eventos.values()].filter((e) => e.chave.includes(':msg:9607:'))).toHaveLength(2);
+  });
+
+  it('delivery id reaproveitado com outro evento: 409 e nada gravado', async () => {
+    await entregar(corpo({ id: 9609, content: 'um' }), { delivery: 'del-9609' });
+    const res = await entregar(corpo({ id: 9610, content: 'outro' }), { delivery: 'del-9609' });
+    expect(res.status).toBe(409);
+    expect(inboxFiel.eventos.size).toBe(1);
+    expect(mensagens('9610')).toHaveLength(0);
+  });
+
+  it('falha do banco antes do commit: não-2xx, sem mapping, efeito nem conclusão; a reentrega depois grava', async () => {
+    inboxFiel.falha = { code: '08006', message: 'connection failure host=db.interno' };
+    const mapeamentosAntes = insertedInboxRows.length;
+    const body = corpo({ id: 9611, content: 'banco fora', inbox: { id: 61 }, conversation: { ...CONVERSA, id: 9611, inbox_id: 61 } });
+    const res = await entregar(body, { delivery: 'del-9611' });
+    expect(res.status).toBe(503);
+    expect(JSON.stringify(await res.json())).not.toContain('db.interno');
+    expect(insertedInboxRows).toHaveLength(mapeamentosAntes);
+    expect(mensagens('9611')).toHaveLength(0);
+    expect(chamadas('concluir_evento_inbox_chatwoot')).toHaveLength(0);
+
+    inboxFiel.falha = null;
+    expect((await entregar(body, { delivery: 'del-9611' })).status).toBe(200);
+    expect(mensagens('9611')).toHaveLength(1);
+  });
+
+  it('corpo adulterado depois de assinado: 401 sem tocar a inbox', async () => {
+    const assinado = corpo({ id: 9612, content: 'original' });
+    const res = await entregar(assinado.replace('original', 'adulterado'), { delivery: 'del-9612', corpoAssinado: assinado });
+    expect(res.status).toBe(401);
+    expect(chamadas('aceitar_entrega_inbox_chatwoot')).toHaveLength(0);
+  });
+
+  it('HMAC sobre os bytes originais: acento assinado em bytes é aceito; UTF-8 inválido é 400 depois da assinatura', async () => {
+    const bytes = Buffer.from(corpo({ id: 9613, content: 'ação' }), 'utf8');
+    expect((await entregar(bytes, { delivery: 'del-9613' })).status).toBe(200);
+    const invalido = Buffer.concat([Buffer.from('{"event":"message_created","content":"'), Buffer.from([0xc3, 0x28]), Buffer.from('"}')]);
+    const res = await entregar(invalido, { delivery: 'del-9614' });
+    expect(res.status).toBe(400);
+    expect(chamadas('aceitar_entrega_inbox_chatwoot')).toHaveLength(1);
+  });
+
+  it('payload acima do limite: 413 antes de qualquer consulta, também sem Content-Length', async () => {
+    const grande = corpo({ id: 9615, content: 'x'.repeat(300 * 1024) });
+    expect((await entregar(grande, { delivery: 'del-9615' })).status).toBe(413);
+    const { POST } = await import('./route');
+    const fluxo = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 40; i += 1) controller.enqueue(new Uint8Array(10 * 1024));
+        controller.close();
+      },
+    });
+    const semTamanho = new Request(`https://orbita.test/api/chatwoot/webhook/${CONEXAO_A}`, {
+      method: 'POST', body: fluxo, duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    expect((await POST(semTamanho, { params: Promise.resolve({ conexaoId: CONEXAO_A }) })).status).toBe(413);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('cabeçalho de entrega ou assinatura fora do formato: recusado antes de consultar a conexão', async () => {
+    const body = corpo({ id: 9616 });
+    expect((await entregar(body, { delivery: 'id com espaço' })).status).toBe(400);
+    const { POST } = await import('./route');
+    const req = new Request(`https://orbita.test/api/chatwoot/webhook/${CONEXAO_A}`, {
+      method: 'POST', headers: { 'x-chatwoot-signature': 'md5=abc', 'x-chatwoot-timestamp': 'agora' }, body,
+    });
+    expect((await POST(req, { params: Promise.resolve({ conexaoId: CONEXAO_A }) })).status).toBe(401);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('limite excedido: 429 sem gravar; contador indisponível: 503 (fail-closed)', async () => {
+    limitePermite = false;
+    expect((await entregar(corpo({ id: 9617 }), { delivery: 'del-9617' })).status).toBe(429);
+    limitePermite = null;
+    expect((await entregar(corpo({ id: 9617 }), { delivery: 'del-9617' })).status).toBe(503);
+    expect(chamadas('aceitar_entrega_inbox_chatwoot')).toHaveLength(0);
+  });
+
+  it('account de outra conexão/organização: 403 sem gravar; o segredo de B não autentica a URL de A', async () => {
+    expect((await entregar(corpo({ id: 9618, account: { id: 999 } }), { delivery: 'del-9618' })).status).toBe(403);
+    expect((await entregar(corpo({ id: 9619 }), { delivery: 'del-9619', segredo: SECRET_B })).status).toBe(401);
+    expect(chamadas('aceitar_entrega_inbox_chatwoot')).toHaveLength(0);
+  });
+
+  it('logs da entrega não carregam conteúdo da mensagem, nome do contato nem a assinatura', async () => {
+    const saidas: string[] = [];
+    const capturar = (...args: unknown[]) => { saidas.push(args.map(String).join(' ')); };
+    const espioes = [
+      vi.spyOn(console, 'info').mockImplementation(capturar),
+      vi.spyOn(console, 'warn').mockImplementation(capturar),
+      vi.spyOn(console, 'error').mockImplementation(capturar),
+    ];
+    try {
+      inboxFiel.falha = { code: '08006', message: 'falha' };
+      await entregar(corpo({ id: 9620, content: 'CONTEUDO-PRIVADO-9620' }), { delivery: 'del-9620' });
+      inboxFiel.falha = null;
+      await entregar(corpo({ id: 9620, content: 'CONTEUDO-PRIVADO-9620' }), { delivery: 'del-9620' });
+    } finally {
+      espioes.forEach((s) => s.mockRestore());
+    }
+    const log = saidas.join('\n');
+    expect(log).toContain('chatwoot.webhook.recusada');
+    expect(log).toContain('chatwoot.webhook.aceita');
+    expect(log).not.toContain('CONTEUDO-PRIVADO-9620');
+    expect(log).not.toContain('Cliente 961');
+    expect(log).not.toContain('sha256=');
   });
 });
