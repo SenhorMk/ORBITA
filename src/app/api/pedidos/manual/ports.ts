@@ -14,6 +14,7 @@
  */
 import type { NextResponse } from 'next/server';
 
+import type { DadosFiscaisDoContato } from '@/lib/config/clienteContract';
 import type { BlingCallResult, BuscaDePedidoPorNumeroLoja } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { Dormir } from '@/services/filaDeRequisicoes';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
@@ -51,6 +52,12 @@ export interface ManualOrderCliente {
   readonly email: string | null;
   readonly telefone: string | null;
   readonly cpfCnpj: string | null;
+  /**
+   * Tipo de pessoa e indicador de IE gravados no cadastro, ou `null` quando
+   * falta um dos dois (ou o gravado é inválido). Nunca preenchido pelo
+   * documento (PRE-010): sem eles, a venda não cadastra o contato no Bling.
+   */
+  readonly dadosFiscais: DadosFiscaisDoContato | null;
   /** Excluído no Bling (PRE-005): não entra em venda nova até a reativação explícita. */
   readonly excluidoNoBling: boolean;
   /** Exclusão recebida sem ordem provável, aguardando conferência no Bling (PRE-005). */
