@@ -78,5 +78,8 @@
     "ts-node": "^10.9.2",
     "typescript": "^5",
     "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "minimatch": "^11.0.3"
   }
 }
