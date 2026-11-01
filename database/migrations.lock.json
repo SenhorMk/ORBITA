@@ -459,7 +459,7 @@
     {
       "order": 92,
       "path": "../database/89_consumidor_inbox_caso_triage.sql",
-      "sha256": "eab5a91dde8901cb533bbee55a2ba1ca037ea9c18e088b84f6aba691762b2ef3"
+      "sha256": "2475fe389cc6a5616d3dc09da54d949c0b4d7904a542263bdb773bfac02f2931"
     }
   ],
   "references": [

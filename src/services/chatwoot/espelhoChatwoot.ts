@@ -172,35 +172,3 @@ export async function gravarMensagem(
     updated_at: new Date().toISOString(),
   }, modo);
 }
-
-export type DesfechoDoStatus =
-  | { readonly _tag: 'StatusAplicado'; readonly conversaIdLocal: string }
-  | { readonly _tag: 'ConversaNaoEspelhada' }
-  | { readonly _tag: 'ConexaoNaoComprovada' };
-
-/**
- * Status de uma conversa desta conexão. Conversa ainda não espelhada não é
- * criada a partir de um evento de status: o próximo sync a traz. Conversa
- * legada sem conexão comprovada não muda: o evento de status não prova de qual
- * instalação ela veio.
- */
-export async function atualizarStatusDaConversa(
-  store: EspelhoChatwootStore,
-  escopo: EscopoDaConexaoChatwoot,
-  conversaIdExterno: number,
-  status: string,
-): Promise<DesfechoDoStatus> {
-  const conversa = await resolverIdLocal(store, escopo, 'conversa', conversaIdExterno);
-  if (conversa._tag === 'IdLocalNaoResolvido') {
-    if (conversa.falha === 'IdentidadeNaoEncontrada') return { _tag: 'ConversaNaoEspelhada' };
-    falhar('conversa', conversa.falha);
-  }
-  if (conversa.legado) return { _tag: 'ConexaoNaoComprovada' };
-  const atualizacao = await store.atualizar('conversa', escopo, conversa.idLocal, {
-    status,
-    updated_at: new Date().toISOString(),
-  }, { somenteConexaoProvada: true });
-  if (atualizacao._tag === 'StoreFalhou') falhar('conversa', falhaDaEscrita(atualizacao.codigo));
-  if (atualizacao.valor !== 1) falhar('conversa', 'IdentidadeAmbigua');
-  return { _tag: 'StatusAplicado', conversaIdLocal: conversa.idLocal };
-}

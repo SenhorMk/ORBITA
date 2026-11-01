@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EspelhoChatwootFake } from '@/services/__testkit__/espelhoChatwootFake';
 import {
-  atualizarStatusDaConversa,
   gravarContato,
   gravarConversa,
   gravarMensagem,
@@ -85,14 +84,6 @@ describe('instalações com o mesmo id remoto (modelo depois do MSG-004)', () =>
     await expect(resolverIdExterno(store, A2, 'conversa', a1.conversaIdLocal)).resolves.toEqual({ _tag: 'IdExternoNaoResolvido', falha: 'IdentidadeNaoEncontrada' });
   });
 
-  it('o status de B não toca a conversa 50 de A', async () => {
-    const store = new EspelhoChatwootFake({ pkGlobal: false });
-    const a1 = await arvore(store, A1, 'A1');
-    const b1 = await arvore(store, B1, 'B1');
-    await expect(atualizarStatusDaConversa(store, B1, 50, 'resolved')).resolves.toEqual({ _tag: 'StatusAplicado', conversaIdLocal: b1.conversaIdLocal });
-    expect(store.porIdLocal('conversa', a1.conversaIdLocal)!.status).toBe('open');
-    expect(store.porIdLocal('conversa', b1.conversaIdLocal)!.status).toBe('resolved');
-  });
 });
 
 describe('antes do MSG-004: o id global ainda é PK', () => {
@@ -112,12 +103,6 @@ describe('antes do MSG-004: o id global ainda é PK', () => {
     expect(store.linhas.mensagem).toHaveLength(1);
   });
 
-  it('o status de B não toca a conversa 50 de A: não espelhada nesta conexão', async () => {
-    const store = new EspelhoChatwootFake();
-    const a1 = await arvore(store, A1, 'A1');
-    await expect(atualizarStatusDaConversa(store, B1, 50, 'resolved')).resolves.toEqual({ _tag: 'ConversaNaoEspelhada' });
-    expect(store.porIdLocal('conversa', a1.conversaIdLocal)!.status).toBe('open');
-  });
 });
 
 describe('duplicação, reprocessamento e ordem', () => {
@@ -149,11 +134,6 @@ describe('duplicação, reprocessamento e ordem', () => {
     expect(store.porIdLocal('mensagem', editada)!.content).toBe('texto editado');
   });
 
-  it('status antes da conversa é ConversaNaoEspelhada e não cria nada', async () => {
-    const store = new EspelhoChatwootFake();
-    await expect(atualizarStatusDaConversa(store, A1, 77, 'resolved')).resolves.toEqual({ _tag: 'ConversaNaoEspelhada' });
-    expect(store.linhas.conversa).toHaveLength(0);
-  });
 });
 
 describe('concorrência (intercalação determinística)', () => {
@@ -252,7 +232,6 @@ describe('contraprovas: store que não filtra a conexão ou busca o id global', 
     const store = new EspelhoChatwootFake({ pkGlobal: false, buscaGlobal: true });
     const b1 = await arvore(store, B1, 'B1');
     await expect(falhaDe(gravarContato(store, A1, contato(5, 'de A1')))).resolves.toEqual({ recurso: 'contato', falha: 'IdentidadeDeOutraConexao' });
-    await expect(atualizarStatusDaConversa(store, A1, 50, 'resolved')).rejects.toBeInstanceOf(FalhaDeIdentidadeChatwootError);
     expect(store.porIdLocal('contato', b1.contatoIdLocal)!.name).toBe('Contato B1');
     expect(store.porIdLocal('conversa', b1.conversaIdLocal)!.status).toBe('open');
   });
@@ -276,27 +255,5 @@ describe('MSG-003B: tradução da referência do navegador (UUID local)', () => 
     await expect(resolverPorIdLocal(store, ORG_A, 'conversa', legado)).resolves.toEqual({ _tag: 'IdLocalNaoTraduzido', falha: 'ConexaoNaoComprovada' });
     store.falharProxima = '08006';
     await expect(resolverPorIdLocal(store, ORG_A, 'conversa', legado)).resolves.toEqual({ _tag: 'IdLocalNaoTraduzido', falha: 'StoreIndisponivel' });
-  });
-});
-
-describe('revisão: status do webhook só em conversa com conexão comprovada', () => {
-  it('conversa legada em quarentena não muda com o status de nenhuma conexão da organização', async () => {
-    const store = new EspelhoChatwootFake();
-    const contato = store.semear('contato', { id: 61, organizacao_id: ORG_A, conexao_id: null, name: 'legado' });
-    const legada = store.semear('conversa', { id: 60, organizacao_id: ORG_A, conexao_id: null, contact_id: 61, contato_id_local: contato, status: 'open' });
-    for (const escopo of [A1, A2]) {
-      await expect(atualizarStatusDaConversa(store, escopo, 60, 'resolved')).resolves.toEqual({ _tag: 'ConexaoNaoComprovada' });
-    }
-    expect(store.porIdLocal('conversa', legada)).toMatchObject({ status: 'open', conexao_id: null });
-    expect(store.chamadas.filter((c) => c.operacao === 'atualizar')).toEqual([]);
-  });
-
-  it('a dona comprovada aplica; outra conexão da organização com o mesmo id remoto não', async () => {
-    const store = new EspelhoChatwootFake();
-    const a2 = await arvore(store, A2, 'A2');
-    await expect(atualizarStatusDaConversa(store, A1, 50, 'resolved')).resolves.toEqual({ _tag: 'ConversaNaoEspelhada' });
-    await expect(atualizarStatusDaConversa(store, A2, 50, 'resolved')).resolves.toEqual({ _tag: 'StatusAplicado', conversaIdLocal: a2.conversaIdLocal });
-    await expect(atualizarStatusDaConversa(store, A2, 50, 'resolved')).resolves.toEqual({ _tag: 'StatusAplicado', conversaIdLocal: a2.conversaIdLocal });
-    expect(store.porIdLocal('conversa', a2.conversaIdLocal)!.status).toBe('resolved');
   });
 });

@@ -441,7 +441,16 @@ begin
                 values ((v_contato ->> 'id')::integer, v_contato ->> 'id', v_evento.organizacao_id, v_evento.conexao_id, v_ator_id,
                         coalesce(v_contato ->> 'nome', 'Cliente WhatsApp'), v_contato ->> 'email', v_contato ->> 'telefone',
                         v_contato ->> 'telefone_normalizado', v_contato ->> 'avatar_url')
+                on conflict (organizacao_id, conexao_id, id_externo) do nothing
                 returning c.id_local into v_contato_local;
+                -- O mesmo contato em outra conversa ou no sync: a linha é a da conexão.
+                if v_contato_local is null then
+                    select c.id_local into strict v_contato_local
+                      from public.chatwoot_contacts c
+                     where c.organizacao_id = v_evento.organizacao_id
+                       and c.conexao_id = v_evento.conexao_id
+                       and c.id_externo = v_contato ->> 'id';
+                end if;
             else
                 update public.chatwoot_contacts c
                    set name = coalesce(v_contato ->> 'nome', c.name),
@@ -471,7 +480,15 @@ begin
                         v_contato_local, (v_conversa ->> 'contato_id')::integer, (v_conversa ->> 'display_id')::integer,
                         coalesce(v_conversa ->> 'status', 'open'), (v_conversa ->> 'inbox_id')::integer,
                         v_conversa ->> 'canal', v_revisao)
+                on conflict (organizacao_id, conexao_id, id_externo) do nothing
                 returning v.id_local into v_conversa_local;
+                if v_conversa_local is null then
+                    select v.id_local into strict v_conversa_local
+                      from public.chatwoot_conversations v
+                     where v.organizacao_id = v_evento.organizacao_id
+                       and v.conexao_id = v_evento.conexao_id
+                       and v.id_externo = v_conversa ->> 'id';
+                end if;
             else
                 update public.chatwoot_conversations v
                    set contato_id_local = v_contato_local,
@@ -512,7 +529,15 @@ begin
                         v_mensagem ->> 'tipo', v_mensagem ->> 'remetente_nome', (v_mensagem ->> 'remetente_id')::integer,
                         v_mensagem ->> 'remetente_tipo', coalesce((v_mensagem ->> 'criada_em')::timestamptz, v_evento.created_at),
                         v_revisao)
+                on conflict (organizacao_id, conexao_id, id_externo) do nothing
                 returning m.id_local into v_mensagem_local;
+                if v_mensagem_local is null then
+                    select m.id_local into strict v_mensagem_local
+                      from public.chatwoot_messages m
+                     where m.organizacao_id = v_evento.organizacao_id
+                       and m.conexao_id = v_evento.conexao_id
+                       and m.id_externo = v_mensagem ->> 'id';
+                end if;
             elsif v_mensagem ->> 'modo' = 'sobrescrever' then
                 -- Edição: a revisão mais nova fica, em qualquer ordem de chegada.
                 update public.chatwoot_messages m

@@ -6,7 +6,7 @@
 
 begin;
 
-select plan(70);
+select plan(75);
 
 set local request.jwt.claim.role = 'service_role';
 
@@ -255,6 +255,27 @@ select is(
     (select v.status from public.chatwoot_conversations v where v.id_externo = '10' and v.conexao_id = 'e6000000-0000-4000-8000-0000000000c1'),
     'resolved', 'fica o status mais novo');
 
+-- Status de B não toca a conversa de mesmo id em A.
+select is(pg_temp.consumir('e6000000-0000-4000-8000-00000000000b', 'e6000000-0000-4000-8000-0000000000c2', 's:b',
+        '{"evento":"conversation_status_changed","acao":"status","revisao_em":"2031-01-01T00:00:00Z","conversa":{"id":10,"status":"pending"}}'::jsonb),
+    'espelho_atualizado', 'status de B aplica em B');
+select is(
+    (select v.status from public.chatwoot_conversations v where v.id_externo = '10' and v.conexao_id = 'e6000000-0000-4000-8000-0000000000c1'),
+    'resolved', 'e a conversa de mesmo id em A fica como estava');
+
+-- Conversa legada sem conexão provada: o status não prova a instalação.
+alter table public.chatwoot_conversations disable trigger user;
+update public.chatwoot_conversations set conexao_id = null, id = 11, id_externo = '11', status = 'open'
+ where id_externo = '10' and conexao_id = 'e6000000-0000-4000-8000-0000000000c2';
+alter table public.chatwoot_conversations enable trigger user;
+select is(pg_temp.consumir('e6000000-0000-4000-8000-00000000000b', 'e6000000-0000-4000-8000-0000000000c2', 's:legada',
+        '{"evento":"conversation_status_changed","acao":"status","conversa":{"id":11,"status":"resolved"}}'::jsonb),
+    'conexao_nao_comprovada', 'status em conversa legada recebe disposição própria');
+select is(
+    (select row(v.status, v.conexao_id)::text from public.chatwoot_conversations v
+      where v.id_externo = '11' and v.organizacao_id = 'e6000000-0000-4000-8000-00000000000b'),
+    '(open,)', 'e a conversa legada não muda nem é adotada');
+
 -- Edição fora de ordem e criação atrasada.
 select pg_temp.consumir('e6000000-0000-4000-8000-00000000000a', 'e6000000-0000-4000-8000-0000000000c1', 'u:2',
     pg_temp.msg(200, 20, 6, false, 'message_updated', 'sobrescrever', 'r2', '2030-01-01T00:00:02Z'));
@@ -318,6 +339,13 @@ select is(
 select throws_ok(
     format($$update public.inbox_eventos_chatwoot set status = 'received' where id = %L$$, (select valor from t_ctx where nome = 'e1')),
     '55000', null, 'evento concluído não muda de estado, nem para o service_role');
+
+-- Retenção: apagar a conversa leva o caso, e a inbox fica sem o vínculo.
+delete from public.chatwoot_conversations where id_externo = '20' and organizacao_id = 'e6000000-0000-4000-8000-00000000000a';
+select is(
+    (select count(*)::int from public.inbox_eventos_chatwoot e
+      where e.idempotency_key = 'v2:message_created:msg:200' and e.caso_id is null and e.status = 'processed'),
+    1, 'conversa eliminada: o caso cai em cascata e a inbox perde só o vínculo');
 
 select * from finish();
 rollback;

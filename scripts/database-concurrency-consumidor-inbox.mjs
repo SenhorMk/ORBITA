@@ -6,7 +6,7 @@ import { observarBloqueioNoPostgres } from './database-concurrency.mjs';
  * MSG-006. Prova contra Postgres real, como `service_role`, o consumo da inbox do
  * Chatwoot (`reivindicar_eventos_inbox_chatwoot`, `aplicar_evento_inbox_chatwoot`):
  *
- * 1. oito workers em 120 eventos de 12 conversas: cada evento reivindicado uma vez,
+ * 1. oito workers em 120 eventos de 12 conversas do mesmo contato: cada evento reivindicado uma vez,
  *    token 1, 12 casos, 12 auditorias, nenhum erro;
  * 2. 40 mensagens da mesma conversa em oito workers: um caso, 39 somadas;
  * 3. queda antes do commit (conexão morta com a transação aberta): nada fica; depois
@@ -108,7 +108,7 @@ async function doisWorkers({ admin, pool, clientA }) {
   const comandos = new Map();
   for (let i = 0; i < 120; i += 1) {
     const r = await aceitar(clientA, org, conexao, `v2:message_created:msg:${1000 + i}`);
-    comandos.set(r.evento_id, comandoDaMensagem(1000 + i, 100 + (i % 12), 50 + (i % 12)));
+    comandos.set(r.evento_id, comandoDaMensagem(1000 + i, 100 + (i % 12), 50));
   }
   const { reivindicados, erros, disposicoes } = await drenar(pool, (e) => comandos.get(e.evento_id));
   const casos = await casosDe(admin, org);
