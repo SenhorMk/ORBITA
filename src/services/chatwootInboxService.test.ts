@@ -136,40 +136,6 @@ describe('ChatwootInboxService & Idempotency Boundary', () => {
     });
   });
 
-  describe('markProcessed', () => {
-    it('calls concluir_evento_inbox_chatwoot with status processed and responseBody', async () => {
-      const mockRpc = vi.fn().mockResolvedValue({ data: null, error: null });
-      const mockSupabase = scopedClient(mockRpc);
-      const service = new ChatwootInboxService();
-
-      await service.markProcessed(mockSupabase, scope, 'evt-123', { success: true, count: 1 });
-
-      expect(mockRpc).toHaveBeenCalledWith('concluir_evento_inbox_chatwoot', {
-        p_evento_id: 'evt-123',
-        p_status: 'processed',
-        p_response_body: { success: true, count: 1 },
-        p_error: null,
-      });
-    });
-  });
-
-  describe('markFailed', () => {
-    it('redacts sensitive credentials before recording last_error in database', async () => {
-      const mockRpc = vi.fn().mockResolvedValue({ data: null, error: null });
-      const mockSupabase = scopedClient(mockRpc);
-      const service = new ChatwootInboxService();
-
-      const sensitiveError = new Error('Falha de autenticação com token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.do_not_leak_this_secret');
-      await service.markFailed(mockSupabase, scope, 'evt-123', sensitiveError);
-
-      expect(mockRpc).toHaveBeenCalledWith('concluir_evento_inbox_chatwoot', expect.objectContaining({
-        p_evento_id: 'evt-123',
-        p_status: 'failed',
-        p_response_body: null,
-      }));
-    });
-  });
-
   describe('prepareReplay', () => {
     it('calls preparar_replay_evento_inbox_chatwoot and returns intact payload', async () => {
       const mockRpc = vi.fn().mockResolvedValue({

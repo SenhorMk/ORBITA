@@ -455,6 +455,11 @@
       "order": 91,
       "path": "../database/88_inbox_chatwoot_dedup_entrega_revisao.sql",
       "sha256": "c6d6c9326489f756ffcdf464c68a828cc6fee86822be8398df42397050069bad"
+    },
+    {
+      "order": 92,
+      "path": "../database/89_consumidor_inbox_caso_triage.sql",
+      "sha256": "eab5a91dde8901cb533bbee55a2ba1ca037ea9c18e088b84f6aba691762b2ef3"
     }
   ],
   "references": [
