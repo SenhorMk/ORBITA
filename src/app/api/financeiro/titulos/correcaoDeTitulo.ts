@@ -48,10 +48,33 @@ export interface TituloParaCorrecao {
   readonly pedidoId: string | null;
 }
 
+/** O que provou que a conta não está mais ativa no Bling. */
+export type Evidencia = 'remoto_ausente' | 'remoto_cancelado' | 'exclusao_confirmada';
+
+/**
+ * As duas mutações locais gravam o evento de auditoria **na mesma transação**
+ * (migration 82): se o evento não for gravado, a linha não muda e a chamada
+ * lança. Por isso elas recebem o contexto da auditoria, e o handler não audita
+ * depois.
+ */
 export interface CorrecaoDeTituloStorePort {
   carregarTituloParaCorrecao(scope: VerifiedOrganizationScope, id: string): Promise<TituloParaCorrecao | null>;
-  excluirLancamentoInterno(scope: VerifiedOrganizationScope, id: string): Promise<number>;
-  marcarDespesaCancelada(scope: VerifiedOrganizationScope, id: string): Promise<number>;
+  excluirLancamentoInterno(
+    scope: VerifiedOrganizationScope,
+    id: string,
+    auditoria: { readonly correlationId: string },
+  ): Promise<number>;
+  /**
+   * A conclusão auditada do cancelamento existe neste banco (migration 82)?
+   * Consultada **antes** de qualquer chamada ao Bling: sem ela, apagar lá
+   * deixaria a despesa ativa aqui.
+   */
+  conclusaoDoCancelamentoDisponivel(): Promise<boolean>;
+  marcarDespesaCancelada(
+    scope: VerifiedOrganizationScope,
+    id: string,
+    auditoria: { readonly correlationId: string; readonly evidencia: Evidencia },
+  ): Promise<number>;
 }
 
 export interface ContaPagarNoBlingPort {
@@ -74,6 +97,7 @@ export interface CorrecaoDeTituloDependencies {
   >;
   readonly store: CorrecaoDeTituloStorePort;
   readonly bling: (scope: VerifiedOrganizationScope) => ContaPagarNoBlingPort;
+  /** Só o evento sem mutação local (`finance.remote_reconcile_required`). */
   readonly auditar: (scope: VerifiedOrganizationScope, evento: EventoDeAuditoriaFinanceira) => Promise<void>;
   readonly correlationId: (request: Request) => string;
 }
@@ -92,8 +116,8 @@ async function auditarSemInterromper(
   try {
     await deps.auditar(scope, evento);
   } catch (erro: unknown) {
-    // O efeito já aconteceu (ou, no caso da reconciliação, nada aconteceu):
-    // a falha da trilha não muda a resposta, e fica no log do servidor.
+    // Nada local aconteceu nem vai acontecer: a falha da trilha não muda a
+    // resposta, e fica no log do servidor.
     registrarFalhaInterna(`financeiro.correcao.auditoria.${evento.acao}`, erro, { organizacaoId: scope.organizationId });
   }
 }
@@ -148,7 +172,11 @@ export function createExclusaoDeLancamentoHandler(deps: CorrecaoDeTituloDependen
     const impedimento = impedimentoDaExclusaoInterna(titulo);
     if (impedimento) return responder(impedimento);
 
-    const removidas = await deps.store.excluirLancamentoInterno(scope, titulo.id);
+    // Auditoria obrigatória: se o evento não for gravado, nada sai e a falha
+    // sobe como 500 genérico na rota.
+    const removidas = await deps.store.excluirLancamentoInterno(scope, titulo.id, {
+      correlationId: deps.correlationId(request),
+    });
     if (removidas !== 1) {
       // O `DELETE` repete todas as condições — inclusive a situação ativa —, e
       // nada saiu: o título mudou desde a leitura. Zero linhas não vira
@@ -162,19 +190,9 @@ export function createExclusaoDeLancamentoHandler(deps: CorrecaoDeTituloDependen
       throw new Error('Despesa interna elegível não foi removida pelo DELETE condicional.');
     }
 
-    await auditarSemInterromper(deps, scope, {
-      acao: 'finance.entry_deleted',
-      recurso: 'titulo_financeiro',
-      recursoId: titulo.id,
-      correlationId: deps.correlationId(request),
-      metadata: { situacao_anterior: titulo.situacao, origem: 'interno' },
-    });
     return responder({ resultado: 'Deleted', removidoDoBling: false });
   };
 }
-
-/** O que provou que a conta não está mais ativa no Bling. */
-type Evidencia = 'remoto_ausente' | 'remoto_cancelado' | 'exclusao_confirmada';
 
 type PassoDoCancelamento =
   | { readonly _tag: 'Evidencia'; readonly evidencia: Evidencia }
@@ -240,11 +258,12 @@ async function concluirCancelamento(
 ): Promise<NextResponse> {
   let alteradas: number;
   try {
-    alteradas = await deps.store.marcarDespesaCancelada(scope, titulo.id);
+    alteradas = await deps.store.marcarDespesaCancelada(scope, titulo.id, { correlationId, evidencia });
   } catch (erro: unknown) {
     registrarFalhaInterna('financeiro.cancelar.local', erro, { organizacaoId: scope.organizationId });
-    // A ausência no Bling já está provada. Repetir é seguro: a próxima
-    // tentativa lê `404` e converge, sem novo `DELETE`.
+    // Banco ou auditoria falhou, e a transação não mudou o título. A ausência
+    // no Bling já está provada; repetir é seguro: a próxima tentativa lê `404`
+    // e converge, sem novo `DELETE`.
     return responder({ resultado: 'ReconcileRequired', motivo: 'conclusao_local_pendente' });
   }
 
@@ -256,13 +275,6 @@ async function concluirCancelamento(
     return responder({ resultado: 'NotFound' });
   }
 
-  await auditarSemInterromper(deps, scope, {
-    acao: 'finance.expense_cancelled',
-    recurso: 'titulo_financeiro',
-    recursoId: titulo.id,
-    correlationId,
-    metadata: { bling_id: titulo.blingId, evidencia, situacao_anterior: titulo.situacao },
-  });
   return responder({ resultado: 'Cancelled' });
 }
 
@@ -276,6 +288,7 @@ export function createCancelamentoDeDespesaHandler(deps: CorrecaoDeTituloDepende
     if (blingId === null || !/^\d+$/u.test(blingId)) {
       return responder({ resultado: 'Blocked', motivo: 'despesa_interna' });
     }
+    if (!(await deps.store.conclusaoDoCancelamentoDisponivel())) return responder({ resultado: 'Unavailable' });
     const correlationId = deps.correlationId(request);
 
     // A situação local não é autoridade: o que o Bling diz agora é.
