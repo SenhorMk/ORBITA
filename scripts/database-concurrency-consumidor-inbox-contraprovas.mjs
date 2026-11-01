@@ -31,7 +31,7 @@ async function sabotar(admin, assinatura, trechos) {
 }
 
 const APLICAR_SIG = 'public.aplicar_evento_inbox_chatwoot(uuid,text,bigint,jsonb)';
-const CLAIM_SIG = 'public.reivindicar_eventos_inbox_chatwoot(text,integer,integer)';
+const CLAIM_SIG = 'public.reivindicar_eventos_inbox_chatwoot(text,integer,integer,timestamptz)';
 
 export async function contraprovaSemFencing({ admin, clientA, clientB }) {
   const { org, conexao } = await novaOrganizacao(admin, 'cpf');

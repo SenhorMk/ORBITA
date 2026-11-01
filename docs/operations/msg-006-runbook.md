@@ -25,8 +25,13 @@ e `public`; a migration confere isso e aborta se não for verdade.
 
 ## 2. Regras
 
-**Abertura de caso.** Só `message_created` recebido do cliente, com id de mensagem.
-Nota privada, resposta de atendente, mensagem de sistema e edição só atualizam o espelho.
+**Abertura de caso.** Exige prova positiva: `message_created`, com id de mensagem,
+`message_type` `incoming` e `sender.type` `contact`, ambos declarados. O banco recusa
+`abre_caso` sem isso. Nota privada, atendente, sistema e edição só atualizam o espelho.
+Tipo ou remetente ausente ou desconhecido não vira atendimento: a mensagem é espelhada
+(com tipo `null`, se ele for desconhecido) e o evento fica `classificacao_inconclusiva`.
+Regra e limites são parâmetros de laboratório, sujeitos a validação com o contrato real
+do MSG-001.
 
 | Situação | Resultado | Disposição |
 |---|---|---|
@@ -43,7 +48,8 @@ conversa e um caso por mensagem de origem.
 | Status | Disposição | Quando |
 |---|---|---|
 | `processed` | `caso_aberto`, `mensagem_no_caso`, `espelho_atualizado` | efeito aplicado |
-| `processed` | `revisao_atrasada` | revisão mais velha que a já aplicada |
+| `processed` | `revisao_atrasada` | revisão mais velha que a comprovada, ou sem versão diante de uma comprovada |
+| `processed` | `classificacao_inconclusiva` | sem prova de que veio do cliente: espelhada, sem caso |
 | `ignored` | `evento_desconhecido` | tipo fora de `message_created`, `message_updated`, `conversation_status_changed` |
 | `ignored` | `conversa_nao_espelhada` | status de conversa que ainda não existe aqui |
 | `ignored` | `conexao_nao_comprovada` | status em conversa legada sem conexão |
@@ -55,8 +61,20 @@ conversa e um caso por mensagem de origem.
 Agora terminam `ignored`; a conversa vem pela primeira mensagem ou pelo sync.
 
 **Ordem.** `skip locked` separa eventos; um lock por conversa impede dois comandos
-da mesma conversa em paralelo. A revisão vem de `updated_at` do provedor, senão de
-`created_at` do evento, senão da chegada na inbox.
+da mesma conversa em paralelo.
+
+**Revisão.** Só `updated_at` do provedor é versão: `conversation.updated_at` para o status,
+`updated_at` da mensagem para o conteúdo. `created_at` e a chegada na inbox não provam nada.
+
+| Gravador | Linha sem versão comprovada | Linha com versão comprovada |
+|---|---|---|
+| Com versão igual ou mais nova | aplica | aplica |
+| Com versão mais velha | aplica | mantém a comprovada |
+| Sem versão (declara `null`) | aplica, na ordem de chegada | mantém a comprovada |
+
+O gatilho `fn_espelho_chatwoot_revisao` impõe isso a todo gravador, inclusive o sync, em
+`status` e `status_revisao_em` e em conteúdo, tipo e remetente da mensagem. Quem não toca
+a coluna de revisão (retenção, adoção de conexão) passa: anonimizar continua apagando.
 
 ## 3. Queda e concorrência
 
@@ -97,8 +115,10 @@ Lock: `lock_timeout` de 5 s. `ACCESS EXCLUSIVE` breve em `inbox_eventos_chatwoot
 em `chatwoot_messages` bloqueia escrita enquanto é construído (proporcional à
 tabela). Sem reescrita de tabela. Em timeout, repetir: a migration é transacional.
 
-**Antes de ligar o worker**, conferir o que ele vai consumir. Eventos antigos em
-`received` ou `failed` abrem caso quando consumidos:
+**Antes de ligar o worker**, inventariar o que está parado. Evento anterior ao corte
+(`CHATWOOT_INBOX_WORKER_BACKLOG_DESDE`) não é consumido; recuar o corte exige inventário e
+autorização, porque evento antigo abre caso quando consumido. Não apagar nem alterar eventos
+para simular backlog limpo:
 
 ```sql
 select status, event_type, min(created_at), max(created_at), count(*)
@@ -121,6 +141,7 @@ select to_regclass('public.sac_cases') is not null as tabela,
 | Variável | Padrão | Papel |
 |---|---|---|
 | `CHATWOOT_INBOX_WORKER_ENABLED` | `false` | kill switch; sem `true` o processo termina sem consumir |
+| `CHATWOOT_INBOX_WORKER_BACKLOG_DESDE` | nenhum | obrigatório com o worker ligado: instante ISO; sem ele o processo recusa a partida. Evento mais antigo não é reivindicado nem alterado |
 | `CHATWOOT_INBOX_WORKER_POLL_MS` | 1000 | intervalo com trabalho |
 | `CHATWOOT_INBOX_WORKER_IDLE_MAX_MS` | 5000 | recuo máximo ocioso ou com o banco fora |
 | `CHATWOOT_INBOX_WORKER_LEASE_SECONDS` | 60 | 5 a 300 |
@@ -129,6 +150,13 @@ select to_regclass('public.sac_cases') is not null as tabela,
 
 O `npm run worker:inbox` usa `ts-node`, dependência de desenvolvimento: serve para
 DEV e laboratório. Empacotar e supervisionar o processo é do MSG-020.
+
+**Credencial.** Hoje o worker usa `service_role`. **O banco não restringe esse papel às
+três RPCs**: o limite está só no adapter, e a chave alcança qualquer tabela. A 89 prepara
+`orbita_worker_inbox`: `NOLOGIN`, sem nenhuma tabela, com `EXECUTE` só nas três funções, que
+gravam a auditoria sem depender do JWT. Provado no pgTAP. Habilitar é decisão pendente e
+exige, por ambiente: dar login ou `grant orbita_worker_inbox to authenticator`, emitir uma
+credencial própria sem `service_role` e trocar a do worker. Nada disso foi feito.
 
 ## 6. Pausa e recuperação (forward-only)
 
@@ -161,20 +189,24 @@ conversa leva o caso em cascata, e a inbox perde só o vínculo.
   entrega é assinada pelo teste (Chatwoot local depende do MSG-001) e a sessão do
   operador é injetada (o laboratório não tem GoTrue). O contrato real de
   `X-Chatwoot-Delivery`, `updated_at` e do status continua sem comprovação.
-- **Sync sem revisão.** O sync grava o estado atual sem preencher `status_revisao_em`;
-  um webhook mais novo que a última revisão ainda sobrescreve. Mensagem que só chega
-  pelo sync não abre caso.
-- **Relógios misturados.** Sem `updated_at`, a revisão é a chegada na inbox, e entra
-  na mesma comparação que os instantes do provedor.
+- **Sem `updated_at` real.** Se a API e os webhooks do Chatwoot não mandarem esse campo, nada
+  fica comprovado: vale a ordem de chegada, e um snapshot atrasado pode sobrescrever. Depende
+  da evidência do MSG-001.
+- **Sync não cura edição perdida.** Com versão comprovada, o sync sem versão não corrige
+  conteúdo cujo webhook mais novo se perdeu.
+- **Mensagem que só chega pelo sync não abre caso.**
+- **Revisão fora do espelho.** Contato não tem versão: a última gravação de nome e telefone vale.
+- **Tela da mensageria.** Mensagem de tipo `null` aparece no lado do contato, como qualquer
+  mensagem que não é nossa; a tela não mostra a classificação.
 - **Sem trabalho derivado.** Nenhum trabalho de triagem é enfileirado: não há
   consumidor antes do MSG-013, que deve incluí-lo nesta transação.
-- **Credencial.** O worker usa `service_role`, restrito no código às três RPCs. Papel
-  próprio no banco é o preferido da arquitetura e fica para decisão.
+- **Credencial.** O worker usa `service_role`, que o banco não restringe (§5).
 - **Sem fairness por organização.** O claim é por ordem de chegada; o limite de 300
   entregas/min por conexão reduz, mas não elimina, a disputa entre organizações.
 - **Parada graciosa só em teste de unidade.** `SIGTERM` no Windows mata o processo; a
   prova com processo real usa morte abrupta.
-- **Retenção.** `sac_cases` e o payload da inbox seguem sem TTL próprio.
+- **Retenção: pendência sob o MSG-021.** `sac_cases` e o payload da inbox seguem sem TTL
+  próprio. Tráfego de dados reais continua proibido até os gates do MSG-021.
 
 ## 9. Evidência
 

@@ -5,6 +5,7 @@ import type { ChatwootConversation } from '../../../../services/chatwoot/chatwoo
 import {
   mapChatwootChannel,
   mapChatwootMessageType,
+  revisaoDoProvedor,
   senderTypeConhecido,
 } from '../../../../services/chatwoot/chatwootWebhookPersistence';
 import {
@@ -54,6 +55,7 @@ async function syncChatwootMessages(
         remetenteId: rawMsg.sender?.id || null,
         remetenteTipo: senderTypeConhecido(rawMsg.sender?.type),
         criadaEm: rawMsg.created_at || new Date().toISOString(),
+        conteudoRevisaoEm: revisaoDoProvedor(rawMsg.updated_at) ?? null,
       }, 'sobrescrever');
       messagesCount++;
     } catch (erro: unknown) {
@@ -123,6 +125,7 @@ async function syncChatwootConversationTree(
       status: rawConv.status || 'open',
       inboxId: rawConv.inbox_id || null,
       canal: mapChatwootChannel(rawConv.meta?.channel || rawConv.channel_type),
+      statusRevisaoEm: revisaoDoProvedor(rawConv.updated_at) ?? null,
     });
   } catch (erro: unknown) {
     registrarRecusa(escopo, erro);

@@ -34,6 +34,8 @@ export const ChatwootConversationSchema = z.object({
   inbox_id: z.coerce.number().int().optional(),
   channel: z.string().optional(),
   channel_type: z.string().optional(),
+  /** Versão do provedor, quando presente. Sem ela, o sync não passa de uma revisão comprovada. */
+  updated_at: z.union([z.string(), z.number()]).optional(),
   meta: z
     .object({
       sender: ChatwootContactSchema.optional(),
@@ -56,6 +58,7 @@ export const ChatwootMessageSchema = z.object({
     })
     .optional(),
   created_at: z.string().optional(),
+  updated_at: z.union([z.string(), z.number()]).optional(),
 });
 export type ChatwootMessage = z.infer<typeof ChatwootMessageSchema>;
 

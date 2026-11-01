@@ -74,11 +74,11 @@ async function outroEscritor(
     idExterno: 5, nome: 'Contato', email: null, telefone: null, telefoneNormalizado: null, avatarUrl: null,
   });
   await gravarConversa(store, escopo, {
-    idExterno: 50, contatoIdLocal, contatoIdExterno: 5, displayId: null, status: 'open', inboxId: 1, canal: 'Channel::Whatsapp',
+    idExterno: 50, contatoIdLocal, contatoIdExterno: 5, displayId: null, status: 'open', inboxId: 1, canal: 'Channel::Whatsapp', statusRevisaoEm: null,
   });
   return gravarMensagem(store, escopo, {
     idExterno: 500, conversaIdExterno: 50, conteudo, tipo: 'incoming', remetenteNome: null, remetenteId: null,
-    remetenteTipo: null, criadaEm: '2026-10-25T00:00:00Z',
+    remetenteTipo: null, criadaEm: '2026-10-25T00:00:00Z', conteudoRevisaoEm: null,
   }, modo);
 }
 
@@ -156,6 +156,12 @@ describe('POST /api/chatwoot/sync (MSG-003A: UUID local por organização + cone
     ]);
     expect([estado.store.linhas.contato.length, estado.store.linhas.conversa.length, estado.store.linhas.mensagem.length]).toEqual([1, 1, 1]);
     expect(mensagemIdLocal).toBe(estado.store.linhas.mensagem[0]!.id_local);
+  });
+
+  it('sem versão do provedor, o sync declara null: não passa de uma revisão comprovada', async () => {
+    await sincronizar(ORG_A);
+    expect(estado.store.linhas.conversa[0]).toMatchObject({ status_revisao_em: null });
+    expect(estado.store.linhas.mensagem[0]).toMatchObject({ conteudo_revisao_em: null });
   });
 });
 

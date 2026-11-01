@@ -15,12 +15,13 @@ export function mapChatwootChannel(channelStr?: string): string {
   return 'Channel::Whatsapp';
 }
 
-/** Normaliza o `message_type` bruto do Chatwoot para o enum local. */
-export function mapChatwootMessageType(rawType: unknown): 'incoming' | 'outgoing' | 'system' | 'template' {
+/** Normaliza o `message_type` bruto do Chatwoot. O que não se reconhece é `null`, nunca `incoming`. */
+export function mapChatwootMessageType(rawType: unknown): 'incoming' | 'outgoing' | 'system' | 'template' | null {
+  if (rawType === 'incoming' || rawType === 0 || rawType === '0') return 'incoming';
   if (rawType === 'outgoing' || rawType === 1 || rawType === '1') return 'outgoing';
   if (rawType === 'system' || rawType === 2 || rawType === '2') return 'system';
   if (rawType === 'template' || rawType === 3 || rawType === '3') return 'template';
-  return 'incoming';
+  return null;
 }
 
 export function senderTypeConhecido(value: string | null | undefined): string | null {
@@ -46,8 +47,11 @@ export interface ComandoDeConsumoChatwoot {
   readonly evento: string;
   readonly acao: 'espelhar' | 'status' | 'ignorar';
   readonly account_id?: string;
-  readonly revisao_em?: string;
+  /** Versões vindas do provedor; sem elas a escrita não passa de uma revisão comprovada. */
+  readonly revisao_status_em?: string;
+  readonly revisao_conteudo_em?: string;
   readonly abre_caso?: boolean;
+  readonly classificacao_inconclusiva?: boolean;
   readonly contato?: Readonly<Record<string, unknown>>;
   readonly conversa?: Readonly<Record<string, unknown>>;
   readonly mensagem?: Readonly<Record<string, unknown>>;
@@ -57,7 +61,8 @@ export type TraducaoDoEvento =
   | { readonly _tag: 'Comando'; readonly comando: ComandoDeConsumoChatwoot }
   | { readonly _tag: 'PayloadInvalido'; readonly codigo: 'payload_invalido' | 'id_fora_da_faixa' };
 
-function revisaoDoEvento(valor: string | number | undefined): string | undefined {
+/** A versão do provedor em ISO, ou `undefined` se ela não vier ou não for um instante. */
+export function revisaoDoProvedor(valor: string | number | undefined): string | undefined {
   if (valor === undefined || valor === '') return undefined;
   // O Chatwoot manda ISO ou segundos desde a época, conforme o evento.
   const segundos = typeof valor === 'number' ? valor : /^\d+$/.test(valor) ? Number(valor) : null;
@@ -121,22 +126,22 @@ function dadosDaMensagem(evento: ChatwootWebhookEvent) {
     remetente_nome: evento.sender?.name || null,
     remetente_id: idDoEspelho(evento.sender?.id),
     remetente_tipo: senderTypeConhecido(evento.sender?.type),
-    criada_em: revisaoDoEvento(evento.created_at) ?? null,
+    criada_em: revisaoDoProvedor(evento.created_at) ?? null,
     modo: evento.event === 'message_created' ? 'preservar' : 'sobrescrever',
   };
 }
 
 /**
- * A regra de abertura: só a mensagem recebida do cliente, na criação. Nota
- * privada, resposta de atendente, mensagem de sistema e edição não abrem caso.
+ * A regra de abertura exige prova positiva: tipo `incoming` e remetente `contact`,
+ * ambos declarados. Nota privada, atendente, sistema e template são outra coisa; o
+ * que falta ou não se reconhece fica inconclusivo e não vira atendimento.
  */
-function abreCaso(evento: ChatwootWebhookEvent): boolean {
+function classificarMensagem(evento: ChatwootWebhookEvent): 'cliente' | 'nao_cliente' | 'inconclusiva' {
+  if (evento.private) return 'nao_cliente';
+  const tipo = mapChatwootMessageType(evento.message_type);
   const remetente = senderTypeConhecido(evento.sender?.type);
-  return evento.event === 'message_created'
-    && !evento.private
-    && mapChatwootMessageType(evento.message_type) === 'incoming'
-    && remetente !== 'agent'
-    && remetente !== 'user';
+  if ((tipo !== null && tipo !== 'incoming') || remetente === 'user' || remetente === 'agent') return 'nao_cliente';
+  return tipo === 'incoming' && remetente === 'contact' ? 'cliente' : 'inconclusiva';
 }
 
 /**
@@ -170,7 +175,7 @@ export function traduzirEventoDaInbox(
       comando: {
         evento: eventType,
         acao: 'status',
-        revisao_em: revisaoDoEvento(conversa.updated_at ?? evento.updated_at),
+        revisao_status_em: revisaoDoProvedor(conversa.updated_at ?? evento.updated_at),
         conversa: { id, status: conversa.status },
       },
     };
@@ -178,14 +183,17 @@ export function traduzirEventoDaInbox(
 
   const contato = dadosDoContato(evento);
   const mensagem = dadosDaMensagem(evento);
+  const classificacao = eventType === 'message_created' && mensagem !== undefined ? classificarMensagem(evento) : 'nao_cliente';
   return {
     _tag: 'Comando',
     comando: {
       evento: eventType,
       acao: 'espelhar',
       account_id: String(evento.account.id),
-      revisao_em: revisaoDoEvento(evento.updated_at ?? (eventType === 'message_created' ? evento.created_at : undefined)),
-      abre_caso: mensagem !== undefined && abreCaso(evento),
+      revisao_status_em: revisaoDoProvedor(conversa?.updated_at),
+      revisao_conteudo_em: revisaoDoProvedor(evento.updated_at),
+      abre_caso: classificacao === 'cliente',
+      classificacao_inconclusiva: classificacao === 'inconclusiva',
       contato,
       conversa: dadosDaConversa(evento, contato?.id, inboxId),
       mensagem,

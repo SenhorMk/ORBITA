@@ -24,6 +24,7 @@ const EXPLICACAO_DA_DISPOSICAO: Readonly<Record<string, string>> = {
   revisao_atrasada: 'Revisão antiga: a mais nova foi mantida.',
   conversa_nao_espelhada: 'Conversa ainda não importada.',
   conexao_nao_comprovada: 'Conversa antiga sem conexão comprovada: não foi alterada.',
+  classificacao_inconclusiva: 'Sem prova de que veio do cliente: guardada, sem abrir caso.',
   evento_desconhecido: 'Tipo de evento que o ORBITA não trata.',
   conexao_removida: 'A conexão deste evento não existe mais.',
   falha_definitiva: 'Não será repetida sem correção.',

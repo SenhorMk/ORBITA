@@ -6,7 +6,7 @@
 
 begin;
 
-select plan(75);
+select plan(93);
 
 set local request.jwt.claim.role = 'service_role';
 
@@ -38,7 +38,7 @@ returns bigint language plpgsql as $$
 declare v bigint;
 begin
     select r.fencing_token into v
-      from public.reivindicar_eventos_inbox_chatwoot(p_worker, 50, 60) r
+      from public.reivindicar_eventos_inbox_chatwoot(p_worker, 50, 60, 'epoch'::timestamptz) r
      where r.evento_id = p_evento;
     return v;
 end;
@@ -50,10 +50,10 @@ create function pg_temp.msg(p_id int, p_conv int, p_contato int default 5, p_abr
                             p_conteudo text default 'oi', p_revisao text default null, p_tipo text default 'incoming')
 returns jsonb language sql as $$
     select jsonb_build_object(
-        'evento', p_evento, 'acao', 'espelhar', 'account_id', '1', 'abre_caso', p_abre, 'revisao_em', p_revisao,
+        'evento', p_evento, 'acao', 'espelhar', 'account_id', '1', 'abre_caso', p_abre, 'revisao_conteudo_em', p_revisao,
         'contato', jsonb_build_object('id', p_contato, 'nome', 'Contato ' || p_contato),
         'conversa', jsonb_build_object('id', p_conv, 'contato_id', p_contato, 'status', 'open', 'inbox_id', 1, 'canal', 'Channel::Api'),
-        'mensagem', jsonb_build_object('id', p_id, 'conversa_id', p_conv, 'conteudo', p_conteudo, 'tipo', p_tipo, 'modo', p_modo));
+        'mensagem', jsonb_build_object('id', p_id, 'conversa_id', p_conv, 'conteudo', p_conteudo, 'tipo', p_tipo, 'remetente_tipo', 'contact', 'modo', p_modo));
 $$;
 
 -- Ciclo completo: aceita, reivindica e aplica; devolve a disposição.
@@ -77,7 +77,7 @@ select ok(not has_table_privilege('service_role', 'public.sac_cases', 'insert'),
 select ok(not has_table_privilege('authenticated', 'public.inbox_eventos_chatwoot', 'update'), 'navegador não escreve na inbox');
 select is(
     (select count(*)::int
-       from (values ('public.reivindicar_eventos_inbox_chatwoot(text,integer,integer)'),
+       from (values ('public.reivindicar_eventos_inbox_chatwoot(text,integer,integer,timestamptz)'),
                     ('public.aplicar_evento_inbox_chatwoot(uuid,text,bigint,jsonb)'),
                     ('public.registrar_falha_evento_inbox_chatwoot(uuid,text,bigint,text,boolean)'),
                     ('public.concluir_evento_inbox_chatwoot(uuid,text,jsonb,text)'),
@@ -246,10 +246,10 @@ select is(pg_temp.consumir('e6000000-0000-4000-8000-00000000000a', 'e6000000-000
         '{"evento":"conversation_status_changed","acao":"status","conversa":{"id":999,"status":"resolved"}}'::jsonb),
     'conversa_nao_espelhada', 'status de conversa desconhecida não cria nada');
 select is(pg_temp.consumir('e6000000-0000-4000-8000-00000000000a', 'e6000000-0000-4000-8000-0000000000c1', 's:2',
-        '{"evento":"conversation_status_changed","acao":"status","revisao_em":"2030-01-01T00:00:02Z","conversa":{"id":10,"status":"resolved"}}'::jsonb),
+        '{"evento":"conversation_status_changed","acao":"status","revisao_status_em":"2030-01-01T00:00:02Z","conversa":{"id":10,"status":"resolved"}}'::jsonb),
     'espelho_atualizado', 'status mais novo aplica');
 select is(pg_temp.consumir('e6000000-0000-4000-8000-00000000000a', 'e6000000-0000-4000-8000-0000000000c1', 's:3',
-        '{"evento":"conversation_status_changed","acao":"status","revisao_em":"2030-01-01T00:00:01Z","conversa":{"id":10,"status":"open"}}'::jsonb),
+        '{"evento":"conversation_status_changed","acao":"status","revisao_status_em":"2030-01-01T00:00:01Z","conversa":{"id":10,"status":"open"}}'::jsonb),
     'revisao_atrasada', 'status atrasado não sobrescreve');
 select is(
     (select v.status from public.chatwoot_conversations v where v.id_externo = '10' and v.conexao_id = 'e6000000-0000-4000-8000-0000000000c1'),
@@ -257,7 +257,7 @@ select is(
 
 -- Status de B não toca a conversa de mesmo id em A.
 select is(pg_temp.consumir('e6000000-0000-4000-8000-00000000000b', 'e6000000-0000-4000-8000-0000000000c2', 's:b',
-        '{"evento":"conversation_status_changed","acao":"status","revisao_em":"2031-01-01T00:00:00Z","conversa":{"id":10,"status":"pending"}}'::jsonb),
+        '{"evento":"conversation_status_changed","acao":"status","revisao_status_em":"2031-01-01T00:00:00Z","conversa":{"id":10,"status":"pending"}}'::jsonb),
     'espelho_atualizado', 'status de B aplica em B');
 select is(
     (select v.status from public.chatwoot_conversations v where v.id_externo = '10' and v.conexao_id = 'e6000000-0000-4000-8000-0000000000c1'),
@@ -339,6 +339,98 @@ select is(
 select throws_ok(
     format($$update public.inbox_eventos_chatwoot set status = 'received' where id = %L$$, (select valor from t_ctx where nome = 'e1')),
     '55000', null, 'evento concluído não muda de estado, nem para o service_role');
+
+-- Classificação: o banco é a última guarda da regra.
+insert into t_ctx values ('e4', pg_temp.aceitar('e6000000-0000-4000-8000-00000000000a', 'e6000000-0000-4000-8000-0000000000c1', 'v2:message_created:msg:500')::text);
+insert into t_ctx values ('t5', pg_temp.token((select valor::uuid from t_ctx where nome = 'e4'), 'w8')::text);
+select throws_ok(
+    format($$select * from public.aplicar_evento_inbox_chatwoot(%L, 'w8', %s, %L::jsonb)$$,
+        (select valor from t_ctx where nome = 'e4'), (select valor from t_ctx where nome = 't5'),
+        (pg_temp.msg(500, 50, 9) #- '{mensagem,remetente_tipo}')::text),
+    '22023', null, 'abrir caso sem remetente provado é recusado pelo banco');
+select throws_ok(
+    format($$select * from public.aplicar_evento_inbox_chatwoot(%L, 'w8', %s, %L::jsonb)$$,
+        (select valor from t_ctx where nome = 'e4'), (select valor from t_ctx where nome = 't5'),
+        pg_temp.msg(500, 50, 9, true, p_tipo => 'outgoing')::text),
+    '22023', null, 'abrir caso com mensagem de saída é recusado pelo banco');
+select is((select count(*)::int from public.chatwoot_messages where id_externo = '500'), 0, 'a recusa não deixou espelho');
+select is(
+    (select a.disposicao from public.aplicar_evento_inbox_chatwoot((select valor::uuid from t_ctx where nome = 'e4'), 'w8', (select valor::bigint from t_ctx where nome = 't5'),
+        jsonb_set(pg_temp.msg(500, 50, 9, false) || '{"classificacao_inconclusiva":true}'::jsonb, '{mensagem,tipo}', 'null'::jsonb)) a),
+    'classificacao_inconclusiva', 'sem prova: espelha, não abre caso e diz por quê');
+select is(
+    (select row(m.message_type, count(s.id))::text from public.chatwoot_messages m
+       left join public.sac_cases s on s.mensagem_origem_id_local = m.id_local
+      where m.id_externo = '500' group by m.message_type),
+    '(,0)', 'tipo desconhecido não vira incoming no espelho, e nenhum caso');
+
+-- Revisão: o gatilho vale para qualquer gravador.
+update public.chatwoot_conversations v set status = 'open', status_revisao_em = null
+ where v.id_externo = '10' and v.conexao_id = 'e6000000-0000-4000-8000-0000000000c1';
+select is(
+    (select v.status from public.chatwoot_conversations v where v.id_externo = '10' and v.conexao_id = 'e6000000-0000-4000-8000-0000000000c1'),
+    'resolved', 'escrita sem versão não muda status comprovado');
+select is(
+    (select to_char(v.status_revisao_em at time zone 'utc', 'YYYY') from public.chatwoot_conversations v
+      where v.id_externo = '10' and v.conexao_id = 'e6000000-0000-4000-8000-0000000000c1'),
+    '2030', 'e a versão comprovada não se perde');
+update public.chatwoot_conversations v set status = 'open', status_revisao_em = '2029-01-01T00:00:00Z'
+ where v.id_externo = '10' and v.conexao_id = 'e6000000-0000-4000-8000-0000000000c1';
+select is(
+    (select v.status from public.chatwoot_conversations v where v.id_externo = '10' and v.conexao_id = 'e6000000-0000-4000-8000-0000000000c1'),
+    'resolved', 'escrita com versão mais velha também não');
+update public.chatwoot_messages m set content = 'sem versao', message_type = 'outgoing', conteudo_revisao_em = null where m.id_externo = '200';
+select is(
+    (select row(m.content, m.message_type)::text from public.chatwoot_messages m where m.id_externo = '200'),
+    '(r2,incoming)', 'conteúdo e tipo comprovados não mudam sem versão');
+update public.chatwoot_messages m set content = 'anonimizado' where m.id_externo = '200';
+select is((select m.content from public.chatwoot_messages m where m.id_externo = '200'), 'anonimizado',
+    'quem não declara escrita versionada (retenção) continua apagando conteúdo');
+
+-- Backlog: evento anterior ao corte não é reivindicado nem alterado.
+insert into t_ctx values ('e5', pg_temp.aceitar('e6000000-0000-4000-8000-00000000000a', 'e6000000-0000-4000-8000-0000000000c1', 'v2:message_created:msg:600')::text);
+select is(
+    (select count(*)::int from public.reivindicar_eventos_inbox_chatwoot('w9', 50, 60, clock_timestamp() + interval '1 hour')),
+    0, 'corte depois do evento: nada reivindicado');
+select is(
+    (select row(status, attempts)::text from public.inbox_eventos_chatwoot where id = (select valor::uuid from t_ctx where nome = 'e5')),
+    '(received,0)', 'o evento antigo fica como estava');
+select throws_ok(
+    $$select * from public.reivindicar_eventos_inbox_chatwoot('w9', 50, 60, null)$$,
+    '22023', null, 'sem corte, o claim recusa');
+
+-- Papel mínimo: executa o consumo e nada mais.
+select ok(
+    (select not rolcanlogin and not rolsuper and not rolbypassrls from pg_roles where rolname = 'orbita_worker_inbox'),
+    'orbita_worker_inbox sem login e sem ignorar RLS');
+select is(
+    (select count(*)::int
+       from (values ('public.inbox_eventos_chatwoot'), ('public.sac_cases'), ('public.chatwoot_messages'), ('public.chatwoot_conversations'),
+                    ('public.chatwoot_contacts'), ('public.credenciais_integracao'), ('public.eventos_auditoria_sistema')) as t(tabela)
+      cross join (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) as p(privilegio)
+      where has_table_privilege('orbita_worker_inbox', t.tabela, p.privilegio)),
+    0, 'o papel não alcança nenhuma tabela');
+select ok(not has_function_privilege('orbita_worker_inbox', 'public.concluir_evento_inbox_chatwoot(uuid,text,jsonb,text)', 'execute')
+      and not has_function_privilege('orbita_worker_inbox', 'public.registrar_evento_auditoria(uuid,uuid,text,text,text,text,text,text,jsonb)', 'execute')
+      and not has_function_privilege('orbita_worker_inbox', 'public.auditar_consumo_inbox_chatwoot(uuid,text,text,text,text,jsonb)', 'execute'),
+    'nem as demais funções');
+-- Com o papel, sem JWT de service_role: consome e audita. O grant vale só nesta transação.
+grant orbita_worker_inbox to postgres;
+select set_config('orbita.m6_comando', pg_temp.msg(600, 60, 12)::text, true);
+set local request.jwt.claim.role = '';
+set local role orbita_worker_inbox;
+select set_config('orbita.m6_claim', (select r.evento_id::text || '|' || r.fencing_token::text
+    from public.reivindicar_eventos_inbox_chatwoot('w-papel', 50, 60, 'epoch'::timestamptz) r limit 1), true);
+select set_config('orbita.m6_disposicao', (select a.disposicao from public.aplicar_evento_inbox_chatwoot(
+    split_part(current_setting('orbita.m6_claim'), '|', 1)::uuid, 'w-papel', split_part(current_setting('orbita.m6_claim'), '|', 2)::bigint,
+    current_setting('orbita.m6_comando')::jsonb) a), true);
+reset role;
+set local request.jwt.claim.role = 'service_role';
+select is(current_setting('orbita.m6_disposicao'), 'caso_aberto', 'com o papel, claim e aplicação funcionam');
+select is(
+    (select count(*)::int from public.eventos_auditoria_sistema a
+      where a.acao = 'sac.case_opened' and a.metadata ->> 'evento_id' = (select valor from t_ctx where nome = 'e5')),
+    1, 'e a auditoria fica na mesma transação, sem depender do JWT');
 
 -- Retenção: apagar a conversa leva o caso, e a inbox fica sem o vínculo.
 delete from public.chatwoot_conversations where id_externo = '20' and organizacao_id = 'e6000000-0000-4000-8000-00000000000a';

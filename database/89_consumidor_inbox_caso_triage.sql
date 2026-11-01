@@ -29,9 +29,12 @@
 --      nunca do comando.
 --   5. `registrar_falha_evento_inbox_chatwoot`: falha com fencing, backoff e
 --      código sem texto livre.
---   6. Revisões: `status_revisao_em` e `conteudo_revisao_em` nos espelhos. Uma
---      revisão atrasada não sobrescreve a mais nova.
+--   6. Revisões: `status_revisao_em` e `conteudo_revisao_em` nos espelhos, só com
+--      versão vinda do provedor. Um gatilho vale para qualquer gravador: revisão
+--      mais velha, ou escrita que declara não ter versão, não sobrescreve a comprovada.
 --   7. As funções legadas de conclusão e replay respeitam a lease.
+--   8. `orbita_worker_inbox`: papel NOLOGIN que só executa as três funções do
+--      consumo. Preparado e provado no laboratório; nada aqui o habilita.
 --
 -- O QUE NÃO MUDA: `aceitar_entrega_inbox_chatwoot`, chaves de dedup e o espelho
 -- gravado pelo sync. Nenhuma linha existente muda de estado aqui.
@@ -108,7 +111,8 @@ alter table public.inbox_eventos_chatwoot
 alter table public.inbox_eventos_chatwoot
     add constraint ck_inbox_eventos_chatwoot_disposicao check (disposicao in (
         'caso_aberto', 'mensagem_no_caso', 'espelho_atualizado', 'revisao_atrasada',
-        'conversa_nao_espelhada', 'conexao_nao_comprovada', 'evento_desconhecido', 'conexao_removida', 'falha_definitiva')),
+        'conversa_nao_espelhada', 'conexao_nao_comprovada', 'classificacao_inconclusiva', 'evento_desconhecido',
+        'conexao_removida', 'falha_definitiva')),
     add constraint fk_inbox_eventos_chatwoot_caso foreign key (organizacao_id, caso_id)
         references public.sac_cases(organizacao_id, id) on delete set null (caso_id);
 
@@ -139,6 +143,64 @@ drop trigger if exists tg_inbox_chatwoot_terminal on public.inbox_eventos_chatwo
 create trigger tg_inbox_chatwoot_terminal
     before update of status on public.inbox_eventos_chatwoot
     for each row execute function public.fn_inbox_chatwoot_terminal();
+
+-- Versão comprovada não recua, venha de quem vier: o worker, o sync ou o que vier
+-- depois. Quem grava sem versão declara `null`; a coluna intocada (retenção, adoção
+-- de conexão) não é escrita de conteúdo versionado e passa. Empate aplica: o provedor
+-- marca em segundos, e duas revisões no mesmo segundo chegam na ordem da inbox.
+create or replace function public.fn_espelho_chatwoot_revisao()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+    if tg_table_name = 'chatwoot_conversations' then
+        if old.status_revisao_em is not null
+           and (new.status_revisao_em is null or new.status_revisao_em < old.status_revisao_em) then
+            new.status := old.status;
+            new.status_revisao_em := old.status_revisao_em;
+        end if;
+    elsif old.conteudo_revisao_em is not null
+          and (new.conteudo_revisao_em is null or new.conteudo_revisao_em < old.conteudo_revisao_em) then
+        new.content := old.content;
+        new.message_type := old.message_type;
+        new.sender_name := old.sender_name;
+        new.sender_id := old.sender_id;
+        new.sender_type := old.sender_type;
+        new.conteudo_revisao_em := old.conteudo_revisao_em;
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists tg_chatwoot_conversations_revisao on public.chatwoot_conversations;
+create trigger tg_chatwoot_conversations_revisao
+    before update on public.chatwoot_conversations
+    for each row execute function public.fn_espelho_chatwoot_revisao();
+drop trigger if exists tg_chatwoot_messages_revisao on public.chatwoot_messages;
+create trigger tg_chatwoot_messages_revisao
+    before update on public.chatwoot_messages
+    for each row execute function public.fn_espelho_chatwoot_revisao();
+
+-- Trilha do consumo: sem ator humano, escrita pelas funções abaixo na mesma transação.
+-- Não passa por `registrar_evento_auditoria`, que só aceita o JWT do `service_role`.
+create or replace function public.auditar_consumo_inbox_chatwoot(
+    p_organizacao_id uuid,
+    p_acao           text,
+    p_recurso        text,
+    p_recurso_id     text,
+    p_correlation_id text,
+    p_metadata       jsonb
+)
+returns void
+language sql
+security invoker
+set search_path = ''
+as $$
+    insert into public.eventos_auditoria_sistema (organizacao_id, actor_id, acao, recurso, recurso_id, correlation_id, metadata)
+    values (p_organizacao_id, null, p_acao, p_recurso, p_recurso_id, p_correlation_id, p_metadata);
+$$;
 
 -- ---------------------------------------------------------------------------
 -- 3. Funções legadas: continuam para o rollback de código, sem atropelar a lease.
@@ -205,7 +267,8 @@ $$;
 create or replace function public.reivindicar_eventos_inbox_chatwoot(
     p_worker text,
     p_limite integer,
-    p_lease_segundos integer
+    p_lease_segundos integer,
+    p_recebidos_desde timestamptz
 )
 returns table (
     evento_id      uuid,
@@ -231,7 +294,8 @@ declare
 begin
     if coalesce(length(p_worker), 0) not between 1 and 128
        or p_limite is null or p_limite not between 1 and 50
-       or p_lease_segundos is null or p_lease_segundos not between 5 and 300 then
+       or p_lease_segundos is null or p_lease_segundos not between 5 and 300
+       or p_recebidos_desde is null then
         raise exception 'MSG-006: entrada invalida' using errcode = '22023';
     end if;
 
@@ -248,6 +312,7 @@ begin
             select x.id
               from public.inbox_eventos_chatwoot x
              where x.status in ('received', 'processing', 'failed')
+               and x.created_at >= p_recebidos_desde
                and x.attempts >= v_max_tentativas
                and x.disposicao is null
                and coalesce(x.lease_expires_at, '-infinity'::timestamptz) <= v_agora
@@ -256,9 +321,9 @@ begin
                for update skip locked)
         returning e.id, e.organizacao_id, e.correlation_id, e.event_type, e.attempts
     loop
-        perform public.registrar_evento_auditoria(
-            v_esgotado.organizacao_id, null, 'chatwoot.inbox_event_failed', 'inbox_evento_chatwoot', v_esgotado.id::text,
-            v_esgotado.correlation_id, null, null,
+        perform public.auditar_consumo_inbox_chatwoot(
+            v_esgotado.organizacao_id, 'chatwoot.inbox_event_failed', 'inbox_evento_chatwoot', v_esgotado.id::text,
+            v_esgotado.correlation_id,
             jsonb_build_object('tipo', v_esgotado.event_type, 'tentativas', v_esgotado.attempts,
                                'codigo', 'tentativas_esgotadas', '_source', 'worker'));
     end loop;
@@ -269,6 +334,7 @@ begin
           from public.inbox_eventos_chatwoot e
           left join public.conexoes_integracao c on c.id = e.conexao_id
          where (c.id is null or c.status <> 'desconectado')
+           and e.created_at >= p_recebidos_desde
            and e.disposicao is null
            and e.attempts < v_max_tentativas
            and ((e.status in ('received', 'failed') and e.available_at <= v_agora)
@@ -319,7 +385,9 @@ declare
     v_contato       jsonb := p_comando -> 'contato';
     v_conversa      jsonb := p_comando -> 'conversa';
     v_mensagem      jsonb := p_comando -> 'mensagem';
-    v_revisao       timestamptz;
+    v_revisao_status   timestamptz;
+    v_revisao_conteudo timestamptz;
+    v_momento       timestamptz;
     v_conversa_ext  integer;
     v_contato_local uuid;
     v_conversa_local uuid;
@@ -381,7 +449,9 @@ begin
     end if;
 
     if v_acao <> 'ignorar' then
-        v_revisao := coalesce((p_comando ->> 'revisao_em')::timestamptz, v_evento.created_at);
+        -- Só o provedor prova versão. Sem ela, a escrita não passa de uma comprovada.
+        v_revisao_status := (p_comando ->> 'revisao_status_em')::timestamptz;
+        v_revisao_conteudo := (p_comando ->> 'revisao_conteudo_em')::timestamptz;
         v_conversa_ext := coalesce((v_conversa ->> 'id')::integer, (v_mensagem ->> 'conversa_id')::integer);
         v_ator_id := v_evento.user_id;
 
@@ -411,11 +481,11 @@ begin
         else
             update public.chatwoot_conversations v
                set status = v_conversa ->> 'status',
-                   status_revisao_em = v_revisao,
+                   status_revisao_em = v_revisao_status,
                    updated_at = now()
              where v.organizacao_id = v_evento.organizacao_id
                and v.id_local = v_conversa_local
-               and coalesce(v.status_revisao_em, '-infinity'::timestamptz) <= v_revisao;
+               and (v.status_revisao_em is null or v.status_revisao_em <= v_revisao_status);
             get diagnostics v_linhas = row_count;
             v_disposicao := case when v_linhas = 0 then 'revisao_atrasada' else 'espelho_atualizado' end;
         end if;
@@ -479,7 +549,7 @@ begin
                 values ((v_conversa ->> 'id')::integer, v_conversa ->> 'id', v_evento.organizacao_id, v_evento.conexao_id, v_ator_id,
                         v_contato_local, (v_conversa ->> 'contato_id')::integer, (v_conversa ->> 'display_id')::integer,
                         coalesce(v_conversa ->> 'status', 'open'), (v_conversa ->> 'inbox_id')::integer,
-                        v_conversa ->> 'canal', v_revisao)
+                        v_conversa ->> 'canal', v_revisao_status)
                 on conflict (organizacao_id, conexao_id, id_externo) do nothing
                 returning v.id_local into v_conversa_local;
                 if v_conversa_local is null then
@@ -496,9 +566,8 @@ begin
                        display_id = coalesce((v_conversa ->> 'display_id')::integer, v.display_id),
                        inbox_id = coalesce((v_conversa ->> 'inbox_id')::integer, v.inbox_id),
                        channel = coalesce(v_conversa ->> 'canal', v.channel),
-                       status = case when coalesce(v.status_revisao_em, '-infinity'::timestamptz) <= v_revisao
-                                     then coalesce(v_conversa ->> 'status', v.status) else v.status end,
-                       status_revisao_em = greatest(v.status_revisao_em, v_revisao),
+                       status = coalesce(v_conversa ->> 'status', v.status),
+                       status_revisao_em = case when v_conversa ->> 'status' is null then v.status_revisao_em else v_revisao_status end,
                        conexao_id = v_evento.conexao_id,
                        updated_at = now()
                  where v.organizacao_id = v_evento.organizacao_id and v.id_local = v_conversa_local;
@@ -528,7 +597,7 @@ begin
                         v_conversa_local, (v_mensagem ->> 'conversa_id')::integer, coalesce(v_mensagem ->> 'conteudo', ''),
                         v_mensagem ->> 'tipo', v_mensagem ->> 'remetente_nome', (v_mensagem ->> 'remetente_id')::integer,
                         v_mensagem ->> 'remetente_tipo', coalesce((v_mensagem ->> 'criada_em')::timestamptz, v_evento.created_at),
-                        v_revisao)
+                        v_revisao_conteudo)
                 on conflict (organizacao_id, conexao_id, id_externo) do nothing
                 returning m.id_local into v_mensagem_local;
                 if v_mensagem_local is null then
@@ -546,12 +615,12 @@ begin
                        sender_name = v_mensagem ->> 'remetente_nome',
                        sender_id = (v_mensagem ->> 'remetente_id')::integer,
                        sender_type = v_mensagem ->> 'remetente_tipo',
-                       conteudo_revisao_em = v_revisao,
+                       conteudo_revisao_em = v_revisao_conteudo,
                        conexao_id = v_evento.conexao_id,
                        updated_at = now()
                  where m.organizacao_id = v_evento.organizacao_id
                    and m.id_local = v_mensagem_local
-                   and coalesce(m.conteudo_revisao_em, '-infinity'::timestamptz) <= v_revisao;
+                   and (m.conteudo_revisao_em is null or m.conteudo_revisao_em <= v_revisao_conteudo);
                 get diagnostics v_linhas = row_count;
                 if v_linhas = 0 then
                     v_disposicao := 'revisao_atrasada';
@@ -571,6 +640,12 @@ begin
             if v_mensagem_local is null then
                 raise exception 'MSG-006: abrir caso exige a mensagem' using errcode = '22023';
             end if;
+            -- Última guarda da regra: só mensagem provada como recebida do contato.
+            if v_mensagem ->> 'tipo' is distinct from 'incoming'
+               or v_mensagem ->> 'remetente_tipo' is distinct from 'contact' then
+                raise exception 'MSG-006: abrir caso exige mensagem recebida do contato' using errcode = '22023';
+            end if;
+            v_momento := coalesce((v_mensagem ->> 'criada_em')::timestamptz, v_evento.created_at);
 
             select s.id into v_caso_id
               from public.sac_cases s
@@ -582,7 +657,7 @@ begin
 
             if v_caso_id is not null then
                 update public.sac_cases s
-                   set ultima_mensagem_em = greatest(s.ultima_mensagem_em, v_revisao),
+                   set ultima_mensagem_em = greatest(s.ultima_mensagem_em, v_momento),
                        updated_at = now()
                  where s.organizacao_id = v_evento.organizacao_id and s.id = v_caso_id;
                 v_disposicao := 'mensagem_no_caso';
@@ -596,16 +671,20 @@ begin
 
                 insert into public.sac_cases as s
                     (organizacao_id, conversa_id_local, mensagem_origem_id_local, evento_origem_id, caso_anterior_id, ultima_mensagem_em)
-                values (v_evento.organizacao_id, v_conversa_local, v_mensagem_local, v_evento.id, v_caso_anterior, v_revisao)
+                values (v_evento.organizacao_id, v_conversa_local, v_mensagem_local, v_evento.id, v_caso_anterior, v_momento)
                 returning s.id into v_caso_id;
 
-                perform public.registrar_evento_auditoria(
-                    v_evento.organizacao_id, null, 'sac.case_opened', 'sac_case', v_caso_id::text,
-                    v_evento.correlation_id, null, null,
+                perform public.auditar_consumo_inbox_chatwoot(
+                    v_evento.organizacao_id, 'sac.case_opened', 'sac_case', v_caso_id::text,
+                    v_evento.correlation_id,
                     jsonb_build_object('evento_id', v_evento.id, 'conversa_id_local', v_conversa_local,
                                        'fase', 'TRIAGE', 'fencing_token', v_evento.fencing_token, '_source', 'worker'));
                 v_disposicao := 'caso_aberto';
             end if;
+        elsif coalesce((p_comando ->> 'classificacao_inconclusiva')::boolean, false)
+              and v_disposicao = 'espelho_atualizado' then
+            -- Espelhada, sem abrir caso: o operador vê que faltou prova.
+            v_disposicao := 'classificacao_inconclusiva';
         end if;
     else
         v_status_final := case when v_acao = 'ignorar' then 'ignored' else v_status_final end;
@@ -670,9 +749,9 @@ begin
     end if;
 
     if p_definitiva then
-        perform public.registrar_evento_auditoria(
-            v_evento.organizacao_id, null, 'chatwoot.inbox_event_failed', 'inbox_evento_chatwoot', p_evento_id::text,
-            v_evento.correlation_id, null, null,
+        perform public.auditar_consumo_inbox_chatwoot(
+            v_evento.organizacao_id, 'chatwoot.inbox_event_failed', 'inbox_evento_chatwoot', p_evento_id::text,
+            v_evento.correlation_id,
             jsonb_build_object('tipo', v_evento.event_type, 'tentativas', v_evento.attempts,
                                'codigo', p_codigo, '_source', 'worker'));
     end if;
@@ -680,13 +759,30 @@ begin
 end;
 $$;
 
-revoke all on function public.reivindicar_eventos_inbox_chatwoot(text, integer, integer) from public, anon, authenticated;
+revoke all on function public.reivindicar_eventos_inbox_chatwoot(text, integer, integer, timestamptz) from public, anon, authenticated;
 revoke all on function public.aplicar_evento_inbox_chatwoot(uuid, text, bigint, jsonb) from public, anon, authenticated;
 revoke all on function public.registrar_falha_evento_inbox_chatwoot(uuid, text, bigint, text, boolean) from public, anon, authenticated;
 revoke all on function public.fn_inbox_chatwoot_terminal() from public, anon, authenticated;
-grant execute on function public.reivindicar_eventos_inbox_chatwoot(text, integer, integer) to service_role;
+revoke all on function public.fn_espelho_chatwoot_revisao() from public, anon, authenticated;
+revoke all on function public.auditar_consumo_inbox_chatwoot(uuid, text, text, text, text, jsonb) from public, anon, authenticated, service_role;
+grant execute on function public.reivindicar_eventos_inbox_chatwoot(text, integer, integer, timestamptz) to service_role;
 grant execute on function public.aplicar_evento_inbox_chatwoot(uuid, text, bigint, jsonb) to service_role;
 grant execute on function public.registrar_falha_evento_inbox_chatwoot(uuid, text, bigint, text, boolean) to service_role;
+
+-- Papel mínimo do worker: sem login, sem tabela, só as três funções. Enquanto o worker
+-- rodar como `service_role`, o banco não o restringe a elas. Habilitar exige decisão:
+-- ver docs/operations/msg-006-runbook.md §5.
+do $$
+begin
+    if not exists (select 1 from pg_roles where rolname = 'orbita_worker_inbox') then
+        create role orbita_worker_inbox nologin noinherit;
+    end if;
+end;
+$$;
+grant usage on schema public to orbita_worker_inbox;
+grant execute on function public.reivindicar_eventos_inbox_chatwoot(text, integer, integer, timestamptz) to orbita_worker_inbox;
+grant execute on function public.aplicar_evento_inbox_chatwoot(uuid, text, bigint, jsonb) to orbita_worker_inbox;
+grant execute on function public.registrar_falha_evento_inbox_chatwoot(uuid, text, bigint, text, boolean) to orbita_worker_inbox;
 
 -- ---------------------------------------------------------------------------
 -- 7. Eventos de auditoria (projeção SQL de `auditEventCatalog.ts`).
@@ -728,15 +824,23 @@ begin
     end if;
 
     select string_agg(f.assinatura || ':' || r.rolname, ', ') into v_texto
-      from (values ('public.reivindicar_eventos_inbox_chatwoot(text,integer,integer)'),
+      from (values ('public.reivindicar_eventos_inbox_chatwoot(text,integer,integer,timestamptz)'),
                    ('public.aplicar_evento_inbox_chatwoot(uuid,text,bigint,jsonb)'),
                    ('public.registrar_falha_evento_inbox_chatwoot(uuid,text,bigint,text,boolean)'),
                    ('public.concluir_evento_inbox_chatwoot(uuid,text,jsonb,text)'),
-                   ('public.preparar_replay_evento_inbox_chatwoot(uuid)')) as f(assinatura)
+                   ('public.preparar_replay_evento_inbox_chatwoot(uuid)'),
+                   ('public.auditar_consumo_inbox_chatwoot(uuid,text,text,text,text,jsonb)')) as f(assinatura)
      cross join (values ('authenticated'), ('anon')) as r(rolname)
      where has_function_privilege(r.rolname, f.assinatura, 'execute');
     if v_texto is not null then
         raise exception 'MSG-006: o navegador aciona o consumidor (%)', v_texto;
+    end if;
+
+    if (select rolcanlogin or rolsuper or rolbypassrls from pg_roles where rolname = 'orbita_worker_inbox') then
+        raise exception 'MSG-006: orbita_worker_inbox nao pode ter login nem ignorar RLS';
+    end if;
+    if pg_has_role('orbita_worker_inbox', 'service_role', 'member') then
+        raise exception 'MSG-006: orbita_worker_inbox nao pode herdar service_role';
     end if;
 
     if not exists (select 1 from pg_index i where i.indexrelid = 'public.uq_sac_cases_conversa_aberto'::regclass and i.indisunique)

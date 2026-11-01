@@ -1,7 +1,7 @@
 /** MSG-006: chamadas e leituras comuns ao ensaio do consumidor e às suas contraprovas. */
 
 const ACEITAR = `select * from public.aceitar_entrega_inbox_chatwoot($1, $2, null, 1, null, $3, $4, '{"event":"x"}'::jsonb)`;
-const REIVINDICAR = 'select * from public.reivindicar_eventos_inbox_chatwoot($1, $2, $3)';
+const REIVINDICAR = "select * from public.reivindicar_eventos_inbox_chatwoot($1, $2, $3, 'epoch'::timestamptz)";
 const APLICAR = 'select * from public.aplicar_evento_inbox_chatwoot($1, $2, $3, $4::jsonb)';
 
 export function comandoDaMensagem(mensagem, conversa, contato, extra = {}) {
@@ -12,7 +12,7 @@ export function comandoDaMensagem(mensagem, conversa, contato, extra = {}) {
     abre_caso: true,
     contato: { id: contato, nome: `Sintetico ${contato}` },
     conversa: { id: conversa, contato_id: contato, status: 'open', inbox_id: 1, canal: 'Channel::Api' },
-    mensagem: { id: mensagem, conversa_id: conversa, conteudo: 'sintetico', tipo: 'incoming', modo: 'preservar' },
+    mensagem: { id: mensagem, conversa_id: conversa, conteudo: 'sintetico', tipo: 'incoming', remetente_tipo: 'contact', modo: 'preservar' },
     ...extra,
   };
 }

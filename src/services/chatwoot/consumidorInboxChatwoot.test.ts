@@ -37,7 +37,7 @@ function comando(payload: Record<string, unknown>, tipo = String(payload.event))
 describe('traduzirEventoDaInbox', () => {
   it('mensagem recebida do cliente abre caso; o comando não leva organização nem conexão', () => {
     const c = comando(MENSAGEM);
-    expect(c).toMatchObject({ acao: 'espelhar', abre_caso: true, revisao_em: '2026-11-01T10:00:00.000Z' });
+    expect(c).toMatchObject({ acao: 'espelhar', abre_caso: true, revisao_conteudo_em: undefined, revisao_status_em: undefined });
     expect(c.mensagem).toMatchObject({ id: 500, conversa_id: 50, modo: 'preservar' });
     expect(JSON.stringify(c)).not.toMatch(/organizacao|conexao/u);
   });
@@ -55,14 +55,14 @@ describe('traduzirEventoDaInbox', () => {
 
   it('edição sobrescreve e a revisão vem do provedor, em ISO ou em segundos', () => {
     expect(comando({ ...MENSAGEM, event: 'message_updated', updated_at: 1793527200 })).toMatchObject({
-      revisao_em: new Date(1793527200 * 1000).toISOString(),
+      revisao_conteudo_em: new Date(1793527200 * 1000).toISOString(),
       mensagem: { modo: 'sobrescrever' },
     });
   });
 
   it('status leva só o id remoto e o estado', () => {
     expect(comando({ event: 'conversation_status_changed', account: { id: 7 }, conversation: { id: 50, status: 'resolved' } })).toEqual({
-      evento: 'conversation_status_changed', acao: 'status', revisao_em: undefined, conversa: { id: 50, status: 'resolved' },
+      evento: 'conversation_status_changed', acao: 'status', revisao_status_em: undefined, conversa: { id: 50, status: 'resolved' },
     });
   });
 
@@ -99,7 +99,7 @@ function porta(desfecho: DesfechoDaAplicacao | Error, lote: readonly EventoReivi
   } satisfies PortaDoConsumidorInbox;
 }
 
-const OPCOES = { workerId: 'w1', limite: 10, leaseSegundos: 60 };
+const OPCOES = { workerId: 'w1', limite: 10, leaseSegundos: 60, recebidosDesde: '2026-11-01T00:00:00Z' };
 
 describe('consumirInboxUmaVez', () => {
   it('conta cada desfecho e não registra falha em sucesso', async () => {
@@ -198,6 +198,8 @@ describe('porta sobre o Supabase', () => {
   });
 });
 
+const LIGADO = { CHATWOOT_INBOX_WORKER_ENABLED: 'true', CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: '2026-11-01T00:00:00Z' };
+
 describe('worker: kill switch e configuração', () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -205,6 +207,17 @@ describe('worker: kill switch e configuração', () => {
     const p = porta({ _tag: 'PossePerdida' });
     await executarWorkerInbox(p, lerConfiguracaoDoWorkerInbox({}), new AbortController().signal);
     expect(p.reivindicar).not.toHaveBeenCalled();
+  });
+
+  it('ligado sem o corte do backlog: recusa a partida', () => {
+    expect(() => lerConfiguracaoDoWorkerInbox({ CHATWOOT_INBOX_WORKER_ENABLED: 'true' })).toThrow(/BACKLOG_DESDE/u);
+    expect(() => lerConfiguracaoDoWorkerInbox({ CHATWOOT_INBOX_WORKER_ENABLED: 'true', CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: 'ontem' })).toThrow();
+  });
+
+  it('o corte chega ao claim', async () => {
+    const p = porta({ _tag: 'PossePerdida' }, []);
+    await consumirInboxUmaVez(p, OPCOES);
+    expect(p.reivindicar).toHaveBeenCalledWith('w1', 10, 60, '2026-11-01T00:00:00Z');
   });
 
   it('valor fora da faixa ou não reconhecido recusa a partida', () => {
@@ -219,7 +232,7 @@ describe('worker: kill switch e configuração', () => {
       parada.abort();
       return [EVENTO];
     });
-    const config = lerConfiguracaoDoWorkerInbox({ CHATWOOT_INBOX_WORKER_ENABLED: 'true', CHATWOOT_INBOX_WORKER_POLL_MS: '100' });
+    const config = lerConfiguracaoDoWorkerInbox({ ...LIGADO, CHATWOOT_INBOX_WORKER_POLL_MS: '100' });
     await executarWorkerInbox(p, config, parada.signal);
     expect(p.reivindicar).toHaveBeenCalledTimes(1);
     expect(p.aplicar).not.toHaveBeenCalled();
@@ -236,7 +249,7 @@ describe('worker: kill switch e configuração', () => {
       return [];
     });
     const config = lerConfiguracaoDoWorkerInbox({
-      CHATWOOT_INBOX_WORKER_ENABLED: 'true', CHATWOOT_INBOX_WORKER_POLL_MS: '100', CHATWOOT_INBOX_WORKER_IDLE_MAX_MS: '100',
+      ...LIGADO, CHATWOOT_INBOX_WORKER_POLL_MS: '100', CHATWOOT_INBOX_WORKER_IDLE_MAX_MS: '100',
     });
     await executarWorkerInbox(p, config, parada.signal);
     expect(chamadas).toBe(2);

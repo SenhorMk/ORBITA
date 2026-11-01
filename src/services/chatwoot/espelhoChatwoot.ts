@@ -41,17 +41,21 @@ export interface DadosDaConversa {
   readonly status: string;
   readonly inboxId: number | null;
   readonly canal: string;
+  /** Versão do status vinda do provedor; `null` não passa de uma revisão comprovada. */
+  readonly statusRevisaoEm: string | null;
 }
 
 export interface DadosDaMensagem {
   readonly idExterno: number;
   readonly conversaIdExterno: number;
   readonly conteudo: string;
-  readonly tipo: 'incoming' | 'outgoing' | 'system' | 'template';
+  readonly tipo: 'incoming' | 'outgoing' | 'system' | 'template' | null;
   readonly remetenteNome: string | null;
   readonly remetenteId: number | null;
   readonly remetenteTipo: string | null;
   readonly criadaEm: string;
+  /** Versão do conteúdo vinda do provedor; `null` não passa de uma revisão comprovada. */
+  readonly conteudoRevisaoEm: string | null;
 }
 
 /**
@@ -145,6 +149,7 @@ export function gravarConversa(
     status: dados.status,
     inbox_id: dados.inboxId,
     channel: dados.canal,
+    status_revisao_em: dados.statusRevisaoEm,
     updated_at: new Date().toISOString(),
   }, 'sobrescrever');
 }
@@ -169,6 +174,7 @@ export async function gravarMensagem(
     sender_id: dados.remetenteId,
     sender_type: dados.remetenteTipo,
     created_at: dados.criadaEm,
+    conteudo_revisao_em: dados.conteudoRevisaoEm,
     updated_at: new Date().toISOString(),
   }, modo);
 }

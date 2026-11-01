@@ -6,7 +6,8 @@ import { consumirInboxUmaVez, type PortaDoConsumidorInbox } from './consumidorIn
 /**
  * Configuração do processo worker. O kill switch começa desligado: sem
  * `CHATWOOT_INBOX_WORKER_ENABLED=true` o processo não reivindica nada, e a
- * recepção continua gravando na inbox.
+ * recepção continua gravando na inbox. Ligado, exige o corte do backlog: evento mais
+ * antigo que ele fica parado até existir inventário e autorização.
  */
 const ConfiguracaoSchema = z.object({
   CHATWOOT_INBOX_WORKER_ENABLED: z.enum(['true', 'false']).default('false'),
@@ -14,10 +15,12 @@ const ConfiguracaoSchema = z.object({
   CHATWOOT_INBOX_WORKER_IDLE_MAX_MS: z.coerce.number().int().min(100).max(60_000).default(5_000),
   CHATWOOT_INBOX_WORKER_LEASE_SECONDS: z.coerce.number().int().min(5).max(300).default(60),
   CHATWOOT_INBOX_WORKER_BATCH: z.coerce.number().int().min(1).max(50).default(10),
+  CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: z.string().datetime({ offset: true }).optional(),
 });
 
 export interface ConfiguracaoDoWorkerInbox {
   readonly ligado: boolean;
+  readonly recebidosDesde: string | null;
   readonly pollMs: number;
   readonly ociosoMaxMs: number;
   readonly leaseSegundos: number;
@@ -26,8 +29,13 @@ export interface ConfiguracaoDoWorkerInbox {
 
 export function lerConfiguracaoDoWorkerInbox(ambiente: Readonly<Record<string, string | undefined>>): ConfiguracaoDoWorkerInbox {
   const lido = ConfiguracaoSchema.parse(ambiente);
+  const ligado = lido.CHATWOOT_INBOX_WORKER_ENABLED === 'true';
+  if (ligado && !lido.CHATWOOT_INBOX_WORKER_BACKLOG_DESDE) {
+    throw new Error('Worker da inbox ligado sem CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: o backlog antigo exige autorização.');
+  }
   return {
-    ligado: lido.CHATWOOT_INBOX_WORKER_ENABLED === 'true',
+    ligado,
+    recebidosDesde: lido.CHATWOOT_INBOX_WORKER_BACKLOG_DESDE ?? null,
     pollMs: lido.CHATWOOT_INBOX_WORKER_POLL_MS,
     ociosoMaxMs: Math.max(lido.CHATWOOT_INBOX_WORKER_IDLE_MAX_MS, lido.CHATWOOT_INBOX_WORKER_POLL_MS),
     leaseSegundos: lido.CHATWOOT_INBOX_WORKER_LEASE_SECONDS,
@@ -62,7 +70,8 @@ export async function executarWorkerInbox(
   configuracao: ConfiguracaoDoWorkerInbox,
   sinal: AbortSignal,
 ): Promise<void> {
-  if (!configuracao.ligado) {
+  const { recebidosDesde } = configuracao;
+  if (!configuracao.ligado || recebidosDesde === null) {
     logger.warn('chatwoot.inbox.worker_desligado', { subsystem: 'queue' });
     return;
   }
@@ -76,6 +85,7 @@ export async function executarWorkerInbox(
         workerId,
         limite: configuracao.lote,
         leaseSegundos: configuracao.leaseSegundos,
+        recebidosDesde,
         deveParar: () => sinal.aborted,
       });
       espera = resumo.reivindicados > 0 ? configuracao.pollMs : Math.min(espera * 2, configuracao.ociosoMaxMs);

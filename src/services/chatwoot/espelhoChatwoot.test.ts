@@ -30,14 +30,14 @@ const contato = (idExterno: number, nome: string) => ({
 });
 const mensagem = (idExterno: number, conversaIdExterno: number, conteudo: string): DadosDaMensagem => ({
   idExterno, conversaIdExterno, conteudo, tipo: 'incoming', remetenteNome: null, remetenteId: null,
-  remetenteTipo: null, criadaEm: '2026-10-26T12:00:00Z',
+  remetenteTipo: null, criadaEm: '2026-10-26T12:00:00Z', conteudoRevisaoEm: null,
 });
 
 /** Contato 5 → conversa 50 → mensagem 500 numa conexão, como o webhook ou o sync gravam. */
 async function arvore(store: EspelhoChatwootFake, escopo: EscopoDeEscritaChatwoot, texto: string) {
   const contatoIdLocal = await gravarContato(store, escopo, contato(5, `Contato ${texto}`));
   const conversaIdLocal = await gravarConversa(store, escopo, {
-    idExterno: 50, contatoIdLocal, contatoIdExterno: 5, displayId: 1, status: 'open', inboxId: 1, canal: 'Channel::Api',
+    idExterno: 50, contatoIdLocal, contatoIdExterno: 5, displayId: 1, status: 'open', inboxId: 1, canal: 'Channel::Api', statusRevisaoEm: null,
   });
   const mensagemIdLocal = await gravarMensagem(store, escopo, mensagem(500, 50, `mensagem de ${texto}`), 'sobrescrever');
   return { contatoIdLocal, conversaIdLocal, mensagemIdLocal };
@@ -200,7 +200,7 @@ describe('legado durante a transição', () => {
     const store = new EspelhoChatwootFake({ pkGlobal: false });
     const contatoDeA2 = await gravarContato(store, A2, contato(5, 'de A2'));
     await expect(falhaDe(gravarConversa(store, A1, {
-      idExterno: 50, contatoIdLocal: contatoDeA2, contatoIdExterno: 5, displayId: null, status: 'open', inboxId: 1, canal: 'Channel::Api',
+      idExterno: 50, contatoIdLocal: contatoDeA2, contatoIdExterno: 5, displayId: null, status: 'open', inboxId: 1, canal: 'Channel::Api', statusRevisaoEm: null,
     }))).resolves.toEqual({ recurso: 'conversa', falha: 'VinculoRecusado' });
   });
 });

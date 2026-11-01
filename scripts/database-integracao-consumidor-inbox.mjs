@@ -1,7 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 
-import { createLocalDatabaseClient, DEFAULT_LOCAL_DATABASE_PORT } from './local-database-client.mjs';
 import { err, ok } from './script-result.mjs';
 
 /**
@@ -27,26 +26,6 @@ function docker(args) {
   return spawnSync('docker', args, { encoding: 'utf8', shell: false });
 }
 
-/**
- * O `auth.role()` do esqueleto do laboratório só lê a GUC antiga, e o PostgREST atual
- * grava `request.jwt.claims`. Produção lê as duas. Alinhamento só do laboratório, como
- * `alinharStubDeAuthComProducao`; não é migration.
- */
-async function alinharPapelDoJwt() {
-  const client = createLocalDatabaseClient('orbita-integracao-auth', console, DEFAULT_LOCAL_DATABASE_PORT, 'supabase_auth_admin');
-  await client.connect();
-  try {
-    await client.query(`
-      create or replace function auth.role() returns text language sql stable as $$
-        select coalesce(
-          nullif(current_setting('request.jwt.claim.role', true), ''),
-          nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role')::text;
-      $$`);
-  } finally {
-    await client.end();
-  }
-}
-
 async function esperarRest() {
   for (let i = 0; i < 150; i += 1) {
     try {
@@ -65,7 +44,6 @@ export async function runIntegracaoConsumidorInbox() {
   const segredo = crypto.randomBytes(32).toString('hex');
   docker(['rm', '-f', CONTAINER]);
   try {
-    await alinharPapelDoJwt();
     const subiu = docker([
       'run', '-d', '--name', CONTAINER, '--network', REDE, '-p', `127.0.0.1:${PORTA_REST}:3000`,
       // O libpq lê o destino destas variáveis: a senha é a do laboratório descartável.

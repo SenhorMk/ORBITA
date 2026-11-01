@@ -28,6 +28,7 @@ export type DisposicaoDoEvento =
   | 'revisao_atrasada'
   | 'conversa_nao_espelhada'
   | 'conexao_nao_comprovada'
+  | 'classificacao_inconclusiva'
   | 'evento_desconhecido'
   | 'conexao_removida';
 
@@ -40,7 +41,7 @@ export type DesfechoDaAplicacao =
 
 /** A única superfície privilegiada do worker: as três RPCs do consumo, nada mais. */
 export interface PortaDoConsumidorInbox {
-  reivindicar(workerId: string, limite: number, leaseSegundos: number): Promise<readonly EventoReivindicado[]>;
+  reivindicar(workerId: string, limite: number, leaseSegundos: number, recebidosDesde: string): Promise<readonly EventoReivindicado[]>;
   aplicar(evento: EventoReivindicado, workerId: string, comando: ComandoDeConsumoChatwoot): Promise<DesfechoDaAplicacao>;
   registrarFalha(evento: EventoReivindicado, workerId: string, codigo: string, definitiva: boolean): Promise<boolean>;
 }
@@ -59,6 +60,8 @@ export interface OpcoesDaPassada {
   readonly workerId: string;
   readonly limite: number;
   readonly leaseSegundos: number;
+  /** Corte do backlog: eventos mais antigos ficam parados até autorização. */
+  readonly recebidosDesde: string;
   readonly deveParar?: () => boolean;
 }
 
@@ -127,7 +130,7 @@ async function processar(porta: PortaDoConsumidorInbox, evento: EventoReivindica
 
 /** Uma passada. Ao pedir parada, os eventos restantes do lote ficam para a lease vencer. */
 export async function consumirInboxUmaVez(porta: PortaDoConsumidorInbox, opcoes: OpcoesDaPassada): Promise<ResumoDaPassada> {
-  const lote = await porta.reivindicar(opcoes.workerId, opcoes.limite, opcoes.leaseSegundos);
+  const lote = await porta.reivindicar(opcoes.workerId, opcoes.limite, opcoes.leaseSegundos, opcoes.recebidosDesde);
   const contagem: Contagem = { reivindicados: lote.length, processados: 0, ignorados: 0, falhas: 0, cercados: 0, devolvidos: 0, semResposta: 0 };
   for (const evento of lote) {
     if (opcoes.deveParar?.()) break;

@@ -13,6 +13,8 @@ import { listarCasos, listarEventosRecebidos } from '@/services/sac/leituraDeCas
 
 import { consumirInboxUmaVez } from './consumidorInboxChatwoot';
 import { criarPortaDoConsumidorInbox } from './consumidorInboxChatwootSupabase';
+import { gravarContato, gravarConversa, gravarMensagem } from './espelhoChatwoot';
+import { criarEspelhoChatwootSupabase } from './espelhoChatwootSupabase';
 
 /**
  * Prova integrada do MSG-006, com fixtures sintéticas. Caminho real: rota do webhook
@@ -57,6 +59,8 @@ const CONEXAO_A = 'e6200000-0000-4000-8000-0000000000c1';
 const CONEXAO_B = 'e6200000-0000-4000-8000-0000000000c2';
 const SEGREDO_A = 'segredo-sintetico-a-1234567890';
 const SEGREDO_B = 'segredo-sintetico-b-1234567890';
+const CONEXAO_A2 = 'e6200000-0000-4000-8000-0000000000c3';
+const SEGREDO_A2 = 'segredo-sintetico-a2-123456789';
 
 /** O caminho até o banco, com a queda injetável na chamada que aplica o evento. */
 type Queda = 'nenhuma' | 'antes_de_chegar' | 'depois_do_commit';
@@ -132,7 +136,7 @@ function mensagem(id: number, conversa: number, contato: number, extra: Record<s
 }
 
 const consumir = (workerId: string, limite = 20) =>
-  consumirInboxUmaVez(criarPortaDoConsumidorInbox(cliente), { workerId, limite, leaseSegundos: 30 });
+  consumirInboxUmaVez(criarPortaDoConsumidorInbox(cliente), { workerId, limite, leaseSegundos: 30, recebidosDesde: '1970-01-01T00:00:00Z' });
 
 async function evento(chave: string, conexao = CONEXAO_A) {
   const { rows } = await admin.query(
@@ -186,9 +190,10 @@ beforeAll(async () => {
     [ORG_A, DONO_A, ORG_B, DONO_B]);
   await admin.query(
     `insert into public.conexoes_integracao (id, organizacao_id, provedor, nome, status) values
-       ($1, $3, 'chatwoot', 'A', 'conectado'), ($2, $4, 'chatwoot', 'B', 'conectado')`, [CONEXAO_A, CONEXAO_B, ORG_A, ORG_B]);
+       ($1, $3, 'chatwoot', 'A', 'conectado'), ($2, $4, 'chatwoot', 'B', 'conectado'), ($5, $3, 'chatwoot', 'A2', 'conectado')`,
+    [CONEXAO_A, CONEXAO_B, ORG_A, ORG_B, CONEXAO_A2]);
   const { encrypt } = await import('@/lib/crypto');
-  for (const [conexao, org, segredo] of [[CONEXAO_A, ORG_A, SEGREDO_A], [CONEXAO_B, ORG_B, SEGREDO_B]] as const) {
+  for (const [conexao, org, segredo] of [[CONEXAO_A, ORG_A, SEGREDO_A], [CONEXAO_B, ORG_B, SEGREDO_B], [CONEXAO_A2, ORG_A, SEGREDO_A2]] as const) {
     await admin.query(
       'insert into public.credenciais_integracao (conexao_id, organizacao_id, dados_cifrados) values ($1, $2, $3)',
       [conexao, org, encrypt(JSON.stringify({ api_url: 'https://chatwoot.invalid', api_token: 'ci-test-token', account_id: '1', webhook_secret: segredo }))],
@@ -356,7 +361,7 @@ describe('webhook → inbox → ACK → worker → caso → operador', () => {
   it('nenhum cliente aciona o consumidor: anon e authenticated recusados pelo PostgREST real', async () => {
     for (const papel of ['anon', 'authenticated']) {
       const navegador = createClient(URL_DO_PROXY, jwtDoLaboratorio(papel), { auth: { persistSession: false, autoRefreshToken: false } });
-      const claim = await navegador.rpc('reivindicar_eventos_inbox_chatwoot', { p_worker: 'x', p_limite: 1, p_lease_segundos: 60 });
+      const claim = await navegador.rpc('reivindicar_eventos_inbox_chatwoot', { p_worker: 'x', p_limite: 1, p_lease_segundos: 60, p_recebidos_desde: '1970-01-01T00:00:00Z' });
       const aplicar = await navegador.rpc('aplicar_evento_inbox_chatwoot', {
         p_evento_id: '00000000-0000-4000-8000-000000000000', p_worker: 'x', p_fencing_token: 1, p_comando: { evento: 'x', acao: 'ignorar' },
       });
@@ -366,10 +371,141 @@ describe('webhook → inbox → ACK → worker → caso → operador', () => {
   });
 });
 
+describe('sync e webhook: a versão mais nova comprovada não é sobrescrita', () => {
+  const T1 = '2030-01-01T00:00:01.000Z';
+  const T2 = '2030-01-01T00:00:02.000Z';
+  const T3 = '2030-01-01T00:00:03.000Z';
+
+  const escopoDe = (conexaoId: string) => ({ organizacaoId: ORG_A, conexaoId, atorId: DONO_A });
+  const espelho = () => criarEspelhoChatwootSupabase(cliente);
+
+  /** O que `POST /api/chatwoot/sync` grava por conversa, com o estado lido do provedor. */
+  async function sincronizarConversa(conexaoId: string, conversa: number, contato: number, status: string, statusRevisaoEm: string | null) {
+    const escopo = escopoDe(conexaoId);
+    const contatoIdLocal = await gravarContato(espelho(), escopo, {
+      idExterno: contato, nome: 'NOME-SINTETICO', email: null, telefone: null, telefoneNormalizado: null, avatarUrl: null,
+    });
+    await gravarConversa(espelho(), escopo, {
+      idExterno: conversa, contatoIdLocal, contatoIdExterno: contato, displayId: null, status, inboxId: 1, canal: 'Channel::Api', statusRevisaoEm,
+    });
+  }
+
+  function sincronizarMensagem(conexaoId: string, conversa: number, mensagemId: number, conteudo: string, conteudoRevisaoEm: string | null) {
+    return gravarMensagem(espelho(), escopoDe(conexaoId), {
+      idExterno: mensagemId, conversaIdExterno: conversa, conteudo, tipo: 'incoming', remetenteNome: null, remetenteId: null,
+      remetenteTipo: 'contact', criadaEm: T1, conteudoRevisaoEm,
+    }, 'sobrescrever');
+  }
+
+  const statusPeloWebhook = (conversa: number, status: string, updatedAt: string) => ({
+    event: 'conversation_status_changed', account: { id: 1 }, inbox: { id: 1 }, conversation: { id: conversa, inbox_id: 1, status, updated_at: updatedAt },
+  });
+
+  async function statusDa(conexaoId: string, conversa: number) {
+    const { rows } = await admin.query(
+      'select status from public.chatwoot_conversations where conexao_id = $1 and id_externo = $2', [conexaoId, String(conversa)]);
+    return rows[0]?.status;
+  }
+
+  async function conteudoDa(conexaoId: string, mensagemId: number) {
+    const { rows } = await admin.query(
+      'select content from public.chatwoot_messages where conexao_id = $1 and id_externo = $2', [conexaoId, String(mensagemId)]);
+    return rows[0]?.content;
+  }
+
+  it('webhook novo → sync antigo: sem versão ou com versão velha não sobrescreve; versão mais nova sim', async () => {
+    expect((await entregar(mensagem(2000, 200, 20))).status).toBe(200);
+    expect((await entregar(statusPeloWebhook(200, 'resolved', T2), { delivery: 's-200' })).status).toBe(200);
+    expect((await entregar({ ...mensagem(2000, 200, 20), event: 'message_updated', content: 'NOVA', updated_at: T2 }, { delivery: 'u-2000' })).status).toBe(200);
+    await consumir('w-sync-1');
+    expect(await statusDa(CONEXAO_A, 200)).toBe('resolved');
+    expect(await conteudoDa(CONEXAO_A, 2000)).toBe('NOVA');
+
+    await sincronizarConversa(CONEXAO_A, 200, 20, 'open', null);
+    await sincronizarMensagem(CONEXAO_A, 200, 2000, 'SEM-VERSAO', null);
+    expect(await statusDa(CONEXAO_A, 200)).toBe('resolved');
+    expect(await conteudoDa(CONEXAO_A, 2000)).toBe('NOVA');
+
+    await sincronizarConversa(CONEXAO_A, 200, 20, 'open', T1);
+    await sincronizarMensagem(CONEXAO_A, 200, 2000, 'VELHA', T1);
+    expect(await statusDa(CONEXAO_A, 200)).toBe('resolved');
+    expect(await conteudoDa(CONEXAO_A, 2000)).toBe('NOVA');
+
+    await sincronizarConversa(CONEXAO_A, 200, 20, 'pending', T3);
+    await sincronizarMensagem(CONEXAO_A, 200, 2000, 'MAIS-NOVA', T3);
+    expect(await statusDa(CONEXAO_A, 200)).toBe('pending');
+    expect(await conteudoDa(CONEXAO_A, 2000)).toBe('MAIS-NOVA');
+  });
+
+  it('sync → webhook novo: o sync sem versão grava, e o webhook comprovado prevalece depois', async () => {
+    await sincronizarConversa(CONEXAO_A, 210, 21, 'open', null);
+    await sincronizarMensagem(CONEXAO_A, 210, 2100, 'DO-SYNC', null);
+    expect(await statusDa(CONEXAO_A, 210)).toBe('open');
+
+    expect((await entregar(statusPeloWebhook(210, 'resolved', T2), { delivery: 's-210' })).status).toBe(200);
+    expect((await entregar({ ...mensagem(2100, 210, 21), event: 'message_updated', content: 'DO-WEBHOOK', updated_at: T2 }, { delivery: 'u-2100' })).status).toBe(200);
+    await consumir('w-sync-2');
+    expect(await statusDa(CONEXAO_A, 210)).toBe('resolved');
+    expect(await conteudoDa(CONEXAO_A, 2100)).toBe('DO-WEBHOOK');
+
+    await sincronizarConversa(CONEXAO_A, 210, 21, 'open', null);
+    expect(await statusDa(CONEXAO_A, 210)).toBe('resolved');
+  });
+
+  it('message_updated antes de message_created: a edição fica e a criação atrasada abre o caso', async () => {
+    const editada = { ...mensagem(2200, 220, 22), event: 'message_updated', content: 'EDITADA', updated_at: T2 };
+    expect((await entregar(editada, { delivery: 'u-2200' })).status).toBe(200);
+    await consumir('w-sync-3');
+    expect(await conteudoDa(CONEXAO_A, 2200)).toBe('EDITADA');
+    expect(await contar('sac_cases', "organizacao_id = $1 and conversa_id_local in (select id_local from public.chatwoot_conversations where conexao_id = $2 and id_externo = '220')", ORG_A, CONEXAO_A)).toBe(0);
+
+    expect((await entregar({ ...mensagem(2200, 220, 22), content: 'ORIGINAL', created_at: T1 })).status).toBe(200);
+    await consumir('w-sync-3b');
+    expect(await evento('v2:message_created:msg:2200')).toMatchObject({ status: 'processed', disposicao: 'caso_aberto' });
+    expect(await conteudoDa(CONEXAO_A, 2200)).toBe('EDITADA');
+  });
+
+  it('dois webhooks fora de ordem: fica a revisão mais nova e a velha é registrada como atrasada', async () => {
+    expect((await entregar(mensagem(2300, 230, 23))).status).toBe(200);
+    expect((await entregar(statusPeloWebhook(230, 'resolved', T2), { delivery: 's-230-b' })).status).toBe(200);
+    await consumir('w-sync-4');
+    expect((await entregar(statusPeloWebhook(230, 'pending', T1), { delivery: 's-230-a' })).status).toBe(200);
+    await consumir('w-sync-4b');
+    expect(await statusDa(CONEXAO_A, 230)).toBe('resolved');
+    const { rows: [atrasado] } = await admin.query(
+      "select status, disposicao from public.inbox_eventos_chatwoot where conexao_id = $1 and idempotency_key like 'v2:conversation_status_changed:conv:230:pending:%'", [CONEXAO_A]);
+    expect(atrasado).toEqual({ status: 'processed', disposicao: 'revisao_atrasada' });
+  });
+
+  it('duas conexões da mesma organização com ids iguais: versão e sync de uma não tocam a outra', async () => {
+    expect((await entregar(mensagem(2400, 240, 24))).status).toBe(200);
+    expect((await entregar(mensagem(2400, 240, 24), { conexao: CONEXAO_A2, segredo: SEGREDO_A2 })).status).toBe(200);
+    await consumir('w-sync-5');
+    expect((await entregar(statusPeloWebhook(240, 'resolved', T2), { conexao: CONEXAO_A2, segredo: SEGREDO_A2, delivery: 's-240' })).status).toBe(200);
+    await consumir('w-sync-5b');
+    expect(await statusDa(CONEXAO_A2, 240)).toBe('resolved');
+    expect(await statusDa(CONEXAO_A, 240)).toBe('open');
+
+    // A conexão A não tem versão comprovada do status: o sync dela grava só nela.
+    await sincronizarConversa(CONEXAO_A, 240, 24, 'pending', null);
+    expect(await statusDa(CONEXAO_A, 240)).toBe('pending');
+    expect(await statusDa(CONEXAO_A2, 240)).toBe('resolved');
+
+    await sincronizarConversa(CONEXAO_A2, 240, 24, 'open', null);
+    expect(await statusDa(CONEXAO_A2, 240)).toBe('resolved');
+
+    const { rows } = await admin.query(
+      `select v.conexao_id from public.sac_cases s
+         join public.chatwoot_conversations v on v.id_local = s.conversa_id_local and v.organizacao_id = s.organizacao_id
+        where v.id_externo = '240' order by 1`);
+    expect(rows.map((l: { conexao_id: string }) => l.conexao_id)).toEqual([CONEXAO_A, CONEXAO_A2].sort());
+  });
+});
+
 describe('processo worker real', () => {
   const RAIZ = path.resolve(__dirname, '../../..');
 
-  function iniciar(ligado: boolean): { filho: ChildProcess; saida: () => string } {
+  function iniciar(ligado: boolean, corte: string | undefined = '1970-01-01T00:00:00Z'): { filho: ChildProcess; saida: () => string } {
     const lab = { chave: jwtDoLaboratorio('service_role') };
     const filho = spawn(process.execPath, [
       'node_modules/ts-node/dist/bin.js', '--transpile-only', '--project', 'scripts/tsconfig.worker.json', 'scripts/worker-inbox-chatwoot.ts',
@@ -382,6 +518,7 @@ describe('processo worker real', () => {
         NEXT_PUBLIC_SUPABASE_URL: URL_DO_PROXY,
         SUPABASE_SERVICE_ROLE_KEY: lab.chave,
         CHATWOOT_INBOX_WORKER_ENABLED: ligado ? 'true' : 'false',
+        ...(corte ? { CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: corte } : {}),
         CHATWOOT_INBOX_WORKER_POLL_MS: '100',
         CHATWOOT_INBOX_WORKER_IDLE_MAX_MS: '200',
         CHATWOOT_INBOX_WORKER_LEASE_SECONDS: '5',
@@ -409,9 +546,28 @@ describe('processo worker real', () => {
 
   it('kill switch desligado: o processo termina sem reivindicar', async () => {
     expect((await entregar(mensagem(1600, 170, 17))).status).toBe(200);
-    const { filho, saida } = iniciar(false);
+    const { filho, saida } = iniciar(false, '');
     expect(await fim(filho)).toBe(0);
     expect(saida()).toContain('chatwoot.inbox.worker_desligado');
+    expect(await evento('v2:message_created:msg:1600')).toMatchObject({ status: 'received', attempts: 0 });
+  });
+
+  it('ligado sem o corte do backlog: recusa a partida e não consome', async () => {
+    const { filho, saida } = iniciar(true, '');
+    expect(await fim(filho)).not.toBe(0);
+    expect(saida()).toContain('BACKLOG_DESDE');
+    expect(await evento('v2:message_created:msg:1600')).toMatchObject({ status: 'received', attempts: 0 });
+  });
+
+  it('corte depois do evento: o processo roda e o backlog fica parado, sem alteração', async () => {
+    const { filho, saida } = iniciar(true, new Date(Date.now() + 3_600_000).toISOString());
+    try {
+      await ate(async () => saida().includes('chatwoot.inbox.worker_iniciado'));
+      await new Promise((resolve) => { setTimeout(resolve, 1500); });
+    } finally {
+      filho.kill('SIGKILL');
+      await fim(filho);
+    }
     expect(await evento('v2:message_created:msg:1600')).toMatchObject({ status: 'received', attempts: 0 });
   });
 

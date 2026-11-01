@@ -18,7 +18,7 @@ const AplicacaoSchema = z.object({
   desfecho: z.enum(['aplicado', 'posse_perdida', 'conexao_desligada']),
   disposicao: z.enum([
     'caso_aberto', 'mensagem_no_caso', 'espelho_atualizado', 'revisao_atrasada',
-    'conversa_nao_espelhada', 'conexao_nao_comprovada', 'evento_desconhecido', 'conexao_removida',
+    'conversa_nao_espelhada', 'conexao_nao_comprovada', 'classificacao_inconclusiva', 'evento_desconhecido', 'conexao_removida',
   ]).nullable(),
   caso_id: z.string().uuid().nullable(),
 });
@@ -34,11 +34,12 @@ function codigoDoBanco(error: { readonly code?: string }): string | null {
  */
 export function criarPortaDoConsumidorInbox(supabase: SupabaseClient): PortaDoConsumidorInbox {
   return {
-    async reivindicar(workerId, limite, leaseSegundos) {
+    async reivindicar(workerId, limite, leaseSegundos, recebidosDesde) {
       const { data, error } = await supabase.rpc('reivindicar_eventos_inbox_chatwoot', {
         p_worker: workerId,
         p_limite: limite,
         p_lease_segundos: leaseSegundos,
+        p_recebidos_desde: recebidosDesde,
       });
       if (error) throw new Error(`Claim da inbox falhou (${error.code ?? 'sem-codigo'}).`);
       return z.array(EventoSchema).parse(data ?? []).map((l): EventoReivindicado => ({
