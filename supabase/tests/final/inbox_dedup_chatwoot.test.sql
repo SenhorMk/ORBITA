@@ -14,7 +14,7 @@
 
 begin;
 
-select plan(33);
+select plan(34);
 
 insert into auth.users (id, email) values
     ('e5000000-0000-4000-8000-0000000000a1', 'dono-a-m5@orbita.test'),
@@ -180,6 +180,8 @@ select pg_temp.aceitar('e5000000-0000-4000-8000-0000000000c3', 'd-1', 'v2:messag
 select is((select count(*)::int from public.inbox_eventos_chatwoot where idempotency_key = 'v2:message_created:msg:8'), 1,
           '33. CONTRAPROVA: sem conferir a entrega, o delivery id reaproveitado grava outro evento');
 rollback to savepoint contraprova_entrega_sem_conferir;
+select throws_ok($$select * from pg_temp.aceitar('e5000000-0000-4000-8000-0000000000c3', 'd-1', 'v2:message_created:msg:8')$$,
+                 '23505', null, '34. sem a sabotagem, o mesmo delivery id com outro evento volta a ser recusado');
 
 select * from finish();
 rollback;

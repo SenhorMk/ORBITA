@@ -134,24 +134,18 @@ function verifySignedDelivery(
 }
 
 /**
- * Resolve the connection, verify the signed delivery over the raw body, parse
- * the payload against the Chatwoot contract, cross-check the account id, and
- * derive a verified organization scope — all before any lookup/insert that
- * would trust `organizacao_id` or `inbox_id`. See
- * `docs/integrations/chatwoot-contract.md` for the exact signing scheme.
+ * Localiza o segredo da conexão e confere a assinatura sobre os bytes originais.
+ * Só depois disto `organizacao_id` e o status lido valem alguma coisa.
  */
-async function authenticateWebhookRequest(delivery: RawDelivery): Promise<AuthenticateWebhookResult> {
-  const { conexaoId, rawBody, signatureHeader, timestampHeader, deliveryHeader } = delivery;
-
-  // 0. Formato barato antes de qualquer consulta, decifragem ou HMAC: o corpo já
-  //    veio limitado pela rota; aqui só cabeçalhos bem formados seguem adiante.
-  if (!signatureHeader || !timestampHeader) return denied(401, 'Assinatura ausente');
-  if (!SIGNATURE_FORMAT.test(signatureHeader) || !TIMESTAMP_FORMAT.test(timestampHeader)) {
-    return denied(401, 'Assinatura inválida');
-  }
-  const deliveryParsed = deliveryHeader === null ? null : DeliveryIdSchema.safeParse(deliveryHeader);
-  if (deliveryParsed && !deliveryParsed.success) return denied(400, 'Identificador de entrega inválido');
-
+async function conexaoAssinada(
+  conexaoId: string,
+  rawBody: Uint8Array,
+  signatureHeader: string,
+  timestampHeader: string,
+): Promise<
+  | { readonly ok: true; readonly connection: { readonly organizacao_id: string; readonly status: string }; readonly storedAccountId: string }
+  | { readonly ok: false; readonly outcome: WebhookOutcome }
+> {
   // 1. Resolver a conexão ANTES de qualquer confiança — apenas para localizar o
   //    segredo que autentica a requisição. organizacao_id só vira autoridade
   //    depois que a assinatura for validada com o segredo desta conexão específica.
@@ -178,6 +172,77 @@ async function authenticateWebhookRequest(delivery: RawDelivery): Promise<Authen
     return denied(401, 'Assinatura inválida');
   }
 
+  return { ok: true, connection, storedAccountId };
+}
+
+/** Decodifica em UTF-8 estrito, valida o contrato e confere a account da conexão. */
+function eventoDaConexao(
+  rawBody: Uint8Array,
+  storedAccountId: string,
+): { readonly ok: true; readonly payload: ChatwootWebhookEvent } | { readonly ok: false; readonly outcome: WebhookOutcome } {
+  let rawPayload: unknown;
+  try {
+    rawPayload = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(rawBody));
+  } catch {
+    return denied(400, 'Payload JSON inválido');
+  }
+
+  const payloadParsed = ChatwootWebhookEventSchema.safeParse(rawPayload);
+  if (!payloadParsed.success) return denied(400, 'Payload não corresponde ao contrato Chatwoot esperado');
+  const payload = payloadParsed.data;
+
+  // 3. Conferir account_id do payload contra o account_id persistido da conexão —
+  //    nunca aceitar inbox_id do payload como autoridade sem esse vínculo.
+  if (String(payload.account.id) !== storedAccountId) {
+    console.error('❌ Webhook Chatwoot: account_id do payload não corresponde à conexão.');
+    return denied(403, 'Conta Chatwoot não corresponde à conexão');
+  }
+
+  return { ok: true, payload };
+}
+
+/** O owner só preenche campos de auditoria; a autoridade vem da conexão assinada. */
+async function escopoDaOrganizacao(
+  organizacaoId: string,
+): Promise<{ readonly ok: true; readonly scope: VerifiedOrganizationScope } | { readonly ok: false; readonly outcome: WebhookOutcome }> {
+  const ownerActorId = await resolveOwnerActorId(organizacaoId);
+  if (!ownerActorId) {
+    console.error('❌ Webhook Chatwoot: organização sem owner resolvível — ambíguo/ausente.');
+    return denied(403, 'Escopo organizacional inválido');
+  }
+
+  const scopeResult = await verifyOrganizationScope(supabaseServer, { organizationId: organizacaoId, actorId: ownerActorId });
+  if (scopeResult._tag !== 'OrganizationScopeVerified') {
+    const unavailable = scopeResult._tag === 'OrganizationScopeStoreUnavailable';
+    return denied(unavailable ? 503 : 403, unavailable ? 'Serviço de autorização indisponível' : 'Escopo organizacional inválido');
+  }
+
+  return { ok: true, scope: scopeResult.scope };
+}
+
+/**
+ * Resolve the connection, verify the signed delivery over the raw body, parse
+ * the payload against the Chatwoot contract, cross-check the account id, and
+ * derive a verified organization scope — all before any lookup/insert that
+ * would trust `organizacao_id` or `inbox_id`. See
+ * `docs/integrations/chatwoot-contract.md` for the exact signing scheme.
+ */
+async function authenticateWebhookRequest(delivery: RawDelivery): Promise<AuthenticateWebhookResult> {
+  const { conexaoId, rawBody, signatureHeader, timestampHeader, deliveryHeader } = delivery;
+
+  // 0. Formato barato antes de qualquer consulta, decifragem ou HMAC: o corpo já
+  //    veio limitado pela rota; aqui só cabeçalhos bem formados seguem adiante.
+  if (!signatureHeader || !timestampHeader) return denied(401, 'Assinatura ausente');
+  if (!SIGNATURE_FORMAT.test(signatureHeader) || !TIMESTAMP_FORMAT.test(timestampHeader)) {
+    return denied(401, 'Assinatura inválida');
+  }
+  const deliveryParsed = deliveryHeader === null ? null : DeliveryIdSchema.safeParse(deliveryHeader);
+  if (deliveryParsed && !deliveryParsed.success) return denied(400, 'Identificador de entrega inválido');
+
+  const assinada = await conexaoAssinada(conexaoId, rawBody, signatureHeader, timestampHeader);
+  if (!assinada.ok) return assinada;
+  const { connection, storedAccountId } = assinada;
+
   // A partir daqui, conexaoId/organizacao_id são autoridade: a assinatura provou
   // conhecimento do segredo específico desta conexão.
 
@@ -198,36 +263,13 @@ async function authenticateWebhookRequest(delivery: RawDelivery): Promise<Authen
     return denied(status, status === 429 ? 'Limite de entregas excedido' : 'Serviço de limite indisponível');
   }
 
-  let rawPayload: unknown;
-  try {
-    rawPayload = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(rawBody));
-  } catch {
-    return denied(400, 'Payload JSON inválido');
-  }
-
-  const payloadParsed = ChatwootWebhookEventSchema.safeParse(rawPayload);
-  if (!payloadParsed.success) return denied(400, 'Payload não corresponde ao contrato Chatwoot esperado');
-  const payload = payloadParsed.data;
-
-  // 3. Conferir account_id do payload contra o account_id persistido da conexão —
-  //    nunca aceitar inbox_id do payload como autoridade sem esse vínculo.
-  if (String(payload.account.id) !== String(storedAccountId)) {
-    console.error('❌ Webhook Chatwoot: account_id do payload não corresponde à conexão.');
-    return denied(403, 'Conta Chatwoot não corresponde à conexão');
-  }
+  const evento = eventoDaConexao(rawBody, storedAccountId);
+  if (!evento.ok) return evento;
+  const { payload } = evento;
 
   const organizacaoId = connection.organizacao_id;
-  const ownerActorId = await resolveOwnerActorId(organizacaoId);
-  if (!ownerActorId) {
-    console.error('❌ Webhook Chatwoot: organização sem owner resolvível — ambíguo/ausente.');
-    return denied(403, 'Escopo organizacional inválido');
-  }
-
-  const scopeResult = await verifyOrganizationScope(supabaseServer, { organizationId: organizacaoId, actorId: ownerActorId });
-  if (scopeResult._tag !== 'OrganizationScopeVerified') {
-    const unavailable = scopeResult._tag === 'OrganizationScopeStoreUnavailable';
-    return denied(unavailable ? 503 : 403, unavailable ? 'Serviço de autorização indisponível' : 'Escopo organizacional inválido');
-  }
+  const escopo = await escopoDaOrganizacao(organizacaoId);
+  if (!escopo.ok) return escopo;
 
   const rawInboxId = payload.inbox?.id ?? payload.conversation?.inbox_id;
   const inboxId = parseOptionalInt(rawInboxId);
@@ -241,7 +283,7 @@ async function authenticateWebhookRequest(delivery: RawDelivery): Promise<Authen
     request: {
       conexaoId,
       organizacaoId,
-      scope: scopeResult.scope,
+      scope: escopo.scope,
       payload,
       inboxId,
       entrega: { deliveryId: deliveryParsed?.data ?? null, timestampAssinado: timestampHeader },
