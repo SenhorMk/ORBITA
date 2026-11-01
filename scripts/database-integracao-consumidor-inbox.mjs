@@ -68,7 +68,13 @@ export async function runIntegracaoConsumidorInbox() {
     await alinharPapelDoJwt();
     const subiu = docker([
       'run', '-d', '--name', CONTAINER, '--network', REDE, '-p', `127.0.0.1:${PORTA_REST}:3000`,
-      '-e', `PGRST_DB_URI=postgres://authenticator:postgres@${BANCO}:5432/postgres`,
+      // O libpq lê o destino destas variáveis: a senha é a do laboratório descartável.
+      '-e', 'PGRST_DB_URI=postgresql://',
+      '-e', `PGHOST=${BANCO}`,
+      '-e', 'PGPORT=5432',
+      '-e', 'PGDATABASE=postgres',
+      '-e', 'PGUSER=authenticator',
+      '-e', 'PGPASSWORD=postgres',
       '-e', 'PGRST_DB_SCHEMAS=public',
       '-e', 'PGRST_DB_ANON_ROLE=anon',
       '-e', `PGRST_JWT_SECRET=${segredo}`,

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import { logger } from '../../lib/observability/logger';
+import { logger, sanitizeErrorForLog } from '../../lib/observability/logger';
 import { consumirInboxUmaVez, type PortaDoConsumidorInbox } from './consumidorInboxChatwoot';
 
 /**
@@ -80,9 +80,9 @@ export async function executarWorkerInbox(
       });
       espera = resumo.reivindicados > 0 ? configuracao.pollMs : Math.min(espera * 2, configuracao.ociosoMaxMs);
       if (resumo.reivindicados > 0) logger.info('chatwoot.inbox.passada', { subsystem: 'queue', workerId, ...resumo });
-    } catch {
+    } catch (error: unknown) {
       espera = configuracao.ociosoMaxMs;
-      logger.error('chatwoot.inbox.claim_falhou', { subsystem: 'queue', workerId });
+      logger.error('chatwoot.inbox.claim_falhou', { subsystem: 'queue', workerId, erro: sanitizeErrorForLog(error) });
     }
     await esperar(espera, sinal);
   }

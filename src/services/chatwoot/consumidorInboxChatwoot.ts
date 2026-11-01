@@ -1,4 +1,4 @@
-import { logger } from '../../lib/observability/logger';
+import { logger, sanitizeErrorForLog } from '../../lib/observability/logger';
 import { traduzirEventoDaInbox, type ComandoDeConsumoChatwoot } from './chatwootWebhookPersistence';
 
 /**
@@ -133,11 +133,11 @@ export async function consumirInboxUmaVez(porta: PortaDoConsumidorInbox, opcoes:
     if (opcoes.deveParar?.()) break;
     try {
       await processar(porta, evento, opcoes.workerId, contagem);
-    } catch {
+    } catch (error: unknown) {
       // Sem resposta do banco: a transação pode ou não ter commitado. A lease
       // vence e o claim só retoma o evento se ele não estiver concluído.
       contagem.semResposta++;
-      logger.error('chatwoot.inbox.sem_resposta', contexto(evento));
+      logger.error('chatwoot.inbox.sem_resposta', { ...contexto(evento), erro: sanitizeErrorForLog(error) });
     }
   }
   return contagem;

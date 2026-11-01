@@ -182,7 +182,7 @@ conversa leva o caso em cascata, e a inbox perde só o vínculo.
 |---|---|
 | Superfície, claim, fencing, regra do caso, organizações, disposições, atomicidade, falha | `supabase/tests/final/consumidor_inbox_caso.test.sql` |
 | Concorrência, quedas reais de conexão e contraprovas | `scripts/database-concurrency-consumidor-inbox.mjs` |
-| Webhook → PostgREST → worker → operador, processo morto e reiniciado, navegador recusado | `src/services/chatwoot/consumidorInbox.integracao.ts`, por `scripts/database-integracao-consumidor-inbox.mjs` |
+| Webhook → PostgREST → worker → operador, processo morto e reiniciado, navegador recusado | `src/services/chatwoot/consumidorInbox.integracao.test.ts`, por `scripts/database-integracao-consumidor-inbox.mjs` |
 | Tradução, passada, kill switch, logs | `src/services/chatwoot/consumidorInboxChatwoot.test.ts` |
 | Rota e tela do operador | `src/app/api/sac/casos/casos.test.ts`, `src/components/integracoes/MensagensRecebidas.test.tsx` |
 

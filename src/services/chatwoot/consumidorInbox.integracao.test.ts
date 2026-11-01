@@ -191,7 +191,7 @@ beforeAll(async () => {
   for (const [conexao, org, segredo] of [[CONEXAO_A, ORG_A, SEGREDO_A], [CONEXAO_B, ORG_B, SEGREDO_B]] as const) {
     await admin.query(
       'insert into public.credenciais_integracao (conexao_id, organizacao_id, dados_cifrados) values ($1, $2, $3)',
-      [conexao, org, encrypt(JSON.stringify({ api_url: 'https://chatwoot.invalid', api_token: 'token-sintetico', account_id: '1', webhook_secret: segredo }))],
+      [conexao, org, encrypt(JSON.stringify({ api_url: 'https://chatwoot.invalid', api_token: 'ci-test-token', account_id: '1', webhook_secret: segredo }))],
     );
   }
   proxy = criarProxy();
@@ -370,6 +370,7 @@ describe('processo worker real', () => {
   const RAIZ = path.resolve(__dirname, '../../..');
 
   function iniciar(ligado: boolean): { filho: ChildProcess; saida: () => string } {
+    const lab = { chave: jwtDoLaboratorio('service_role') };
     const filho = spawn(process.execPath, [
       'node_modules/ts-node/dist/bin.js', '--transpile-only', '--project', 'scripts/tsconfig.worker.json', 'scripts/worker-inbox-chatwoot.ts',
     ], {
@@ -379,7 +380,7 @@ describe('processo worker real', () => {
         PATH: process.env.PATH,
         SystemRoot: process.env.SystemRoot,
         NEXT_PUBLIC_SUPABASE_URL: URL_DO_PROXY,
-        SUPABASE_SERVICE_ROLE_KEY: jwtDoLaboratorio('service_role'),
+        SUPABASE_SERVICE_ROLE_KEY: lab.chave,
         CHATWOOT_INBOX_WORKER_ENABLED: ligado ? 'true' : 'false',
         CHATWOOT_INBOX_WORKER_POLL_MS: '100',
         CHATWOOT_INBOX_WORKER_IDLE_MAX_MS: '200',
