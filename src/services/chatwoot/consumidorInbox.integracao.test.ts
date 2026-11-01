@@ -301,6 +301,28 @@ describe('webhook → inbox → ACK → worker → caso → operador', () => {
     expect((await verComoOperador(ORG_A, DONO_A)).eventos[0]).toMatchObject({ estado: 'ignorada', disposicao: 'evento_desconhecido' });
   });
 
+  it('sem prova de que veio do cliente: nada de TRIAGE, disposição visível e payload preservado na inbox', async () => {
+    const semTipo = { ...mensagem(1250, 125, 12) } as Record<string, unknown>;
+    delete semTipo.message_type;
+    const semRemetente = { ...mensagem(1251, 126, 12), sender: { id: 12, type: 'tipo_novo' } };
+    const desconhecido = { ...mensagem(1252, 127, 12), message_type: 'tipo_novo' };
+    const deSaida = { ...mensagem(1253, 128, 12), message_type: 'outgoing', sender: { id: 90, type: 'user' } };
+    for (const corpo of [semTipo, semRemetente, desconhecido, deSaida]) expect((await entregar(corpo)).status).toBe(200);
+    const casosAntes = await contar('sac_cases', 'organizacao_id = $1', ORG_A);
+    await consumir('w-classificacao');
+    expect(await contar('sac_cases', 'organizacao_id = $1', ORG_A)).toBe(casosAntes);
+
+    expect(await evento('v2:message_created:msg:1250')).toMatchObject({ status: 'processed', disposicao: 'classificacao_inconclusiva' });
+    expect(await evento('v2:message_created:msg:1251')).toMatchObject({ status: 'processed', disposicao: 'classificacao_inconclusiva' });
+    expect(await evento('v2:message_created:msg:1252')).toMatchObject({ status: 'processed', disposicao: 'classificacao_inconclusiva' });
+    expect(await evento('v2:message_created:msg:1253')).toMatchObject({ status: 'processed', disposicao: 'espelho_atualizado' });
+
+    // Tipo desconhecido não entra no espelho; remetente desconhecido entra, sem caso.
+    expect(await contar('chatwoot_messages', "organizacao_id = $1 and id_externo in ('1250', '1252')", ORG_A)).toBe(0);
+    expect(await contar('chatwoot_messages', "organizacao_id = $1 and id_externo = '1251'", ORG_A)).toBe(1);
+    expect(await contar('inbox_eventos_chatwoot', "conexao_id = $1 and idempotency_key = 'v2:message_created:msg:1250' and payload ->> 'content' = 'CONTEUDO-SINTETICO-1250'", CONEXAO_A)).toBe(1);
+  });
+
   it('entrada que nunca vai dar certo: falha definitiva, auditada, sem novo claim', async () => {
     expect((await entregar(mensagem(3_000_000_000, 130, 13))).status).toBe(200);
     expect(await consumir('w-invalida')).toMatchObject({ falhas: 1 });

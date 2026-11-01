@@ -53,6 +53,28 @@ describe('traduzirEventoDaInbox', () => {
     expect(comando(payload).abre_caso).toBe(false);
   });
 
+  it.each([
+    ['message_created sem message_type', { ...MENSAGEM, message_type: undefined }],
+    ['message_created sem sender.type', { ...MENSAGEM, sender: { id: 5, name: 'Contato' } }],
+    ['message_type desconhecido', { ...MENSAGEM, message_type: 'tipo_nao_documentado' }],
+    ['sender.type desconhecido', { ...MENSAGEM, sender: { id: 5, type: 'external_unknown' } }],
+    ['sender ausente', { ...MENSAGEM, sender: undefined }],
+    ['outgoing mesmo com contact', { ...MENSAGEM, message_type: 'outgoing' }],
+    ['nota privada com contact', { ...MENSAGEM, private: true }],
+    ['system mesmo com contact', { ...MENSAGEM, message_type: 'system' }],
+  ])('classificacao sem prova positiva: %s jamais abre TRIAGE', (_nome, payload) => {
+    expect(comando(payload).abre_caso).toBe(false);
+  });
+
+  it('incoming com remetente comprovadamente contact pode abrir TRIAGE', () => {
+    expect(comando({ ...MENSAGEM, message_type: 'incoming', sender: { id: 5, type: 'contact' } }).abre_caso).toBe(true);
+  });
+
+  it('tipo de mensagem ausente ou desconhecido nao e inventado como incoming no espelho', () => {
+    expect(comando({ ...MENSAGEM, message_type: undefined }).mensagem).toBeUndefined();
+    expect(comando({ ...MENSAGEM, message_type: 'tipo_nao_documentado' }).mensagem).toBeUndefined();
+  });
+
   it('edição sobrescreve e a revisão vem do provedor, em ISO ou em segundos', () => {
     expect(comando({ ...MENSAGEM, event: 'message_updated', updated_at: 1793527200 })).toMatchObject({
       revisao_conteudo_em: new Date(1793527200 * 1000).toISOString(),

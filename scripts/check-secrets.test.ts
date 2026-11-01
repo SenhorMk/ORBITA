@@ -92,6 +92,20 @@ describe('check-secrets command', () => {
     expect(result.stdout).not.toContain(syntheticSecret);
   });
 
+  it('aceita JWT sintetico de laboratorio, mas rejeita credencial literal no mesmo campo', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'orbita-lab-secret-'));
+    temporaryDirectories.push(directory);
+    const fixturePath = join(directory, 'laboratorio.ts');
+    const executar = () => spawnSync(process.execPath, [resolve('scripts/check-secrets.mjs'), fixturePath], { encoding: 'utf8' });
+    writeFileSync(fixturePath, "SUPABASE_SERVICE_ROLE_KEY: jwtDoLaboratorio('service_role'),\n", 'utf8');
+    expect(executar().status).toBe(0);
+    const syntheticSecret = ['synthetic', 'role', 'credential', '123456789'].join('-');
+    writeFileSync(fixturePath, `SUPABASE_SERVICE_ROLE_KEY: '${syntheticSecret}',\n`, 'utf8');
+    const denied = executar();
+    expect(denied.status).toBe(1);
+    expect(denied.stdout).not.toContain(syntheticSecret);
+  });
+
   it('detects a credential added and removed inside a commit range', () => {
     const directory = mkdtempSync(join(tmpdir(), 'orbita-secret-history-'));
     temporaryDirectories.push(directory);

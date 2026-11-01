@@ -356,13 +356,13 @@ select throws_ok(
 select is((select count(*)::int from public.chatwoot_messages where id_externo = '500'), 0, 'a recusa não deixou espelho');
 select is(
     (select a.disposicao from public.aplicar_evento_inbox_chatwoot((select valor::uuid from t_ctx where nome = 'e4'), 'w8', (select valor::bigint from t_ctx where nome = 't5'),
-        jsonb_set(pg_temp.msg(500, 50, 9, false) || '{"classificacao_inconclusiva":true}'::jsonb, '{mensagem,tipo}', 'null'::jsonb)) a),
-    'classificacao_inconclusiva', 'sem prova: espelha, não abre caso e diz por quê');
+        (pg_temp.msg(500, 50, 9, false) - 'mensagem') || '{"classificacao_inconclusiva":true}'::jsonb) a),
+    'classificacao_inconclusiva', 'sem prova: não abre caso e diz por quê');
 select is(
-    (select row(m.message_type, count(s.id))::text from public.chatwoot_messages m
-       left join public.sac_cases s on s.mensagem_origem_id_local = m.id_local
-      where m.id_externo = '500' group by m.message_type),
-    '(,0)', 'tipo desconhecido não vira incoming no espelho, e nenhum caso');
+    (select count(*)::int from public.sac_cases s
+       join public.chatwoot_conversations v on v.id_local = s.conversa_id_local and v.organizacao_id = s.organizacao_id
+      where v.id_externo = '50' and v.conexao_id = 'e6000000-0000-4000-8000-0000000000c1'),
+    0, 'nenhum caso nasce da mensagem sem prova');
 
 -- Revisão: o gatilho vale para qualquer gravador.
 update public.chatwoot_conversations v set status = 'open', status_revisao_em = null

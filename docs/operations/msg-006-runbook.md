@@ -28,8 +28,10 @@ e `public`; a migration confere isso e aborta se não for verdade.
 **Abertura de caso.** Exige prova positiva: `message_created`, com id de mensagem,
 `message_type` `incoming` e `sender.type` `contact`, ambos declarados. O banco recusa
 `abre_caso` sem isso. Nota privada, atendente, sistema e edição só atualizam o espelho.
-Tipo ou remetente ausente ou desconhecido não vira atendimento: a mensagem é espelhada
-(com tipo `null`, se ele for desconhecido) e o evento fica `classificacao_inconclusiva`.
+Tipo ou remetente ausente ou desconhecido não vira atendimento, e o evento fica
+`classificacao_inconclusiva`. Com tipo desconhecido a mensagem não entra no espelho (o texto
+segue no payload da inbox); com remetente desconhecido, entra sem abrir caso. O sync também
+pula mensagem de tipo desconhecido.
 Regra e limites são parâmetros de laboratório, sujeitos a validação com o contrato real
 do MSG-001.
 
@@ -49,7 +51,7 @@ conversa e um caso por mensagem de origem.
 |---|---|---|
 | `processed` | `caso_aberto`, `mensagem_no_caso`, `espelho_atualizado` | efeito aplicado |
 | `processed` | `revisao_atrasada` | revisão mais velha que a comprovada, ou sem versão diante de uma comprovada |
-| `processed` | `classificacao_inconclusiva` | sem prova de que veio do cliente: espelhada, sem caso |
+| `processed` | `classificacao_inconclusiva` | sem prova de que veio do cliente: sem caso |
 | `ignored` | `evento_desconhecido` | tipo fora de `message_created`, `message_updated`, `conversation_status_changed` |
 | `ignored` | `conversa_nao_espelhada` | status de conversa que ainda não existe aqui |
 | `ignored` | `conexao_nao_comprovada` | status em conversa legada sem conexão |
@@ -196,8 +198,9 @@ conversa leva o caso em cascata, e a inbox perde só o vínculo.
   conteúdo cujo webhook mais novo se perdeu.
 - **Mensagem que só chega pelo sync não abre caso.**
 - **Revisão fora do espelho.** Contato não tem versão: a última gravação de nome e telefone vale.
-- **Tela da mensageria.** Mensagem de tipo `null` aparece no lado do contato, como qualquer
-  mensagem que não é nossa; a tela não mostra a classificação.
+- **Mensagem inconclusiva não aparece na conversa.** Com tipo desconhecido ela só está na inbox,
+  e não há replay nesta fatia. Se o contrato real do MSG-001 não trouxer esses campos, nenhum
+  caso abre: a regra precisa ser revista com a evidência, não afrouxada às cegas.
 - **Sem trabalho derivado.** Nenhum trabalho de triagem é enfileirado: não há
   consumidor antes do MSG-013, que deve incluí-lo nesta transação.
 - **Credencial.** O worker usa `service_role`, que o banco não restringe (§5).

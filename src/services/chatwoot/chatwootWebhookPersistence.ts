@@ -115,6 +115,8 @@ function dadosDaConversa(evento: ChatwootWebhookEvent, contatoId: number | undef
 }
 
 function dadosDaMensagem(evento: ChatwootWebhookEvent) {
+  const tipo = mapChatwootMessageType(evento.message_type);
+  if (tipo === null) return undefined;
   const id = idDoEspelho(evento.id);
   const conversaId = idDoEspelho(evento.conversation?.id || evento.conversation_id);
   if (id === null || conversaId === null) return undefined;
@@ -122,7 +124,7 @@ function dadosDaMensagem(evento: ChatwootWebhookEvent) {
     id,
     conversa_id: conversaId,
     conteudo: evento.content || '',
-    tipo: mapChatwootMessageType(evento.message_type),
+    tipo,
     remetente_nome: evento.sender?.name || null,
     remetente_id: idDoEspelho(evento.sender?.id),
     remetente_tipo: senderTypeConhecido(evento.sender?.type),
@@ -183,7 +185,7 @@ export function traduzirEventoDaInbox(
 
   const contato = dadosDoContato(evento);
   const mensagem = dadosDaMensagem(evento);
-  const classificacao = eventType === 'message_created' && mensagem !== undefined ? classificarMensagem(evento) : 'nao_cliente';
+  const classificacao = eventType === 'message_created' && idDoEspelho(evento.id) !== null ? classificarMensagem(evento) : 'nao_cliente';
   return {
     _tag: 'Comando',
     comando: {
@@ -192,7 +194,7 @@ export function traduzirEventoDaInbox(
       account_id: String(evento.account.id),
       revisao_status_em: revisaoDoProvedor(conversa?.updated_at),
       revisao_conteudo_em: revisaoDoProvedor(evento.updated_at),
-      abre_caso: classificacao === 'cliente',
+      abre_caso: classificacao === 'cliente' && mensagem !== undefined,
       classificacao_inconclusiva: classificacao === 'inconclusiva',
       contato,
       conversa: dadosDaConversa(evento, contato?.id, inboxId),

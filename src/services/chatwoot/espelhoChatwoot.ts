@@ -49,7 +49,7 @@ export interface DadosDaMensagem {
   readonly idExterno: number;
   readonly conversaIdExterno: number;
   readonly conteudo: string;
-  readonly tipo: 'incoming' | 'outgoing' | 'system' | 'template' | null;
+  readonly tipo: 'incoming' | 'outgoing' | 'system' | 'template';
   readonly remetenteNome: string | null;
   readonly remetenteId: number | null;
   readonly remetenteTipo: string | null;

@@ -59,10 +59,15 @@ describe('abertura de caso exige prova positiva', () => {
     expect(comando(payload).abre_caso).toBe(false);
   });
 
-  it('classificação inconclusiva fica registrada no comando, sem chutar o tipo no espelho', () => {
+  it('tipo desconhecido fica registrado no comando e fora do espelho, sem virar incoming', () => {
     const c = comando(sem(CLIENTE, 'message_type'));
     expect(c.classificacao_inconclusiva).toBe(true);
-    expect(c.mensagem).toMatchObject({ tipo: null });
+    expect(c.mensagem).toBeUndefined();
+  });
+
+  it('remetente desconhecido: a mensagem é espelhada, mas fica inconclusiva e sem caso', () => {
+    const c = comando({ ...CLIENTE, sender: { id: 5, type: 'agent_bot' } });
+    expect(c).toMatchObject({ classificacao_inconclusiva: true, abre_caso: false, mensagem: { tipo: 'incoming', remetente_tipo: null } });
   });
 
   it('mensagem classificada, ainda que não abra caso, não é inconclusiva', () => {
