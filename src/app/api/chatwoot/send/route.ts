@@ -88,6 +88,7 @@ async function saveMessageLocally(
     remetenteId: rawMsg.sender?.id || null,
     remetenteTipo: resolveSenderType(rawMsg.sender?.type),
     criadaEm: rawMsg.created_at || new Date().toISOString(),
+    conteudoRevisaoEm: null,
   }, 'preservar');
   await espelho.atualizar('conversa', escopo, conversa.idLocal, { updated_at: new Date().toISOString() });
   return mensagemIdLocal;

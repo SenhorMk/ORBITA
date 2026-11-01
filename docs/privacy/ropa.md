@@ -75,7 +75,7 @@ Cada linha é uma jornada real do produto, traçada UI/webhook → rota → serv
 ## 7. Conexão e atendimento via Chatwoot
 
 - **Rota/serviço**: `POST /api/chatwoot/connect`, `/webhook/[conexaoId]`, `/send`, `/status`, `/sync` (ticket 11).
-- **Dados**: `chatwoot_contacts` (item 18), `chatwoot_messages` (item 19), `inbox_eventos_chatwoot.payload` (item 20), credenciais cifradas (item 21).
+- **Dados**: `chatwoot_contacts` (item 18), `chatwoot_messages` (item 19), `inbox_eventos_chatwoot.payload` (item 20), credenciais cifradas (item 21), `sac_cases` (item 28b).
 - **Base legal candidata**: execução de contrato entre lojista e o contato que conversa (atendimento) — quando o contato é um cliente existente; legítimo interesse do lojista em prestar suporte, quando não há contrato prévio. **needs-legal-review** para diferenciar os dois casos.
 - **Controlador/operador**: lojista = controlador dos dados do contato que fala com ele; ORBITA = operador; Chatwoot = suboperador (Cloud ou self-hosted, conforme `api_url` configurada pela organização).
 - **Compartilhamento**: Chatwoot, bidirecional.

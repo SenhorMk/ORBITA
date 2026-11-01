@@ -62,7 +62,8 @@ pula direto para "contract".
   operacional quando o canal de auditoria real existir.
 - Webhooks recebidos durante a janela de rollback continuam idempotentes (`inbox_eventos_bling`,
   `inbox_eventos_chatwoot` — chave de idempotência já garantida pelas migrations 28/29): reprocessar
-  após o rollback não duplica efeito.
+  após o rollback não duplica efeito. Para o consumidor da inbox do Chatwoot, ver
+  `docs/operations/msg-006-runbook.md`.
 
 ## Ensaio local realizado nesta branch (laboratório descartável, não staging real)
 

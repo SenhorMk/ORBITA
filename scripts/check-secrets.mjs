@@ -39,6 +39,11 @@ function isPlaceholder(value) {
   );
 }
 
+/** Expressão estritamente sintética do laboratório; não é credencial literal. */
+function isLaboratoryJwt(value) {
+  return /^jwtDoLaboratorio\((?:'service_role'|"service_role")\),?$/u.test(value.trim());
+}
+
 function containsAssignedCredential(text) {
   return text.split(/\r?\n/u).some((line) => {
     const environmentAssignment = line.match(
@@ -66,7 +71,8 @@ function containsAssignedCredential(text) {
     return Boolean(
       structuredAssignment
       && credentialVariables.has(structuredAssignment[1])
-      && !isPlaceholder(structuredAssignment[2]),
+      && !isPlaceholder(structuredAssignment[2])
+      && !isLaboratoryJwt(structuredAssignment[2]),
     );
   });
 }

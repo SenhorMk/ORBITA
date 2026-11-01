@@ -57,7 +57,7 @@ Em `chatwoot_inboxes` o navegador só tinha SELECT; `credenciais_integracao` e
 | `GET /api/bling/callback` | upsert `pendente` → cofre → `conectado`; espelho legado best-effort | transação OAuth consumida (state + cookie) | a do authorize | tokens pelo contrato do OAuth |
 | `POST /api/bling/webhook` | lê as conexões Bling e o `client_secret` do cofre para o HMAC | a conexão cujo segredo confere | assinatura | contrato do evento |
 | `POST /api/chatwoot/connect` | lê, insere, atualiza (`pendente`); desfaz a linha nova se o cofre recusar | sessão verificada | `organization:manage` | **`ChatwootConnectBodySchema`** (fatia de código) |
-| `POST /api/chatwoot/webhook/[conexaoId]` | lê `id, organizacao_id, status`; registra o mapping de inbox | a conexão do path, provada pelo HMAC com o segredo dela | assinatura + `account_id` conferido com o cofre | `ChatwootWebhookEventSchema` |
+| `POST /api/chatwoot/webhook/[conexaoId]` | lê `id, organizacao_id, status`; o mapping de inbox passou para `aplicar_evento_inbox_chatwoot`, no worker (MSG-006) | a conexão do path, provada pelo HMAC com o segredo dela | assinatura + `account_id` conferido com o cofre | `ChatwootWebhookEventSchema` |
 | `POST /api/chatwoot/sync` | registra o mapping de inbox de conversas lidas com as credenciais da própria organização | sessão verificada | `organization:access` | contrato da Application API |
 | `ChatwootAdapter.forScope` (send, status, sync) | lê a conexão e o cofre | escopo verificado | a da rota | `ChatwootCredentialsPayloadSchema` |
 | `blingCredenciaisSupabase` (token do Bling) | lê `id, status`; `acquire/release_conexao_token_lock`; regrava o cofre na renovação | escopo verificado | a da rota | `blingVaultCredentialsSchema` |
@@ -69,10 +69,11 @@ Gravadores diretos, todos com `supabaseServer` (o detector os fixa):
 `bling/connect/route.ts`, `chatwoot/connect/route.ts`,
 `lib/integrations/credentialsVault.ts` (`credenciais_integracao`) e
 `services/chatwoot/chatwootInboxRegistration.ts` (`chatwoot_inboxes`, recebe o
-cliente por parâmetro; os dois callers passam o `supabaseServer`).
+cliente por parâmetro; o único caller, o sync, passa o `supabaseServer`).
 
 Funções do banco que citam as tabelas, medidas em S86. Nenhuma é executável por
 `authenticated` ou `anon`:
+- `aplicar_evento_inbox_chatwoot` (migration 89, só `service_role`): grava `chatwoot_inboxes` com a organização e a conexão da linha da inbox;
 - `acquire_conexao_token_lock`, `release_conexao_token_lock`, `acquire_bling_token_lock` (security invoker, só `service_role`);
 - `atualizar_saude_conexao`, `concluir_evento_outbox`, `executar_encerramento_definitivo` (security definer, só `service_role`);
   desde a migration 86 (MSG-007), `concluir_evento_outbox` não existe mais: a conclusão é

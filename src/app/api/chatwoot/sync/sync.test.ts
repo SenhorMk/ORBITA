@@ -62,6 +62,26 @@ vi.mock('../../../../services/chatwoot/chatwootAdapter', () => ({
   },
 }));
 
+/** Outra escrita concorrente no espelho, na mesma conexão ou em outra da organização. */
+async function outroEscritor(
+  store: EspelhoChatwootFake,
+  escopo: { organizacaoId: string; conexaoId: string; atorId: string },
+  conteudo: string,
+  modo: 'preservar' | 'sobrescrever',
+) {
+  const { gravarContato, gravarConversa, gravarMensagem } = await import('../../../../services/chatwoot/espelhoChatwoot');
+  const contatoIdLocal = await gravarContato(store, escopo, {
+    idExterno: 5, nome: 'Contato', email: null, telefone: null, telefoneNormalizado: null, avatarUrl: null,
+  });
+  await gravarConversa(store, escopo, {
+    idExterno: 50, contatoIdLocal, contatoIdExterno: 5, displayId: null, status: 'open', inboxId: 1, canal: 'Channel::Whatsapp', statusRevisaoEm: null,
+  });
+  return gravarMensagem(store, escopo, {
+    idExterno: 500, conversaIdExterno: 50, conteudo, tipo: 'incoming', remetenteNome: null, remetenteId: null,
+    remetenteTipo: null, criadaEm: '2026-10-25T00:00:00Z', conteudoRevisaoEm: null,
+  }, modo);
+}
+
 async function novoStore(pkGlobal: boolean) {
   const { EspelhoChatwootFake } = await import('../../../../services/__testkit__/espelhoChatwootFake');
   estado.store = new EspelhoChatwootFake({ pkGlobal });
@@ -130,17 +150,18 @@ describe('POST /api/chatwoot/sync (MSG-003A: UUID local por organização + cone
   });
 
   it('sync e webhook concorrentes na mesma conexão convergem para uma linha por recurso', async () => {
-    const { persistWebhookEffects } = await import('../../../../services/chatwoot/chatwootWebhookPersistence');
-    const webhook = persistWebhookEffects(estado.store, { organizacaoId: ORG_A, conexaoId: CONEXAO_A, atorId: ATOR }, {
-      event: 'message_created',
-      account: { id: 1 },
-      id: 500,
-      content: 'pelo webhook',
-      conversation: { id: 50, inbox_id: 1, contact: { id: 5, name: 'Contato' } },
-    } as never, 1);
-    const [efeitos] = await Promise.all([webhook, sincronizar(ORG_A)]);
+    const [mensagemIdLocal] = await Promise.all([
+      outroEscritor(estado.store, { organizacaoId: ORG_A, conexaoId: CONEXAO_A, atorId: ATOR }, 'pelo webhook', 'preservar'),
+      sincronizar(ORG_A),
+    ]);
     expect([estado.store.linhas.contato.length, estado.store.linhas.conversa.length, estado.store.linhas.mensagem.length]).toEqual([1, 1, 1]);
-    expect(efeitos.mensagemIdLocal).toBe(estado.store.linhas.mensagem[0]!.id_local);
+    expect(mensagemIdLocal).toBe(estado.store.linhas.mensagem[0]!.id_local);
+  });
+
+  it('sem versão do provedor, o sync declara null: não passa de uma revisão comprovada', async () => {
+    await sincronizar(ORG_A);
+    expect(estado.store.linhas.conversa[0]).toMatchObject({ status_revisao_em: null });
+    expect(estado.store.linhas.mensagem[0]).toMatchObject({ conteudo_revisao_em: null });
   });
 });
 
@@ -158,16 +179,9 @@ describe('POST /api/chatwoot/sync depois do MSG-004 (sem PK global)', () => {
   });
 
   it('três instalações (A, segunda de A, B) com os ids 5/50/500 por webhook e sync, com replays, não se misturam', async () => {
-    const { persistWebhookEffects } = await import('../../../../services/chatwoot/chatwootWebhookPersistence');
     const CONEXAO_A2 = '11111111-1111-4111-8111-111111111112';
     const webhookA2 = (conteudo: string, evento: 'message_created' | 'message_updated' = 'message_created') =>
-      persistWebhookEffects(estado.store, { organizacaoId: ORG_A, conexaoId: CONEXAO_A2, atorId: ATOR }, {
-        event: evento,
-        account: { id: 1 },
-        id: 500,
-        content: conteudo,
-        conversation: { id: 50, inbox_id: 1, contact: { id: 5, name: 'Contato da segunda' } },
-      } as never, 1);
+      outroEscritor(estado.store, { organizacaoId: ORG_A, conexaoId: CONEXAO_A2, atorId: ATOR }, conteudo, evento === 'message_created' ? 'preservar' : 'sobrescrever');
 
     await Promise.all([webhookA2('da segunda'), sincronizar(ORG_A)]);
     await sincronizar(ORG_B);

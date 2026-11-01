@@ -10,6 +10,9 @@ import { PRAZO_DA_INTEGRACAO_MS } from './comPrazo';
 
 // A seção de envios (MSG-007) tem leitura e testes próprios
 // (EnviosComAtencao.test.tsx); aqui ela não pode disputar o fetch dos cartões.
+vi.mock('./useMensagensRecebidas', () => ({
+  useMensagensRecebidas: () => ({ dados: { eventos: [], casos: [] }, carregando: false, erro: null, recarregar: async () => {} }),
+}));
 vi.mock('./useEnviosComAtencao', () => ({
   useEnviosComAtencao: () => ({ dados: [], carregando: false, erro: null, recarregar: async () => {} }),
 }));

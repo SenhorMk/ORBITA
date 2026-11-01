@@ -66,15 +66,13 @@ export interface EspelhoChatwootStore {
   inserir(recurso: RecursoChatwoot, linha: Readonly<Record<string, unknown>>): Promise<ResultadoDoStore<string>>;
   /**
    * Atualiza a linha do UUID local na organização, se ela for da conexão do
-   * escopo ou ainda não tiver conexão; com `somenteConexaoProvada`, só se for
-   * da conexão do escopo. Devolve quantas linhas mudaram.
+   * escopo ou ainda não tiver conexão. Devolve quantas linhas mudaram.
    */
   atualizar(
     recurso: RecursoChatwoot,
     escopo: EscopoDaConexaoChatwoot,
     idLocal: string,
     campos: Readonly<Record<string, unknown>>,
-    opcoes?: { readonly somenteConexaoProvada?: boolean },
   ): Promise<ResultadoDoStore<number>>;
 }
 

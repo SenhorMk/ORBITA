@@ -2,7 +2,6 @@ import crypto from 'node:crypto';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import type { ChatwootWebhookEvent } from './chatwoot/chatwootPort';
-import { redactSensitiveData } from '../lib/integrations/credentialsVault';
 import type { VerifiedOrganizationScope } from '../lib/verifiedOrganizationScope';
 
 export interface ChatwootInboxEventRecord {
@@ -160,62 +159,6 @@ export class ChatwootInboxService {
       duplicata: row.data.duplicata,
       cachedResponse: row.data.cached_response,
     };
-  }
-
-  /**
-   * Conclui o evento no inbox como processado com sucesso, salvando a resposta cacheada.
-   */
-  async markProcessed(
-    supabase: SupabaseClient,
-    scope: VerifiedOrganizationScope,
-    eventoId: string,
-    responseBody: Record<string, unknown>
-  ): Promise<void> {
-    await this.assertEventScope(supabase, scope, eventoId);
-    const { error } = await supabase.rpc('concluir_evento_inbox_chatwoot', {
-      p_evento_id: eventoId,
-      p_status: 'processed',
-      p_response_body: responseBody,
-      p_error: null,
-    });
-
-    if (error) {
-      console.error('❌ Falha ao marcar evento Chatwoot como processed:', error.message);
-    }
-  }
-
-  /**
-   * Conclui o evento no inbox como com falha, preservando o erro redigido contra vazamento de segredos.
-   */
-  async markFailed(
-    supabase: SupabaseClient,
-    scope: VerifiedOrganizationScope,
-    eventoId: string,
-    error: unknown
-  ): Promise<void> {
-    let sanitizedMessage = 'Erro desconhecido durante processamento de webhook Chatwoot';
-    if (error instanceof Error) {
-      sanitizedMessage = error.message;
-    } else if (typeof error === 'string') {
-      sanitizedMessage = error;
-    }
-
-    // Redigir qualquer token, chave ou dado sensível que possa constar na mensagem de erro
-    const redactedDiagnosis = typeof redactSensitiveData(sanitizedMessage) === 'string'
-      ? (redactSensitiveData(sanitizedMessage) as string)
-      : sanitizedMessage;
-
-    await this.assertEventScope(supabase, scope, eventoId);
-    const { error: dbError } = await supabase.rpc('concluir_evento_inbox_chatwoot', {
-      p_evento_id: eventoId,
-      p_status: 'failed',
-      p_response_body: null,
-      p_error: redactedDiagnosis,
-    });
-
-    if (dbError) {
-      console.error('❌ Falha ao marcar evento Chatwoot como failed:', dbError.message);
-    }
   }
 
   /**

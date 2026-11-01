@@ -10,7 +10,8 @@ export default defineConfig({
     // that are not Vitest tests. The pure, non-Playwright logic those specs
     // depend on lives under `src/lib/e2e/` instead, and stays covered by
     // Vitest as normal.
-    exclude: [...configDefaults.exclude, 'e2e/**'],
+    // `*.integracao.test.ts` needs the disposable lab and runs from `npm run test:db`.
+    exclude: [...configDefaults.exclude, 'e2e/**', '**/*.integracao.test.ts'],
     // Component tests (RTL) opt into `jsdom` per-file via the
     // `@vitest-environment jsdom` pragma; API/service/domain tests keep the
     // default `node` environment untouched.

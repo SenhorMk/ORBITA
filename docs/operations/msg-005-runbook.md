@@ -1,8 +1,9 @@
 # Aceite do webhook na inbox do Chatwoot (MSG-005) — migration 88_inbox_chatwoot_dedup_entrega_revisao.sql
 
 O webhook autentica, limita e grava a entrega e o evento minimizado antes de
-qualquer efeito e de qualquer 2xx. O consumo continua síncrono na mesma
-requisição; a separação em worker é do MSG-006.
+qualquer efeito e de qualquer 2xx. O consumo saiu da requisição no MSG-006: os
+passos abaixo valem até o aceite, e o passo 10 agora é do worker
+(`docs/operations/msg-006-runbook.md`).
 
 ## 1. Ordem do caminho de entrada
 
