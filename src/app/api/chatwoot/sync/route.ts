@@ -45,11 +45,13 @@ async function syncChatwootMessages(
   let messagesCount = 0;
   for (const rawMsg of messagesResult.data) {
     try {
+      const tipo = mapChatwootMessageType(rawMsg.message_type);
+      if (tipo === null) continue; // tipo desconhecido não vira incoming por suposição
       await gravarMensagem(espelho, escopo, {
         idExterno: rawMsg.id,
         conversaIdExterno: conversationId,
         conteudo: rawMsg.content || '',
-        tipo: mapChatwootMessageType(rawMsg.message_type),
+        tipo,
         remetenteNome: rawMsg.sender?.name || null,
         remetenteId: rawMsg.sender?.id || null,
         remetenteTipo: senderTypeConhecido(rawMsg.sender?.type),
