@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   ChatwootInboxService,
-  generateChatwootIdempotencyKey,
+  chaveDoEventoChatwoot,
+  type EntregaChatwoot,
 } from './chatwootInboxService';
 import { SupabaseClient } from '@supabase/supabase-js';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
@@ -24,129 +25,114 @@ function scopedClient(rpc: ReturnType<typeof vi.fn>): SupabaseClient {
 }
 
 describe('ChatwootInboxService & Idempotency Boundary', () => {
-  describe('generateChatwootIdempotencyKey', () => {
-    it('generates a structured key for message_created events with id and conversation', () => {
-      const event = {
-        event: 'message_created',
-        id: 12345,
-        conversation: { id: 6789 },
-        content: 'Olá!',
-      };
+  describe('chaveDoEventoChatwoot (MSG-005)', () => {
+    const conta = { id: 1 };
+    const semEntrega: EntregaChatwoot = { deliveryId: null, timestampAssinado: '1700000000' };
+    const chave = (evento: Record<string, unknown>, entrega = semEntrega) =>
+      chaveDoEventoChatwoot({ account: conta, ...evento } as Parameters<typeof chaveDoEventoChatwoot>[0], entrega);
 
-      const key = generateChatwootIdempotencyKey(event);
-      expect(key).toBe('event_message_created_msg_12345_conv_6789');
+    it('message_created: uma chave por mensagem, igual em qualquer entrega', () => {
+      const evento = { event: 'message_created', id: 500, conversation: { id: 50 }, content: 'Olá' };
+      expect(chave(evento)).toBe('v2:message_created:msg:500');
+      expect(chave(evento, { deliveryId: 'outra', timestampAssinado: '1700000099' })).toBe('v2:message_created:msg:500');
     });
 
-    it('generates a structured key for conversation_status_changed events', () => {
-      const event = {
-        event: 'conversation_status_changed',
-        id: 6789,
-        conversation: { id: 6789, status: 'resolved' },
-      };
-
-      const key = generateChatwootIdempotencyKey(event);
-      expect(key).toBe('event_conversation_status_changed_conv_6789_status_resolved');
+    it('message_updated: created → edited → edited são três chaves; o mesmo conteúdo em outra revisão também separa', () => {
+      const created = chave({ event: 'message_created', id: 500, content: 'A' });
+      const edit1 = chave({ event: 'message_updated', id: 500, content: 'B' }, { deliveryId: 'd-1', timestampAssinado: '1' });
+      const edit2 = chave({ event: 'message_updated', id: 500, content: 'A' }, { deliveryId: 'd-2', timestampAssinado: '2' });
+      const edit3 = chave({ event: 'message_updated', id: 500, content: 'B' }, { deliveryId: 'd-3', timestampAssinado: '3' });
+      expect(new Set([created, edit1, edit2, edit3]).size).toBe(4);
     });
 
-    it('generates a structured key for contact events', () => {
-      const event = {
-        event: 'contact_updated',
-        id: 999,
-        contact: { id: 999, name: 'Cliente A' },
-      };
-
-      const key = generateChatwootIdempotencyKey(event);
-      expect(key).toBe('event_contact_updated_contact_999');
+    it('message_updated: a repetição da mesma entrega dá a mesma chave', () => {
+      const evento = { event: 'message_updated', id: 500, content: 'B' };
+      expect(chave(evento, { deliveryId: 'd-1', timestampAssinado: '1' })).toBe(chave(evento, { deliveryId: 'd-1', timestampAssinado: '9' }));
+      expect(chave(evento)).toBe(chave(evento));
     });
 
-    it('falls back to deterministic SHA-256 for unstructured or arbitrary payloads', () => {
-      const event = { randomField: 'value123' };
-      const key1 = generateChatwootIdempotencyKey(event);
-      const key2 = generateChatwootIdempotencyKey(event);
+    it('updated_at do provedor marca a revisão e prevalece sobre o delivery id', () => {
+      const evento = { event: 'message_updated', id: 500, content: 'B', updated_at: '2026-10-26T10:00:00Z' };
+      expect(chave(evento, { deliveryId: 'd-1', timestampAssinado: '1' })).toBe(chave(evento, { deliveryId: 'd-2', timestampAssinado: '2' }));
+      expect(chave(evento)).not.toBe(chave({ ...evento, updated_at: '2026-10-26T10:00:01Z' }));
+    });
 
-      expect(key1).toMatch(/^chatwoot_hash_[0-9a-f]{32}$/);
-      expect(key1).toBe(key2);
+    it('status: open → resolved → open → resolved são quatro chaves', () => {
+      const status = (s: string, n: number) =>
+        chave({ event: 'conversation_status_changed', conversation: { id: 50, status: s } }, { deliveryId: `d-${n}`, timestampAssinado: String(n) });
+      expect(new Set([status('open', 1), status('resolved', 2), status('open', 3), status('resolved', 4)]).size).toBe(4);
+    });
+
+    it('status sem delivery id e sem updated_at: o timestamp assinado separa as ocorrências', () => {
+      const evento = { event: 'conversation_status_changed', conversation: { id: 50, status: 'resolved' } };
+      expect(chave(evento, { deliveryId: null, timestampAssinado: '1' })).not.toBe(chave(evento, { deliveryId: null, timestampAssinado: '2' }));
+    });
+
+    it('evento sem forma conhecida: chave determinística pelo conteúdo e pela revisão', () => {
+      const evento = { event: 'contact_updated', id: 999, content: 'x' };
+      expect(chave(evento)).toBe(chave(evento));
+      expect(chave(evento)).toMatch(/^v2:contact_updated:999:t1700000000:[0-9a-f]{32}$/);
     });
   });
 
-  describe('registerEvent', () => {
-    it('invokes registrar_evento_inbox_chatwoot RPC and returns structured result for new event', async () => {
+  describe('aceitarEntrega', () => {
+    const params = {
+      conexaoId: 'conn-123',
+      inboxId: 10,
+      deliveryId: 'd-1',
+      idempotencyKey: 'v2:message_created:msg:123',
+      eventType: 'message_created',
+      payload: { id: 123 },
+    };
+
+    it('chama aceitar_entrega_inbox_chatwoot com o escopo verificado e devolve EntregaAceita', async () => {
       const mockRpc = vi.fn().mockResolvedValue({
-        data: [{
-          evento_id: 'evt-123',
-          status: 'received',
-          is_duplicate: false,
-          cached_response: null,
-        }],
+        data: [{ evento_id: '00000000-0000-4000-8000-000000000001', status: 'received', is_duplicate: false, duplicata: null, cached_response: null }],
         error: null,
       });
+      const result = await new ChatwootInboxService().aceitarEntrega(scopedClient(mockRpc), scope, params);
 
-      const mockSupabase = scopedClient(mockRpc);
-      const service = new ChatwootInboxService();
-
-      const result = await service.registerEvent(mockSupabase, scope, {
-        conexaoId: 'conn-123',
-        inboxId: 10,
-        idempotencyKey: 'event_message_created_msg_123',
-        eventType: 'message_created',
-        payload: { id: 123 },
-      });
-
-      expect(mockRpc).toHaveBeenCalledWith('registrar_evento_inbox_chatwoot', {
+      expect(mockRpc).toHaveBeenCalledWith('aceitar_entrega_inbox_chatwoot', {
         p_organizacao_id: 'org-abc',
         p_conexao_id: 'conn-123',
         p_user_id: 'user-123',
         p_inbox_id: 10,
-        p_idempotency_key: 'event_message_created_msg_123',
+        p_delivery_id: 'd-1',
+        p_idempotency_key: 'v2:message_created:msg:123',
         p_event_type: 'message_created',
         p_payload: { id: 123 },
       });
-
-      expect(result.eventoId).toBe('evt-123');
-      expect(result.status).toBe('received');
-      expect(result.isDuplicate).toBe(false);
-      expect(result.cachedResponse).toBeNull();
+      expect(result).toEqual({
+        _tag: 'EntregaAceita', eventoId: '00000000-0000-4000-8000-000000000001', status: 'received', duplicata: null, cachedResponse: null,
+      });
     });
 
-    it('returns isDuplicate = true and cachedResponse if event was already registered', async () => {
+    it('duplicata devolve a origem e a resposta gravada', async () => {
       const mockRpc = vi.fn().mockResolvedValue({
-        data: [{
-          evento_id: 'evt-123',
-          status: 'processed',
-          is_duplicate: true,
-          cached_response: { success: true, messageId: 123 },
-        }],
+        data: [{ evento_id: '00000000-0000-4000-8000-000000000001', status: 'processed', is_duplicate: true, duplicata: 'entrega', cached_response: { success: true } }],
         error: null,
       });
-
-      const mockSupabase = scopedClient(mockRpc);
-      const service = new ChatwootInboxService();
-
-      const result = await service.registerEvent(mockSupabase, scope, {
-        idempotencyKey: 'event_message_created_msg_123',
-        eventType: 'message_created',
-        payload: { id: 123 },
+      expect(await new ChatwootInboxService().aceitarEntrega(scopedClient(mockRpc), scope, params)).toMatchObject({
+        _tag: 'EntregaAceita', duplicata: 'entrega', status: 'processed', cachedResponse: { success: true },
       });
-
-      expect(result.isDuplicate).toBe(true);
-      expect(result.status).toBe('processed');
-      expect(result.cachedResponse).toEqual({ success: true, messageId: 123 });
     });
 
-    it('throws when RPC encounters a database error', async () => {
-      const mockRpc = vi.fn().mockResolvedValue({
-        data: null,
-        error: { message: 'Database constraint violation' },
+    it.each([
+      ['23505', { _tag: 'EntregaConflitante' }],
+      ['42501', { _tag: 'ConexaoRecusada', motivo: 'fora_do_escopo' }],
+      ['55000', { _tag: 'ConexaoRecusada', motivo: 'desligada' }],
+      ['22023', { _tag: 'EntradaRecusada' }],
+      ['08006', { _tag: 'InboxIndisponivel', cause: '08006' }],
+    ])('SQLSTATE %s vira recusa tipada, sem lançar', async (code, esperado) => {
+      const mockRpc = vi.fn().mockResolvedValue({ data: null, error: { code, message: 'detalhe interno' } });
+      expect(await new ChatwootInboxService().aceitarEntrega(scopedClient(mockRpc), scope, params)).toEqual(esperado);
+    });
+
+    it('resposta fora do contrato é InboxIndisponivel, nunca aceite', async () => {
+      const mockRpc = vi.fn().mockResolvedValue({ data: [{ evento_id: 'evt-1', status: 'desconhecido', duplicata: null, cached_response: null }], error: null });
+      expect(await new ChatwootInboxService().aceitarEntrega(scopedClient(mockRpc), scope, params)).toEqual({
+        _tag: 'InboxIndisponivel', cause: 'resposta-invalida',
       });
-
-      const mockSupabase = scopedClient(mockRpc);
-      const service = new ChatwootInboxService();
-
-      await expect(service.registerEvent(mockSupabase, scope, {
-        idempotencyKey: 'event_1',
-        eventType: 'test',
-        payload: {},
-      })).rejects.toThrow('Falha ao registrar evento no inbox Chatwoot: Database constraint violation');
     });
   });
 
