@@ -25,6 +25,7 @@ import { runIdentidadeChatwootRaceRehearsal } from './database-concurrency-ident
 import { runOutboxRaceRehearsal } from './database-concurrency-outbox.mjs';
 import { runResolverChatwootRaceRehearsal } from './database-concurrency-resolver-chatwoot.mjs';
 import { runContracaoChatwootRaceRehearsal } from './database-concurrency-contracao-chatwoot.mjs';
+import { runInboxChatwootRaceRehearsal } from './database-concurrency-inbox-chatwoot.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -59,6 +60,7 @@ let outcomeIdentidadeChatwoot;
 let outcomeOutbox;
 let outcomeResolverChatwoot;
 let outcomeContracaoChatwoot;
+let outcomeInboxChatwoot;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -82,6 +84,7 @@ try {
     outcomeOutbox = started;
     outcomeResolverChatwoot = started;
     outcomeContracaoChatwoot = started;
+    outcomeInboxChatwoot = started;
   } else {
     const alinhado = await alinharStubDeAuthComProducao();
     const applied = alinhado._tag === 'err' ? alinhado : await applyCanonicalMigrations({});
@@ -106,6 +109,7 @@ try {
       outcomeOutbox = applied;
       outcomeResolverChatwoot = applied;
       outcomeContracaoChatwoot = applied;
+      outcomeInboxChatwoot = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
@@ -127,6 +131,7 @@ try {
       outcomeOutbox = await runOutboxRaceRehearsal();
       outcomeResolverChatwoot = await runResolverChatwootRaceRehearsal();
       outcomeContracaoChatwoot = await runContracaoChatwootRaceRehearsal();
+      outcomeInboxChatwoot = await runInboxChatwootRaceRehearsal();
     }
   }
 } finally {
@@ -193,6 +198,7 @@ const relatos = [
   [outcomeOutbox, (v) => v.relato],
   [outcomeResolverChatwoot, (v) => v.relato],
   [outcomeContracaoChatwoot, (v) => v.relato],
+  [outcomeInboxChatwoot, (v) => v.relato],
 ];
 
 const falhou = relatos.map(([outcome, resumo]) => relatar(outcome, resumo)).includes(true);

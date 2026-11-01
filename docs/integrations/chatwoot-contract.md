@@ -78,9 +78,16 @@ skip the idempotent inbox write.
   `payload.account.id` against the `account_id` persisted for the resolved
   connection before treating `inbox_id` as authoritative. A mismatch is a fail
   loud (`403`), never a silent fallback.
-- Idempotency key derivation (`generateChatwootIdempotencyKey`) uses the event
-  type plus message/conversation/contact identifiers; unknown shapes fall back
-  to a SHA-256 hash of the canonical payload so replay is always detected.
+- Dedup (MSG-005, `docs/operations/msg-005-runbook.md`): `X-Chatwoot-Delivery`
+  is optional and never invented; when present it is unique per organization +
+  connection. The logical event key (`chaveDoEventoChatwoot`, version `v2`)
+  carries a revision marker (provider `updated_at`, else delivery id, else the
+  signed timestamp), so later edits and repeated statuses separated by other
+  transitions are kept. `message_created` has no marker. A `2xx` is only returned
+  after the delivery and the minimized event are committed.
+- Limits before any expensive work: body up to 256 KiB (`413`), header format,
+  then HMAC over the original bytes, then 300 signed deliveries per minute per
+  connection (`429`; `503` when the counter is unavailable).
 
 ### Known limitation (provider-side, tracked `needs-owner`)
 
