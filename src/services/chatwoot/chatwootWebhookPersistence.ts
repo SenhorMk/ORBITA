@@ -16,11 +16,12 @@ export function mapChatwootChannel(channelStr?: string): string {
 }
 
 /** Normaliza o `message_type` bruto do Chatwoot para o enum local. */
-export function mapChatwootMessageType(rawType: unknown): 'incoming' | 'outgoing' | 'system' | 'template' {
+export function mapChatwootMessageType(rawType: unknown): 'incoming' | 'outgoing' | 'system' | 'template' | null {
   if (rawType === 'outgoing' || rawType === 1 || rawType === '1') return 'outgoing';
   if (rawType === 'system' || rawType === 2 || rawType === '2') return 'system';
   if (rawType === 'template' || rawType === 3 || rawType === '3') return 'template';
-  return 'incoming';
+  if (rawType === 'incoming' || rawType === 0 || rawType === '0') return 'incoming';
+  return null;
 }
 
 export function senderTypeConhecido(value: string | null | undefined): string | null {
@@ -110,6 +111,8 @@ function dadosDaConversa(evento: ChatwootWebhookEvent, contatoId: number | undef
 }
 
 function dadosDaMensagem(evento: ChatwootWebhookEvent) {
+  const tipo = mapChatwootMessageType(evento.message_type);
+  if (tipo === null) return undefined;
   const id = idDoEspelho(evento.id);
   const conversaId = idDoEspelho(evento.conversation?.id || evento.conversation_id);
   if (id === null || conversaId === null) return undefined;
@@ -117,7 +120,7 @@ function dadosDaMensagem(evento: ChatwootWebhookEvent) {
     id,
     conversa_id: conversaId,
     conteudo: evento.content || '',
-    tipo: mapChatwootMessageType(evento.message_type),
+    tipo,
     remetente_nome: evento.sender?.name || null,
     remetente_id: idDoEspelho(evento.sender?.id),
     remetente_tipo: senderTypeConhecido(evento.sender?.type),
@@ -135,8 +138,7 @@ function abreCaso(evento: ChatwootWebhookEvent): boolean {
   return evento.event === 'message_created'
     && !evento.private
     && mapChatwootMessageType(evento.message_type) === 'incoming'
-    && remetente !== 'agent'
-    && remetente !== 'user';
+    && remetente === 'contact';
 }
 
 /**
