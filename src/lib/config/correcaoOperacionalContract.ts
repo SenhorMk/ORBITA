@@ -19,6 +19,7 @@ import { z } from 'zod';
  * | `ProviderRefused`   | 502  | o Bling não removeu; nada mudou no ORBITA                           |
  * | `ReconcileRequired` | 503  | o estado no Bling não pôde ser confirmado; nada local foi concluído |
  * | `InvalidRequest`    | 400  | o pedido não tem a forma esperada                                   |
+ * | `Unavailable`       | 503  | a correção não pode rodar agora; nada foi tocado, nem no Bling      |
  *
  * A única exceção ao "nada foi tocado" de `Blocked` é o motivo
  * `preservado_por_historico_apos_remocao_no_bling`: o contato **já saiu** do
@@ -73,6 +74,7 @@ export const respostaDeCorrecaoSchema = z.discriminatedUnion('resultado', [
   z.object({ resultado: z.literal('ProviderRefused'), motivo: z.enum(MOTIVOS_DE_RECUSA) }),
   z.object({ resultado: z.literal('ReconcileRequired'), motivo: z.enum(MOTIVOS_DE_RECONCILIACAO) }),
   z.object({ resultado: z.literal('InvalidRequest') }),
+  z.object({ resultado: z.literal('Unavailable') }),
 ]);
 
 export type RespostaDeCorrecao = z.infer<typeof respostaDeCorrecaoSchema>;
@@ -87,6 +89,7 @@ export const STATUS_HTTP_DA_CORRECAO: Record<ResultadoDeCorrecao, number> = {
   ProviderRefused: 502,
   ReconcileRequired: 503,
   InvalidRequest: 400,
+  Unavailable: 503,
 };
 
 /**
@@ -153,6 +156,8 @@ export function mensagemDaCorrecao(desfecho: DesfechoDaCorrecao): string {
       return MENSAGEM_DE_RECONCILIACAO[desfecho.motivo];
     case 'InvalidRequest':
       return 'Não foi possível identificar o registro.';
+    case 'Unavailable':
+      return 'Esta correção está indisponível no momento. Nada foi alterado no ORBITA nem no Bling; tente de novo mais tarde.';
     case 'SemPermissao':
       return 'Apenas quem administra a organização pode fazer esta correção.';
     case 'SessaoExpirada':
