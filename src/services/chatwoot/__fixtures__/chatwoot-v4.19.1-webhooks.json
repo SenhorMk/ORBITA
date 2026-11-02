@@ -1,0 +1,788 @@
+{
+ "conversa_criada": {
+  "additional_attributes": {},
+  "can_reply": true,
+  "channel": "Channel::Api",
+  "contact_inbox": {
+   "id": 3,
+   "contact_id": 3,
+   "inbox_id": 3,
+   "source_id": "983345cf-6b44-462b-94ad-f4887f78f082",
+   "created_at": "2026-11-02T07:36:51.116Z",
+   "updated_at": "2026-11-02T07:36:51.116Z",
+   "hmac_verified": false,
+   "pubsub_token": "[redigido]"
+  },
+  "id": 1,
+  "inbox_id": 3,
+  "messages": [],
+  "labels": [],
+  "meta": {
+   "sender": {
+    "additional_attributes": {},
+    "custom_attributes": {},
+    "email": null,
+    "id": 3,
+    "identifier": "sint-1",
+    "name": "Contato Sintetico",
+    "phone_number": null,
+    "thumbnail": "",
+    "blocked": false,
+    "contact_type": "lead",
+    "type": "contact",
+    "company_id": null
+   },
+   "assignee": null,
+   "assignee_type": null,
+   "team": null,
+   "hmac_verified": false
+  },
+  "status": "open",
+  "custom_attributes": {},
+  "snoozed_until": null,
+  "unread_count": 1,
+  "first_reply_created_at": null,
+  "priority": null,
+  "waiting_since": 1793605011,
+  "agent_last_seen_at": 0,
+  "contact_last_seen_at": 0,
+  "last_activity_at": 1793605011,
+  "timestamp": 1793605011,
+  "created_at": 1793605011,
+  "updated_at": 1793605011.20815,
+  "account": {
+   "id": 3,
+   "name": "Conta sintetica x"
+  },
+  "event": "conversation_created"
+ },
+ "entrada_do_cliente_api_publica": {
+  "account": {
+   "id": 3,
+   "name": "Conta sintetica x"
+  },
+  "additional_attributes": {},
+  "content_attributes": {},
+  "content_type": "text",
+  "content": "MENSAGEM-PUBLICA-SINTETICA",
+  "conversation": {
+   "additional_attributes": {},
+   "can_reply": true,
+   "channel": "Channel::Api",
+   "contact_inbox": {
+    "id": 3,
+    "contact_id": 3,
+    "inbox_id": 3,
+    "source_id": "983345cf-6b44-462b-94ad-f4887f78f082",
+    "created_at": "2026-11-02T07:36:51.116Z",
+    "updated_at": "2026-11-02T07:36:51.116Z",
+    "hmac_verified": false,
+    "pubsub_token": "[redigido]"
+   },
+   "id": 1,
+   "inbox_id": 3,
+   "messages": [
+    {
+     "id": 10,
+     "content": "MENSAGEM-SINTETICA-ENTRADA",
+     "account_id": 3,
+     "inbox_id": 3,
+     "conversation_id": 1,
+     "message_type": 0,
+     "created_at": 1793605011,
+     "updated_at": "2026-11-02T07:36:51.426Z",
+     "private": false,
+     "status": "sent",
+     "source_id": null,
+     "content_type": "text",
+     "content_attributes": {},
+     "sender_type": "Contact",
+     "sender_id": 3,
+     "external_source_ids": {},
+     "additional_attributes": {},
+     "processed_message_content": "MENSAGEM-SINTETICA-ENTRADA",
+     "sentiment": {},
+     "conversation": {
+      "assignee_id": null,
+      "unread_count": 2,
+      "last_activity_at": 1793605011,
+      "contact_inbox": {
+       "source_id": "983345cf-6b44-462b-94ad-f4887f78f082"
+      }
+     },
+     "sender": {
+      "additional_attributes": {},
+      "custom_attributes": {},
+      "email": null,
+      "id": 3,
+      "identifier": "sint-1",
+      "name": "Contato Sintetico",
+      "phone_number": null,
+      "thumbnail": "",
+      "blocked": false,
+      "contact_type": "lead",
+      "type": "contact",
+      "company_id": null
+     }
+    }
+   ],
+   "labels": [],
+   "meta": {
+    "sender": {
+     "additional_attributes": {},
+     "custom_attributes": {},
+     "email": null,
+     "id": 3,
+     "identifier": "sint-1",
+     "name": "Contato Sintetico",
+     "phone_number": null,
+     "thumbnail": "",
+     "blocked": false,
+     "contact_type": "lead",
+     "type": "contact",
+     "company_id": null
+    },
+    "assignee": null,
+    "assignee_type": null,
+    "team": null,
+    "hmac_verified": false
+   },
+   "status": "open",
+   "custom_attributes": {},
+   "snoozed_until": null,
+   "unread_count": 2,
+   "first_reply_created_at": null,
+   "priority": null,
+   "waiting_since": 1793605011,
+   "agent_last_seen_at": 0,
+   "contact_last_seen_at": 0,
+   "last_activity_at": 1793605011,
+   "timestamp": 1793605011,
+   "created_at": 1793605011,
+   "updated_at": 1793605011.3225238,
+   "account": {
+    "id": 3,
+    "name": "Conta sintetica x"
+   }
+  },
+  "created_at": "2026-11-02T07:36:51.310Z",
+  "id": 9,
+  "inbox": {
+   "id": 3,
+   "name": "API sintetica"
+  },
+  "message_type": "incoming",
+  "private": false,
+  "sender": {
+   "account": {
+    "id": 3,
+    "name": "Conta sintetica x"
+   },
+   "additional_attributes": {},
+   "avatar": "",
+   "custom_attributes": {},
+   "email": null,
+   "id": 3,
+   "identifier": "sint-1",
+   "name": "Contato Sintetico",
+   "phone_number": null,
+   "thumbnail": "",
+   "blocked": false,
+   "contact_type": "lead"
+  },
+  "source_id": null,
+  "event": "message_created"
+ },
+ "entrada_do_cliente_api_app": {
+  "account": {
+   "id": 3,
+   "name": "Conta sintetica x"
+  },
+  "additional_attributes": {},
+  "content_attributes": {},
+  "content_type": "text",
+  "content": "MENSAGEM-SINTETICA-ENTRADA",
+  "conversation": {
+   "additional_attributes": {},
+   "can_reply": true,
+   "channel": "Channel::Api",
+   "contact_inbox": {
+    "id": 3,
+    "contact_id": 3,
+    "inbox_id": 3,
+    "source_id": "983345cf-6b44-462b-94ad-f4887f78f082",
+    "created_at": "2026-11-02T07:36:51.116Z",
+    "updated_at": "2026-11-02T07:36:51.116Z",
+    "hmac_verified": false,
+    "pubsub_token": "[redigido]"
+   },
+   "id": 1,
+   "inbox_id": 3,
+   "messages": [
+    {
+     "id": 11,
+     "content": "RESPOSTA-SINTETICA",
+     "account_id": 3,
+     "inbox_id": 3,
+     "conversation_id": 1,
+     "message_type": 1,
+     "created_at": 1793605011,
+     "updated_at": "2026-11-02T07:36:51.616Z",
+     "private": false,
+     "status": "sent",
+     "source_id": null,
+     "content_type": "text",
+     "content_attributes": {},
+     "sender_type": "User",
+     "sender_id": 3,
+     "external_source_ids": {},
+     "additional_attributes": {},
+     "processed_message_content": "RESPOSTA-SINTETICA",
+     "sentiment": {},
+     "conversation": {
+      "assignee_id": null,
+      "unread_count": 2,
+      "last_activity_at": 1793605011,
+      "contact_inbox": {
+       "source_id": "983345cf-6b44-462b-94ad-f4887f78f082"
+      }
+     },
+     "sender": {
+      "id": 3,
+      "name": "Agente x",
+      "available_name": "Agente x",
+      "avatar_url": "",
+      "type": "user",
+      "availability_status": null,
+      "thumbnail": ""
+     }
+    }
+   ],
+   "labels": [],
+   "meta": {
+    "sender": {
+     "additional_attributes": {},
+     "custom_attributes": {},
+     "email": null,
+     "id": 3,
+     "identifier": "sint-1",
+     "name": "Contato Sintetico",
+     "phone_number": null,
+     "thumbnail": "",
+     "blocked": false,
+     "contact_type": "lead",
+     "type": "contact",
+     "company_id": null
+    },
+    "assignee": null,
+    "assignee_type": null,
+    "team": null,
+    "hmac_verified": false
+   },
+   "status": "open",
+   "custom_attributes": {},
+   "snoozed_until": null,
+   "unread_count": 2,
+   "first_reply_created_at": null,
+   "priority": null,
+   "waiting_since": 1793605011,
+   "agent_last_seen_at": 0,
+   "contact_last_seen_at": 0,
+   "last_activity_at": 1793605011,
+   "timestamp": 1793605011,
+   "created_at": 1793605011,
+   "updated_at": 1793605011.436141,
+   "account": {
+    "id": 3,
+    "name": "Conta sintetica x"
+   }
+  },
+  "created_at": "2026-11-02T07:36:51.426Z",
+  "id": 10,
+  "inbox": {
+   "id": 3,
+   "name": "API sintetica"
+  },
+  "message_type": "incoming",
+  "private": false,
+  "sender": {
+   "account": {
+    "id": 3,
+    "name": "Conta sintetica x"
+   },
+   "additional_attributes": {},
+   "avatar": "",
+   "custom_attributes": {},
+   "email": null,
+   "id": 3,
+   "identifier": "sint-1",
+   "name": "Contato Sintetico",
+   "phone_number": null,
+   "thumbnail": "",
+   "blocked": false,
+   "contact_type": "lead"
+  },
+  "source_id": null,
+  "event": "message_created"
+ },
+ "resposta_do_agente": {
+  "account": {
+   "id": 3,
+   "name": "Conta sintetica x"
+  },
+  "additional_attributes": {},
+  "content_attributes": {},
+  "content_type": "text",
+  "content": "RESPOSTA-SINTETICA",
+  "conversation": {
+   "additional_attributes": {},
+   "can_reply": true,
+   "channel": "Channel::Api",
+   "contact_inbox": {
+    "id": 3,
+    "contact_id": 3,
+    "inbox_id": 3,
+    "source_id": "983345cf-6b44-462b-94ad-f4887f78f082",
+    "created_at": "2026-11-02T07:36:51.116Z",
+    "updated_at": "2026-11-02T07:36:51.116Z",
+    "hmac_verified": false,
+    "pubsub_token": "[redigido]"
+   },
+   "id": 1,
+   "inbox_id": 3,
+   "messages": [
+    {
+     "id": 11,
+     "content": "RESPOSTA-SINTETICA",
+     "account_id": 3,
+     "inbox_id": 3,
+     "conversation_id": 1,
+     "message_type": 1,
+     "created_at": 1793605011,
+     "updated_at": "2026-11-02T07:36:51.616Z",
+     "private": false,
+     "status": "sent",
+     "source_id": null,
+     "content_type": "text",
+     "content_attributes": {},
+     "sender_type": "User",
+     "sender_id": 3,
+     "external_source_ids": {},
+     "additional_attributes": {},
+     "processed_message_content": "RESPOSTA-SINTETICA",
+     "sentiment": {},
+     "conversation": {
+      "assignee_id": null,
+      "unread_count": 2,
+      "last_activity_at": 1793605011,
+      "contact_inbox": {
+       "source_id": "983345cf-6b44-462b-94ad-f4887f78f082"
+      }
+     },
+     "sender": {
+      "id": 3,
+      "name": "Agente x",
+      "available_name": "Agente x",
+      "avatar_url": "",
+      "type": "user",
+      "availability_status": null,
+      "thumbnail": ""
+     }
+    }
+   ],
+   "labels": [],
+   "meta": {
+    "sender": {
+     "additional_attributes": {},
+     "custom_attributes": {},
+     "email": null,
+     "id": 3,
+     "identifier": "sint-1",
+     "name": "Contato Sintetico",
+     "phone_number": null,
+     "thumbnail": "",
+     "blocked": false,
+     "contact_type": "lead",
+     "type": "contact",
+     "company_id": null
+    },
+    "assignee": null,
+    "assignee_type": null,
+    "team": null,
+    "hmac_verified": false
+   },
+   "status": "open",
+   "custom_attributes": {},
+   "snoozed_until": null,
+   "unread_count": 2,
+   "first_reply_created_at": "2026-11-02T07:36:51.616Z",
+   "priority": null,
+   "waiting_since": 0,
+   "agent_last_seen_at": 0,
+   "contact_last_seen_at": 0,
+   "last_activity_at": 1793605011,
+   "timestamp": 1793605011,
+   "created_at": 1793605011,
+   "updated_at": 1793605011.7629209,
+   "account": {
+    "id": 3,
+    "name": "Conta sintetica x"
+   }
+  },
+  "created_at": "2026-11-02T07:36:51.616Z",
+  "id": 11,
+  "inbox": {
+   "id": 3,
+   "name": "API sintetica"
+  },
+  "message_type": "outgoing",
+  "private": false,
+  "sender": {
+   "id": 3,
+   "name": "Agente x",
+   "email": "agente-x58cb8c@orbita.test",
+   "type": "user"
+  },
+  "source_id": null,
+  "event": "message_created"
+ },
+ "nota_privada": {
+  "account": {
+   "id": 3,
+   "name": "Conta sintetica x"
+  },
+  "additional_attributes": {},
+  "content_attributes": {},
+  "content_type": "text",
+  "content": "NOTA-SINTETICA",
+  "conversation": {
+   "additional_attributes": {},
+   "can_reply": true,
+   "channel": "Channel::Api",
+   "contact_inbox": {
+    "id": 3,
+    "contact_id": 3,
+    "inbox_id": 3,
+    "source_id": "983345cf-6b44-462b-94ad-f4887f78f082",
+    "created_at": "2026-11-02T07:36:51.116Z",
+    "updated_at": "2026-11-02T07:36:51.116Z",
+    "hmac_verified": false,
+    "pubsub_token": "[redigido]"
+   },
+   "id": 1,
+   "inbox_id": 3,
+   "messages": [
+    {
+     "id": 11,
+     "content": "RESPOSTA-SINTETICA",
+     "account_id": 3,
+     "inbox_id": 3,
+     "conversation_id": 1,
+     "message_type": 1,
+     "created_at": 1793605011,
+     "updated_at": "2026-11-02T07:36:52.229Z",
+     "private": false,
+     "status": "delivered",
+     "source_id": null,
+     "content_type": "text",
+     "content_attributes": {},
+     "sender_type": "User",
+     "sender_id": 3,
+     "external_source_ids": {},
+     "additional_attributes": {},
+     "processed_message_content": "RESPOSTA-SINTETICA",
+     "sentiment": {},
+     "conversation": {
+      "assignee_id": null,
+      "unread_count": 2,
+      "last_activity_at": 1793605012,
+      "contact_inbox": {
+       "source_id": "983345cf-6b44-462b-94ad-f4887f78f082"
+      }
+     },
+     "sender": {
+      "id": 3,
+      "name": "Agente x",
+      "available_name": "Agente x",
+      "avatar_url": "",
+      "type": "user",
+      "availability_status": null,
+      "thumbnail": ""
+     }
+    }
+   ],
+   "labels": [],
+   "meta": {
+    "sender": {
+     "additional_attributes": {},
+     "custom_attributes": {},
+     "email": null,
+     "id": 3,
+     "identifier": "sint-1",
+     "name": "Contato Sintetico",
+     "phone_number": null,
+     "thumbnail": "",
+     "blocked": false,
+     "contact_type": "lead",
+     "type": "contact",
+     "company_id": null
+    },
+    "assignee": null,
+    "assignee_type": null,
+    "team": null,
+    "hmac_verified": false
+   },
+   "status": "open",
+   "custom_attributes": {},
+   "snoozed_until": null,
+   "unread_count": 2,
+   "first_reply_created_at": "2026-11-02T07:36:51.616Z",
+   "priority": null,
+   "waiting_since": 0,
+   "agent_last_seen_at": 0,
+   "contact_last_seen_at": 0,
+   "last_activity_at": 1793605012,
+   "timestamp": 1793605012,
+   "created_at": 1793605011,
+   "updated_at": 1793605012.0606878,
+   "account": {
+    "id": 3,
+    "name": "Conta sintetica x"
+   }
+  },
+  "created_at": "2026-11-02T07:36:52.050Z",
+  "id": 12,
+  "inbox": {
+   "id": 3,
+   "name": "API sintetica"
+  },
+  "message_type": "outgoing",
+  "private": true,
+  "sender": {
+   "id": 3,
+   "name": "Agente x",
+   "email": "agente-x58cb8c@orbita.test",
+   "type": "user"
+  },
+  "source_id": null,
+  "event": "message_created"
+ },
+ "mensagem_atualizada": {
+  "account": {
+   "id": 3,
+   "name": "Conta sintetica x"
+  },
+  "additional_attributes": {},
+  "content_attributes": {},
+  "content_type": "text",
+  "content": "RESPOSTA-SINTETICA",
+  "conversation": {
+   "additional_attributes": {},
+   "can_reply": true,
+   "channel": "Channel::Api",
+   "contact_inbox": {
+    "id": 3,
+    "contact_id": 3,
+    "inbox_id": 3,
+    "source_id": "983345cf-6b44-462b-94ad-f4887f78f082",
+    "created_at": "2026-11-02T07:36:51.116Z",
+    "updated_at": "2026-11-02T07:36:51.116Z",
+    "hmac_verified": false,
+    "pubsub_token": "[redigido]"
+   },
+   "id": 1,
+   "inbox_id": 3,
+   "messages": [
+    {
+     "id": 11,
+     "content": "RESPOSTA-SINTETICA",
+     "account_id": 3,
+     "inbox_id": 3,
+     "conversation_id": 1,
+     "message_type": 1,
+     "created_at": 1793605011,
+     "updated_at": "2026-11-02T07:36:52.229Z",
+     "private": false,
+     "status": "delivered",
+     "source_id": null,
+     "content_type": "text",
+     "content_attributes": {},
+     "sender_type": "User",
+     "sender_id": 3,
+     "external_source_ids": {},
+     "additional_attributes": {},
+     "processed_message_content": "RESPOSTA-SINTETICA",
+     "sentiment": {},
+     "conversation": {
+      "assignee_id": null,
+      "unread_count": 2,
+      "last_activity_at": 1793605012,
+      "contact_inbox": {
+       "source_id": "983345cf-6b44-462b-94ad-f4887f78f082"
+      }
+     },
+     "sender": {
+      "id": 3,
+      "name": "Agente x",
+      "available_name": "Agente x",
+      "avatar_url": "",
+      "type": "user",
+      "availability_status": null,
+      "thumbnail": ""
+     }
+    }
+   ],
+   "labels": [],
+   "meta": {
+    "sender": {
+     "additional_attributes": {},
+     "custom_attributes": {},
+     "email": null,
+     "id": 3,
+     "identifier": "sint-1",
+     "name": "Contato Sintetico",
+     "phone_number": null,
+     "thumbnail": "",
+     "blocked": false,
+     "contact_type": "lead",
+     "type": "contact",
+     "company_id": null
+    },
+    "assignee": null,
+    "assignee_type": null,
+    "team": null,
+    "hmac_verified": false
+   },
+   "status": "resolved",
+   "custom_attributes": {},
+   "snoozed_until": null,
+   "unread_count": 2,
+   "first_reply_created_at": "2026-11-02T07:36:51.616Z",
+   "priority": null,
+   "waiting_since": 0,
+   "agent_last_seen_at": 0,
+   "contact_last_seen_at": 0,
+   "last_activity_at": 1793605012,
+   "timestamp": 1793605012,
+   "created_at": 1793605011,
+   "updated_at": 1793605012.3442,
+   "account": {
+    "id": 3,
+    "name": "Conta sintetica x"
+   }
+  },
+  "created_at": "2026-11-02T07:36:51.616Z",
+  "id": 11,
+  "inbox": {
+   "id": 3,
+   "name": "API sintetica"
+  },
+  "message_type": "outgoing",
+  "private": false,
+  "sender": {
+   "id": 3,
+   "name": "Agente x",
+   "email": "agente-x58cb8c@orbita.test",
+   "type": "user"
+  },
+  "source_id": null,
+  "event": "message_updated"
+ },
+ "status_alterado": {
+  "additional_attributes": {},
+  "can_reply": true,
+  "channel": "Channel::Api",
+  "contact_inbox": {
+   "id": 3,
+   "contact_id": 3,
+   "inbox_id": 3,
+   "source_id": "983345cf-6b44-462b-94ad-f4887f78f082",
+   "created_at": "2026-11-02T07:36:51.116Z",
+   "updated_at": "2026-11-02T07:36:51.116Z",
+   "hmac_verified": false,
+   "pubsub_token": "[redigido]"
+  },
+  "id": 1,
+  "inbox_id": 3,
+  "messages": [
+   {
+    "id": 11,
+    "content": "RESPOSTA-SINTETICA",
+    "account_id": 3,
+    "inbox_id": 3,
+    "conversation_id": 1,
+    "message_type": 1,
+    "created_at": 1793605011,
+    "updated_at": "2026-11-02T07:36:52.229Z",
+    "private": false,
+    "status": "delivered",
+    "source_id": null,
+    "content_type": "text",
+    "content_attributes": {},
+    "sender_type": "User",
+    "sender_id": 3,
+    "external_source_ids": {},
+    "additional_attributes": {},
+    "processed_message_content": "RESPOSTA-SINTETICA",
+    "sentiment": {},
+    "conversation": {
+     "assignee_id": null,
+     "unread_count": 2,
+     "last_activity_at": 1793605012,
+     "contact_inbox": {
+      "source_id": "983345cf-6b44-462b-94ad-f4887f78f082"
+     }
+    },
+    "sender": {
+     "id": 3,
+     "name": "Agente x",
+     "available_name": "Agente x",
+     "avatar_url": "",
+     "type": "user",
+     "availability_status": null,
+     "thumbnail": ""
+    }
+   }
+  ],
+  "labels": [],
+  "meta": {
+   "sender": {
+    "additional_attributes": {},
+    "custom_attributes": {},
+    "email": null,
+    "id": 3,
+    "identifier": "sint-1",
+    "name": "Contato Sintetico",
+    "phone_number": null,
+    "thumbnail": "",
+    "blocked": false,
+    "contact_type": "lead",
+    "type": "contact",
+    "company_id": null
+   },
+   "assignee": null,
+   "assignee_type": null,
+   "team": null,
+   "hmac_verified": false
+  },
+  "status": "resolved",
+  "custom_attributes": {},
+  "snoozed_until": null,
+  "unread_count": 2,
+  "first_reply_created_at": "2026-11-02T07:36:51.616Z",
+  "priority": null,
+  "waiting_since": 0,
+  "agent_last_seen_at": 0,
+  "contact_last_seen_at": 0,
+  "last_activity_at": 1793605012,
+  "timestamp": 1793605012,
+  "created_at": 1793605011,
+  "updated_at": 1793605012.3442,
+  "account": {
+   "id": 3,
+   "name": "Conta sintetica x"
+  },
+  "event": "conversation_status_changed",
+  "changed_attributes": null
+ }
+}

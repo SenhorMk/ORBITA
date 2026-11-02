@@ -179,8 +179,9 @@ export class ChatwootAdapter implements ChatwootPort {
       return { _tag: 'ChatwootFailed', reason: 'invalid-response', retryable: false };
     }
 
-    const payload = (raw as { payload?: unknown })?.payload ?? [];
-    const parsed = ChatwootConversationSchema.array().safeParse(payload);
+    // A listagem vem em `data.payload` (4.19.1). Outro formato é resposta inválida, nunca "sem conversas".
+    const envelope = raw as { data?: { payload?: unknown }; payload?: unknown } | null;
+    const parsed = ChatwootConversationSchema.array().safeParse(envelope?.data?.payload ?? envelope?.payload);
     if (!parsed.success) {
       return { _tag: 'ChatwootFailed', reason: 'invalid-response', retryable: false };
     }
