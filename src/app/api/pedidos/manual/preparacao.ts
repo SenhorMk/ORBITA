@@ -29,6 +29,7 @@ import type {
   ManualOrderStorePort,
   ResolvedManualOrderItem,
 } from './ports';
+import { faltamDadosFiscaisParaCadastrarContato, mensagemDeDadosFiscaisPendentes } from './envioAoBling';
 import { falhaDaVendaManual as fail } from './resposta';
 
 type ResolveItensResult =
@@ -134,6 +135,11 @@ export async function prepararPedido(request: Request, deps: ManualOrderDependen
       _tag: 'Rejeitado',
       response: fail(`${cliente.nome} tem uma exclusão no Bling aguardando conferência e não pode ser usado em venda nova.`, 400),
     };
+  }
+  // Antes do claim e de qualquer envio (PRE-010): cadastrar o contato exigiria
+  // uma situação de ICMS que ninguém escolheu. A decisão volta para quem opera.
+  if (body.syncBling && faltamDadosFiscaisParaCadastrarContato(cliente)) {
+    return { _tag: 'Rejeitado', response: fail(mensagemDeDadosFiscaisPendentes(cliente.nome), 400) };
   }
 
   const itensResult = await resolveItens(scope, body, deps.store);

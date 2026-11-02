@@ -497,6 +497,8 @@ describe('o payload que sai pelo fio bate com o schema oficial', () => {
       email: 'cliente@exemplo.test',
       telefone: '11999998888',
       documento: '12345678909',
+      tipo: 'F',
+      indicadorIe: 9,
     });
 
     expect(urlEnviada().pathname).toBe('/contatos');
