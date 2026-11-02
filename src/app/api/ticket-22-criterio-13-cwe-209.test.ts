@@ -92,7 +92,7 @@ vi.mock('@/repositories/financeiroRepository', () => ({
   },
 }));
 vi.mock('@/repositories/pedidoRepository', () => ({
-  pedidoRepository: { upsertNfe: vi.fn(), getById: vi.fn(), upsert: vi.fn() },
+  pedidoRepository: { upsertNfe: vi.fn(), getById: vi.fn(), upsert: vi.fn(), registroDeNfeDisponivel: vi.fn(async () => true) },
 }));
 
 /**

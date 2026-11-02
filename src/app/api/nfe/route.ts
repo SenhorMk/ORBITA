@@ -7,6 +7,7 @@ import { escopoTemCapacidade, resolveVerifiedOrganizationScope } from '@/lib/req
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { registrarFalhaInterna, MENSAGEM_PUBLICA_DE_FALHA } from '@/lib/observability/falhaInterna';
 import { logger } from '@/lib/observability/logger';
+import { getCorrelationId } from '@/lib/observability/correlation';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,6 +30,7 @@ async function emitNfeWithLock(
   pedidoId: string,
   blingPedidoId: string,
   blingClient: BlingPort,
+  correlationId: string,
 ): Promise<NextResponse> {
   // 2. Verificar no banco se a NF-e já existe na tabela canônica
   const { data: nfeExistente, error: nfeError } = await supabaseServer
@@ -50,6 +52,15 @@ async function emitNfeWithLock(
     return NextResponse.json(
       { success: false, error: `Este pedido já possui a NF-e número ${nfeExistente.numero} emitida.` },
       { status: 400 }
+    );
+  }
+
+  // Sem a RPC auditada (banco sem a migration 83) a nota sairia no Bling e não
+  // poderia ser registrada aqui: recusa antes de emitir.
+  if (!(await pedidoRepository.registroDeNfeDisponivel())) {
+    return NextResponse.json(
+      { success: false, error: 'Emissão de NF-e indisponível no momento. Nada foi enviado ao Bling.' },
+      { status: 503 }
     );
   }
 
@@ -106,7 +117,7 @@ async function emitNfeWithLock(
       chave: nfeChave || '',
       status: nfeStatus,
       pedido_id: pedidoId,
-    });
+    }, { correlationId });
 
     // 3. Atualizar status do pedido local para Atendido/Faturado
     const pedidoLocal = await pedidoRepository.getById(scope, pedidoId);
@@ -173,7 +184,7 @@ export async function POST(request: Request) {
 
       try {
         const blingClient = bling.forVerifiedOrganization(scope);
-        return await emitNfeWithLock(scope, pedidoId, blingPedidoId, blingClient);
+        return await emitNfeWithLock(scope, pedidoId, blingPedidoId, blingClient, getCorrelationId(request));
       } catch (error: unknown) {
         // A mensagem do erro fica só no log (CWE-209); o cliente recebe frase fixa.
         registrarFalhaInterna('nfe.emitir', error, { organizacaoId: scope.organizationId });
