@@ -30,7 +30,8 @@ export const ChatwootConversationSchema = z.object({
   id: z.coerce.number().int(),
   display_id: z.coerce.number().int().optional(),
   contact_id: z.coerce.number().int().optional(),
-  status: z.enum(['open', 'resolved', 'pending']).default('open'),
+  // `snoozed` só se lê: a ORBITA não adia conversa, mas o agente pode adiar no Chatwoot.
+  status: z.enum(['open', 'resolved', 'pending', 'snoozed']).default('open'),
   inbox_id: z.coerce.number().int().optional(),
   channel: z.string().optional(),
   channel_type: z.string().optional(),

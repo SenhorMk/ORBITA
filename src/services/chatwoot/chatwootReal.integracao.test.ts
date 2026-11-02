@@ -19,6 +19,7 @@ import type { OrganizationContextResult } from '@/lib/organizationAuthorization'
 import { listarCasos, listarEventosRecebidos } from '@/services/sac/leituraDeCasos';
 
 import { ChatwootAdapter } from './chatwootAdapter';
+import { ChatwootConversationSchema } from './chatwootPort';
 import { consumirInboxUmaVez } from './consumidorInboxChatwoot';
 import { criarPortaDoConsumidorInbox } from './consumidorInboxChatwootSupabase';
 
@@ -388,6 +389,24 @@ describe('Chatwoot CE real → ORBITA', () => {
     expect(await contar('inbox_eventos_chatwoot', "conexao_id = $1 and disposicao = 'classificacao_inconclusiva'", CONEXAO.a)).toBe(0);
     expect(await contar('chatwoot_conversations', "conexao_id = $1 and id_externo = $2 and status = 'resolved'", CONEXAO.a, String(contas.a.conversaId))).toBe(1);
     expect(await contar('chatwoot_messages', 'organizacao_id = $1 and id_externo = $2', ORG.a, String(nota.id))).toBe(1);
+  });
+
+  it('o agente adia a conversa no Chatwoot: o status snoozed chega ao espelho e passa pelo contrato da listagem', async () => {
+    const antes = entregas.filter((e) => e.evento === 'conversation_status_changed' && e.conexao === CONEXAO.a).length;
+    await api('a', 'POST', `/conversations/${contas.a.conversaId}/toggle_status`, { status: 'snoozed' });
+    const limite = Date.now() + 60_000;
+    while (entregas.filter((e) => e.evento === 'conversation_status_changed' && e.conexao === CONEXAO.a).length <= antes && Date.now() < limite) {
+      await new Promise((resolve) => { setTimeout(resolve, 250); });
+    }
+    const entrega = entregas.filter((e) => e.evento === 'conversation_status_changed' && e.conexao === CONEXAO.a).at(-1);
+    expect(entrega).toMatchObject({ status: 200 });
+    expect(await consumir('w-m1-snoozed')).toMatchObject({ falhas: 0 });
+    expect(await contar('chatwoot_conversations', "conexao_id = $1 and id_externo = $2 and status = 'snoozed'", CONEXAO.a, String(contas.a.conversaId))).toBe(1);
+
+    // A listagem sem filtro só traz abertas; `status=all` traz a adiada de verdade.
+    const todas = await api('a', 'GET', '/conversations?status=all');
+    const lidas = ChatwootConversationSchema.array().parse(todas.data.payload);
+    expect(lidas.find((c) => c.id === contas.a.conversaId)?.status).toBe('snoozed');
   });
 
   it('reiniciar o Chatwoot: a conversa continua, e a próxima entrega é assinada e aceita', async () => {

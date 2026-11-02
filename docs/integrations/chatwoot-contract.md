@@ -107,6 +107,8 @@ endpoint never triggers it. See `docs/operations/msg-006-runbook.md`.
   só é preenchido com prova: mensagem de entrada cujo `sender.id` é o contato da conversa.
 - `conversation_*`: a conversa vem no topo (`id`, `status`, `inbox_id`, `updated_at`), sem
   `conversation` e sem `inbox`; `created_at` é numérico.
+- Status de conversa no provedor: `open`, `resolved`, `pending` e `snoozed`. A ORBITA lê os
+  quatro e só escreve os três primeiros.
 - `message_updated` não traz `updated_at` da mensagem; a revisão usa o id da entrega.
 - `X-Chatwoot-Delivery` veio em todas as entregas observadas, como UUID. Segue opcional.
 - Na API, `created_at` da mensagem são segundos desde a época; a aplicação recebe ISO.

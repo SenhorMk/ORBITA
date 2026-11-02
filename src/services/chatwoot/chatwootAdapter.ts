@@ -202,8 +202,8 @@ export class ChatwootAdapter implements ChatwootPort {
       return { _tag: 'ChatwootFailed', reason: 'invalid-response', retryable: false };
     }
 
-    const payload = (raw as { payload?: unknown })?.payload ?? [];
-    const parsed = ChatwootMessageSchema.array().safeParse(payload);
+    // Sem `payload` é resposta inválida, nunca "sem mensagens".
+    const parsed = ChatwootMessageSchema.array().safeParse((raw as { payload?: unknown } | null)?.payload);
     if (!parsed.success) {
       return { _tag: 'ChatwootFailed', reason: 'invalid-response', retryable: false };
     }

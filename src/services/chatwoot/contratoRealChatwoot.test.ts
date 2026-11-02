@@ -39,6 +39,23 @@ describe('contrato real do Chatwoot 4.19.1', () => {
     expect(await adapter.getConversations(respondendo({ data: {} }))).toMatchObject({ _tag: 'ChatwootFailed', reason: 'invalid-response' });
   });
 
+  it('formato desconhecido nas mensagens é resposta inválida, nunca "sem mensagens"', async () => {
+    expect(await adapter.getMessages(1, respondendo({ data: {} }))).toMatchObject({ _tag: 'ChatwootFailed', reason: 'invalid-response' });
+  });
+
+  it('conversa sem mensagens continua sendo lista vazia', async () => {
+    expect(await adapter.getMessages(1, respondendo({ meta: {}, payload: [] }))).toEqual({ _tag: 'ChatwootSuccess', data: [] });
+  });
+
+  it('uma conversa adiada (snoozed) não derruba a listagem', async () => {
+    const r = await adapter.getConversations(respondendo({ data: { payload: [{ id: 1, status: 'snoozed' }, { id: 2, status: 'open' }] } }));
+    expect(r).toMatchObject({ _tag: 'ChatwootSuccess', data: [{ id: 1, status: 'snoozed' }, { id: 2, status: 'open' }] });
+  });
+
+  it('status fora do que o provedor define continua sendo resposta inválida', async () => {
+    expect(await adapter.getConversations(respondendo({ data: { payload: [{ id: 1, status: 'inventado' }] } }))).toMatchObject({ _tag: 'ChatwootFailed', reason: 'invalid-response' });
+  });
+
   it('a resposta da API traz created_at em segundos, e a aplicação recebe ISO', () => {
     const r = ChatwootMessageSchema.parse({ id: 11, content: 'RESPOSTA', message_type: 1, created_at: 1793605011, sender: { id: 3, name: 'Agente', type: 'user' } });
     expect(r.created_at).toBe(new Date(1793605011 * 1000).toISOString());
