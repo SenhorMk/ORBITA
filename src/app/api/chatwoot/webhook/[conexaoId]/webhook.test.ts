@@ -12,6 +12,10 @@ const ORG_A = '22222222-2222-4222-8222-222222222222';
 const ORG_B = '33333333-3333-4333-8333-333333333333';
 const CONEXAO_A = '11111111-1111-4111-8111-111111111111';
 const CONEXAO_B = '44444444-4444-4444-8444-444444444444';
+/** Organização cujo owner perdeu o acesso: nenhuma membership de owner resolve. */
+const ORG_SEM_DONO = '55555555-5555-4555-8555-555555555555';
+const CONEXAO_SEM_DONO = '66666666-6666-4666-8666-666666666666';
+const SECRET_SEM_DONO = 'chatwoot_secret_org_sem_dono_1234';
 const OWNER_A = '70000000-0000-4000-8000-000000000001';
 const OWNER_B = '70000000-0000-4000-8000-000000000002';
 const SECRET_A = 'chatwoot_secret_org_a_1234567890';
@@ -140,6 +144,7 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
     connections = {
       [CONEXAO_A]: { organizacao_id: ORG_A, status: 'conectado' },
       [CONEXAO_B]: { organizacao_id: ORG_B, status: 'conectado' },
+      [CONEXAO_SEM_DONO]: { organizacao_id: ORG_SEM_DONO, status: 'conectado' },
     };
     credentials = {
       [CONEXAO_A]: encrypt(
@@ -147,6 +152,9 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
       ) as string,
       [CONEXAO_B]: encrypt(
         JSON.stringify({ api_url: 'https://b.chatwoot.test', api_token: 'tok-b', account_id: '1', webhook_secret: SECRET_B }),
+      ) as string,
+      [CONEXAO_SEM_DONO]: encrypt(
+        JSON.stringify({ api_url: 'https://c.chatwoot.test', api_token: 'tok-c', account_id: '1', webhook_secret: SECRET_SEM_DONO }),
       ) as string,
     };
   });
@@ -219,6 +227,74 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
     const res = await postWebhook(CONEXAO_A, body, { signature, timestamp });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ success: false, error: 'Inbox não identificada' });
+  });
+
+  it('PRE-008: conexão desligada recusa a entrega assinada, sem mapping, inbox nem efeito', async () => {
+    connections[CONEXAO_A]!.status = 'desconectado';
+    mockUpsert.mockClear();
+    mockRpc.mockClear();
+    const inboxesAntes = insertedInboxRows.length;
+    try {
+      const body = JSON.stringify({
+        event: 'message_created',
+        account: { id: 1 },
+        id: 502,
+        content: 'mensagem depois de desligar',
+        inbox: { id: 7 },
+        conversation: { id: 207, inbox_id: 7, contact: { id: 107 } },
+        sender: { id: 107, type: 'contact' },
+      });
+      const { signature, timestamp } = signBody(SECRET_A, body);
+      const res = await postWebhook(CONEXAO_A, body, { signature, timestamp });
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ success: false, error: 'Conexão Chatwoot desligada' });
+      expect(insertedInboxRows).toHaveLength(inboxesAntes);
+      expect(mockRpc).not.toHaveBeenCalled();
+      expect(mockUpsert).not.toHaveBeenCalled();
+    } finally {
+      connections[CONEXAO_A]!.status = 'conectado';
+    }
+  });
+
+  it('PRE-008: owner removido — a entrega assinada é recusada sem mapping, inbox nem efeito', async () => {
+    mockUpsert.mockClear();
+    mockRpc.mockClear();
+    const inboxesAntes = insertedInboxRows.length;
+    const erro = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const body = JSON.stringify({
+        event: 'message_created',
+        account: { id: 1 },
+        id: 503,
+        inbox: { id: 9 },
+        conversation: { id: 209, inbox_id: 9, contact: { id: 109 } },
+        sender: { id: 109, type: 'contact' },
+      });
+      const { signature, timestamp } = signBody(SECRET_SEM_DONO, body);
+      const res = await postWebhook(CONEXAO_SEM_DONO, body, { signature, timestamp });
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ success: false, error: 'Escopo organizacional inválido' });
+      expect(insertedInboxRows).toHaveLength(inboxesAntes);
+      expect(mockRpc).not.toHaveBeenCalled();
+      expect(mockUpsert).not.toHaveBeenCalled();
+    } finally {
+      erro.mockRestore();
+    }
+  });
+
+  it('PRE-008: conexão desligada com assinatura inválida responde 401, sem revelar o estado', async () => {
+    connections[CONEXAO_A]!.status = 'desconectado';
+    try {
+      const body = JSON.stringify({ event: 'message_created', account: { id: 1 } });
+      const { signature, timestamp } = signBody('segredo-errado', body);
+      const res = await postWebhook(CONEXAO_A, body, { signature, timestamp });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ success: false, error: 'Assinatura inválida' });
+    } finally {
+      connections[CONEXAO_A]!.status = 'conectado';
+    }
   });
 
   it('processes a valid signed event, auto-registers the inbox mapping and marks it processed', async () => {

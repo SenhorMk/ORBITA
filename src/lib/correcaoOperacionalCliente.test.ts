@@ -25,6 +25,13 @@ describe('executarCorrecao', () => {
     expect(await executarCorrecao(buscar, '/x')).toEqual({ resultado: 'FalhaInesperada' });
   });
 
+  it('503 Unavailable é lido do contrato e diz que nada foi alterado, nem no Bling', async () => {
+    const buscar = vi.fn(async () => resposta(503, { resultado: 'Unavailable' }));
+    const desfecho = await executarCorrecao(buscar, '/x');
+    expect(desfecho).toEqual({ resultado: 'Unavailable' });
+    expect(mensagemDaCorrecao(desfecho)).toContain('Nada foi alterado no ORBITA nem no Bling');
+  });
+
   it('403 da autorização vira SemPermissao', async () => {
     const buscar = vi.fn(async () => resposta(403, { success: false, error: 'Acesso negado' }));
     expect(await executarCorrecao(buscar, '/x')).toEqual({ resultado: 'SemPermissao' });
