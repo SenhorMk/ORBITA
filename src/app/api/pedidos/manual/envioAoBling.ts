@@ -51,6 +51,23 @@ function parseNumericBlingId(value: string | null): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+/**
+ * O envio teria de cadastrar o contato no Bling, e o cadastro local não tem o
+ * tipo de pessoa e o tipo de contribuinte escolhidos (PRE-010).
+ *
+ * Só um contato NOVO precisa deles: o cliente já vinculado segue com o
+ * contato que o Bling tem.
+ */
+export function faltamDadosFiscaisParaCadastrarContato(cliente: ManualOrderCliente): boolean {
+  return parseNumericBlingId(cliente.blingId) === null && cliente.dadosFiscais === null;
+}
+
+/** A recusa pede a escolha a quem opera: o ORBITA não deduz ICMS do CPF/CNPJ. */
+export function mensagemDeDadosFiscaisPendentes(nome: string): string {
+  return `${nome} ainda não tem cadastro no Bling, e falta escolher o tipo de pessoa e o tipo de contribuinte `
+    + 'no cadastro do cliente. O CPF/CNPJ não diz se ele é contribuinte de ICMS. Complete o cadastro e envie de novo.';
+}
+
 type ContatoResult =
   | { readonly _tag: 'ContatoResolved'; readonly blingContatoId: number }
   | { readonly _tag: 'ContatoRejected'; readonly response: NextResponse }
@@ -69,6 +86,13 @@ async function resolveBlingContato(
     return { _tag: 'ContatoResolved', blingContatoId: existente };
   }
 
+  // `prepararPedido` já recusou este caso antes do claim; a conferência aqui
+  // garante que nenhum caminho chegue ao POST sem a escolha do cadastro.
+  const { dadosFiscais } = cliente;
+  if (dadosFiscais === null) {
+    return { _tag: 'ContatoRejected', response: fail(mensagemDeDadosFiscaisPendentes(cliente.nome), 400) };
+  }
+
   // CADASTRAR O CONTATO É EFEITO NO ERP: esta função CRIA um contato na conta
   // do lojista e grava o vínculo local. Um executor que já perdeu a posse não
   // deve chegar a esse efeito.
@@ -84,6 +108,8 @@ async function resolveBlingContato(
     email: cliente.email,
     telefone: cliente.telefone,
     documento: cliente.cpfCnpj,
+    tipo: dadosFiscais.tipo,
+    indicadorIe: dadosFiscais.indicadorIe,
   });
 
   if (criado._tag === 'BlingFailed') {

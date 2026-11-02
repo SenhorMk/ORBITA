@@ -451,6 +451,26 @@ Nenhum dos dois existe em `POST /contatos`. O Bling descartava os valores em
 silêncio: o contato era criado sem telefone e sem indicador de inscrição
 estadual, e nada no ORBITA acusava. Corrigido no Ticket 32.
 
+### `tipo` e `indicadorIe` nunca são deduzidos (PRE-010)
+
+Todo `POST /contatos` leva `tipo` e `indicadorIe` escolhidos por alguém, e os
+dois são independentes: `J` não implica `1`, e o CPF/CNPJ não implica nenhum dos
+dois. Ter CNPJ não diz se a empresa é contribuinte, isenta ou não contribuinte
+de ICMS.
+
+O `createContato` legado deduzia `indicadorIe = 1` de todo documento de 14
+dígitos, e usava `9` e `tipo = 'F'` como padrão. As três deduções saíram:
+`createContato` e `criarContatoParaVenda` validam os dois campos com
+`dadosFiscaisDoContatoSchema` (`src/lib/config/clienteContract.ts`) e, sem eles,
+nada sai pelo fio.
+
+A venda manual usa o `tipo` e o `indicador_ie` gravados no cadastro do cliente.
+Quando o cliente ainda não tem contato no Bling e falta um dos dois,
+`prepararPedido` recusa com `400` **antes** do claim da tentativa e de qualquer
+efeito, pedindo que o operador complete o cadastro (o formulário de cliente já
+exige a escolha). Cliente já vinculado ao Bling segue com o contato que existe
+lá. Os registros históricos não são alterados.
+
 ## Schema de `POST /contas/pagar` (Ticket 33)
 
 Codificado em `criarContaPagar` de `src/services/bling.ts`.

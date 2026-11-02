@@ -193,42 +193,47 @@ export class PedidoRepository {
   }
 
   // Operações para Documentos Fiscais (Canônico)
-  async upsertNfe(scope: VerifiedOrganizationScope, nfe: Nfe): Promise<Nfe> {
-    const payload = {
-      organizacao_id: scope.organizationId,
-      user_id: scope.actorId,
-      bling_id: nfe.bling_id,
-      numero: nfe.numero,
-      chave_acesso: nfe.chave || null,
-      status: nfe.status,
-      pedido_id: nfe.pedido_id,
-      tipo: 'NFE',
-    };
+  /**
+   * Registra a NF-e devolvida pelo Bling. A RPC `registrar_documento_fiscal_emitido`
+   * (migration 83) faz o upsert por (organização, id do Bling) e grava
+   * `fiscal.document_issued` na mesma transação: se o evento for recusado, a
+   * nota não fica e esta chamada lança.
+   */
+  async upsertNfe(scope: VerifiedOrganizationScope, nfe: Nfe, auditoria: { readonly correlationId: string }): Promise<Nfe> {
+    const { data, error } = await supabaseServer.rpc('registrar_documento_fiscal_emitido', {
+      p_organizacao_id: scope.organizationId,
+      p_ator_id: scope.actorId,
+      p_pedido_id: nfe.pedido_id,
+      p_bling_id: nfe.bling_id,
+      p_numero: nfe.numero,
+      p_chave_acesso: nfe.chave || null,
+      p_status: nfe.status,
+      p_correlation_id: auditoria.correlationId,
+    });
 
-    const { data, error } = await supabaseServer
-      .from('documentos_fiscais')
-      .upsert(payload, { onConflict: 'organizacao_id, bling_id' })
-      .select()
-      .single();
+    if (error) throw new Error('Falha ao registrar o documento fiscal.', { cause: error });
+    const registrada = mapDocumentoToNfe(data as RawDocumentoFiscal | null);
+    if (!registrada) throw new Error('O registro do documento fiscal não devolveu a nota.');
+    return registrada;
+  }
 
-    if (error) {
-      console.error('Erro ao persistir Documento Fiscal no Supabase:', error);
-      throw error;
-    }
-
-    return {
-      id: data.id,
-      organizacao_id: data.organizacao_id,
-      user_id: data.user_id,
-      bling_id: data.bling_id,
-      numero: data.numero,
-      chave: data.chave_acesso || '',
-      status: data.status,
-      pedido_id: data.pedido_id,
-      emitida_em: data.emitida_em,
-      created_at: data.created_at,
-      updated_at: data.updated_at,
-    };
+  /**
+   * Sonda sem efeito: a RPC recusa argumentos nulos com `22023` antes de ler
+   * ou gravar qualquer coisa. Qualquer outra resposta (função ausente,
+   * `PGRST202`, ou banco fora) conta como indisponível: falha fechada.
+   */
+  async registroDeNfeDisponivel(): Promise<boolean> {
+    const { error } = await supabaseServer.rpc('registrar_documento_fiscal_emitido', {
+      p_organizacao_id: null,
+      p_ator_id: null,
+      p_pedido_id: null,
+      p_bling_id: null,
+      p_numero: null,
+      p_chave_acesso: null,
+      p_status: null,
+      p_correlation_id: null,
+    });
+    return error?.code === '22023';
   }
 
   // Obter faturamento mensal total

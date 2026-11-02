@@ -1,4 +1,5 @@
 import type { VerifiedOrganizationScope } from '../../lib/verifiedOrganizationScope';
+import { conexaoDesligada } from '../../lib/integrations/conexaoDesligada';
 import {
   ChatwootCredentialsPayloadSchema,
   ChatwootConversationSchema,
@@ -69,7 +70,7 @@ export class ChatwootAdapter implements ChatwootPort {
 
     let connQuery = supabaseServer
       .from('conexoes_integracao')
-      .select('id, metadata')
+      .select('id, metadata, status')
       .eq('organizacao_id', scope.organizationId)
       .eq('provedor', 'chatwoot');
 
@@ -78,7 +79,9 @@ export class ChatwootAdapter implements ChatwootPort {
     }
 
     const { data: conn } = await connQuery.maybeSingle();
-    if (!conn) return null;
+    // Desligada (PRE-008) é o mesmo que não configurada: nenhum envio, status
+    // ou sincronização sai por ela.
+    if (!conn || conexaoDesligada(conn.status)) return null;
 
     const creds = await credentialsVault.getDecryptedCredentials(scope.organizationId, conn.id);
     if (!creds) return null;
