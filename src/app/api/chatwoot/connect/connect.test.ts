@@ -6,6 +6,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'server-key-12345678901234567890';
 process.env.ENCRYPTION_KEY = 'cd'.repeat(32);
 
 const mockUpsertCreds = vi.fn().mockResolvedValue(undefined);
+const mockRpc = vi.fn().mockResolvedValue({ data: 'evento-1', error: null });
 let existingConnection: { id: string } | null = null;
 /** Linhas removidas pela compensação, com o filtro que as removeu. */
 const remocoes: Array<Record<string, unknown>> = [];
@@ -30,6 +31,7 @@ vi.mock('@/lib/integrations/credentialsVault', async () => {
 
 vi.mock('@/lib/supabaseServer', () => ({
   supabaseServer: {
+    rpc: (...args: unknown[]) => mockRpc(...args),
     from: (table: string) => {
       if (table === 'conexoes_integracao') {
         return {
@@ -270,6 +272,37 @@ describe('POST /api/chatwoot/connect', () => {
     // Nome de tabela, de constraint e o texto do Postgres ficam no log redigido.
     expect(JSON.stringify(corpo)).not.toContain('credenciais_integracao');
     expect(JSON.stringify(corpo)).not.toContain('duplicate key');
+  });
+
+  describe('rastro da configuração (PRE-008)', () => {
+    it('grava integration.connection_configured na organização e com o ator da sessão, sem segredo', async () => {
+      existingConnection = null;
+      mockRpc.mockClear();
+      const res = await callConnect({ api_token: 'tok-123', account_id: '42', webhook_secret: 'wh-secret-value' });
+      expect(res.status).toBe(200);
+      expect(mockRpc).toHaveBeenCalledWith('registrar_evento_auditoria', expect.objectContaining({
+        p_org_id: 'org-1',
+        p_actor_id: 'actor-1',
+        p_acao: 'integration.connection_configured',
+        p_recurso_id: 'new-conexao-id',
+        p_metadata: { provedor: 'chatwoot', status: 'pendente' },
+      }));
+      const auditado = JSON.stringify(mockRpc.mock.calls);
+      expect(auditado).not.toContain('tok-123');
+      expect(auditado).not.toContain('wh-secret-value');
+    });
+
+    it('a auditoria falhando não desdiz a gravação: 200, falha no log', async () => {
+      existingConnection = null;
+      mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'auditoria indisponível' } });
+      const erro = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        const res = await callConnect({ api_token: 'tok-123', account_id: '42', webhook_secret: 'wh-secret-value' });
+        expect(res.status).toBe(200);
+      } finally {
+        erro.mockRestore();
+      }
+    });
   });
 
   it('devolve a URL do webhook absoluta quando a origem estável está configurada', async () => {
