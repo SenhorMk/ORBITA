@@ -27,8 +27,8 @@ const TABELAS = ['titulos_financeiros', 'fornecedores', 'contas_financeiras', 'c
  * inventário: um gravador novo precisa de capacidade e auditoria decididas.
  */
 const GRAVADORES_DO_SERVIDOR: Record<string, readonly string[]> = {
-  // `upsertTitulo` (despesa e sincronização), `vincularPedidos` (sincronização) e, enquanto a
-  // fatia 2 não entra, o DELETE/UPDATE das correções de título.
+  // `upsertTitulo` (despesa e sincronização) e `vincularPedidos` (sincronização). As
+  // correções de título saem pelas RPCs auditadas (fatia 2).
   'src/repositories/financeiroRepository.ts': ['titulos_financeiros'],
 };
 
@@ -71,5 +71,12 @@ describe('gravadores do servidor nas quatro tabelas (PRE-007A)', () => {
     for (const caminho of Object.keys(gravadores)) {
       expect(fontes.find((f) => f.caminho === caminho)!.fonte).toMatch(/\bsupabaseServer\b/);
     }
+  });
+
+  it('as correções de título saem pelas RPCs auditadas, não por DELETE/UPDATE direto (fatia 2)', () => {
+    const repositorio = fontes.find((f) => f.caminho === 'src/repositories/financeiroRepository.ts')!.fonte;
+    expect(repositorio).toContain("rpc('excluir_lancamento_interno_auditado'");
+    expect(repositorio).toContain("rpc('cancelar_despesa_local_auditada'");
+    expect(acessos(repositorio).filter(({ cadeia }) => /\.(update|delete)\(/.test(cadeia))).toEqual([]);
   });
 });
