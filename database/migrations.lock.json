@@ -450,6 +450,11 @@
       "order": 90,
       "path": "../database/87_contrair_chaves_globais_chatwoot.sql",
       "sha256": "d0ec404b4f2ef5d503955513e86b5dc0e8b84eeee4f5087da007fa8fdb1a8f96"
+    },
+    {
+      "order": 91,
+      "path": "../database/88_inbox_chatwoot_dedup_entrega_revisao.sql",
+      "sha256": "c6d6c9326489f756ffcdf464c68a828cc6fee86822be8398df42397050069bad"
     }
   ],
   "references": [

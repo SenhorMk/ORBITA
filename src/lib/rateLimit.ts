@@ -7,7 +7,7 @@
  */
 
 /** One rate-limited action recognised by the durable store. */
-export type RateLimitAction = 'register' | 'bling_authorize' | 'bling_callback' | 'empresa_cnpj';
+export type RateLimitAction = 'register' | 'bling_authorize' | 'bling_callback' | 'empresa_cnpj' | 'chatwoot_webhook';
 
 /** Outcome recorded by the durable store for one consume attempt. */
 export type RateLimitStoreResult =
@@ -46,6 +46,8 @@ export const DEFAULT_RATE_LIMIT_POLICIES: Readonly<Record<RateLimitAction, RateL
   bling_callback: { limit: 20, windowMs: 5 * 60 * 1_000 },
   // Consulta de CNPJ no cadastro de contato: uma por empresa, com debounce no navegador.
   empresa_cnpj: { limit: 20, windowMs: 60 * 1_000 },
+  // Entregas assinadas do webhook do Chatwoot, por conexão (MSG-005).
+  chatwoot_webhook: { limit: 300, windowMs: 60 * 1_000 },
 };
 
 /** Check and record one rate-limited attempt for `action:identifier`. */
