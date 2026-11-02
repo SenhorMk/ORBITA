@@ -158,6 +158,12 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   // Metadata: ids técnicos, situação e operação — nunca a chave de acesso,
   // destinatário, itens, valores ou corpo do Bling.
   ['fiscal.document_issued', 'fiscal', 'info', 'user', 1825, 'NF-e emitida no Bling e registrada no ORBITA.', undefined, ['chave_acesso', 'xml_url', 'danfe_url']],
+  // Conexão de integração configurada ou autorizada pela API (migration 84,
+  // PRE-008). Desde a 84, a API autorizada é o único caminho para (re)ativar uma
+  // conexão; estes eventos são o rastro dela. Metadata: provedor, id da conexão
+  // e status resultante — nunca token, segredo ou credencial do cofre.
+  ['integration.connection_configured', 'integrations', 'info', 'user', 1825, 'Credenciais de integração gravadas pela API; a conexão volta a pendente.', undefined, ['api_token', 'webhook_secret']],
+  ['integration.connection_authorized', 'integrations', 'info', 'user', 1825, 'Autorização OAuth concluída; a conexão passa a conectado.', undefined, ['api_token', 'webhook_secret']],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 

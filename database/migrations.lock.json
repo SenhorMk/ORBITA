@@ -430,6 +430,11 @@
       "order": 86,
       "path": "../database/83_revogar_dml_direto_fiscal.sql",
       "sha256": "a1973f54bec9a9633f734603f195d0cf3d57ff647c15b4ada50b565896e9430e"
+    },
+    {
+      "order": 87,
+      "path": "../database/84_proteger_conexoes_de_integracao.sql",
+      "sha256": "4c38472fa64f321338ac9504f797bf57cdfe2cd1fca0154b66d8d23beef1bdd1"
     }
   ],
   "references": [
