@@ -37,6 +37,10 @@ function montar(opcoes: {
   exclusao?: ExclusaoRemota;
   negar?: number;
   marcarFalha?: boolean;
+  /** A gravação do evento falha: a mutação da mesma transação não acontece. */
+  auditoriaFalha?: boolean;
+  /** O banco ainda não tem a migration 82: a sonda da conclusão auditada falha. */
+  semConclusaoAuditada?: boolean;
   /** Mudança concorrente aplicada entre a classificação e o DELETE local. */
   antesDoDelete?: (linha: Linha) => void;
 }) {
@@ -57,23 +61,37 @@ function montar(opcoes: {
         ? { _tag: 'Negado', response: NextResponse.json({ success: false }, { status: opcoes.negar }) }
         : { _tag: 'Autorizado', scope: escopo },
     store: {
+      conclusaoDoCancelamentoDisponivel: vi.fn(async () => !opcoes.semConclusaoAuditada),
       carregarTituloParaCorrecao: vi.fn(async (scope, id) => {
         const l = doEscopo(scope, id);
         return l ? { id: l.id, tipo: l.tipo, situacao: l.situacao, blingId: l.blingId, pedidoId: l.pedidoId } : null;
       }),
-      excluirLancamentoInterno: vi.fn(async (scope, id) => {
+      // As duas mutações gravam o evento na mesma transação, como as RPCs
+      // auditadas da migration 82: se a auditoria falha, nada muda.
+      excluirLancamentoInterno: vi.fn(async (scope, id, auditoria) => {
         const l = doEscopo(scope, id);
         if (l) opcoes.antesDoDelete?.(l);
         // As mesmas condições do `WHERE` real, inclusive a situação ativa.
         if (!l || l.tipo !== 'pagar' || l.blingId !== null || l.pedidoId !== null) return 0;
         if (!movimentacaoContaComoAtiva(l.situacao)) return 0;
+        if (opcoes.auditoriaFalha) throw new Error('evento de auditoria recusado');
         linhas.delete(id);
+        eventos.push({
+          acao: 'finance.entry_deleted', recurso: 'titulo_financeiro', recursoId: id,
+          correlationId: auditoria.correlationId, metadata: { situacao_anterior: l.situacao, origem: 'interno' },
+        });
         return 1;
       }),
-      marcarDespesaCancelada: vi.fn(async (scope, id) => {
+      marcarDespesaCancelada: vi.fn(async (scope, id, auditoria) => {
         if (opcoes.marcarFalha) throw new Error('connection reset');
         const l = doEscopo(scope, id);
         if (!l || l.tipo !== 'pagar' || l.blingId === null || !movimentacaoContaComoAtiva(l.situacao)) return 0;
+        if (opcoes.auditoriaFalha) throw new Error('evento de auditoria recusado');
+        eventos.push({
+          acao: 'finance.expense_cancelled', recurso: 'titulo_financeiro', recursoId: id,
+          correlationId: auditoria.correlationId,
+          metadata: { bling_id: l.blingId, evidencia: auditoria.evidencia, situacao_anterior: l.situacao },
+        });
         l.situacao = 'cancelado';
         return 1;
       }),
@@ -190,6 +208,20 @@ describe('POST /api/financeiro/titulos/{id}/exclusao — despesa interna', () =>
   it('id que não é UUID é InvalidRequest', async () => {
     const t = montar({ titulos: [interna('aberto')] });
     expect((await t.excluir('abc')).status).toBe(400);
+  });
+
+  it('a auditoria vai com a exclusão, na mesma gravação; o handler não audita depois', async () => {
+    const t = montar({ titulos: [interna('aberto')] });
+    await t.excluir();
+    expect(t.deps.store.excluirLancamentoInterno).toHaveBeenCalledWith(escopo, TITULO, { correlationId: 'corr_teste' });
+    expect(t.deps.auditar).not.toHaveBeenCalled();
+  });
+
+  it('falha da auditoria aborta a exclusão: o lançamento fica e nada é anunciado (PRE-007A)', async () => {
+    const t = montar({ titulos: [interna('pago')], auditoriaFalha: true });
+    await expect(t.excluir()).rejects.toThrow();
+    expect(t.linhas.has(TITULO)).toBe(true);
+    expect(t.eventos).toEqual([]);
   });
 });
 
@@ -313,6 +345,36 @@ describe('POST /api/financeiro/titulos/{id}/cancelamento — despesa do Bling', 
     expect((await corpo(primeira)).resultado).toBe('ReconcileRequired');
     expect(await corpo(segunda)).toEqual({ resultado: 'Cancelled' });
     expect(t.excluirContaPagar).toHaveBeenCalledTimes(1);
+  });
+
+  it('a auditoria vai com a conclusão local, com a evidência provada', async () => {
+    const t = montar({ titulos: [doBling()], leituras: [{ _tag: 'RemotoAusente' }] });
+    await t.cancelar();
+    expect(t.deps.store.marcarDespesaCancelada).toHaveBeenCalledWith(
+      escopo, TITULO, { correlationId: 'corr_teste', evidencia: 'remoto_ausente' },
+    );
+    expect(t.deps.auditar).not.toHaveBeenCalled();
+  });
+
+  it('falha da auditoria aborta a conclusão local: o título segue ativo e a resposta pede reconciliação (PRE-007A)', async () => {
+    const t = montar({ titulos: [doBling()], leituras: [remota(1)], auditoriaFalha: true });
+    expect(await corpo(await t.cancelar())).toEqual({ resultado: 'ReconcileRequired', motivo: 'conclusao_local_pendente' });
+    expect(t.linhas.get(TITULO)?.situacao).toBe('aberto');
+    expect(t.eventos).toEqual([]);
+  });
+
+  it('banco sem a conclusão auditada (sem a 82): Unavailable antes de qualquer chamada ao Bling', async () => {
+    const t = montar({ titulos: [doBling()], leituras: [remota(1)], semConclusaoAuditada: true });
+
+    const resposta = await t.cancelar();
+
+    expect(resposta.status).toBe(503);
+    expect(await corpo(resposta)).toEqual({ resultado: 'Unavailable' });
+    expect(t.consultarContaPagar).not.toHaveBeenCalled();
+    expect(t.excluirContaPagar).not.toHaveBeenCalled();
+    expect(t.deps.store.marcarDespesaCancelada).not.toHaveBeenCalled();
+    expect(t.linhas.get(TITULO)?.situacao).toBe('aberto');
+    expect(t.eventos).toEqual([]);
   });
 
   it('removida no Bling mas o banco falhou: ReconcileRequired com conclusão pendente', async () => {
