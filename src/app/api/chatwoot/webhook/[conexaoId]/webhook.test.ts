@@ -431,32 +431,32 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
       .filter(([fn, args]) => fn === 'concluir_evento_inbox_chatwoot' && (args as { p_evento_id: string }).p_evento_id === eventoId)
       .map(([, args]) => args as { p_status: string; p_error: string | null; p_response_body: Record<string, unknown> | null });
 
-    it('B com os mesmos ids remotos de A é recusada com 409 tipado, A intacta e o evento de B fica failed', async () => {
+    it('B com os mesmos ids remotos de A grava a sua árvore (MSG-004): uma linha por instalação, A intacta', async () => {
       mockRpc.mockClear();
       const conversa = { id: 802, inbox_id: 1, status: 'open', contact: { id: 801, name: 'Cliente A 801' } };
       expect((await entregar(CONEXAO_A, SECRET_A, evento({ id: 803, content: 'de A', conversation: conversa }), 'evt-803a'))
         .status).toBe(200);
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-      try {
-        const res = await entregar(CONEXAO_B, SECRET_B, evento({
-          id: 803, content: 'de B', conversation: { ...conversa, contact: { id: 801, name: 'Cliente B 801' } },
-        }), 'evt-803b');
-        expect(res.status).toBe(409);
-        expect(await res.json()).toEqual({ success: false, error: 'Identidade Chatwoot não resolvida', motivo: 'IdentidadeDeOutraConexao' });
-        // Evento de falha redigido: recurso e desfecho, sem id remoto nem conteúdo.
-        const linha = warn.mock.calls.map(([m]) => String(m)).find((m) => m.includes('chatwoot.identidade.recusada'))!;
-        expect(JSON.parse(linha)).toMatchObject({ organizacaoId: ORG_B, conexaoId: CONEXAO_B, recurso: 'contato', outcome: 'IdentidadeDeOutraConexao' });
-        expect(linha).not.toMatch(/801|Cliente B/u);
-      } finally {
-        warn.mockRestore();
-      }
-      expect(conclusao('evt-803b')).toEqual([expect.objectContaining({ p_status: 'failed', p_error: 'Identidade Chatwoot não resolvida (contato: IdentidadeDeOutraConexao)' })]);
+      const res = await entregar(CONEXAO_B, SECRET_B, evento({
+        id: 803, content: 'de B', conversation: { ...conversa, contact: { id: 801, name: 'Cliente B 801' } },
+      }), 'evt-803b');
+      expect(res.status).toBe(200);
+      expect(conclusao('evt-803b')).toEqual([expect.objectContaining({ p_status: 'processed' })]);
       for (const recurso of ['contato', 'conversa', 'mensagem'] as const) {
-        expect(espelho.store.linhas[recurso].filter((l) => ['801', '802', '803'].includes(l.id_externo))).toEqual([
+        const linhas = espelho.store.linhas[recurso].filter((l) => ['801', '802', '803'].includes(l.id_externo));
+        expect(linhas).toHaveLength(2);
+        expect(linhas).toEqual(expect.arrayContaining([
           expect.objectContaining({ organizacao_id: ORG_A, conexao_id: CONEXAO_A }),
-        ]);
+          expect.objectContaining({ organizacao_id: ORG_B, conexao_id: CONEXAO_B }),
+        ]));
       }
-      expect(espelho.store.linhas.contato.find((l) => l.id_externo === '801')!.name).toBe('Cliente A 801');
+      const contatoDe = (conexao: string) => espelho.store.linhas.contato.find((l) => l.id_externo === '801' && l.conexao_id === conexao)!;
+      expect(contatoDe(CONEXAO_A).name).toBe('Cliente A 801');
+      expect(contatoDe(CONEXAO_B).name).toBe('Cliente B 801');
+      // A mensagem de B entra na conversa 802 de B, nunca na de A.
+      const conversaDe = (conexao: string) => espelho.store.linhas.conversa.find((l) => l.id_externo === '802' && l.conexao_id === conexao)!;
+      const mensagemDe = (conexao: string) => espelho.store.linhas.mensagem.find((l) => l.id_externo === '803' && l.conexao_id === conexao)!;
+      expect(mensagemDe(CONEXAO_B)).toMatchObject({ conversa_id_local: conversaDe(CONEXAO_B).id_local, content: 'de B' });
+      expect(mensagemDe(CONEXAO_A)).toMatchObject({ conversa_id_local: conversaDe(CONEXAO_A).id_local, content: 'de A' });
     });
 
     it('mensagem antes da conversa: 409 PaiNaoEspelhado sem gravar; o reprocessamento grava uma vez', async () => {
@@ -500,22 +500,31 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
       })]);
     });
 
-    it('status de B para a conversa 802 de A não toca A e registra conversa_nao_espelhada', async () => {
+    it('status de B na conversa 802 muda só a de B; numa conversa que B não tem, registra conversa_nao_espelhada', async () => {
       mockRpc.mockClear();
-      const body = JSON.stringify({
-        event: 'conversation_status_changed', account: { id: 1 }, inbox: { id: 1 }, conversation: { id: 802, inbox_id: 1, status: 'resolved' },
+      const status = (id: number) => JSON.stringify({
+        event: 'conversation_status_changed', account: { id: 1 }, inbox: { id: 1 }, conversation: { id, inbox_id: 1, status: 'resolved' },
       });
-      expect((await entregar(CONEXAO_B, SECRET_B, body, 'evt-status-b')).status).toBe(200);
-      expect(espelho.store.linhas.conversa.find((l) => l.id_externo === '802')).toMatchObject({ organizacao_id: ORG_A, status: 'open' });
+      const conversaDe = (id: string, conexao: string) => espelho.store.linhas.conversa.find((l) => l.id_externo === id && l.conexao_id === conexao)!;
+
+      expect((await entregar(CONEXAO_B, SECRET_B, status(802), 'evt-status-b')).status).toBe(200);
+      expect(conversaDe('802', CONEXAO_B).status).toBe('resolved');
+      expect(conversaDe('802', CONEXAO_A).status).toBe('open');
       expect(conclusao('evt-status-b')).toEqual([expect.objectContaining({
+        p_response_body: expect.objectContaining({ conversaIdLocal: conversaDe('802', CONEXAO_B).id_local }),
+      })]);
+
+      // A conversa 912 só existe em A.
+      expect((await entregar(CONEXAO_B, SECRET_B, status(912), 'evt-status-b-912')).status).toBe(200);
+      expect(conversaDe('912', CONEXAO_A).status).toBe('open');
+      expect(conclusao('evt-status-b-912')).toEqual([expect.objectContaining({
         p_status: 'processed', p_response_body: expect.objectContaining({ ignorado: 'conversa_nao_espelhada' }),
       })]);
 
-      expect((await entregar(CONEXAO_A, SECRET_A, body, 'evt-status-a')).status).toBe(200);
-      const conversa = espelho.store.linhas.conversa.find((l) => l.id_externo === '802')!;
-      expect(conversa.status).toBe('resolved');
+      expect((await entregar(CONEXAO_A, SECRET_A, status(802), 'evt-status-a')).status).toBe(200);
+      expect(conversaDe('802', CONEXAO_A).status).toBe('resolved');
       expect(conclusao('evt-status-a')).toEqual([expect.objectContaining({
-        p_response_body: expect.objectContaining({ conversaIdLocal: conversa.id_local }),
+        p_response_body: expect.objectContaining({ conversaIdLocal: conversaDe('802', CONEXAO_A).id_local }),
       })]);
     });
   });

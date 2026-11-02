@@ -131,6 +131,6 @@ pelo PostgREST (o laboratório não sobe a API). Nenhuma chamada real.
 ## 7. Pendências conhecidas
 
 - Retenção (`retentionDbAdapter`) ainda checa o contato por `id` + organização,
-  via RPC da migration 51: entra na contração do MSG-004.
+  via RPC da migration 51: entra na contração do MSG-004. (Resolvido no MSG-004.)
 - O `resolverIdExterno` exige conexão provada; linha legada em quarentena não é
   traduzida para envio (MSG-003B decide a mensagem ao operador).

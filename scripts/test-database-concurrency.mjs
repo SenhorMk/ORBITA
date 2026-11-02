@@ -24,6 +24,7 @@ import { runMigracoesRemotasRaceRehearsal } from './database-concurrency-migraco
 import { runIdentidadeChatwootRaceRehearsal } from './database-concurrency-identidade-chatwoot.mjs';
 import { runOutboxRaceRehearsal } from './database-concurrency-outbox.mjs';
 import { runResolverChatwootRaceRehearsal } from './database-concurrency-resolver-chatwoot.mjs';
+import { runContracaoChatwootRaceRehearsal } from './database-concurrency-contracao-chatwoot.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -57,6 +58,7 @@ let outcomeMigracoesRemotas;
 let outcomeIdentidadeChatwoot;
 let outcomeOutbox;
 let outcomeResolverChatwoot;
+let outcomeContracaoChatwoot;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -79,6 +81,7 @@ try {
     outcomeIdentidadeChatwoot = started;
     outcomeOutbox = started;
     outcomeResolverChatwoot = started;
+    outcomeContracaoChatwoot = started;
   } else {
     const alinhado = await alinharStubDeAuthComProducao();
     const applied = alinhado._tag === 'err' ? alinhado : await applyCanonicalMigrations({});
@@ -102,6 +105,7 @@ try {
       outcomeIdentidadeChatwoot = applied;
       outcomeOutbox = applied;
       outcomeResolverChatwoot = applied;
+      outcomeContracaoChatwoot = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
@@ -122,6 +126,7 @@ try {
       outcomeIdentidadeChatwoot = await runIdentidadeChatwootRaceRehearsal();
       outcomeOutbox = await runOutboxRaceRehearsal();
       outcomeResolverChatwoot = await runResolverChatwootRaceRehearsal();
+      outcomeContracaoChatwoot = await runContracaoChatwootRaceRehearsal();
     }
   }
 } finally {
@@ -187,6 +192,7 @@ const relatos = [
   [outcomeIdentidadeChatwoot, (v) => v.relato],
   [outcomeOutbox, (v) => v.relato],
   [outcomeResolverChatwoot, (v) => v.relato],
+  [outcomeContracaoChatwoot, (v) => v.relato],
 ];
 
 const falhou = relatos.map(([outcome, resumo]) => relatar(outcome, resumo)).includes(true);

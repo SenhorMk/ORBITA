@@ -150,7 +150,8 @@ schema_paths = [
   "../database/83_revogar_dml_direto_fiscal.sql",
   "../database/84_proteger_conexoes_de_integracao.sql",
   "../database/85_identidade_local_chatwoot.sql",
-  "../database/86_efeito_ambiguo_na_outbox.sql"
+  "../database/86_efeito_ambiguo_na_outbox.sql",
+  "../database/87_contrair_chaves_globais_chatwoot.sql"
 ]
 
 [db.seed]

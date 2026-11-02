@@ -13,8 +13,11 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { z } from 'zod';
 import type { RetentionAction, RetentionEffectAdapter, RetentionEffectContext, RetentionItemOutcome } from './retentionTypes';
 import { descreverErro } from '../../../lib/erroLegivel';
+
+const UUID = z.string().uuid();
 
 export interface RetentionDatabasePort {
   entityExists(tabelaAlvo: string, organizationId: string, entidadeId: string): Promise<boolean>;
@@ -100,11 +103,14 @@ export class SupabaseRetentionDatabasePort implements RetentionDatabasePort {
 
   async entityExists(tabelaAlvo: string, organizationId: string, entidadeId: string): Promise<boolean> {
     const table = tabelaAlvo === 'clientes' ? 'clientes' : 'chatwoot_contacts';
-    const idColumn = 'id';
+    // Contato Chatwoot é o UUID local (MSG-004): o id remoto se repete entre
+    // instalações. Item legado (id numérico) não existe para o preview.
+    const idColumn = tabelaAlvo === 'clientes' ? 'id' : 'id_local';
+    if (table === 'chatwoot_contacts' && !UUID.safeParse(entidadeId).success) return false;
     const { count, error } = await this.supabase
       .from(table)
       .select(idColumn, { count: 'exact', head: true })
-      .eq(idColumn, tabelaAlvo === 'clientes' ? entidadeId : Number(entidadeId))
+      .eq(idColumn, entidadeId)
       .eq('organizacao_id', organizationId);
     if (error) throw new Error(`Falha ao checar existencia da entidade de retencao: ${error.message}`);
     return (count ?? 0) > 0;

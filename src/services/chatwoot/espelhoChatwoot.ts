@@ -13,9 +13,10 @@ import {
  * conexão), atualiza pelo `id_local` e devolve o `id_local`. O id remoto entra
  * só como dado da linha; o vínculo com o pai é o UUID local do pai.
  *
- * Enquanto a PK legada `id` existir (até o MSG-004), a linha nova ainda leva o
- * `id` e os vínculos legados; um id que já é de outra conexão é recusado com
- * `IdentidadeDeOutraConexao`, nunca fundido.
+ * A linha nova ainda leva `id`, `contact_id` e `conversation_id` como eco do id
+ * remoto, sem papel de chave (MSG-004). O mesmo id em outra conexão ou
+ * organização é outra linha; trocar a instalação de uma linha provada é
+ * recusado pelo banco com `IdentidadeDeOutraConexao`, nunca fundido.
  */
 
 export interface EscopoDeEscritaChatwoot extends EscopoDaConexaoChatwoot {
