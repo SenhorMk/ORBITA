@@ -54,8 +54,10 @@ function construtor(tabela: string) {
   });
 }
 
+const rpc = vi.fn();
+
 vi.mock('../lib/supabaseServer', () => ({
-  supabaseServer: { from: (tabela: string) => construtor(tabela) },
+  supabaseServer: { from: (tabela: string) => construtor(tabela), rpc: (...args: unknown[]) => rpc(...args) },
 }));
 
 const ORG = '11111111-1111-4111-8111-111111111111';
@@ -68,6 +70,7 @@ beforeEach(() => {
   consultas.length = 0;
   respostas = [];
   tabelas = {};
+  rpc.mockReset();
 });
 
 describe('clienteRepository — exclusão', () => {
@@ -152,42 +155,76 @@ describe('clienteRepository — exclusão', () => {
   });
 });
 
+/**
+ * PRE-007A: as duas mutações saem pelas RPCs auditadas da migration 82. As
+ * condições estruturais (tipo, `bling_id`, `pedido_id`, situação ativa) e a
+ * transação única com o evento são provadas no pgTAP
+ * `final/escrita_direta_financeira`; aqui se confere que organização e ator
+ * vêm só do escopo verificado e que a falha não vira "zero linhas".
+ */
 describe('financeiroRepository — correção de título', () => {
-  it('exclusão interna repete as condições estruturais no próprio DELETE', async () => {
+  it('exclusão interna: RPC auditada com organização e ator do escopo, nenhum DELETE direto', async () => {
     const { financeiroRepository } = await import('./financeiroRepository');
-    respostas = [{ data: [{ id: ID }], error: null }];
+    rpc.mockResolvedValue({ data: 1, error: null });
 
-    expect(await financeiroRepository.excluirLancamentoInterno(escopo, ID)).toBe(1);
-    const chamadas = consultas[0]!.chamadas;
-    expect(escopada(consultas[0]!)).toBe(true);
-    expect(chamadas).toContainEqual(['eq', 'tipo', 'pagar']);
-    expect(chamadas).toContainEqual(['is', 'bling_id', null]);
-    expect(chamadas).toContainEqual(['is', 'pedido_id', null]);
-    expect(chamadas).toContainEqual(['in', 'situacao', ['aberto', 'pago']]);
+    expect(await financeiroRepository.excluirLancamentoInterno(escopo, ID, { correlationId: 'corr_1' })).toBe(1);
+    expect(rpc).toHaveBeenCalledWith('excluir_lancamento_interno_auditado', {
+      p_organizacao_id: ORG, p_ator_id: escopo.actorId, p_titulo_id: ID, p_correlation_id: 'corr_1',
+    });
+    expect(consultas).toEqual([]);
   });
 
-  it('título que virou terminal antes do DELETE não é removido: zero linhas', async () => {
+  it('título que a RPC não removeu: zero linhas', async () => {
     const { financeiroRepository } = await import('./financeiroRepository');
-    tabelas = {
-      titulos_financeiros: [{
-        id: ID, organizacao_id: ORG, tipo: 'pagar', bling_id: null, pedido_id: null, situacao: 'cancelado',
-      }],
-    };
-
-    expect(await financeiroRepository.excluirLancamentoInterno(escopo, ID)).toBe(0);
+    rpc.mockResolvedValue({ data: 0, error: null });
+    expect(await financeiroRepository.excluirLancamentoInterno(escopo, ID, { correlationId: 'corr_1' })).toBe(0);
   });
 
-  it('cancelamento só move título ativo do Bling a `cancelado` — sem apagar', async () => {
+  it('auditoria recusada pelo banco: a exclusão lança em vez de responder zero', async () => {
     const { financeiroRepository } = await import('./financeiroRepository');
-    respostas = [{ data: [], error: null }];
+    rpc.mockResolvedValue({ data: null, error: { code: 'P0001', message: 'evento recusado' } });
+    await expect(financeiroRepository.excluirLancamentoInterno(escopo, ID, { correlationId: 'corr_1' })).rejects.toThrow();
+  });
 
-    expect(await financeiroRepository.marcarDespesaCancelada(escopo, ID)).toBe(0);
-    const chamadas = consultas[0]!.chamadas;
-    expect(chamadas).toContainEqual(['update', { situacao: 'cancelado' }]);
-    expect(chamadas.some(([m]) => m === 'delete')).toBe(false);
-    expect(escopada(consultas[0]!)).toBe(true);
-    expect(chamadas).toContainEqual(['in', 'situacao', ['aberto', 'pago']]);
-    expect(chamadas).toContainEqual(['not', 'bling_id', 'is', null]);
+  it('cancelamento: RPC auditada com a evidência, sem UPDATE nem DELETE direto', async () => {
+    const { financeiroRepository } = await import('./financeiroRepository');
+    rpc.mockResolvedValue({ data: 0, error: null });
+
+    expect(await financeiroRepository.marcarDespesaCancelada(escopo, ID, {
+      correlationId: 'corr_2', evidencia: 'remoto_ausente',
+    })).toBe(0);
+    expect(rpc).toHaveBeenCalledWith('cancelar_despesa_local_auditada', {
+      p_organizacao_id: ORG, p_ator_id: escopo.actorId, p_titulo_id: ID, p_correlation_id: 'corr_2', p_evidencia: 'remoto_ausente',
+    });
+    expect(consultas).toEqual([]);
+  });
+
+  it('sonda: só a recusa 22023 da própria RPC prova que a conclusão auditada existe', async () => {
+    const { financeiroRepository } = await import('./financeiroRepository');
+    rpc.mockResolvedValue({ data: null, error: { code: '22023', message: 'Organizacao, ator e titulo sao obrigatorios.' } });
+    expect(await financeiroRepository.conclusaoDoCancelamentoDisponivel()).toBe(true);
+    expect(rpc).toHaveBeenCalledWith('cancelar_despesa_local_auditada', {
+      p_organizacao_id: null, p_ator_id: null, p_titulo_id: null, p_correlation_id: null, p_evidencia: null,
+    });
+    expect(consultas).toEqual([]);
+  });
+
+  it.each([
+    ['função ausente (PGRST202)', { data: null, error: { code: 'PGRST202', message: 'not found' } }],
+    ['banco fora', { data: null, error: { code: '', message: 'fetch failed' } }],
+    ['sucesso inesperado', { data: 0, error: null }],
+  ])('sonda: %s conta como indisponível', async (_caso, resposta) => {
+    const { financeiroRepository } = await import('./financeiroRepository');
+    rpc.mockResolvedValue(resposta);
+    expect(await financeiroRepository.conclusaoDoCancelamentoDisponivel()).toBe(false);
+  });
+
+  it('auditoria recusada no cancelamento: lança', async () => {
+    const { financeiroRepository } = await import('./financeiroRepository');
+    rpc.mockResolvedValue({ data: null, error: { code: 'P0001', message: 'evento recusado' } });
+    await expect(financeiroRepository.marcarDespesaCancelada(escopo, ID, {
+      correlationId: 'corr_2', evidencia: 'remoto_cancelado',
+    })).rejects.toThrow();
   });
 
   it('carga do título é escopada pela organização', async () => {

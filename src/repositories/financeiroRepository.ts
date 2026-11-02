@@ -245,39 +245,64 @@ export class FinanceiroRepository {
    * sem pedido, **ativa** (`aberto`/`pago`), desta organização, sai por este
    * caminho. Um título que virou terminal nesse meio-tempo fica, e o retorno é
    * zero.
+   *
+   * A RPC `excluir_lancamento_interno_auditado` (migration 82) apaga e grava
+   * `finance.entry_deleted` na mesma transação: se o evento for recusado, a
+   * linha fica e esta chamada lança.
    */
-  async excluirLancamentoInterno(scope: VerifiedOrganizationScope, id: string): Promise<number> {
-    const { data, error } = await supabaseServer
-      .from('titulos_financeiros')
-      .delete()
-      .eq('id', id)
-      .eq('organizacao_id', scope.organizationId)
-      .eq('tipo', 'pagar')
-      .is('bling_id', null)
-      .is('pedido_id', null)
-      .in('situacao', [...SITUACOES_ATIVAS])
-      .select('id');
+  async excluirLancamentoInterno(
+    scope: VerifiedOrganizationScope,
+    id: string,
+    auditoria: { readonly correlationId: string },
+  ): Promise<number> {
+    const { data, error } = await supabaseServer.rpc('excluir_lancamento_interno_auditado', {
+      p_organizacao_id: scope.organizationId,
+      p_ator_id: scope.actorId,
+      p_titulo_id: id,
+      p_correlation_id: auditoria.correlationId,
+    });
     if (error) throw new Error('Falha ao excluir o lançamento.', { cause: error });
-    return (data ?? []).length;
+    return Number(data);
+  }
+
+  /**
+   * Sonda sem efeito: a RPC recusa argumentos nulos com `22023` antes de ler
+   * ou gravar qualquer coisa. Qualquer outra resposta (função ausente,
+   * `PGRST202`, ou banco fora) conta como indisponível: falha fechada.
+   */
+  async conclusaoDoCancelamentoDisponivel(): Promise<boolean> {
+    const { error } = await supabaseServer.rpc('cancelar_despesa_local_auditada', {
+      p_organizacao_id: null,
+      p_ator_id: null,
+      p_titulo_id: null,
+      p_correlation_id: null,
+      p_evidencia: null,
+    });
+    return error?.code === '22023';
   }
 
   /**
    * Leva uma despesa do Bling a `cancelado` — só a partir de `aberto`/`pago`,
    * só `pagar`, só desta organização. A linha **fica**: é histórico, e sai dos
    * totais por ser terminal. Devolve quantas linhas mudaram.
+   *
+   * A RPC `cancelar_despesa_local_auditada` (migration 82) muda a situação e
+   * grava `finance.expense_cancelled` na mesma transação.
    */
-  async marcarDespesaCancelada(scope: VerifiedOrganizationScope, id: string): Promise<number> {
-    const { data, error } = await supabaseServer
-      .from('titulos_financeiros')
-      .update({ situacao: 'cancelado' })
-      .eq('id', id)
-      .eq('organizacao_id', scope.organizationId)
-      .eq('tipo', 'pagar')
-      .not('bling_id', 'is', null)
-      .in('situacao', [...SITUACOES_ATIVAS])
-      .select('id');
+  async marcarDespesaCancelada(
+    scope: VerifiedOrganizationScope,
+    id: string,
+    auditoria: { readonly correlationId: string; readonly evidencia: string },
+  ): Promise<number> {
+    const { data, error } = await supabaseServer.rpc('cancelar_despesa_local_auditada', {
+      p_organizacao_id: scope.organizationId,
+      p_ator_id: scope.actorId,
+      p_titulo_id: id,
+      p_correlation_id: auditoria.correlationId,
+      p_evidencia: auditoria.evidencia,
+    });
     if (error) throw new Error('Falha ao cancelar a despesa.', { cause: error });
-    return (data ?? []).length;
+    return Number(data);
   }
 
   /**
