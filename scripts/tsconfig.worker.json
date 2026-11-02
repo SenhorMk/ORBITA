@@ -1,0 +1,10 @@
+{
+  "//": "Compiler options do processo worker, rodado por ts-node. A cadeia do worker usa imports relativos: ts-node nao resolve o alias @/.",
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "noEmit": false
+  },
+  "include": ["worker-inbox-chatwoot.ts"]
+}

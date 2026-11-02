@@ -46,7 +46,7 @@ const GRAVADORES_DO_SERVIDOR: Record<string, readonly string[]> = {
 const GRAVADORES_POR_PARAMETRO: Record<string, { funcao: string; callers: readonly string[] }> = {
   'src/services/chatwoot/chatwootInboxRegistration.ts': {
     funcao: 'registerChatwootInboxIfNeeded',
-    callers: ['src/app/api/chatwoot/sync/route.ts', 'src/services/chatwoot/chatwootWebhookService.ts'],
+    callers: ['src/app/api/chatwoot/sync/route.ts'],
   },
 };
 

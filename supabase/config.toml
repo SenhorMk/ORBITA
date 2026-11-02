@@ -152,7 +152,8 @@ schema_paths = [
   "../database/85_identidade_local_chatwoot.sql",
   "../database/86_efeito_ambiguo_na_outbox.sql",
   "../database/87_contrair_chaves_globais_chatwoot.sql",
-  "../database/88_inbox_chatwoot_dedup_entrega_revisao.sql"
+  "../database/88_inbox_chatwoot_dedup_entrega_revisao.sql",
+  "../database/89_consumidor_inbox_caso_triage.sql"
 ]
 
 [db.seed]

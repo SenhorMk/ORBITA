@@ -11,11 +11,7 @@ import {
 } from '@/services/chatwootInboxService';
 import { checkRateLimit, DEFAULT_RATE_LIMIT_POLICIES, rateLimitDenialStatus } from '@/lib/rateLimit';
 import { createSupabaseRateLimitStore } from '@/lib/rateLimitStore';
-import { registerChatwootInboxIfNeeded } from '@/services/chatwoot/chatwootInboxRegistration';
-import { parseOptionalInt, persistWebhookEffects } from '@/services/chatwoot/chatwootWebhookPersistence';
-import { atualizarStatusDaConversa } from '@/services/chatwoot/espelhoChatwoot';
-import { criarEspelhoChatwootSupabase } from '@/services/chatwoot/espelhoChatwootSupabase';
-import { FalhaDeIdentidadeChatwootError } from '@/services/chatwoot/identidadeChatwoot';
+import { parseOptionalInt } from '@/services/chatwoot/chatwootWebhookPersistence';
 import { logger, sanitizeErrorForLog } from '@/lib/observability/logger';
 import {
   ChatwootCredentialsPayloadSchema,
@@ -60,8 +56,6 @@ type AuthenticateWebhookResult =
 
 const SIDE_EFFECTING_EVENTS = new Set(['message_created', 'message_updated', 'conversation_status_changed']);
 
-/** Espelhos gravados e localizados pelo UUID local, sempre na conexão verificada. */
-const espelho = criarEspelhoChatwootSupabase(supabaseServer);
 const rateLimitStore = createSupabaseRateLimitStore(supabaseServer);
 
 /** Resposta de cada recusa do aceite: nada foi gravado, nenhuma é 2xx. */
@@ -291,52 +285,25 @@ async function authenticateWebhookRequest(delivery: RawDelivery): Promise<Authen
   };
 }
 
-async function processStatusChangedEvent(
-  request: AuthenticatedWebhookRequest,
-  inboxEventoId: string | null,
-): Promise<WebhookOutcome> {
-  const { organizacaoId, conexaoId, payload, scope } = request;
-  const conversationData = payload.conversation;
-  const convId = parseOptionalInt(conversationData?.id);
-  // Conversa ainda não espelhada nesta conexão: o status não cria a conversa e o
-  // desfecho fica registrado no inbox; o próximo sync a traz.
-  const desfecho = convId === null
-    ? null
-    : await atualizarStatusDaConversa(espelho, { organizacaoId, conexaoId }, convId, conversationData?.status || 'open');
-  if (inboxEventoId) {
-    await chatwootInboxService.markProcessed(supabaseServer, scope, inboxEventoId, {
-      success: true,
-      event: 'conversation_status_changed',
-      ...(desfecho?._tag === 'StatusAplicado' ? { conversaIdLocal: desfecho.conversaIdLocal } : {}),
-      ...(desfecho?._tag === 'ConversaNaoEspelhada' ? { ignorado: 'conversa_nao_espelhada' } : {}),
-      ...(desfecho?._tag === 'ConexaoNaoComprovada' ? { ignorado: 'conexao_nao_comprovada' } : {}),
-    });
-  }
-  return { status: 200, body: { success: true } };
-}
-
 /**
- * Handle one Chatwoot webhook delivery end to end: authenticate, register the
- * inbox mapping, apply the idempotent inbox pattern, persist effects, and mark
- * the inbox event processed/failed. Returns a plain HTTP-shaped outcome so the
- * inbound Adapter (route handler) stays a thin protocol translation layer.
+ * Handle one Chatwoot webhook delivery: authenticate, then durably accept it in
+ * the inbox. The 2xx means only that the delivery is committed; the consumer
+ * worker (MSG-006) produces every effect. Returns a plain HTTP-shaped outcome so
+ * the inbound Adapter (route handler) stays a thin protocol translation layer.
  */
 export async function handleChatwootWebhookDelivery(delivery: RawDelivery): Promise<WebhookOutcome> {
-  let inboxEventoId: string | null = null;
-  let scope: VerifiedOrganizationScope | null = null;
+  let organizacaoId: string | undefined;
 
   try {
     const authResult = await authenticateWebhookRequest(delivery);
     if (!authResult.ok) return authResult.outcome;
 
-    const { conexaoId, organizacaoId, payload, inboxId } = authResult.request;
-    scope = authResult.request.scope;
+    const { conexaoId, payload, inboxId, scope, entrega } = authResult.request;
+    organizacaoId = authResult.request.organizacaoId;
     const event = payload.event;
 
     // A entrega e o evento minimizado ficam gravados (commit) antes de qualquer
-    // efeito e de qualquer 2xx. Sem o aceite, a resposta é não-2xx e o Chatwoot
-    // pode reenviar.
-    const { entrega } = authResult.request;
+    // 2xx. Sem o aceite, a resposta é não-2xx e o Chatwoot pode reenviar.
     const aceite = await chatwootInboxService.aceitarEntrega(supabaseServer, scope, {
       conexaoId,
       inboxId,
@@ -350,56 +317,14 @@ export async function handleChatwootWebhookDelivery(delivery: RawDelivery): Prom
       logger.warn('chatwoot.webhook.recusada', { ...logDaEntrega, outcome: aceite._tag });
       return RECUSA_DO_ACEITE[aceite._tag];
     }
-    inboxEventoId = aceite.eventoId;
-    logger.info('chatwoot.webhook.aceita', { ...logDaEntrega, inboxEventoId, duplicata: aceite.duplicata, status: aceite.status });
-
-    // Duplicata já processada: replay é no-op, devolve o resultado gravado.
-    if (aceite.duplicata && aceite.status === 'processed') {
-      return { status: 200, body: aceite.cachedResponse || { success: true } };
-    }
-
-    if (inboxId !== null) {
-      await registerChatwootInboxIfNeeded(supabaseServer, scope, { conexaoId, inboxId, accountId: String(payload.account.id) });
-    }
-
-    if (event === 'conversation_status_changed') {
-      return await processStatusChangedEvent(authResult.request, inboxEventoId);
-    }
-
-    const effects = await persistWebhookEffects(espelho, { organizacaoId, conexaoId, atorId: scope.actorId }, payload, inboxId);
-
-    if (inboxEventoId) {
-      await chatwootInboxService.markProcessed(supabaseServer, scope, inboxEventoId, { success: true, event, ...effects });
-    }
+    logger.info('chatwoot.webhook.aceita', { ...logDaEntrega, inboxEventoId: aceite.eventoId, duplicata: aceite.duplicata, status: aceite.status });
 
     return { status: 200, body: { success: true } };
   } catch (error: unknown) {
-    if (inboxEventoId && scope) {
-      // A falha fica no inbox. Cada gravação é idempotente pelo UUID local, então
-      // reprocessar depois (com o pai já espelhado) completa o evento sem duplicar.
-      try {
-        await chatwootInboxService.markFailed(supabaseServer, scope, inboxEventoId, error);
-      } catch (markErr) {
-        console.error('❌ Falha ao gravar status de falha no inbox Chatwoot:', markErr);
-      }
-    }
-    if (error instanceof FalhaDeIdentidadeChatwootError) {
-      logger.warn('chatwoot.identidade.recusada', {
-        subsystem: 'provider',
-        organizacaoId: scope?.organizationId,
-        conexaoId: delivery.conexaoId,
-        inboxEventoId,
-        recurso: error.recurso,
-        outcome: error.falha,
-      });
-      const status = error.falha === 'StoreIndisponivel' ? 503 : 409;
-      return { status, body: { success: false, error: 'Identidade Chatwoot não resolvida', motivo: error.falha } };
-    }
     logger.error('chatwoot.webhook.falha', {
       subsystem: 'provider',
-      organizacaoId: scope?.organizationId,
+      organizacaoId,
       conexaoId: delivery.conexaoId,
-      inboxEventoId,
       erro: sanitizeErrorForLog(error),
     });
     return { status: 500, body: { success: false, error: 'Erro interno no processamento do webhook' } };

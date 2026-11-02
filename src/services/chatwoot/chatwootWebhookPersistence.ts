@@ -1,18 +1,5 @@
-import { normalizeToE164 } from '@/lib/utils';
-import type { ChatwootWebhookEvent } from '@/services/chatwoot/chatwootPort';
-import { gravarContato, gravarConversa, gravarMensagem, type EscopoDeEscritaChatwoot } from '@/services/chatwoot/espelhoChatwoot';
-import {
-  FalhaDeIdentidadeChatwootError,
-  resolverIdLocal,
-  type EspelhoChatwootStore,
-} from '@/services/chatwoot/identidadeChatwoot';
-
-/** Os espelhos tocados por um evento, pelo UUID local. O id remoto não sai daqui. */
-export interface PersistedWebhookEffects {
-  readonly contatoIdLocal: string | null;
-  readonly conversaIdLocal: string | null;
-  readonly mensagemIdLocal: string | null;
-}
+import { normalizeToE164 } from '../../lib/utils';
+import { ChatwootWebhookEventSchema, type ChatwootWebhookEvent } from './chatwootPort';
 
 export function mapChatwootChannel(channelStr?: string): string {
   if (!channelStr) return 'Channel::Whatsapp';
@@ -28,12 +15,13 @@ export function mapChatwootChannel(channelStr?: string): string {
   return 'Channel::Whatsapp';
 }
 
-/** Normaliza o `message_type` bruto do Chatwoot para o enum local. */
-export function mapChatwootMessageType(rawType: unknown): 'incoming' | 'outgoing' | 'system' | 'template' {
+/** Normaliza o `message_type` bruto do Chatwoot. O que não se reconhece é `null`, nunca `incoming`. */
+export function mapChatwootMessageType(rawType: unknown): 'incoming' | 'outgoing' | 'system' | 'template' | null {
+  if (rawType === 'incoming' || rawType === 0 || rawType === '0') return 'incoming';
   if (rawType === 'outgoing' || rawType === 1 || rawType === '1') return 'outgoing';
   if (rawType === 'system' || rawType === 2 || rawType === '2') return 'system';
   if (rawType === 'template' || rawType === 3 || rawType === '3') return 'template';
-  return 'incoming';
+  return null;
 }
 
 export function senderTypeConhecido(value: string | null | undefined): string | null {
@@ -51,105 +39,166 @@ export function parseOptionalInt(value: unknown): number | null {
   return null;
 }
 
-async function contatoJaEspelhado(store: EspelhoChatwootStore, escopo: EscopoDeEscritaChatwoot, idExterno: number): Promise<string> {
-  const contato = await resolverIdLocal(store, escopo, 'contato', idExterno);
-  if (contato._tag === 'IdLocalResolvido') return contato.idLocal;
-  throw new FalhaDeIdentidadeChatwootError(
-    'conversa',
-    contato.falha === 'IdentidadeNaoEncontrada' ? 'PaiNaoEspelhado' : contato.falha,
-  );
+/** Os ids dos espelhos são `int` no banco: fora disso a escrita não tem como acertar. */
+const MAIOR_ID_DO_ESPELHO = 2_147_483_647;
+
+/** O comando da transação de consumo: dados do evento, sem organização nem conexão. */
+export interface ComandoDeConsumoChatwoot {
+  readonly evento: string;
+  readonly acao: 'espelhar' | 'status' | 'ignorar';
+  readonly account_id?: string;
+  /** Versões vindas do provedor; sem elas a escrita não passa de uma revisão comprovada. */
+  readonly revisao_status_em?: string;
+  readonly revisao_conteudo_em?: string;
+  readonly abre_caso?: boolean;
+  readonly classificacao_inconclusiva?: boolean;
+  readonly contato?: Readonly<Record<string, unknown>>;
+  readonly conversa?: Readonly<Record<string, unknown>>;
+  readonly mensagem?: Readonly<Record<string, unknown>>;
 }
 
-/** Contato e conversa de um evento verificado, gravados pelo UUID local na conexão do escopo. */
-async function persistWebhookContactAndConversation(
-  store: EspelhoChatwootStore,
-  escopo: EscopoDeEscritaChatwoot,
-  payload: ChatwootWebhookEvent,
+export type TraducaoDoEvento =
+  | { readonly _tag: 'Comando'; readonly comando: ComandoDeConsumoChatwoot }
+  | { readonly _tag: 'PayloadInvalido'; readonly codigo: 'payload_invalido' | 'id_fora_da_faixa' };
+
+/** A versão do provedor em ISO, ou `undefined` se ela não vier ou não for um instante. */
+export function revisaoDoProvedor(valor: string | number | undefined): string | undefined {
+  if (valor === undefined || valor === '') return undefined;
+  // O Chatwoot manda ISO ou segundos desde a época, conforme o evento.
+  const segundos = typeof valor === 'number' ? valor : /^\d+$/.test(valor) ? Number(valor) : null;
+  const instante = segundos !== null ? new Date(segundos * 1000) : new Date(String(valor));
+  return Number.isNaN(instante.getTime()) ? undefined : instante.toISOString();
+}
+
+function idDoEspelho(valor: unknown): number | null {
+  const id = parseOptionalInt(valor);
+  return id !== null && id <= MAIOR_ID_DO_ESPELHO ? id : null;
+}
+
+/** Algum id presente, mas que o espelho não consegue guardar. */
+function idForaDaFaixa(...valores: readonly unknown[]): boolean {
+  return valores.some((v) => {
+    const id = parseOptionalInt(v);
+    return id !== null && id > MAIOR_ID_DO_ESPELHO;
+  });
+}
+
+function dadosDoContato(evento: ChatwootWebhookEvent) {
+  const remetente = evento.meta?.sender;
+  const fragmento = evento.conversation?.contact;
+  const id = idDoEspelho(remetente?.id ?? fragmento?.id);
+  if (id === null) return undefined;
+  const telefone = remetente?.phone_number || fragmento?.phone_number || undefined;
+  return {
+    id,
+    nome: remetente?.name || fragmento?.name || null,
+    email: remetente?.email || fragmento?.email || null,
+    telefone: telefone ?? null,
+    telefone_normalizado: normalizeToE164(telefone),
+    avatar_url: remetente?.avatar_url || remetente?.thumbnail || fragmento?.avatar_url || null,
+  };
+}
+
+function dadosDaConversa(evento: ChatwootWebhookEvent, contatoId: number | undefined, inboxId: number | null) {
+  const conversa = evento.conversation;
+  const id = idDoEspelho(conversa?.id);
+  const contato = contatoId ?? idDoEspelho(conversa?.contact_id ?? conversa?.contact?.id);
+  if (id === null || contato === null) return undefined;
+  return {
+    id,
+    contato_id: contato,
+    display_id: idDoEspelho(conversa?.display_id),
+    status: conversa?.status || null,
+    inbox_id: idDoEspelho(conversa?.inbox_id) ?? inboxId,
+    canal: mapChatwootChannel(evento.meta?.channel || conversa?.channel),
+  };
+}
+
+function dadosDaMensagem(evento: ChatwootWebhookEvent) {
+  const tipo = mapChatwootMessageType(evento.message_type);
+  if (tipo === null) return undefined;
+  const id = idDoEspelho(evento.id);
+  const conversaId = idDoEspelho(evento.conversation?.id || evento.conversation_id);
+  if (id === null || conversaId === null) return undefined;
+  return {
+    id,
+    conversa_id: conversaId,
+    conteudo: evento.content || '',
+    tipo,
+    remetente_nome: evento.sender?.name || null,
+    remetente_id: idDoEspelho(evento.sender?.id),
+    remetente_tipo: senderTypeConhecido(evento.sender?.type),
+    criada_em: revisaoDoProvedor(evento.created_at) ?? null,
+    modo: evento.event === 'message_created' ? 'preservar' : 'sobrescrever',
+  };
+}
+
+/**
+ * A regra de abertura exige prova positiva: tipo `incoming` e remetente `contact`,
+ * ambos declarados. Nota privada, atendente, sistema e template são outra coisa; o
+ * que falta ou não se reconhece fica inconclusivo e não vira atendimento.
+ */
+function classificarMensagem(evento: ChatwootWebhookEvent): 'cliente' | 'nao_cliente' | 'inconclusiva' {
+  if (evento.private) return 'nao_cliente';
+  const tipo = mapChatwootMessageType(evento.message_type);
+  const remetente = senderTypeConhecido(evento.sender?.type);
+  if ((tipo !== null && tipo !== 'incoming') || remetente === 'user' || remetente === 'agent') return 'nao_cliente';
+  return tipo === 'incoming' && remetente === 'contact' ? 'cliente' : 'inconclusiva';
+}
+
+/**
+ * Traduz o payload minimizado da inbox no comando da transação. O payload passou
+ * pelo contrato no aceite, mas é relido aqui: a linha pode ser antiga. Tipo fora
+ * da lista vira `ignorar`, nunca um efeito por adivinhação.
+ */
+export function traduzirEventoDaInbox(
+  eventType: string,
   inboxId: number | null,
-): Promise<{ contatoIdLocal: string | null; conversaIdLocal: string | null }> {
-  const conversationData = payload.conversation;
-  let rawContactId: number | string | undefined = payload.meta?.sender?.id;
-  let contactName = payload.meta?.sender?.name;
-  let contactEmail = payload.meta?.sender?.email ?? undefined;
-  let contactPhone = payload.meta?.sender?.phone_number ?? undefined;
-  let contactAvatar = payload.meta?.sender?.avatar_url ?? payload.meta?.sender?.thumbnail ?? undefined;
-
-  if (conversationData?.contact) {
-    if (!rawContactId) rawContactId = conversationData.contact.id;
-    if (!contactName) contactName = conversationData.contact.name;
-    if (!contactEmail) contactEmail = conversationData.contact.email ?? undefined;
-    if (!contactPhone) contactPhone = conversationData.contact.phone_number ?? undefined;
-    if (!contactAvatar) contactAvatar = conversationData.contact.avatar_url ?? undefined;
+  payload: unknown,
+): TraducaoDoEvento {
+  if (!['message_created', 'message_updated', 'conversation_status_changed'].includes(eventType)) {
+    return { _tag: 'Comando', comando: { evento: eventType, acao: 'ignorar' } };
   }
 
-  const contactId = parseOptionalInt(rawContactId);
-  let contatoIdLocal: string | null = null;
-  if (contactId !== null) {
-    contatoIdLocal = await gravarContato(store, escopo, {
-      idExterno: contactId,
-      nome: contactName || 'Cliente WhatsApp',
-      email: contactEmail || null,
-      telefone: contactPhone || null,
-      telefoneNormalizado: normalizeToE164(contactPhone),
-      avatarUrl: contactAvatar || null,
-    });
+  const lido = ChatwootWebhookEventSchema.safeParse(payload);
+  if (!lido.success || lido.data.event !== eventType) return { _tag: 'PayloadInvalido', codigo: 'payload_invalido' };
+  const evento = lido.data;
+  const conversa = evento.conversation;
+
+  if (idForaDaFaixa(evento.id, conversa?.id, evento.conversation_id, conversa?.contact_id, evento.meta?.sender?.id, conversa?.contact?.id)) {
+    return { _tag: 'PayloadInvalido', codigo: 'id_fora_da_faixa' };
   }
 
-  let conversaIdLocal: string | null = null;
-  const convId = parseOptionalInt(conversationData?.id);
-  const convContactId = contactId ?? parseOptionalInt(conversationData?.contact_id ?? conversationData?.contact?.id);
-  if (convId !== null && convContactId !== null) {
-    // O contato da conversa é o gravado acima ou um já espelhado nesta conexão.
-    const contatoDaConversa = contatoIdLocal ?? (await contatoJaEspelhado(store, escopo, convContactId));
-    conversaIdLocal = await gravarConversa(store, escopo, {
-      idExterno: convId,
-      contatoIdLocal: contatoDaConversa,
-      contatoIdExterno: convContactId,
-      displayId: parseOptionalInt(conversationData?.display_id),
-      status: conversationData?.status || 'open',
-      inboxId: parseOptionalInt(conversationData?.inbox_id) ?? inboxId,
-      canal: mapChatwootChannel(payload.meta?.channel || conversationData?.channel),
-    });
+  if (eventType === 'conversation_status_changed') {
+    const id = idDoEspelho(conversa?.id);
+    if (id === null || !conversa?.status) return { _tag: 'PayloadInvalido', codigo: 'payload_invalido' };
+    return {
+      _tag: 'Comando',
+      comando: {
+        evento: eventType,
+        acao: 'status',
+        revisao_status_em: revisaoDoProvedor(conversa.updated_at ?? evento.updated_at),
+        conversa: { id, status: conversa.status },
+      },
+    };
   }
 
-  return { contatoIdLocal, conversaIdLocal };
-}
-
-/** A mensagem de um `message_created`/`message_updated`, na conversa desta conexão. */
-async function persistWebhookMessage(
-  store: EspelhoChatwootStore,
-  escopo: EscopoDeEscritaChatwoot,
-  payload: ChatwootWebhookEvent,
-): Promise<string | null> {
-  const msgId = parseOptionalInt(payload.id);
-  const conversationId = parseOptionalInt(payload.conversation?.id || payload.conversation_id);
-  if (conversationId === null || msgId === null) return null;
-
-  return gravarMensagem(store, escopo, {
-    idExterno: msgId,
-    conversaIdExterno: conversationId,
-    conteudo: payload.content || '',
-    tipo: mapChatwootMessageType(payload.message_type),
-    remetenteNome: payload.sender?.name || null,
-    remetenteId: parseOptionalInt(payload.sender?.id),
-    remetenteTipo: senderTypeConhecido(payload.sender?.type),
-    criadaEm: payload.created_at || new Date().toISOString(),
-  }, payload.event === 'message_created' ? 'preservar' : 'sobrescrever');
-}
-
-/** Apply every side effect for one verified, non-duplicate webhook event. */
-export async function persistWebhookEffects(
-  store: EspelhoChatwootStore,
-  escopo: EscopoDeEscritaChatwoot,
-  payload: ChatwootWebhookEvent,
-  inboxId: number | null,
-): Promise<PersistedWebhookEffects> {
-  const { contatoIdLocal, conversaIdLocal } = await persistWebhookContactAndConversation(store, escopo, payload, inboxId);
-
-  let mensagemIdLocal: string | null = null;
-  if (payload.event === 'message_created' || payload.event === 'message_updated') {
-    mensagemIdLocal = await persistWebhookMessage(store, escopo, payload);
-  }
-
-  return { contatoIdLocal, conversaIdLocal, mensagemIdLocal };
+  const contato = dadosDoContato(evento);
+  const mensagem = dadosDaMensagem(evento);
+  const classificacao = eventType === 'message_created' && idDoEspelho(evento.id) !== null ? classificarMensagem(evento) : 'nao_cliente';
+  return {
+    _tag: 'Comando',
+    comando: {
+      evento: eventType,
+      acao: 'espelhar',
+      account_id: String(evento.account.id),
+      revisao_status_em: revisaoDoProvedor(conversa?.updated_at),
+      revisao_conteudo_em: revisaoDoProvedor(evento.updated_at),
+      abre_caso: classificacao === 'cliente' && mensagem !== undefined,
+      classificacao_inconclusiva: classificacao === 'inconclusiva',
+      contato,
+      conversa: dadosDaConversa(evento, contato?.id, inboxId),
+      mensagem,
+    },
+  };
 }

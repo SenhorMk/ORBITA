@@ -5,6 +5,7 @@ import type { ChatwootConversation } from '../../../../services/chatwoot/chatwoo
 import {
   mapChatwootChannel,
   mapChatwootMessageType,
+  revisaoDoProvedor,
   senderTypeConhecido,
 } from '../../../../services/chatwoot/chatwootWebhookPersistence';
 import {
@@ -45,15 +46,18 @@ async function syncChatwootMessages(
   let messagesCount = 0;
   for (const rawMsg of messagesResult.data) {
     try {
+      const tipo = mapChatwootMessageType(rawMsg.message_type);
+      if (tipo === null) continue; // tipo desconhecido não vira incoming por suposição
       await gravarMensagem(espelho, escopo, {
         idExterno: rawMsg.id,
         conversaIdExterno: conversationId,
         conteudo: rawMsg.content || '',
-        tipo: mapChatwootMessageType(rawMsg.message_type),
+        tipo,
         remetenteNome: rawMsg.sender?.name || null,
         remetenteId: rawMsg.sender?.id || null,
         remetenteTipo: senderTypeConhecido(rawMsg.sender?.type),
         criadaEm: rawMsg.created_at || new Date().toISOString(),
+        conteudoRevisaoEm: revisaoDoProvedor(rawMsg.updated_at) ?? null,
       }, 'sobrescrever');
       messagesCount++;
     } catch (erro: unknown) {
@@ -123,6 +127,7 @@ async function syncChatwootConversationTree(
       status: rawConv.status || 'open',
       inboxId: rawConv.inbox_id || null,
       canal: mapChatwootChannel(rawConv.meta?.channel || rawConv.channel_type),
+      statusRevisaoEm: revisaoDoProvedor(rawConv.updated_at) ?? null,
     });
   } catch (erro: unknown) {
     registrarRecusa(escopo, erro);

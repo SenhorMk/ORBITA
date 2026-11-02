@@ -58,6 +58,10 @@ skip the idempotent inbox write.
 
 ## Webhook contract
 
+A 2xx means the delivery is durably committed in the inbox, nothing more. The
+consumer worker (MSG-006) produces every effect afterwards; a client of this
+endpoint never triggers it. See `docs/operations/msg-006-runbook.md`.
+
 - Chatwoot's `POST /api/v1/accounts/{account_id}/webhooks` resource creates a
   webhook subscription with its own unique per-webhook secret. Signed
   deliveries carry `X-Chatwoot-Timestamp` (Unix seconds) and

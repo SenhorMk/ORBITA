@@ -33,7 +33,8 @@
     "e2e:list": "playwright test --list",
     "e2e:seed": "ts-node --transpile-only --project e2e/tsconfig.seed.json e2e/seed/run-seed.ts",
     "e2e:cleanup": "ts-node --transpile-only --project e2e/tsconfig.seed.json e2e/seed/run-cleanup.ts --",
-    "verificar:bling": "node scripts/verificar-jornada-bling.mjs"
+    "verificar:bling": "node scripts/verificar-jornada-bling.mjs",
+    "worker:inbox": "ts-node --transpile-only --project scripts/tsconfig.worker.json scripts/worker-inbox-chatwoot.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.7.1",

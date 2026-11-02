@@ -170,6 +170,10 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   ['outbox.effect_reconciled', 'integrations', 'warning', 'user', 1825, 'Efeito desconhecido reconciliado por pessoa autorizada.', undefined, ['payload', 'content']],
   ['outbox.replay_authorized', 'integrations', 'warning', 'user', 1825, 'Replay autorizado de efeito provado como não aplicado.', undefined, ['payload', 'content']],
   ['outbox.replay_refused', 'integrations', 'info', 'user', 1825, 'Pedido de replay recusado: efeito sem prova de não aplicação.', undefined, ['payload', 'content']],
+  // Consumo da inbox do Chatwoot (migration 89, MSG-006). Metadata: ids técnicos,
+  // tentativa e código; nunca o payload nem o conteúdo da mensagem.
+  ['sac.case_opened', 'sac', 'info', 'system', 1825, 'Caso SAC aberto em TRIAGE pelo consumidor da inbox.', undefined, ['payload', 'content']],
+  ['chatwoot.inbox_event_failed', 'integrations', 'warning', 'system', 365, 'Evento da inbox do Chatwoot em falha definitiva: não será retomado sem correção.', undefined, ['payload', 'content']],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 

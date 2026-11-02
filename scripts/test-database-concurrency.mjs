@@ -26,6 +26,8 @@ import { runOutboxRaceRehearsal } from './database-concurrency-outbox.mjs';
 import { runResolverChatwootRaceRehearsal } from './database-concurrency-resolver-chatwoot.mjs';
 import { runContracaoChatwootRaceRehearsal } from './database-concurrency-contracao-chatwoot.mjs';
 import { runInboxChatwootRaceRehearsal } from './database-concurrency-inbox-chatwoot.mjs';
+import { runConsumidorInboxRaceRehearsal } from './database-concurrency-consumidor-inbox.mjs';
+import { runIntegracaoConsumidorInbox } from './database-integracao-consumidor-inbox.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -61,6 +63,8 @@ let outcomeOutbox;
 let outcomeResolverChatwoot;
 let outcomeContracaoChatwoot;
 let outcomeInboxChatwoot;
+let outcomeConsumidorInbox;
+let outcomeIntegracaoConsumidor;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -85,6 +89,8 @@ try {
     outcomeResolverChatwoot = started;
     outcomeContracaoChatwoot = started;
     outcomeInboxChatwoot = started;
+    outcomeConsumidorInbox = started;
+    outcomeIntegracaoConsumidor = started;
   } else {
     const alinhado = await alinharStubDeAuthComProducao();
     const applied = alinhado._tag === 'err' ? alinhado : await applyCanonicalMigrations({});
@@ -110,6 +116,8 @@ try {
       outcomeResolverChatwoot = applied;
       outcomeContracaoChatwoot = applied;
       outcomeInboxChatwoot = applied;
+      outcomeConsumidorInbox = applied;
+      outcomeIntegracaoConsumidor = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
@@ -132,6 +140,8 @@ try {
       outcomeResolverChatwoot = await runResolverChatwootRaceRehearsal();
       outcomeContracaoChatwoot = await runContracaoChatwootRaceRehearsal();
       outcomeInboxChatwoot = await runInboxChatwootRaceRehearsal();
+      outcomeConsumidorInbox = await runConsumidorInboxRaceRehearsal();
+      outcomeIntegracaoConsumidor = await runIntegracaoConsumidorInbox();
     }
   }
 } finally {
@@ -199,6 +209,8 @@ const relatos = [
   [outcomeResolverChatwoot, (v) => v.relato],
   [outcomeContracaoChatwoot, (v) => v.relato],
   [outcomeInboxChatwoot, (v) => v.relato],
+  [outcomeConsumidorInbox, (v) => v.relato],
+  [outcomeIntegracaoConsumidor, (v) => v.relato],
 ];
 
 const falhou = relatos.map(([outcome, resumo]) => relatar(outcome, resumo)).includes(true);
