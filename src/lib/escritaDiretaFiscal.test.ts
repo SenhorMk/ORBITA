@@ -26,9 +26,7 @@ const TABELAS = ['documentos_fiscais'] as const;
  * inventário: um gravador novo precisa de capacidade e auditoria decididas.
  */
 const GRAVADORES_DO_SERVIDOR: Record<string, readonly string[]> = {
-  // `upsertNfe`, chamado só por `POST /api/nfe` (organization:manage), enquanto a
-  // fatia 2 não passa o registro para a RPC auditada.
-  'src/repositories/pedidoRepository.ts': ['documentos_fiscais'],
+  // Nenhum: `upsertNfe` registra pela RPC auditada (fatia 2).
 };
 
 const acessos = (fonte: string) => acessosEm(fonte, TABELAS);
@@ -70,7 +68,13 @@ describe('gravadores do servidor em documentos_fiscais (PRE-007B)', () => {
     }
   });
 
-  it('o único caller do gravador é POST /api/nfe, que exige organization:manage', () => {
+  it('o registro da NF-e sai pela RPC auditada, não por escrita direta (fatia 2)', () => {
+    const repositorio = fontes.find((f) => f.caminho === 'src/repositories/pedidoRepository.ts')!.fonte;
+    expect(repositorio).toContain("rpc('registrar_documento_fiscal_emitido'");
+    expect(acessos(repositorio).filter(({ cadeia }) => escreve(cadeia))).toEqual([]);
+  });
+
+  it('o único caller do registro é POST /api/nfe, que exige organization:manage', () => {
     const callers = fontes.filter(({ fonte }) => /\.upsertNfe\(/.test(fonte)).map((a) => a.caminho);
     expect(callers).toEqual(['src/app/api/nfe/route.ts']);
     expect(fontes.find((f) => f.caminho === 'src/app/api/nfe/route.ts')!.fonte)

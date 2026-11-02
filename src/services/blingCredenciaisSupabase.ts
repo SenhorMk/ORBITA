@@ -31,7 +31,7 @@ const ARMAZENAMENTO_SUPABASE: ArmazenamentoDeCredenciais = {
   acharConexaoId: async (organizacaoId) => {
     const resposta = await supabaseServer
       .from('conexoes_integracao')
-      .select('id')
+      .select('id, status')
       .eq('organizacao_id', organizacaoId)
       .eq('provedor', 'bling')
       .maybeSingle();

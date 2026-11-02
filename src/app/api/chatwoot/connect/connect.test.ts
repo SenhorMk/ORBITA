@@ -6,6 +6,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'server-key-12345678901234567890';
 process.env.ENCRYPTION_KEY = 'cd'.repeat(32);
 
 const mockUpsertCreds = vi.fn().mockResolvedValue(undefined);
+const mockRpc = vi.fn().mockResolvedValue({ data: 'evento-1', error: null });
 let existingConnection: { id: string } | null = null;
 /** Linhas removidas pela compensação, com o filtro que as removeu. */
 const remocoes: Array<Record<string, unknown>> = [];
@@ -30,6 +31,7 @@ vi.mock('@/lib/integrations/credentialsVault', async () => {
 
 vi.mock('@/lib/supabaseServer', () => ({
   supabaseServer: {
+    rpc: (...args: unknown[]) => mockRpc(...args),
     from: (table: string) => {
       if (table === 'conexoes_integracao') {
         return {
@@ -126,6 +128,65 @@ describe('POST /api/chatwoot/connect', () => {
     expect(res.status).toBe(400);
   });
 
+  describe('organização do corpo (PRE-008)', () => {
+    const credenciais = { api_token: 'tok-123', account_id: '42', webhook_secret: 'wh-secret-value' };
+
+    it('organizacao_esperada que não é texto é entrada inválida, e nada é gravado', async () => {
+      escritas.length = 0;
+      mockUpsertCreds.mockClear();
+      for (const organizacao_esperada of [123, { id: 'org-1' }, ['org-1'], '']) {
+        const res = await callConnect({ ...credenciais, organizacao_esperada });
+        expect(res.status).toBe(400);
+      }
+      expect(escritas).toEqual([]);
+      expect(mockUpsertCreds).not.toHaveBeenCalled();
+    });
+
+    it('outra organização no corpo não é autoridade: 409, sem escrita', async () => {
+      escritas.length = 0;
+      mockUpsertCreds.mockClear();
+      const res = await callConnect({ ...credenciais, organizacao_esperada: 'org-2' });
+      expect(res.status).toBe(409);
+      expect(escritas).toEqual([]);
+      expect(mockUpsertCreds).not.toHaveBeenCalled();
+    });
+
+    it('organizacao_id no corpo é ignorado: grava na organização da sessão', async () => {
+      existingConnection = null;
+      escritas.length = 0;
+      mockUpsertCreds.mockClear();
+      const res = await callConnect({ ...credenciais, organizacao_id: 'org-2', organizacao_esperada: 'org-1' });
+      expect(res.status).toBe(200);
+      expect(escritas).toEqual([{ op: 'insert', values: expect.objectContaining({ organizacao_id: 'org-1' }) }]);
+      expect(mockUpsertCreds).toHaveBeenCalledWith('org-1', 'new-conexao-id', credenciais);
+    });
+
+    it('a resposta nunca devolve token nem segredo', async () => {
+      existingConnection = null;
+      const res = await callConnect({ ...credenciais, organizacao_esperada: 'org-1' });
+      const texto = JSON.stringify(await res.json());
+      expect(texto).not.toContain('tok-123');
+      expect(texto).not.toContain('wh-secret-value');
+    });
+
+    it('nem o log de uma falha do cofre leva token ou segredo', async () => {
+      existingConnection = null;
+      const logs = [vi.spyOn(console, 'error'), vi.spyOn(console, 'warn'), vi.spyOn(console, 'log')];
+      for (const espiao of logs) espiao.mockImplementation(() => undefined);
+      mockUpsertCreds.mockRejectedValueOnce(new Error('cofre indisponível'));
+      try {
+        const res = await callConnect({ ...credenciais, organizacao_esperada: 'org-1' });
+        expect(res.status).toBe(500);
+        const registrado = JSON.stringify(logs.flatMap((espiao) => espiao.mock.calls));
+        expect(registrado).toContain('cofre indisponível');
+        expect(registrado).not.toContain('tok-123');
+        expect(registrado).not.toContain('wh-secret-value');
+      } finally {
+        for (const espiao of logs) espiao.mockRestore();
+      }
+    });
+  });
+
   it('creates a new connection and stores encrypted credentials', async () => {
     existingConnection = null;
     mockUpsertCreds.mockClear();
@@ -211,6 +272,37 @@ describe('POST /api/chatwoot/connect', () => {
     // Nome de tabela, de constraint e o texto do Postgres ficam no log redigido.
     expect(JSON.stringify(corpo)).not.toContain('credenciais_integracao');
     expect(JSON.stringify(corpo)).not.toContain('duplicate key');
+  });
+
+  describe('rastro da configuração (PRE-008)', () => {
+    it('grava integration.connection_configured na organização e com o ator da sessão, sem segredo', async () => {
+      existingConnection = null;
+      mockRpc.mockClear();
+      const res = await callConnect({ api_token: 'tok-123', account_id: '42', webhook_secret: 'wh-secret-value' });
+      expect(res.status).toBe(200);
+      expect(mockRpc).toHaveBeenCalledWith('registrar_evento_auditoria', expect.objectContaining({
+        p_org_id: 'org-1',
+        p_actor_id: 'actor-1',
+        p_acao: 'integration.connection_configured',
+        p_recurso_id: 'new-conexao-id',
+        p_metadata: { provedor: 'chatwoot', status: 'pendente' },
+      }));
+      const auditado = JSON.stringify(mockRpc.mock.calls);
+      expect(auditado).not.toContain('tok-123');
+      expect(auditado).not.toContain('wh-secret-value');
+    });
+
+    it('a auditoria falhando não desdiz a gravação: 200, falha no log', async () => {
+      existingConnection = null;
+      mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'auditoria indisponível' } });
+      const erro = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        const res = await callConnect({ api_token: 'tok-123', account_id: '42', webhook_secret: 'wh-secret-value' });
+        expect(res.status).toBe(200);
+      } finally {
+        erro.mockRestore();
+      }
+    });
   });
 
   it('devolve a URL do webhook absoluta quando a origem estável está configurada', async () => {
