@@ -47,6 +47,18 @@ describe('lerResultadoDaConexao', () => {
     });
   });
 
+  it('PRE-008: conexão desligada é "sem conexão": não se renova token nem se chama o Bling', () => {
+    expect(lerResultadoDaConexao({ data: { id: 'conexao-1', status: 'desconectado' }, error: null })).toEqual({
+      _tag: 'SemConexao',
+    });
+    for (const status of ['pendente', 'conectado', 'erro']) {
+      expect(lerResultadoDaConexao({ data: { id: 'conexao-1', status }, error: null })).toEqual({
+        _tag: 'Encontrada',
+        conexaoId: 'conexao-1',
+      });
+    }
+  });
+
   it('erro prevalece mesmo com dado presente', () => {
     // O PostgREST pode devolver os dois; um dado acompanhado de erro não é
     // confiável, e tratá-lo como sucesso esconderia a falha.

@@ -25,7 +25,7 @@ const ORG_B = '22222222-2222-4222-8222-222222222222';
 
 /** Supabase mínimo em memória, cobrindo só o que o cofre e a porta de leitura tocam. */
 function createFakeSupabase() {
-  const conexoes: Array<{ id: string; organizacao_id: string; provedor: string }> = [];
+  const conexoes: Array<{ id: string; organizacao_id: string; provedor: string; status?: string }> = [];
   const credenciais: Array<{ conexao_id: string; organizacao_id: string; dados_cifrados: string; chave_versao: string }> = [];
 
   const client = {
@@ -122,6 +122,20 @@ describe('resolveSignedBlingConnection', () => {
     );
 
     expect(result).toMatchObject({ _tag: 'ConnectionResolved', connection: { organizacaoId: ORG_B } });
+  });
+
+  it('PRE-008: conexão desligada não autentica o evento, nem com o secret dela', async () => {
+    await conectarBling(fake, 'conn-a', ORG_A, 'segredo-da-org-a');
+    await conectarBling(fake, 'conn-b', ORG_B, 'segredo-da-org-b');
+    fake.conexoes.find((c) => c.id === 'conn-a')!.status = 'desconectado';
+    const rawBody = '{"event":"order.created","data":{"id":"789"}}';
+    const store = createSupabaseBlingWebhookTenantStore(fake.client);
+
+    expect(await resolveSignedBlingConnection(store, rawBody, assinar(rawBody, 'segredo-da-org-a')))
+      .toEqual({ _tag: 'SignatureUnmatched' });
+    // A outra organização continua autenticando normalmente.
+    expect(await resolveSignedBlingConnection(store, rawBody, assinar(rawBody, 'segredo-da-org-b')))
+      .toMatchObject({ _tag: 'ConnectionResolved', connection: { id: 'conn-b', organizacaoId: ORG_B } });
   });
 
   it('recusa assinatura que não corresponde a nenhuma conexão', async () => {
