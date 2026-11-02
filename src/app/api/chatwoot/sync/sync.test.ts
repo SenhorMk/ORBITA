@@ -1,30 +1,39 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EspelhoChatwootFake } from '../../../../services/__testkit__/espelhoChatwootFake';
 
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project-ref.supabase.co';
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'public-key-12345678901234567890';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'server-key-12345678901234567890';
 
-const ORG = '22222222-2222-4222-8222-222222222222';
+const ORG_A = '22222222-2222-4222-8222-222222222222';
+const ORG_B = '33333333-3333-4333-8333-333333333333';
 const ATOR = '70000000-0000-4000-8000-000000000001';
-const CONEXAO = '11111111-1111-4111-8111-111111111111';
+const CONEXAO_A = '11111111-1111-4111-8111-111111111111';
+const CONEXAO_B = '44444444-4444-4444-8444-444444444444';
 
-const upserts: Array<{ table: string; row: Record<string, unknown> }> = [];
-
-vi.mock('../../../../lib/supabaseServer', () => ({
-  supabaseServer: {
-    from: (table: string) => ({
-      upsert: (row: Record<string, unknown>) => {
-        upserts.push({ table, row });
-        return Promise.resolve({ error: null });
-      },
-    }),
-  },
+/** A sessão de cada requisição; a fake do Chatwoot devolve sempre os ids 5/50/500. */
+const estado = vi.hoisted(() => ({
+  store: null as unknown as EspelhoChatwootFake,
+  sessao: { organizacao: '' },
+  antesDasMensagens: null as (() => void) | null,
 }));
+
+vi.mock('../../../../services/chatwoot/espelhoChatwootSupabase', () => ({
+  // O módulo da rota guarda o store na carga; o proxy aponta para o store do teste corrente.
+  criarEspelhoChatwootSupabase: () => new Proxy({}, {
+    get: (_alvo, operacao: string) => (...args: unknown[]) =>
+      (estado.store as unknown as Record<string, (...a: unknown[]) => unknown>)[operacao]!(...args),
+  }),
+}));
+vi.mock('../../../../lib/supabaseServer', () => ({ supabaseServer: {} }));
 vi.mock('../../../../lib/requestOrganizationContext', () => ({
-  resolveActiveRequestOrganizationContext: vi.fn().mockResolvedValue({ _tag: 'OrganizationContextResolved', context: {} }),
+  resolveActiveRequestOrganizationContext: vi.fn(async () => ({
+    _tag: 'OrganizationContextResolved',
+    context: { organizacao: estado.sessao.organizacao },
+  })),
 }));
 vi.mock('../../../../lib/verifiedOrganizationScope', () => ({
-  organizationContextToScope: () => ({ organizationId: ORG, actorId: ATOR }),
+  organizationContextToScope: (context: { organizacao: string }) => ({ organizationId: context.organizacao, actorId: ATOR }),
 }));
 vi.mock('../../../../services/chatwoot/chatwootInboxRegistration', () => ({
   registerChatwootInboxIfNeeded: vi.fn().mockResolvedValue(undefined),
@@ -35,33 +44,153 @@ vi.mock('../../../../services/integrationService', () => ({
 }));
 vi.mock('../../../../services/chatwoot/chatwootAdapter', () => ({
   ChatwootAdapter: {
-    forScope: vi.fn().mockResolvedValue({
-      conexaoId: CONEXAO,
+    forScope: vi.fn(async (scope: { organizationId: string }) => ({
+      // O adapter é o da organização do escopo verificado.
+      conexaoId: scope.organizationId === ORG_A ? CONEXAO_A : CONEXAO_B,
       getConversations: () => Promise.resolve({
         _tag: 'ChatwootSuccess',
-        data: [{ id: 50, display_id: 50, inbox_id: 1, status: 'open', meta: { sender: { id: 5, name: 'Contato' } } }],
+        data: [{ id: 50, display_id: 50, inbox_id: 1, status: 'open', meta: { sender: { id: 5, name: `Contato ${scope.organizationId}` } } }],
       }),
-      getMessages: () => Promise.resolve({
-        _tag: 'ChatwootSuccess',
-        data: [{ id: 500, content: 'oi', message_type: 0, created_at: '2026-10-25T00:00:00Z' }],
-      }),
-    }),
+      getMessages: () => {
+        estado.antesDasMensagens?.();
+        return Promise.resolve({
+          _tag: 'ChatwootSuccess',
+          data: [{ id: 500, content: `oi de ${scope.organizationId}`, message_type: 0, created_at: '2026-10-25T00:00:00Z' }],
+        });
+      },
+    })),
   },
 }));
 
-describe('POST /api/chatwoot/sync (MSG-002: escrita compatível)', () => {
-  beforeEach(() => {
-    upserts.length = 0;
+async function novoStore(pkGlobal: boolean) {
+  const { EspelhoChatwootFake } = await import('../../../../services/__testkit__/espelhoChatwootFake');
+  estado.store = new EspelhoChatwootFake({ pkGlobal });
+  estado.antesDasMensagens = null;
+}
+
+async function sincronizar(organizacao: string) {
+  estado.sessao = { organizacao };
+  const { POST } = await import('./route');
+  const response = await POST(new Request('https://orbita.test/api/chatwoot/sync', { method: 'POST' }));
+  return { status: response.status, body: await response.json() };
+}
+
+describe('POST /api/chatwoot/sync (MSG-003A: UUID local por organização + conexão)', () => {
+  beforeEach(() => novoStore(true));
+
+  it('grava contato, conversa e mensagem ligados pelo UUID local, na organização verificada e na conexão do adapter', async () => {
+    const { status, body } = await sincronizar(ORG_A);
+    expect(status).toBe(200);
+    expect(body.stats).toEqual({ contacts: 1, conversations: 1, messages: 1 });
+    const [contato] = estado.store.linhas.contato;
+    const [conversa] = estado.store.linhas.conversa;
+    const [mensagem] = estado.store.linhas.mensagem;
+    for (const linha of [contato, conversa, mensagem]) {
+      expect(linha).toMatchObject({ organizacao_id: ORG_A, conexao_id: CONEXAO_A, user_id: ATOR });
+    }
+    expect(conversa!.contato_id_local).toBe(contato!.id_local);
+    expect(mensagem!.conversa_id_local).toBe(conversa!.id_local);
   });
 
-  it('grava contato, conversa e mensagem na organização verificada e na conexão do adapter', async () => {
-    const { POST } = await import('./route');
-    const response = await POST(new Request('https://orbita.test/api/chatwoot/sync', { method: 'POST' }));
+  it('sincronizar de novo não duplica e mantém os UUIDs', async () => {
+    await sincronizar(ORG_A);
+    const antes = estado.store.linhas.mensagem.map((l) => l.id_local);
+    await sincronizar(ORG_A);
+    expect(estado.store.linhas.mensagem.map((l) => l.id_local)).toEqual(antes);
+    expect(estado.store.linhas.contato).toHaveLength(1);
+  });
 
-    expect(response.status).toBe(200);
-    expect(upserts.map((u) => u.table)).toEqual(['chatwoot_contacts', 'chatwoot_conversations', 'chatwoot_messages']);
-    for (const { row } of upserts) {
-      expect(row).toMatchObject({ organizacao_id: ORG, conexao_id: CONEXAO, user_id: ATOR });
+  it('antes do MSG-004, B com os mesmos ids de A é recusada sem tocar A nem inventar contagem', async () => {
+    await sincronizar(ORG_A);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { status, body } = await sincronizar(ORG_B);
+      expect(status).toBe(200);
+      expect(body.stats).toEqual({ contacts: 0, conversations: 0, messages: 0 });
+      expect(warn.mock.calls.map(([m]) => String(m)).join('\n')).toContain('IdentidadeDeOutraConexao');
+    } finally {
+      warn.mockRestore();
+    }
+    expect(estado.store.linhas.mensagem).toEqual([expect.objectContaining({ organizacao_id: ORG_A, content: `oi de ${ORG_A}` })]);
+  });
+
+  it('linha legada sem conexão (sync antigo) é adotada pela conexão do adapter, com o mesmo UUID', async () => {
+    const legado = estado.store.semear('contato', { id: 5, organizacao_id: ORG_A, conexao_id: null, name: 'Sync antigo' });
+    await sincronizar(ORG_A);
+    expect(estado.store.linhas.contato).toEqual([expect.objectContaining({ id_local: legado, conexao_id: CONEXAO_A })]);
+    expect(estado.store.linhas.conversa[0]!.contato_id_local).toBe(legado);
+  });
+
+  it('trocar a organização ativa durante o sync não muda onde ele grava', async () => {
+    estado.antesDasMensagens = () => {
+      estado.sessao = { organizacao: ORG_B };
+    };
+    await sincronizar(ORG_A);
+    expect(estado.store.linhas.mensagem).toEqual([expect.objectContaining({ organizacao_id: ORG_A, conexao_id: CONEXAO_A })]);
+  });
+
+  it('sync e webhook concorrentes na mesma conexão convergem para uma linha por recurso', async () => {
+    const { persistWebhookEffects } = await import('../../../../services/chatwoot/chatwootWebhookPersistence');
+    const webhook = persistWebhookEffects(estado.store, { organizacaoId: ORG_A, conexaoId: CONEXAO_A, atorId: ATOR }, {
+      event: 'message_created',
+      account: { id: 1 },
+      id: 500,
+      content: 'pelo webhook',
+      conversation: { id: 50, inbox_id: 1, contact: { id: 5, name: 'Contato' } },
+    } as never, 1);
+    const [efeitos] = await Promise.all([webhook, sincronizar(ORG_A)]);
+    expect([estado.store.linhas.contato.length, estado.store.linhas.conversa.length, estado.store.linhas.mensagem.length]).toEqual([1, 1, 1]);
+    expect(efeitos.mensagemIdLocal).toBe(estado.store.linhas.mensagem[0]!.id_local);
+  });
+});
+
+describe('POST /api/chatwoot/sync depois do MSG-004 (sem PK global)', () => {
+  beforeEach(() => novoStore(false));
+
+  it('A e B com os mesmos ids remotos gravam espelhos distintos por UUID', async () => {
+    await sincronizar(ORG_A);
+    await sincronizar(ORG_B);
+    expect(estado.store.linhas.mensagem).toHaveLength(2);
+    const porOrg = (org: string) => estado.store.linhas.mensagem.find((l) => l.organizacao_id === org)!;
+    expect(porOrg(ORG_A).id_local).not.toBe(porOrg(ORG_B).id_local);
+    expect(porOrg(ORG_A).content).toBe(`oi de ${ORG_A}`);
+    expect(porOrg(ORG_B).content).toBe(`oi de ${ORG_B}`);
+  });
+
+  it('três instalações (A, segunda de A, B) com os ids 5/50/500 por webhook e sync, com replays, não se misturam', async () => {
+    const { persistWebhookEffects } = await import('../../../../services/chatwoot/chatwootWebhookPersistence');
+    const CONEXAO_A2 = '11111111-1111-4111-8111-111111111112';
+    const webhookA2 = (conteudo: string, evento: 'message_created' | 'message_updated' = 'message_created') =>
+      persistWebhookEffects(estado.store, { organizacaoId: ORG_A, conexaoId: CONEXAO_A2, atorId: ATOR }, {
+        event: evento,
+        account: { id: 1 },
+        id: 500,
+        content: conteudo,
+        conversation: { id: 50, inbox_id: 1, contact: { id: 5, name: 'Contato da segunda' } },
+      } as never, 1);
+
+    await Promise.all([webhookA2('da segunda'), sincronizar(ORG_A)]);
+    await sincronizar(ORG_B);
+    // Reprocessamento e evento atrasado: a criação repetida não apaga a edição.
+    await webhookA2('editada na segunda', 'message_updated');
+    await webhookA2('da segunda');
+    await sincronizar(ORG_A);
+    await sincronizar(ORG_B);
+
+    for (const recurso of ['contato', 'conversa', 'mensagem'] as const) expect(estado.store.linhas[recurso]).toHaveLength(3);
+    const daConexao = (conexao: string) => {
+      const mensagem = estado.store.linhas.mensagem.find((l) => l.conexao_id === conexao)!;
+      const conversa = estado.store.porIdLocal('conversa', mensagem.conversa_id_local as string)!;
+      const contato = estado.store.porIdLocal('contato', conversa.contato_id_local as string)!;
+      return { mensagem, conversa, contato };
+    };
+    for (const [conexao, org, conteudo] of [
+      [CONEXAO_A, ORG_A, `oi de ${ORG_A}`], [CONEXAO_A2, ORG_A, 'editada na segunda'], [CONEXAO_B, ORG_B, `oi de ${ORG_B}`],
+    ] as const) {
+      const arvore = daConexao(conexao);
+      expect(arvore.mensagem).toMatchObject({ organizacao_id: org, content: conteudo });
+      expect(arvore.conversa).toMatchObject({ organizacao_id: org, conexao_id: conexao });
+      expect(arvore.contato).toMatchObject({ organizacao_id: org, conexao_id: conexao });
     }
   });
 });
