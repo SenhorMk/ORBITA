@@ -53,6 +53,24 @@ describe('store Supabase dos espelhos: toda consulta leva organização e conex�
     expect(chamadas.some(([m]) => m === 'or')).toBe(false);
   });
 
+  it('MSG-003B: a conexão de um UUID local é buscada só dentro da organização da sessão', async () => {
+    const { cliente, chamadas } = clienteGravador({ data: { conexao_id: CONEXAO }, error: null });
+    const resultado = await criarEspelhoChatwootSupabase(cliente).buscarConexaoPorIdLocal('conversa', ORG, ID_LOCAL);
+    expect(resultado).toEqual({ _tag: 'StoreOk', valor: { conexaoId: CONEXAO } });
+    expect(chamadas).toEqual([
+      ['from', 'chatwoot_conversations'],
+      ['select', 'conexao_id'],
+      ['eq', 'organizacao_id', ORG],
+      ['eq', 'id_local', ID_LOCAL],
+      ['maybeSingle'],
+    ]);
+    const vazio = clienteGravador({ data: null, error: null });
+    await expect(criarEspelhoChatwootSupabase(vazio.cliente).buscarConexaoPorIdLocal('conversa', ORG, ID_LOCAL)).resolves.toEqual({ _tag: 'StoreOk', valor: null });
+    const adulterado = clienteGravador({ data: null, error: null });
+    await expect(criarEspelhoChatwootSupabase(adulterado.cliente).buscarConexaoPorIdLocal('conversa', ORG, "x' or 1=1")).resolves.toEqual({ _tag: 'StoreFalhou', codigo: 'escopo_invalido' });
+    expect(adulterado.chamadas).toEqual([]);
+  });
+
   it('a atualização é pelo UUID local, dentro da organização e da conexão', async () => {
     const { cliente, chamadas } = clienteGravador({ data: [{ id_local: ID_LOCAL }], error: null });
     const resultado = await criarEspelhoChatwootSupabase(cliente).atualizar('contato', ESCOPO, ID_LOCAL, { name: 'x' });

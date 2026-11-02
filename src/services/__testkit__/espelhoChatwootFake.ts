@@ -85,6 +85,14 @@ export class EspelhoChatwootFake implements EspelhoChatwootStore {
     return ok<readonly CandidatoDeIdentidade[]>(candidatos);
   }
 
+  async buscarConexaoPorIdLocal(recurso: RecursoChatwoot, organizacaoId: string, idLocal: string) {
+    this.chamadas.push({ operacao: 'buscarConexaoPorIdLocal', recurso });
+    const injetada = this.falhaInjetada();
+    if (injetada) return falha<{ readonly conexaoId: string | null } | null>(injetada);
+    const linha = this.linhas[recurso].find((l) => l.id_local === idLocal && l.organizacao_id === organizacaoId);
+    return ok<{ readonly conexaoId: string | null } | null>(linha ? { conexaoId: linha.conexao_id } : null);
+  }
+
   async buscarPorIdLocal(recurso: RecursoChatwoot, escopo: EscopoDaConexaoChatwoot, idLocal: string) {
     this.chamadas.push({ operacao: 'buscarPorIdLocal', recurso });
     const injetada = this.falhaInjetada();

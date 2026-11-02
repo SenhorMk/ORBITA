@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import { ChatwootAdapter } from '../../../../services/chatwoot/chatwootAdapter';
 import { supabaseServer } from '../../../../lib/supabaseServer';
 import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
 import { outboxService } from '../../../../services/outboxService';
 import { organizationContextToScope } from '../../../../lib/verifiedOrganizationScope';
-import type { VerifiedOrganizationScope } from '../../../../lib/verifiedOrganizationScope';
+import { gravarMensagem, type EscopoDeEscritaChatwoot } from '../../../../services/chatwoot/espelhoChatwoot';
+import { criarEspelhoChatwootSupabase } from '../../../../services/chatwoot/espelhoChatwootSupabase';
+import { resolverPorIdLocal, type FalhaDeIdentidadeChatwoot } from '../../../../services/chatwoot/identidadeChatwoot';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,47 +37,43 @@ interface ChatwootApiMessageResponse {
   created_at?: string;
 }
 
-async function verifyConversationBelongsToOrg(
-  conversationId: string | number,
-  scope: VerifiedOrganizationScope,
-): Promise<boolean> {
-  const query = supabaseServer
-    .from('chatwoot_conversations')
-    .select('id')
-    .eq('id', conversationId)
-    .eq('organizacao_id', scope.organizationId);
+/** O navegador referencia a conversa só pelo UUID local; id remoto não é aceito. */
+const EnvioSchema = z.object({
+  conversaId: z.string().uuid(),
+  content: z.string().trim().min(1),
+});
 
-  const { data, error } = await query.maybeSingle();
-  return Boolean(!error && data);
+const espelho = criarEspelhoChatwootSupabase(supabaseServer);
+
+/**
+ * Status HTTP de uma referência que não pôde ser traduzida para esta
+ * organização. 422, e não 409: na tela, 409 significa integração indisponível.
+ */
+function statusDaFalha(falha: FalhaDeIdentidadeChatwoot): number {
+  if (falha === 'IdentidadeNaoEncontrada') return 404;
+  if (falha === 'StoreIndisponivel') return 503;
+  return 422;
 }
 
+/** A mensagem enviada entra no espelho pelo UUID local, ligada à conversa desta conexão. */
 async function saveMessageLocally(
   rawMsg: ChatwootApiMessageResponse,
-  conversationId: string | number,
+  escopo: EscopoDeEscritaChatwoot,
+  conversa: { readonly idLocal: string; readonly idExterno: number },
   content: string,
-  scope: VerifiedOrganizationScope,
-): Promise<void> {
-  const { error: dbError } = await supabaseServer
-    .from('chatwoot_messages')
-    .upsert({
-      id: rawMsg.id,
-      user_id: scope.actorId,
-      organizacao_id: scope.organizationId,
-      conversation_id: conversationId,
-      content,
-      message_type: resolveMessageType(rawMsg.message_type),
-      sender_name: rawMsg.sender?.name || 'Atendente Orbita',
-      sender_id: rawMsg.sender?.id || null,
-      sender_type: resolveSenderType(rawMsg.sender?.type),
-      created_at: rawMsg.created_at || new Date().toISOString(),
-    });
-
-  if (dbError) throw dbError;
-
-  await supabaseServer
-    .from('chatwoot_conversations')
-    .update({ updated_at: new Date().toISOString() })
-    .eq('id', conversationId);
+): Promise<string> {
+  const mensagemIdLocal = await gravarMensagem(espelho, escopo, {
+    idExterno: rawMsg.id,
+    conversaIdExterno: conversa.idExterno,
+    conteudo: content,
+    tipo: resolveMessageType(rawMsg.message_type),
+    remetenteNome: rawMsg.sender?.name || 'Atendente Orbita',
+    remetenteId: rawMsg.sender?.id || null,
+    remetenteTipo: resolveSenderType(rawMsg.sender?.type),
+    criadaEm: rawMsg.created_at || new Date().toISOString(),
+  }, 'preservar');
+  await espelho.atualizar('conversa', escopo, conversa.idLocal, { updated_at: new Date().toISOString() });
+  return mensagemIdLocal;
 }
 
 export async function POST(request: Request) {
@@ -88,31 +87,33 @@ export async function POST(request: Request) {
       );
     }
 
-    const { conversationId, content } = await request.json();
-    if (!conversationId || !content) {
+    const parsed = EnvioSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
       return NextResponse.json(
-        { success: false, error: 'Parâmetros conversationId e content são obrigatórios.' },
+        { success: false, error: 'Parâmetros conversaId (UUID local) e content são obrigatórios.' },
         { status: 400 },
       );
     }
+    const { conversaId, content } = parsed.data;
 
     const scope = organizationContextToScope(contextResult.context);
 
-    const exists = await verifyConversationBelongsToOrg(
-      conversationId,
-      scope,
-    );
-
-    if (!exists) {
-      return NextResponse.json({ success: false, error: 'Conversa não encontrada' }, { status: 404 });
+    // Organização da sessão; conexão e id remoto da própria conversa, no servidor.
+    const conversa = await resolverPorIdLocal(espelho, scope.organizationId, 'conversa', conversaId);
+    if (conversa._tag === 'IdLocalNaoTraduzido') {
+      return NextResponse.json(
+        { success: false, error: conversa.falha === 'IdentidadeNaoEncontrada' ? 'Conversa não encontrada' : 'Conversa sem identidade Chatwoot resolvida', motivo: conversa.falha },
+        { status: statusDaFalha(conversa.falha) },
+      );
     }
+    const escopo = { ...conversa.escopo, atorId: scope.actorId };
 
-    const idempotencyKey = `chatwoot_msg_${conversationId}_${Date.now()}`;
+    const idempotencyKey = `chatwoot_msg_${conversaId}_${Date.now()}`;
     const outboxRecord = await outboxService.enqueue(supabaseServer, scope, {
       idempotencyKey,
       destination: 'chatwoot',
       eventType: 'message.send',
-      payload: { conversationId, content },
+      payload: { conversaIdLocal: conversaId, conexaoId: escopo.conexaoId, content },
     });
 
     // Envio síncrono inline (não passa por reivindicar_lote_outbox/lease):
@@ -121,13 +122,14 @@ export async function POST(request: Request) {
     // lease em `concluir_evento_outbox` não se aplica aqui.
     const INLINE_SEND_WORKER_ID = 'chatwoot-http-inline-send';
 
-    const adapter = await ChatwootAdapter.forScope(scope);
+    // O adapter é o da conexão da conversa: credenciais de outra instalação nunca.
+    const adapter = await ChatwootAdapter.forScope(scope, escopo.conexaoId);
     if (!adapter) {
       await outboxService.markFailed(supabaseServer, scope, INLINE_SEND_WORKER_ID, outboxRecord.eventoId, 'Chatwoot não configurado para esta organização', 0);
       return NextResponse.json({ success: false, error: 'Integração Chatwoot não configurada' }, { status: 409 });
     }
 
-    const sendResult = await adapter.sendMessage(conversationId, content);
+    const sendResult = await adapter.sendMessage(conversa.idExterno, content);
     if (sendResult._tag !== 'ChatwootSuccess') {
       await outboxService.markFailed(supabaseServer, scope, INLINE_SEND_WORKER_ID, outboxRecord.eventoId, sendResult.message || sendResult.reason, 0);
       return NextResponse.json(
@@ -142,9 +144,20 @@ export async function POST(request: Request) {
       created_at: rawMsg.created_at,
     });
 
-    await saveMessageLocally(rawMsg, conversationId, content, scope);
+    const mensagemIdLocal = await saveMessageLocally(rawMsg, escopo, { idLocal: conversaId, idExterno: conversa.idExterno }, content);
 
-    return NextResponse.json({ success: true, message: rawMsg });
+    // A resposta ao navegador carrega só o UUID local.
+    return NextResponse.json({
+      success: true,
+      message: {
+        id_local: mensagemIdLocal,
+        conversa_id_local: conversaId,
+        content,
+        message_type: resolveMessageType(rawMsg.message_type),
+        sender_name: rawMsg.sender?.name || 'Atendente Orbita',
+        created_at: rawMsg.created_at || new Date().toISOString(),
+      },
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Erro ao enviar mensagem';
     console.error('❌ Erro na API de envio de mensagem do Chatwoot:', error);

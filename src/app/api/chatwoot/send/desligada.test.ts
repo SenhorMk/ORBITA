@@ -13,6 +13,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'server-key-12345678901234567890';
 
 const ORG_A = '22222222-2222-4222-8222-222222222222';
 const CONEXAO_A = '11111111-1111-4111-8111-111111111111';
+const CONVERSA_A = 'c0000000-0000-4000-8000-000000000201';
 
 const enqueue = vi.fn().mockResolvedValue({ eventoId: 'evt-1' });
 const markFailed = vi.fn().mockResolvedValue(undefined);
@@ -38,19 +39,25 @@ vi.mock('../../../../lib/integrations/credentialsVault', () => ({
 vi.mock('../../../../lib/supabaseServer', () => ({
   supabaseServer: {
     from: (tabela: string) => {
+      let colunas = '';
       const builder = {
-        select: () => builder,
+        select: (lidas: string) => {
+          colunas = lidas;
+          return builder;
+        },
         eq: () => builder,
         upsert: (linha: unknown) => {
           escritasEmMensagens.push(linha);
           return Promise.resolve({ error: null });
         },
         update: () => builder,
-        maybeSingle: () => Promise.resolve(
-          tabela === 'chatwoot_conversations'
-            ? { data: { id: 201 }, error: null }
-            : { data: { id: CONEXAO_A, metadata: {}, status: 'desconectado' }, error: null },
-        ),
+        maybeSingle: () => {
+          // A conversa (MSG-003B): a conexão dela e, nessa conexão, o id remoto.
+          if (tabela === 'chatwoot_conversations') {
+            return Promise.resolve({ data: colunas === 'conexao_id' ? { conexao_id: CONEXAO_A } : { id_externo: '201' }, error: null });
+          }
+          return Promise.resolve({ data: { id: CONEXAO_A, metadata: {}, status: 'desconectado' }, error: null });
+        },
       };
       return builder;
     },
@@ -65,7 +72,7 @@ describe('POST /api/chatwoot/send com a conexão desligada (PRE-008)', () => {
       const { POST } = await import('./route');
       const res = await POST(new Request('https://orbita.test/api/chatwoot/send', {
         method: 'POST',
-        body: JSON.stringify({ conversationId: 201, content: 'resposta depois da pausa' }),
+        body: JSON.stringify({ conversaId: CONVERSA_A, content: 'resposta depois da pausa' }),
       }));
 
       expect(res.status).toBe(409);

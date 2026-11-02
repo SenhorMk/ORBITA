@@ -66,7 +66,7 @@ export function estadoVazio(chave: string): EstadoDaConversa {
 }
 
 /**
- * O histórico visível: espelho + chegadas posteriores, **deduplicado por id**.
+ * O histórico visível: espelho + chegadas posteriores, **deduplicado pelo UUID local**.
  *
  * A heurística anterior descartava qualquer mensagem cujo conteúdo fosse igual
  * ao de outra dentro de uma janela de 5 segundos. Duas mensagens legítimas com
@@ -76,9 +76,9 @@ export function estadoVazio(chave: string): EstadoDaConversa {
  * diferentes são duas mensagens, e as duas aparecem.
  */
 export function historicoVisivel(estado: EstadoDaConversa): readonly ChatwootMessage[] {
-  const porId = new Map<number, ChatwootMessage>();
-  for (const mensagem of estado.base ?? []) porId.set(mensagem.id, mensagem);
-  for (const mensagem of estado.extras) porId.set(mensagem.id, mensagem);
+  const porId = new Map<string, ChatwootMessage>();
+  for (const mensagem of estado.base ?? []) porId.set(mensagem.id_local, mensagem);
+  for (const mensagem of estado.extras) porId.set(mensagem.id_local, mensagem);
   return [...porId.values()].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''));
 }
 

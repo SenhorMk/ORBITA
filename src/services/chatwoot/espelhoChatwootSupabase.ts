@@ -19,6 +19,7 @@ const uuid = z.string().uuid();
 const CandidatoSchema = z.object({ id_local: z.string().uuid(), conexao_id: z.string().uuid().nullable() });
 const IdLocalSchema = z.object({ id_local: z.string().uuid() });
 const IdExternoSchema = z.object({ id_externo: z.string().regex(/^\d+$/u) });
+const ConexaoSchema = z.object({ conexao_id: z.string().uuid().nullable() });
 
 function falhou<T>(codigo: string | undefined): ResultadoDoStore<T> {
   return { _tag: 'StoreFalhou', codigo };
@@ -48,6 +49,20 @@ export function criarEspelhoChatwootSupabase(supabase: SupabaseClient): EspelhoC
       if (!linhas.success) return falhou('resposta_invalida');
       const candidatos: CandidatoDeIdentidade[] = linhas.data.map((l) => ({ idLocal: l.id_local, conexaoId: l.conexao_id }));
       return { _tag: 'StoreOk', valor: candidatos };
+    },
+
+    async buscarConexaoPorIdLocal(recurso, organizacaoId, idLocal) {
+      if (!uuid.safeParse(organizacaoId).success || !uuid.safeParse(idLocal).success) return falhou('escopo_invalido');
+      const { data, error } = await supabase
+        .from(TABELA_DO_RECURSO[recurso])
+        .select('conexao_id')
+        .eq('organizacao_id', organizacaoId)
+        .eq('id_local', idLocal)
+        .maybeSingle();
+      if (error) return falhou(error.code);
+      if (data === null) return { _tag: 'StoreOk', valor: null };
+      const linha = ConexaoSchema.safeParse(data);
+      return linha.success ? { _tag: 'StoreOk', valor: { conexaoId: linha.data.conexao_id } } : falhou('resposta_invalida');
     },
 
     async buscarPorIdLocal(recurso, escopo, idLocal) {

@@ -77,14 +77,15 @@ export function useEnvio(
         const resposta = await fetchWithAuth('/api/chatwoot/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversationId: conversa.id, content: conteudo }),
+          // Só o UUID local: o servidor resolve conexão e id remoto.
+          body: JSON.stringify({ conversaId: conversa.id_local, content: conteudo }),
         });
         if (!resposta.ok) {
           marcarFalha(await falhaDaResposta(resposta));
           return;
         }
         const corpo = await resposta.json();
-        if (corpo?.success !== true || typeof corpo?.message?.id !== 'number') {
+        if (corpo?.success !== true || typeof corpo?.message?.id_local !== 'string') {
           // O contrato existe e é `{ success, message }`. Sem o id, não há
           // identidade estável para deduplicar, e confirmar assim mesmo seria
           // afirmar entrega a partir de uma resposta que não a sustenta.
@@ -100,7 +101,7 @@ export function useEnvio(
           // nem sempre o traz de volta, e uma bolha vazia no lugar da mensagem
           // enviada seria pior que não confirmar.
           content: typeof corpo.message.content === 'string' ? corpo.message.content : conteudo,
-          conversation_id: conversa.id,
+          conversa_id_local: conversa.id_local,
           message_type: 'outgoing',
           created_at: corpo.message.created_at ?? otimista.criadaEm,
         };
