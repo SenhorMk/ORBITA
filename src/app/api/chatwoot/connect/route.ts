@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { credentialsVault, redactSensitiveData } from '@/lib/integrations/credentialsVault';
 import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizationContext';
@@ -12,6 +13,17 @@ import { getCorrelationId } from '@/lib/observability/correlation';
 import { registrarFalhaInterna } from '@/lib/observability/falhaInterna';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * Corpo de `POST /api/chatwoot/connect`: as credenciais e, opcional, a
+ * organização que a tela acreditava estar ativa. Esta só recusa (ver
+ * `organizacaoEsperada.ts`), nunca vai para o cofre: sai do objeto antes da
+ * gravação. Um valor que não é texto é entrada inválida, e não "sem
+ * declaração" — antes ele desligava a guarda em silêncio.
+ */
+const ChatwootConnectBodySchema = ChatwootCredentialsPayloadSchema.extend({
+  organizacao_esperada: z.string().min(1).optional(),
+});
 
 /**
  * Cria ou atualiza a conexão Chatwoot da organização, e devolve o seu id.
@@ -121,7 +133,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Corpo da requisição inválido' }, { status: 400 });
     }
 
-    const parsed = ChatwootCredentialsPayloadSchema.safeParse(body);
+    const parsed = ChatwootConnectBodySchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
         { success: false, error: 'Credenciais Chatwoot inválidas: api_token, account_id e webhook_secret são obrigatórios' },
@@ -131,8 +143,8 @@ export async function POST(request: Request) {
 
     // Mesma guarda de `POST /api/bling/connect`: se a organização ativa mudou
     // desde que o formulário foi enviado, nada é gravado em lugar nenhum.
-    const esperada = (body as { organizacao_esperada?: unknown }).organizacao_esperada;
-    if (organizacaoEsperadaDivergente(typeof esperada === 'string' ? esperada : null, scope.organizationId)) {
+    const { organizacao_esperada: esperada, ...credenciais } = parsed.data;
+    if (organizacaoEsperadaDivergente(esperada, scope.organizationId)) {
       return NextResponse.json({ success: false, error: ORGANIZACAO_ESPERADA_DIVERGENTE }, { status: 409 });
     }
 
@@ -143,7 +155,7 @@ export async function POST(request: Request) {
       .eq('provedor', 'chatwoot')
       .maybeSingle();
     if (findError) throw findError;
-    const conexaoId = await gravarCredenciaisDoChatwoot(scope.organizationId, existing?.id ?? null, parsed.data);
+    const conexaoId = await gravarCredenciaisDoChatwoot(scope.organizationId, existing?.id ?? null, credenciais);
 
     // Rastro da configuração (PRE-008), com a mesma regra do Bling: a conexão
     // está `pendente`, então a falha da auditoria fica no log.

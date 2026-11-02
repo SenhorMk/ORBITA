@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { conexaoDesligada } from '../lib/integrations/conexaoDesligada';
+
 import type { ResultadoDaConexao, ResultadoDoLock } from './blingToken';
 
 /**
@@ -67,10 +69,16 @@ function codigoDeSqlstate(erro: unknown): string | undefined {
   return typeof bruto === 'string' && /^[0-9A-Z]{5}$/u.test(bruto) ? bruto : undefined;
 }
 
-/** Traduz a consulta da conexão. `error` **não** é ausência de conexão. */
-export function lerResultadoDaConexao(resposta: RespostaDoSupabase<{ id?: string }>): ResultadoDaConexao {
+/**
+ * Traduz a consulta da conexão. `error` **não** é ausência de conexão.
+ *
+ * Conexão desligada (PRE-008) conta como ausente: não se renova token nem se
+ * chama o Bling por ela. Religar é refazer a conexão pela API autorizada.
+ */
+export function lerResultadoDaConexao(resposta: RespostaDoSupabase<{ id?: string; status?: unknown }>): ResultadoDaConexao {
   if (resposta.error) return { _tag: 'Indisponivel', causa: resposta.error };
-  return resposta.data?.id ? { _tag: 'Encontrada', conexaoId: resposta.data.id } : { _tag: 'SemConexao' };
+  if (!resposta.data?.id || conexaoDesligada(resposta.data.status)) return { _tag: 'SemConexao' };
+  return { _tag: 'Encontrada', conexaoId: resposta.data.id };
 }
 
 /**
