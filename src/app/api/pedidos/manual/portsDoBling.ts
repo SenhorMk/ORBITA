@@ -12,17 +12,23 @@
  * só repassa) → `BlingClient` (`services/bling.ts`, faz o HTTP) → contratos
  * Zod (`lib/integrations/bling/pedidoVendaContract.ts`) → API do Bling.
  */
+import type { ContatoTipo, IndicadorIe } from '@/lib/config/clienteContract';
 import type { BlingCallResult, BuscaDePedidoPorNumeroLoja, PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
 
 export interface ManualOrderBlingPort {
   /** `GET /formas-pagamentos` — a forma marcada como padrão na conta do proprietário. */
   getDefaultFormaPagamentoId(): Promise<BlingCallResult<number>>;
-  /** `POST /contatos` — usado quando o cliente local ainda não tem cadastro no Bling. */
+  /**
+   * `POST /contatos` — usado quando o cliente local ainda não tem cadastro no Bling.
+   * `tipo` e `indicadorIe` são os do cadastro, nunca deduzidos do documento.
+   */
   createContato(input: {
     nome: string;
     email: string | null;
     telefone: string | null;
     documento: string | null;
+    tipo: ContatoTipo;
+    indicadorIe: IndicadorIe;
   }): Promise<BlingCallResult<{ id: number }>>;
   /** `POST /pedidos/vendas` — o payload já vem validado contra o schema oficial. */
   createPedidoVenda(payload: PedidoVendaPayload): Promise<BlingCallResult<{ id: string; alertas: readonly string[] }>>;
