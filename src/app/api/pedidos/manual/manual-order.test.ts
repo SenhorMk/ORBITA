@@ -15,6 +15,9 @@ import {
   type ReivindicacaoDeTentativa,
   type TentativaRegistrada,
 } from './handler';
+import { NextResponse } from 'next/server';
+
+import { prepararEnvioAoBling } from './envioAoBling';
 import { buildManualOrderRequest, manualOrderRequestSchema } from '@/lib/config/manualOrderContract';
 import { pedidoVendaPayloadSchema, type PedidoVendaPayload } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
@@ -43,7 +46,7 @@ function produto(overrides: Partial<ManualOrderProduto> = {}): ManualOrderProdut
 }
 
 function cliente(overrides: Partial<ManualOrderCliente> = {}): ManualOrderCliente {
-  return { id: CLIENTE, nome: 'Ana', blingId: '4321', email: null, telefone: null, cpfCnpj: null, excluidoNoBling: false, exclusaoPendenteNoBling: false, ...overrides };
+  return { id: CLIENTE, nome: 'Ana', blingId: '4321', email: null, telefone: null, cpfCnpj: null, dadosFiscais: { tipo: 'F', indicadorIe: 9 }, excluidoNoBling: false, exclusaoPendenteNoBling: false, ...overrides };
 }
 
 interface FakeStore extends ManualOrderStorePort {
@@ -195,6 +198,8 @@ interface FakeBling extends ManualOrderBlingPort {
   readonly payloads: PedidoVendaPayload[];
   readonly estoqueLancado: string[];
   readonly contatosCriados: number;
+  /** O que cada `createContato` recebeu (PRE-010). */
+  readonly contatosEnviados: Array<Parameters<ManualOrderBlingPort['createContato']>[0]>;
   /** Pedidos que a compensacao mandou cancelar no Bling. */
   readonly cancelados: string[];
   /** Referências consultadas por `buscarPedidoPorNumeroLoja` (reconciliação, 5ª rodada). */
@@ -222,8 +227,10 @@ function fakeBling(options: {
   const cancelados: string[] = [];
   const numerosLojaConsultados: string[] = [];
   let contatosCriados = 0;
+  const contatosEnviados: Array<Parameters<ManualOrderBlingPort['createContato']>[0]> = [];
 
   const port = {
+    contatosEnviados,
     payloads,
     estoqueLancado,
     cancelados,
@@ -237,8 +244,9 @@ function fakeBling(options: {
       }
       return { _tag: 'BlingOk' as const, value: 12 };
     },
-    async createContato() {
+    async createContato(input: Parameters<ManualOrderBlingPort['createContato']>[0]) {
       options.ordemDosEfeitos?.push('createContato');
+      contatosEnviados.push(input);
       contatosCriados += 1;
       return { _tag: 'BlingOk' as const, value: { id: 9001 } };
     },
@@ -1224,5 +1232,152 @@ describe('9ª rodada — posse como pré-condição do efeito (B1, B2, B4)', () 
     expect(store.desfechosRegistrados).toEqual([
       { estado: 'concluida', pedidoId: 'pedido-local-1', blingPedidoId: '918273' },
     ]);
+  });
+});
+
+// PRE-010: o contato novo leva o tipo de pessoa e o indicador de IE do
+// cadastro, e sem eles a venda é recusada antes do claim e de qualquer efeito.
+describe('PRE-010 — situação de ICMS do contato novo vem do cadastro, nunca do documento', () => {
+  const CNPJ = '11222333000181';
+  const CPF = '12345678909';
+
+  /** Nada aconteceu: nem tentativa, nem contato, nem pedido, nem venda local. */
+  function semEfeitoNenhum(store: FakeStore, bling: FakeBling) {
+    expect(store.fingerprintsReivindicados).toEqual([]);
+    expect(store.desfechosRegistrados).toEqual([]);
+    expect(store.confirmacoesDePosse).toBe(0);
+    expect(bling.contatosCriados).toBe(0);
+    expect(bling.payloads).toHaveLength(0);
+    expect(store.vinculos).toEqual([]);
+    expect(store.persisted).toHaveLength(0);
+  }
+
+  it.each([
+    ['CNPJ contribuinte', CNPJ, 'J', 1],
+    ['CNPJ isento', CNPJ, 'J', 2],
+    ['CNPJ não contribuinte', CNPJ, 'J', 9],
+    ['CPF', CPF, 'F', 9],
+    ['divergência: J com 9', CNPJ, 'J', 9],
+    ['divergência: F com CNPJ e 1', CNPJ, 'F', 1],
+  ] as const)('contato novo, %s: vai exatamente o que o cadastro tem', async (_caso, cpfCnpj, tipo, indicadorIe) => {
+    const store = fakeStore({ clientes: { [ORG_A]: cliente({ blingId: null, cpfCnpj, dadosFiscais: { tipo, indicadorIe } }) } });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+
+    expect(response.status).toBe(201);
+    expect(bling.contatosEnviados).toEqual([{ nome: 'Ana', email: null, telefone: null, documento: cpfCnpj, tipo, indicadorIe }]);
+    expect(store.vinculos).toEqual([{ clienteId: CLIENTE, blingId: '9001' }]);
+  });
+
+  it.each([
+    ['CNPJ', CNPJ],
+    ['CPF', CPF],
+    ['sem documento', null],
+  ])('contato novo sem indicador, %s: 400 que pede a escolha, antes do claim e sem efeito nenhum', async (_caso, cpfCnpj) => {
+    const store = fakeStore({ clientes: { [ORG_A]: cliente({ blingId: null, cpfCnpj, dadosFiscais: null }) } });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+    const body = (await response.json()) as ManualOrderResponseBody;
+
+    expect(response.status).toBe(400);
+    expect(body.error).toContain('falta escolher o tipo de pessoa e o tipo de contribuinte');
+    semEfeitoNenhum(store, bling);
+  });
+
+  it('bling_id ilegível conta como contato novo: sem indicador, recusa igual', async () => {
+    const store = fakeStore({ clientes: { [ORG_A]: cliente({ blingId: 'abc', dadosFiscais: null }) } });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    expect((await handler(requestWith(corpoValido()))).status).toBe(400);
+    semEfeitoNenhum(store, bling);
+  });
+
+  it('contato existente sem indicador no cadastro: a venda segue com o contato que o Bling já tem', async () => {
+    const store = fakeStore({ clientes: { [ORG_A]: cliente({ blingId: '4321', cpfCnpj: CNPJ, dadosFiscais: null }) } });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido()));
+
+    expect(response.status).toBe(201);
+    expect(bling.contatosCriados).toBe(0);
+    expect(bling.payloads[0]!.contato.id).toBe(4321);
+  });
+
+  it('venda sem envio ao Bling não precisa do indicador: nada é cadastrado lá', async () => {
+    const store = fakeStore({ clientes: { [ORG_A]: cliente({ blingId: null, dadosFiscais: null }) } });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith(corpoValido({ syncBling: false })));
+
+    expect(response.status).toBe(201);
+    expect(bling.contatosCriados).toBe(0);
+    expect(store.persisted).toHaveLength(1);
+  });
+
+  it('cliente de outra organização: não é encontrado, e nenhum contato é criado', async () => {
+    const store = fakeStore({ clientes: { [ORG_B]: cliente({ blingId: null }) } });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    const response = await handler(requestWith({ ...corpoValido(), organizacaoId: ORG_B }));
+
+    expect(response.status).toBe(400);
+    semEfeitoNenhum(store, bling);
+  });
+
+  it('usuário sem autorização na organização: 403 e nenhum contato é criado', async () => {
+    const store = fakeStore({ clientes: { [ORG_A]: cliente({ blingId: null }) } });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({
+      store,
+      bling,
+      auth: {
+        async authenticate() {
+          return { actorId: ACTOR };
+        },
+        async resolveScope() {
+          return { _tag: 'Denied', response: NextResponse.json({ success: false, error: 'Sem acesso' }, { status: 403 }) };
+        },
+      },
+    }));
+
+    expect((await handler(requestWith(corpoValido()))).status).toBe(403);
+    semEfeitoNenhum(store, bling);
+  });
+
+  it.each([
+    ['tipo e indicador no corpo não substituem o cadastro', { tipo: 'J', indicadorIe: 1 }],
+    ['corpo inválido', { itens: 'nada' }],
+  ])('%s', async (_caso, extra) => {
+    const store = fakeStore({ clientes: { [ORG_A]: cliente({ blingId: null, dadosFiscais: null }) } });
+    const bling = fakeBling();
+    const handler = createManualOrderHandler(deps({ store, bling }));
+
+    expect((await handler(requestWith({ ...corpoValido(), ...extra }))).status).toBe(400);
+    semEfeitoNenhum(store, bling);
+  });
+
+  it('defesa em profundidade: a preparação do envio também recusa sem tocar na posse nem no Bling', async () => {
+    const store = fakeStore();
+    const bling = fakeBling();
+    const resultado = await prepararEnvioAoBling(
+      scopeA,
+      cliente({ blingId: null, dadosFiscais: null }),
+      manualOrderRequestSchema.parse(corpoValido()),
+      { itens: [], total: 0, dataStr: '2026-08-29', referenciaLocal: 'ORBITA-REF-1' },
+      { tentativaId: 'tentativa-fake-1', epoca: 1 },
+      deps({ store, bling }),
+    );
+
+    expect(resultado._tag).toBe('PayloadRejected');
+    expect(store.confirmacoesDePosse).toBe(0);
+    expect(bling.contatosCriados).toBe(0);
   });
 });
