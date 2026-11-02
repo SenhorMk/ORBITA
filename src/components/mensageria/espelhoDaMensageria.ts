@@ -63,7 +63,7 @@ export const espelhoSupabase: EspelhoDaMensageria = {
   async lerConversas(organizacaoId) {
     const { data, error } = await supabase
       .from('chatwoot_conversations')
-      .select('*, contact:chatwoot_contacts(*)')
+      .select('*, contact:chatwoot_contacts!chatwoot_conversations_contact_id_fkey(*)')
       .eq('organizacao_id', organizacaoId)
       .order('updated_at', { ascending: false });
 

@@ -32,8 +32,11 @@ function mapChatwootChannel(channelStr?: string): string {
 
 type ChatwootPersistenceTable = 'chatwoot_contacts' | 'chatwoot_conversations' | 'chatwoot_messages';
 
+/** Grava no escopo verificado e na conexão do adapter: sem `conexao_id`, a
+ * linha nasce sem prova de instalação e o MSG-002 a deixa em quarentena. */
 async function upsertChatwootRecord(
   scope: VerifiedOrganizationScope,
+  conexaoId: string,
   table: ChatwootPersistenceTable,
   record: Readonly<Record<string, unknown>>,
 ) {
@@ -41,16 +44,18 @@ async function upsertChatwootRecord(
     ...record,
     user_id: scope.actorId,
     organizacao_id: scope.organizationId,
+    conexao_id: conexaoId,
   });
 }
 
 /** Sincroniza o contato remetente de uma conversa. Retorna `true` quando persistido com sucesso. */
 async function syncChatwootContact(
   scope: VerifiedOrganizationScope,
+  conexaoId: string,
   sender: NonNullable<NonNullable<ChatwootConversation['meta']>['sender']>,
 ): Promise<boolean> {
   const contactId = sender.id;
-  const { error: contactError } = await upsertChatwootRecord(scope, 'chatwoot_contacts', {
+  const { error: contactError } = await upsertChatwootRecord(scope, conexaoId, 'chatwoot_contacts', {
     id: contactId,
     name: sender.name || 'Cliente Sem Nome',
     email: sender.email || null,
@@ -69,10 +74,11 @@ async function syncChatwootContact(
 /** Sincroniza a conversa (com canal mapeado) associada a um contato já persistido. */
 async function syncChatwootConversation(
   scope: VerifiedOrganizationScope,
+  conexaoId: string,
   rawConv: ChatwootConversation,
   contactId: number,
 ): Promise<boolean> {
-  const { error: convError } = await upsertChatwootRecord(scope, 'chatwoot_conversations', {
+  const { error: convError } = await upsertChatwootRecord(scope, conexaoId, 'chatwoot_conversations', {
     id: rawConv.id,
     display_id: rawConv.display_id,
     contact_id: contactId,
@@ -116,7 +122,7 @@ async function syncChatwootMessages(
       senderType = null;
     }
 
-    const { error: msgError } = await upsertChatwootRecord(scope, 'chatwoot_messages', {
+    const { error: msgError } = await upsertChatwootRecord(scope, adapter.conexaoId, 'chatwoot_messages', {
       id: rawMsg.id,
       conversation_id: conversationId,
       content: rawMsg.content || '',
@@ -155,10 +161,10 @@ async function syncChatwootConversationTree(
   const sender = rawConv.meta?.sender;
   if (!sender) return { contacts: 0, conversations: 0, messages: 0 };
 
-  const contactSynced = await syncChatwootContact(scope, sender);
+  const contactSynced = await syncChatwootContact(scope, adapter.conexaoId, sender);
   if (!contactSynced) return { contacts: 0, conversations: 0, messages: 0 };
 
-  const conversationSynced = await syncChatwootConversation(scope, rawConv, sender.id);
+  const conversationSynced = await syncChatwootConversation(scope, adapter.conexaoId, rawConv, sender.id);
   if (!conversationSynced) return { contacts: 1, conversations: 0, messages: 0 };
 
   const messages = await syncChatwootMessages(adapter, scope, rawConv.id);
