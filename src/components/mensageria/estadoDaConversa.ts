@@ -21,7 +21,11 @@ export interface MensagemOtimista {
   /** Identidade local, negativa, que nunca colide com um id do Chatwoot. */
   readonly id: number;
   readonly conteudo: string;
-  readonly estado: 'enviando' | 'falhou';
+  /**
+   * `incerta`: o servidor registrou o envio como desconhecido (MSG-007) — pode
+   * ter chegado. Diferente de `falhou`, não oferece recuperar para reenviar.
+   */
+  readonly estado: 'enviando' | 'falhou' | 'incerta';
   /** O motivo da falha, quando houve. */
   readonly erro: string | null;
   readonly criadaEm: string;

@@ -3,6 +3,7 @@ import {
   classifyError,
   calculateBackoffSeconds,
   outboxService,
+  OutboxIntencaoDivergente,
 } from './outboxService';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
@@ -139,23 +140,51 @@ describe('outboxService', () => {
         }),
       ).rejects.toThrow('Falha ao registrar evento no outbox: Database connection lost');
     });
+
+    it('refuses the same key with another intention as a typed failure (23505)', async () => {
+      mockRpc.mockResolvedValueOnce({ data: null, error: { code: '23505', message: 'outra intencao' } });
+
+      await expect(
+        outboxService.enqueue(mockSupabase, scope, {
+          idempotencyKey: 'k', destination: 'chatwoot', eventType: 'message.send', payload: { content: 'outro' },
+        }),
+      ).rejects.toBeInstanceOf(OutboxIntencaoDivergente);
+    });
   });
 
   describe('claimBatch', () => {
-    it('claims available batch of outbox events for the given worker', async () => {
-      const mockBatch = [
-        { evento_id: 'evt-1', destination: 'chatwoot', event_type: 'message.send', lease_owner: 'worker-1' },
-        { evento_id: 'evt-2', destination: 'bling', event_type: 'order.push', lease_owner: 'worker-1' },
-      ];
-      mockRpc.mockResolvedValueOnce({ data: mockBatch, error: null });
+    const linha = {
+      evento_id: '11111111-1111-4111-8111-111111111111',
+      organizacao_id: '22222222-2222-4222-8222-222222222222',
+      conexao_id: null,
+      destination: 'chatwoot',
+      event_type: 'message.send',
+      payload: { content: 'oi' },
+      attempts: 0,
+      max_attempts: 5,
+      lease_owner: 'worker-1',
+      lease_expires_at: '2026-10-26T00:00:00Z',
+      correlation_id: null,
+      fencing_token: '3',
+    };
+
+    it('claims with the fencing RPC and parses the token', async () => {
+      mockRpc.mockResolvedValueOnce({ data: [linha], error: null });
 
       const result = await outboxService.claimBatch(mockSupabase, 'worker-1', 10, 300);
-      expect(result).toHaveLength(2);
-      expect(mockRpc).toHaveBeenCalledWith('reivindicar_lote_outbox', {
+
+      expect(result[0]!.fencing_token).toBe(3);
+      expect(mockRpc).toHaveBeenCalledWith('reivindicar_tentativas_outbox', {
         p_worker_id: 'worker-1',
         p_limit: 10,
         p_lease_ttl_sec: 300,
       });
+    });
+
+    it('rejects a claimed row without a fencing token instead of dispatching blind', async () => {
+      mockRpc.mockResolvedValueOnce({ data: [{ ...linha, fencing_token: null }], error: null });
+
+      await expect(outboxService.claimBatch(mockSupabase, 'worker-1')).rejects.toThrow();
     });
 
     it('rejects claiming a batch without a workerId', async () => {
@@ -166,77 +195,71 @@ describe('outboxService', () => {
     });
   });
 
-  describe('markSent and markFailed', () => {
-    it('calls concluir_evento_outbox with status sent and workerId on success', async () => {
+  describe('claimOne, startDispatch and concludeAttempt', () => {
+    it('claims one event only inside the verified organization', async () => {
+      mockRpc.mockResolvedValueOnce({ data: [{ fencing_token: 4, lease_expires_at: 'x' }], error: null });
+
+      expect(await outboxService.claimOne(mockSupabase, scope, 'evt-1', 'inline')).toBe(4);
+      expect(mockRpc).toHaveBeenCalledWith('reivindicar_evento_outbox', expect.objectContaining({
+        p_organizacao_id: 'org-1', p_evento_id: 'evt-1', p_worker_id: 'inline',
+      }));
+    });
+
+    it('returns null when the event is not claimable (already in flight or unknown)', async () => {
+      mockRpc.mockResolvedValueOnce({ data: [], error: null });
+
+      expect(await outboxService.claimOne(mockSupabase, scope, 'evt-1', 'inline')).toBeNull();
+    });
+
+    it('starts the dispatch with owner and token', async () => {
       mockRpc.mockResolvedValueOnce({ data: true, error: null });
 
-      const result = await outboxService.markSent(mockSupabase, scope, 'worker-1', 'evt-1', { messageId: 456 });
+      expect(await outboxService.startDispatch(mockSupabase, 'evt-1', 'w', 4)).toBe(true);
+      expect(mockRpc).toHaveBeenCalledWith('iniciar_despacho_outbox', { p_evento_id: 'evt-1', p_worker_id: 'w', p_fencing_token: 4 });
+    });
 
-      expect(result).toBe(true);
-      expect(mockRpc).toHaveBeenCalledWith('concluir_evento_outbox', {
-        p_evento_id: 'evt-1',
-        p_worker_id: 'worker-1',
-        p_status: 'sent',
-        p_response_body: { messageId: 456 },
-        p_error: null,
-        p_error_category: null,
-        p_retry_delay_sec: 0,
+    const posse = { eventoId: 'evt-1', workerId: 'w', fencingToken: 4 };
+
+    it('sends the receipt only for a confirmed outcome', async () => {
+      mockRpc.mockResolvedValueOnce({ data: 'sent', error: null });
+
+      expect(await outboxService.concludeAttempt(mockSupabase, posse, { _tag: 'Confirmado', recibo: '99' })).toBe('sent');
+      expect(mockRpc).toHaveBeenCalledWith('concluir_tentativa_outbox', {
+        p_evento_id: 'evt-1', p_worker_id: 'w', p_fencing_token: 4,
+        p_desfecho: 'confirmado', p_recibo_ref: '99', p_resposta: null,
       });
     });
 
-    it('returns false when the RPC rejects a worker without a valid lease', async () => {
-      mockRpc.mockResolvedValueOnce({ data: false, error: null });
+    it('records an unknown outcome with its reason and a redacted error, never a receipt', async () => {
+      mockRpc.mockResolvedValueOnce({ data: 'unknown', error: null });
 
-      const result = await outboxService.markSent(mockSupabase, scope, 'worker-zombie', 'evt-1', null);
+      await outboxService.concludeAttempt(mockSupabase, posse, { _tag: 'Desconhecido', motivo: 'timeout', erro: 'Bearer abc.def' });
 
-      expect(result).toBe(false);
+      const args = mockRpc.mock.calls[0]![1];
+      expect(args).toMatchObject({ p_desfecho: 'desconhecido', p_motivo: 'timeout', p_erro: 'Bearer [REDACTED]' });
+      expect(args).not.toHaveProperty('p_recibo_ref');
     });
 
-    it('calls concluir_evento_outbox with failed_transient for transient errors', async () => {
-      mockRpc.mockResolvedValueOnce({ data: true, error: null });
+    it('honors Retry-After only for a proven non-application', async () => {
+      mockRpc.mockResolvedValueOnce({ data: 'failed_transient', error: null });
 
-      await outboxService.markFailed(
-        mockSupabase,
-        scope,
-        'worker-1',
-        'evt-1',
-        new Error('503 Service Unavailable'),
-        1,
-      );
+      await outboxService.concludeAttempt(mockSupabase, posse, {
+        _tag: 'NaoEnviado', prova: 'nao_aplicacao_documentada', retryAfterSeconds: 120, erro: '429',
+      });
 
-      expect(mockRpc).toHaveBeenCalledWith(
-        'concluir_evento_outbox',
-        expect.objectContaining({
-          p_evento_id: 'evt-1',
-          p_worker_id: 'worker-1',
-          p_status: 'failed_transient',
-          p_error_category: 'transient',
-          p_retry_delay_sec: 20,
-        }),
-      );
+      expect(mockRpc.mock.calls[0]![1]).toMatchObject({ p_desfecho: 'nao_enviado', p_retry_delay_sec: 120 });
     });
 
-    it('calls concluir_evento_outbox with dead_letter for permanent errors without loop', async () => {
-      mockRpc.mockResolvedValueOnce({ data: true, error: null });
+    it('returns null when the CAS refuses an old lease or token', async () => {
+      mockRpc.mockResolvedValueOnce({ data: null, error: null });
 
-      await outboxService.markFailed(
-        mockSupabase,
-        scope,
-        'worker-1',
-        'evt-1',
-        new Error('400 Bad Request: Invalid parameters'),
-        0,
-      );
+      expect(await outboxService.concludeAttempt(mockSupabase, posse, { _tag: 'Confirmado', recibo: '1' })).toBeNull();
+    });
 
-      expect(mockRpc).toHaveBeenCalledWith(
-        'concluir_evento_outbox',
-        expect.objectContaining({
-          p_evento_id: 'evt-1',
-          p_worker_id: 'worker-1',
-          p_status: 'dead_letter',
-          p_error_category: 'permanent',
-        }),
-      );
+    it('throws a database error instead of reporting an outcome', async () => {
+      mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'db down' } });
+
+      await expect(outboxService.concludeAttempt(mockSupabase, posse, { _tag: 'Confirmado', recibo: '1' })).rejects.toThrow('db down');
     });
   });
 

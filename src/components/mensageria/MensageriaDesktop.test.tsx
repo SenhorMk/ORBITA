@@ -440,6 +440,25 @@ describe('MensageriaDesktop — envio', () => {
     expect(screen.getByText('O servidor respondeu em um formato inesperado.')).toBeInTheDocument();
   });
 
+  it('MSG-007: envio desconhecido no servidor fica "não confirmada", sem oferecer reenvio', async () => {
+    const fetchWithAuth = vi.fn().mockResolvedValue(respostaJson({
+      success: false,
+      desfecho: 'desconhecido',
+      eventoId: '11111111-1111-4111-8111-111111111111',
+      error: 'Não foi possível confirmar a entrega. A mensagem pode ter chegado: não reenvie; confira em Integrações.',
+    }, 202));
+    await abrirComposer(fetchWithAuth);
+
+    await userEvent.type(screen.getByLabelText('Mensagem'), 'chegou?');
+    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
+
+    await waitFor(() => expect(screen.getByText('Entrega não confirmada')).toBeInTheDocument());
+    expect(screen.getByText(/não reenvie/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Recuperar texto' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Não enviada')).not.toBeInTheDocument();
+    expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+  });
+
   it('a indisponibilidade da integração bloqueia o envio e é dita como tal', async () => {
     const fetchWithAuth = vi.fn().mockResolvedValue(
       respostaJson({ success: false, error: 'Integração Chatwoot não configurada' }, 409),

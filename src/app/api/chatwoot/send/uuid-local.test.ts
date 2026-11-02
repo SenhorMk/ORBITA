@@ -25,8 +25,12 @@ const estado = vi.hoisted(() => ({
   enviadas: [] as Array<{ conexaoId: string | undefined; conversa: number; conteudo: string }>,
   status: [] as Array<{ conexaoId: string | undefined; conversa: number; status: string }>,
   enqueue: vi.fn(),
-  markFailed: vi.fn(),
-  markSent: vi.fn(),
+  claimOne: vi.fn(),
+  startDispatch: vi.fn(),
+  concludeAttempt: vi.fn(),
+  auditoria: vi.fn(),
+  /** A próxima resposta do Chatwoot; `null` = sucesso com id. */
+  resposta: null as unknown,
 }));
 
 vi.mock('../../../../services/chatwoot/espelhoChatwootSupabase', () => ({
@@ -47,9 +51,13 @@ vi.mock('../../../../lib/verifiedOrganizationScope', () => ({
 vi.mock('../../../../services/outboxService', () => ({
   outboxService: {
     enqueue: (...a: unknown[]) => estado.enqueue(...a),
-    markFailed: (...a: unknown[]) => estado.markFailed(...a),
-    markSent: (...a: unknown[]) => estado.markSent(...a),
+    claimOne: (...a: unknown[]) => estado.claimOne(...a),
+    startDispatch: (...a: unknown[]) => estado.startDispatch(...a),
+    concludeAttempt: (...a: unknown[]) => estado.concludeAttempt(...a),
   },
+}));
+vi.mock('../../../../services/auditService', () => ({
+  recordSystemAuditEvent: (...a: unknown[]) => estado.auditoria(...a),
 }));
 vi.mock('../../../../services/chatwoot/chatwootAdapter', () => ({
   ChatwootAdapter: {
@@ -59,6 +67,8 @@ vi.mock('../../../../services/chatwoot/chatwootAdapter', () => ({
         conexaoId,
         sendMessage: async (conversa: number, conteudo: string) => {
           estado.enviadas.push({ conexaoId, conversa, conteudo });
+          if (estado.resposta === 'lancar') throw new Error('socket hang up');
+          if (estado.resposta) return estado.resposta;
           return { _tag: 'ChatwootSuccess', data: { id: 9000 + estado.enviadas.length, message_type: 1, created_at: '2026-10-26T12:00:00Z' } };
         },
         toggleConversationStatus: async (conversa: number, status: string) => {
@@ -93,8 +103,12 @@ beforeEach(async () => {
   estado.enviadas.length = 0;
   estado.status.length = 0;
   estado.enqueue.mockReset().mockResolvedValue({ eventoId: 'evt-1' });
-  estado.markFailed.mockReset().mockResolvedValue(undefined);
-  estado.markSent.mockReset().mockResolvedValue(undefined);
+  estado.claimOne.mockReset().mockResolvedValue(1);
+  estado.startDispatch.mockReset().mockResolvedValue(true);
+  estado.concludeAttempt.mockReset().mockImplementation(async (_s: unknown, _p: unknown, desfecho: { _tag: string }) =>
+    ({ Confirmado: 'sent', NaoEnviado: 'failed_transient', Recusado: 'dead_letter', Desconhecido: 'unknown' })[desfecho._tag]);
+  estado.auditoria.mockReset().mockResolvedValue('audit-1');
+  estado.resposta = null;
 });
 
 describe('POST /api/chatwoot/send pelo UUID local (MSG-003B)', () => {
@@ -160,6 +174,84 @@ describe('POST /api/chatwoot/send pelo UUID local (MSG-003B)', () => {
     expect(res.status).toBe(403);
     expect(estado.store.chamadas).toEqual([]);
     expect(estado.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/chatwoot/send com efeito ambíguo (MSG-007)', () => {
+  const falhou = (reason: string, status?: number) => ({ _tag: 'ChatwootFailed', reason, status, retryable: true });
+
+  it('confirma só com recibo: in_flight antes da rede, sent pelo mesmo token', async () => {
+    const conversaA1 = semearConversa(ORG_A, CONEXAO_A1);
+    const { status } = await postar('send', { conversaId: conversaA1, content: 'olá' });
+    expect(status).toBe(200);
+    expect(estado.startDispatch).toHaveBeenCalledWith({}, 'evt-1', 'chatwoot-http-inline-send', 1);
+    expect(estado.concludeAttempt).toHaveBeenCalledWith({}, { eventoId: 'evt-1', workerId: 'chatwoot-http-inline-send', fencingToken: 1 },
+      { _tag: 'Confirmado', recibo: '9001', resposta: { id: 9001 } });
+  });
+
+  it.each([
+    ['timeout', falhou('timeout'), 'timeout'],
+    ['ACK perdido', falhou('network'), 'ack_perdido'],
+    ['2xx inválido', falhou('invalid-response'), 'resposta_invalida'],
+    ['5xx', falhou('http', 503), 'erro_do_provedor'],
+    ['429 sem prova', falhou('rate-limited', 429), 'limite_sem_prova'],
+  ])('%s: 202 desconhecido, sem mensagem local, auditado e sem pedir reenvio', async (_nome, resposta, motivo) => {
+    const conversaA1 = semearConversa(ORG_A, CONEXAO_A1);
+    estado.resposta = resposta;
+    const { status, body } = await postar('send', { conversaId: conversaA1, content: 'olá' });
+    expect(status).toBe(202);
+    expect(body).toMatchObject({ success: false, desfecho: 'desconhecido', eventoId: 'evt-1' });
+    expect(body.error).toMatch(/não reenvie/u);
+    expect(estado.concludeAttempt.mock.calls[0]![2]).toMatchObject({ _tag: 'Desconhecido', motivo });
+    expect(estado.store.linhas.mensagem).toEqual([]);
+    expect(estado.enviadas).toHaveLength(1);
+    expect(estado.auditoria).toHaveBeenCalledWith({}, expect.objectContaining({
+      acao: 'outbox.effect_unknown', organizationId: ORG_A, recursoId: 'evt-1',
+      metadata: expect.not.objectContaining({ content: expect.anything() }),
+    }));
+  });
+
+  it('recusa definitiva: dead_letter e o status do Chatwoot', async () => {
+    const conversaA1 = semearConversa(ORG_A, CONEXAO_A1);
+    estado.resposta = falhou('http', 422);
+    const { status, body } = await postar('send', { conversaId: conversaA1, content: 'olá' });
+    expect(status).toBe(422);
+    expect(body.desfecho).toBe('recusado');
+    expect(estado.auditoria).not.toHaveBeenCalled();
+  });
+
+  it('recibo recebido mas a lease já venceu (CAS recusou): 202, nada afirmado', async () => {
+    const conversaA1 = semearConversa(ORG_A, CONEXAO_A1);
+    estado.concludeAttempt.mockResolvedValueOnce(null);
+    const { status, body } = await postar('send', { conversaId: conversaA1, content: 'olá' });
+    expect(status).toBe(202);
+    expect(body.desfecho).toBe('desconhecido');
+    expect(estado.store.linhas.mensagem).toEqual([]);
+  });
+
+  it('falha depois do despacho (adapter lança ou gravar o desfecho falha): 202, nunca 500 de "tente de novo"', async () => {
+    const conversaA1 = semearConversa(ORG_A, CONEXAO_A1);
+    estado.resposta = 'lancar';
+    const lancou = await postar('send', { conversaId: conversaA1, content: 'a' });
+    expect(lancou.status).toBe(202);
+    expect(estado.concludeAttempt.mock.calls[0]![2]).toMatchObject({ _tag: 'Desconhecido', motivo: 'falha_apos_despacho' });
+
+    estado.resposta = null;
+    estado.concludeAttempt.mockRejectedValueOnce(new Error('banco fora'));
+    const semGravar = await postar('send', { conversaId: conversaA1, content: 'b' });
+    expect(semGravar.status).toBe(202);
+    expect(semGravar.body.desfecho).toBe('desconhecido');
+    expect(estado.store.linhas.mensagem).toEqual([]);
+  });
+
+  it('evento que não está na fila, ou posse perdida antes da rede: 409 e nenhum envio', async () => {
+    const conversaA1 = semearConversa(ORG_A, CONEXAO_A1);
+    estado.claimOne.mockResolvedValueOnce(null);
+    expect((await postar('send', { conversaId: conversaA1, content: 'a' })).status).toBe(409);
+    estado.startDispatch.mockResolvedValueOnce(false);
+    expect((await postar('send', { conversaId: conversaA1, content: 'b' })).status).toBe(409);
+    expect(estado.enviadas).toEqual([]);
+    expect(estado.concludeAttempt).not.toHaveBeenCalled();
   });
 });
 
