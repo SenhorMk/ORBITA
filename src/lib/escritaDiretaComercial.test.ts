@@ -1,6 +1,13 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+
+import {
+  acessos as acessosEm,
+  comSessaoDoUsuario,
+  doNavegador,
+  escreve,
+  fontesDoProduto,
+  fromNaoLiteral,
+} from './__testkit__/escritaDireta';
 
 /**
  * PRE-006A: o inventário da escrita direta em catálogo, clientes, pedidos e
@@ -26,58 +33,10 @@ const LEITURAS_DO_NAVEGADOR: Record<string, readonly string[]> = {
   'src/components/ManualOrderModal.tsx': ['clientes', 'produtos'],
 };
 
-const RAIZ = path.resolve(__dirname, '..', '..');
+/** Cada `.from('<tabela>')` das seis tabelas com a cadeia até o próximo `;`. */
+const acessos = (fonte: string) => acessosEm(fonte, TABELAS);
 
-function arquivos(dir: string): string[] {
-  return readdirSync(dir).flatMap((nome) => {
-    const caminho = path.join(dir, nome);
-    if (statSync(caminho).isDirectory()) return nome === 'e2e' ? [] : arquivos(caminho);
-    return /\.(ts|tsx)$/.test(nome) && !/\.test\.tsx?$/.test(nome) ? [caminho] : [];
-  });
-}
-
-/**
- * Do navegador: componente cliente ou quem importa o cliente Supabase do
- * navegador — por alias ou caminho relativo (`./supabaseClient`), que a
- * versão do PRE-006A não enxergava.
- */
-export function doNavegador(fonte: string): boolean {
-  return /^\s*['"]use client['"]/m.test(fonte) || /[/'"]supabaseClient['"]/.test(fonte);
-}
-
-/**
- * Executa como o usuário, com a chave anônima e o token dele: passa por RLS e
- * pelos grants de `authenticated`, como o navegador. Hoje só as rotas de
- * organização e convite o usam.
- */
-export function comSessaoDoUsuario(fonte: string): boolean {
-  return /\bcreateActorScopedSupabaseClient\b/.test(fonte);
-}
-
-/**
- * `.from(<expressão>)` direto no cliente do banco: a tabela não é literal e o
- * inventário não sabe qual é. `supabase.storage.from(...)` é Storage, e fica
- * de fora.
- */
-export function fromNaoLiteral(fonte: string): boolean {
-  return /\b(?:supabase|client|cliente)\s*\.\s*from\(\s*[^'"\s)]/.test(fonte);
-}
-
-/** Cada `.from('<tabela>')` do escopo com a cadeia até o próximo `;`. */
-export function acessos(fonte: string): Array<{ tabela: string; cadeia: string }> {
-  const encontrados: Array<{ tabela: string; cadeia: string }> = [];
-  for (const m of fonte.matchAll(/\.from\(\s*['"]([a-z_]+)['"]\s*\)/g)) {
-    const tabela = m[1]!;
-    if (!(TABELAS as readonly string[]).includes(tabela)) continue;
-    const resto = fonte.slice((m.index ?? 0) + m[0].length);
-    const fim = resto.indexOf(';');
-    encontrados.push({ tabela, cadeia: fim >= 0 ? resto.slice(0, fim) : resto });
-  }
-  return encontrados;
-}
-
-const fontes = arquivos(path.join(RAIZ, 'src'))
-  .map((caminho) => ({ caminho: path.relative(RAIZ, caminho).split(path.sep).join('/'), fonte: readFileSync(caminho, 'utf8') }));
+const fontes = fontesDoProduto();
 const navegador = fontes.filter(({ fonte }) => doNavegador(fonte));
 
 describe('escrita direta comercial pelo navegador (PRE-006A)', () => {
@@ -87,7 +46,7 @@ describe('escrita direta comercial pelo navegador (PRE-006A)', () => {
 
   it('nenhum arquivo do navegador grava nas seis tabelas', () => {
     const escritas = navegador.flatMap(({ caminho, fonte }) => acessos(fonte)
-      .filter(({ cadeia }) => /\.(insert|update|upsert|delete)\(/.test(cadeia))
+      .filter(({ cadeia }) => escreve(cadeia))
       .map(({ tabela }) => `${caminho} → ${tabela}`));
     expect(escritas).toEqual([]);
   });
