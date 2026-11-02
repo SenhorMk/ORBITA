@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { dadosFiscaisDoContatoSchema } from '@/lib/config/clienteContract';
 import { situacaoDoProdutoSchema } from '@/lib/config/produtoContract';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { bling } from '@/services/bling';
@@ -77,7 +78,7 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
     async findClienteById(scope: VerifiedOrganizationScope, clienteId: string): Promise<ManualOrderCliente | null> {
       const { data, error } = await supabaseServer
         .from('clientes')
-        .select('id, nome, bling_id, email, telefone, cpf_cnpj, excluido_no_bling_em, exclusao_pendente_desde')
+        .select('id, nome, bling_id, email, telefone, cpf_cnpj, tipo, indicador_ie, excluido_no_bling_em, exclusao_pendente_desde')
         .eq('organizacao_id', scope.organizationId)
         .eq('id', clienteId)
         .maybeSingle();
@@ -92,6 +93,8 @@ function supabaseManualOrderStore(): ManualOrderStorePort {
         email: data.email ?? null,
         telefone: data.telefone ?? null,
         cpfCnpj: data.cpf_cnpj ?? null,
+        // O que foi escolhido no cadastro, conferido; faltando, fica `null`.
+        dadosFiscais: dadosFiscaisDoContatoSchema.safeParse({ tipo: data.tipo, indicadorIe: data.indicador_ie }).data ?? null,
         excluidoNoBling: data.excluido_no_bling_em != null,
         exclusaoPendenteNoBling: data.exclusao_pendente_desde != null,
       };

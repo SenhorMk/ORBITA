@@ -11,6 +11,7 @@ import type {
   ProdutoRemoto,
 } from '../lib/integrations/bling/operacaoRemotaContract';
 import type { CodigoDaSituacaoDaConta } from '../lib/integrations/bling/situacaoDaContaBling';
+import type { ContatoTipo, IndicadorIe } from '../lib/config/clienteContract';
 
 /** Conta a pagar lida por id: só o que a correção precisa. */
 export interface ContaPagarRemota {
@@ -119,6 +120,8 @@ export interface BlingPort {
     email: string | null;
     telefone: string | null;
     documento: string | null;
+    tipo: ContatoTipo;
+    indicadorIe: IndicadorIe;
   }): Promise<BlingCallResult<{ id: number }>>;
   /** Cadastro de contato com endereço completo, usado por fornecedores. */
   createContato(payload: ContatoLegadoEntrada): Promise<unknown>;
@@ -198,19 +201,22 @@ export interface ContatoBlingEntrada {
 /**
  * Entrada do cadastro de contato no formato simplificado, usada pela rota de
  * fornecedores e pela venda manual. Mantida separada de `ContatoBlingEntrada`
- * porque não é validada por schema antes do envio.
+ * porque só `tipo` e `indicadorIe` são validados por schema antes do envio.
  */
 export interface ContatoLegadoEntrada {
   nome: string;
   email?: string;
   telefone?: string;
   cnpj?: string;
-  tipo?: string;
+  /** Explícito: não é deduzido do documento (PRE-010). */
+  tipo: ContatoTipo;
   /**
    * Indicador de IE — `indicadorIe` no OpenAPI oficial. Um nome que o Bling não
    * tem (como `contribuinte`) seria aceito na requisição e descartado em silêncio.
+   *
+   * Explícito: ter CNPJ não torna ninguém contribuinte de ICMS (PRE-010).
    */
-  indicadorIe?: number;
+  indicadorIe: IndicadorIe;
   cep?: string;
   endereco?: string;
   numero?: string;

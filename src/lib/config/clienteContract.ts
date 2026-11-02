@@ -22,6 +22,18 @@ export type ContatoTipo = z.infer<typeof contatoTipoSchema>;
 export const indicadorIeSchema = z.union([z.literal(1), z.literal(2), z.literal(9)]);
 export type IndicadorIe = z.infer<typeof indicadorIeSchema>;
 
+/**
+ * Tipo de pessoa e indicador de IE de um contato, ambos escolhidos por alguém.
+ *
+ * São independentes: `J` não implica `1`, e o documento não implica nenhum dos
+ * dois. Sem os dois, o contato não é cadastrado no Bling (PRE-010).
+ */
+export const dadosFiscaisDoContatoSchema = z.object({
+  tipo: contatoTipoSchema,
+  indicadorIe: indicadorIeSchema,
+});
+export type DadosFiscaisDoContato = z.infer<typeof dadosFiscaisDoContatoSchema>;
+
 /** Apenas dígitos, para validar CPF (11) e CNPJ (14). */
 function apenasDigitos(valor: string): string {
   return valor.replace(/\D/gu, '');
