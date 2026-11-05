@@ -28,6 +28,7 @@ import { runContracaoChatwootRaceRehearsal } from './database-concurrency-contra
 import { runInboxChatwootRaceRehearsal } from './database-concurrency-inbox-chatwoot.mjs';
 import { runConsumidorInboxRaceRehearsal } from './database-concurrency-consumidor-inbox.mjs';
 import { runIntegracaoConsumidorInbox } from './database-integracao-consumidor-inbox.mjs';
+import { runEnvioChatwootRaceRehearsal } from './database-concurrency-envio-chatwoot.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -65,6 +66,7 @@ let outcomeContracaoChatwoot;
 let outcomeInboxChatwoot;
 let outcomeConsumidorInbox;
 let outcomeIntegracaoConsumidor;
+let outcomeEnvioChatwoot;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -91,6 +93,7 @@ try {
     outcomeInboxChatwoot = started;
     outcomeConsumidorInbox = started;
     outcomeIntegracaoConsumidor = started;
+    outcomeEnvioChatwoot = started;
   } else {
     const alinhado = await alinharStubDeAuthComProducao();
     const applied = alinhado._tag === 'err' ? alinhado : await applyCanonicalMigrations({});
@@ -118,6 +121,7 @@ try {
       outcomeInboxChatwoot = applied;
       outcomeConsumidorInbox = applied;
       outcomeIntegracaoConsumidor = applied;
+      outcomeEnvioChatwoot = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
@@ -142,6 +146,7 @@ try {
       outcomeInboxChatwoot = await runInboxChatwootRaceRehearsal();
       outcomeConsumidorInbox = await runConsumidorInboxRaceRehearsal();
       outcomeIntegracaoConsumidor = await runIntegracaoConsumidorInbox();
+      outcomeEnvioChatwoot = await runEnvioChatwootRaceRehearsal();
     }
   }
 } finally {
@@ -211,6 +216,7 @@ const relatos = [
   [outcomeInboxChatwoot, (v) => v.relato],
   [outcomeConsumidorInbox, (v) => v.relato],
   [outcomeIntegracaoConsumidor, (v) => v.relato],
+  [outcomeEnvioChatwoot, (v) => v.relato],
 ];
 
 const falhou = relatos.map(([outcome, resumo]) => relatar(outcome, resumo)).includes(true);

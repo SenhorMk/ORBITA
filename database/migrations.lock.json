@@ -460,6 +460,11 @@
       "order": 92,
       "path": "../database/89_consumidor_inbox_caso_triage.sql",
       "sha256": "4dc1b2e9bcc6ae8e9a9cc40805714ded53b2df5dcedb779586a685a0b160dc67"
+    },
+    {
+      "order": 93,
+      "path": "../database/90_envio_chatwoot_por_consumidor.sql",
+      "sha256": "f6e198f57254ca987b81f58bc14e3b57b52010daa40157ff9bdb30ece89321ac"
     }
   ],
   "references": [
