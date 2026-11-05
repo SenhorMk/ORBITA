@@ -11,8 +11,9 @@
  * Limite real do sistema atual: o worker não agenda a própria execução e não
  * registra adapters de produção. Não há, no código atual, rota, cron ou
  * processo que monte adapters reais e chame `runOutboxWorkerOnce` ou
- * `drainOutboxWorker` — eles só são exercitados por testes. O consumidor real
- * do Chatwoot é do MSG-008.
+ * `drainOutboxWorker` — eles só são exercitados por testes. O envio ao Chatwoot
+ * tem consumidor próprio (`consumidorEnvioChatwoot.ts`, MSG-008), cujo claim só
+ * pega intenções registradas; não registre um adapter do Chatwoot aqui.
  *
  * Semântica de entrega (MSG-007): o despacho só começa depois que o banco
  * grava `in_flight` para este fencing token. Daí em diante, só um recibo do

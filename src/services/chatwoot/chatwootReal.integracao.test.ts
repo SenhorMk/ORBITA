@@ -20,6 +20,8 @@ import { listarCasos, listarEventosRecebidos } from '@/services/sac/leituraDeCas
 
 import { ChatwootAdapter } from './chatwootAdapter';
 import { ChatwootConversationSchema } from './chatwootPort';
+import { consumirEnviosUmaVez, type PortaDoConsumidorEnvio } from './consumidorEnvioChatwoot';
+import { criarPortaDoConsumidorEnvio } from './consumidorEnvioChatwootSupabase';
 import { consumirInboxUmaVez } from './consumidorInboxChatwoot';
 import { criarPortaDoConsumidorInbox } from './consumidorInboxChatwootSupabase';
 
@@ -27,6 +29,8 @@ import { criarPortaDoConsumidorInbox } from './consumidorInboxChatwootSupabase';
  * Prova do MSG-001. Sem dublê do provedor: Chatwoot CE real entrega, por rede, à rota
  * real do webhook; dali PostgREST, Postgres e worker reais, até a leitura do operador.
  * Dublê só a sessão do operador, porque o laboratório não tem GoTrue. Dados sintéticos.
+ * O MSG-008 fecha a jornada no sentido inverso: a rota real de envio registra a
+ * intenção, e o worker real despacha ao Chatwoot com a credencial cifrada da conexão.
  * Os testes formam uma jornada e dependem da ordem. Roda por `npm run test:chatwoot`.
  */
 
@@ -56,6 +60,19 @@ vi.mock('@/lib/supabaseServer', async () => {
     }),
   };
 });
+
+// A sessão do operador da organização A, para as rotas reais de envio.
+vi.mock('@/lib/requestOrganizationContext', () => ({
+  resolveActiveRequestOrganizationContext: async () => ({
+    _tag: 'OrganizationContextResolved',
+    context: {
+      actorId: 'e0010000-0000-4000-8000-0000000000a1',
+      organizationId: 'e0010000-0000-4000-8000-00000000000a',
+      role: 'member',
+      capabilities: new Set(['organization:access']),
+    },
+  }),
+}));
 
 const BASE = String(process.env.CHATWOOT_REAL_URL);
 const PORTA_DO_RECEPTOR = 3188;
@@ -439,5 +456,166 @@ describe('Chatwoot CE real → ORBITA', () => {
     expect(entrega.assinatura).toBe(assinaturaDe(entrega, contas.a.segredo));
     expect(await consumir('w-m1-restore')).toMatchObject({ falhas: 0 });
     expect(await contar('sac_cases', 'organizacao_id = $1', ORG.a)).toBe(1);
+  });
+});
+
+
+/**
+ * Um intermediário entre o worker e o Chatwoot real: o pedido chega ao Chatwoot de
+ * verdade e é aplicado; o que volta ao worker é que falha. É o "sucesso remoto
+ * com ACK perdido" e o "2xx inválido" sem simular o efeito.
+ */
+function intermediario(modo: 'derrubar' | 'dois_xx_invalido'): Promise<{ readonly url: string; readonly fechar: () => Promise<void> }> {
+  const servidor = http.createServer((pedido, resposta) => {
+    const pedacos: Buffer[] = [];
+    pedido.on('data', (d: Buffer) => pedacos.push(d));
+    pedido.on('end', () => {
+      void (async () => {
+        const headers: Record<string, string> = {};
+        for (const nome of ['api_access_token', 'content-type']) {
+          const valor = pedido.headers[nome];
+          if (typeof valor === 'string') headers[nome] = valor;
+        }
+        const original = await fetch(`${BASE}${pedido.url ?? ''}`, { method: pedido.method, headers, body: Buffer.concat(pedacos) });
+        await original.arrayBuffer();
+        if (modo === 'derrubar') {
+          pedido.socket.destroy();
+          return;
+        }
+        resposta.writeHead(200, { 'content-type': 'application/json' });
+        resposta.end('{"ok":true}');
+      })();
+    });
+  });
+  return new Promise((resolve) => {
+    servidor.listen(0, '127.0.0.1', () => {
+      const endereco = servidor.address() as { port: number };
+      resolve({
+        url: `http://127.0.0.1:${endereco.port}`,
+        fechar: () => new Promise((fim) => { servidor.closeAllConnections(); servidor.close(() => fim()); }),
+      });
+    });
+  });
+}
+
+describe('MSG-008: resposta pelo cockpit → worker → Chatwoot real', () => {
+  const CORTE = '1970-01-01T00:00:00Z';
+  const comando = () => crypto.randomUUID();
+  const adapterReal = () => ChatwootAdapter.forTesting({ apiUrl: BASE, apiToken: contas.a.token, accountId: String(contas.a.accountId), conexaoId: CONEXAO.a });
+
+  async function conversaLocal(): Promise<string> {
+    const { rows: [linha] } = await admin.query(
+      'select id_local from public.chatwoot_conversations where conexao_id = $1 and id_externo = $2', [CONEXAO.a, String(contas.a.conversaId)]);
+    return linha.id_local;
+  }
+
+  async function noChatwoot(conteudo: string): Promise<number> {
+    const mensagens = await adapterReal().getMessages(contas.a.conversaId);
+    if (mensagens._tag !== 'ChatwootSuccess') throw new Error('Leitura do Chatwoot falhou');
+    return mensagens.data.filter((m) => m.content === conteudo).length;
+  }
+
+  async function enviarPelaRota(corpo: Record<string, unknown>) {
+    const { POST } = await import('@/app/api/chatwoot/send/route');
+    const res = await POST(new Request('https://orbita.test/api/chatwoot/send', { method: 'POST', body: JSON.stringify(corpo) }));
+    return { status: res.status, body: await res.json() };
+  }
+
+  async function statusDoEnvio(commandId: string) {
+    const { rows: [linha] } = await admin.query(
+      `select o.status, o.motivo_bloqueio, e.mensagem_id_local from public.chatwoot_envios e
+         join public.outbox_eventos o on o.id = e.outbox_evento_id where e.command_id = $1`, [commandId]);
+    return linha;
+  }
+
+  const despachar = (porta: PortaDoConsumidorEnvio = criarPortaDoConsumidorEnvio(cliente)) =>
+    consumirEnviosUmaVez(porta, { workerId: `w-m8-${crypto.randomUUID()}`, limite: 10, leaseSegundos: 60, criadosDesde: CORTE });
+
+  it('enviar registra a intenção e nada sai na requisição; clique duplo devolve a mesma', async () => {
+    const conversaId = await conversaLocal();
+    const id = comando();
+    const primeira = await enviarPelaRota({ conversaId, commandId: id, content: 'RESPOSTA-M8-1' });
+    const segunda = await enviarPelaRota({ conversaId, commandId: id, content: 'RESPOSTA-M8-1' });
+
+    expect(primeira).toMatchObject({ status: 202, body: { envio: { estado: 'pendente', duplicado: false } } });
+    expect(segunda).toMatchObject({ status: 202, body: { envio: { id: primeira.body.envio.id, duplicado: true } } });
+    expect(await noChatwoot('RESPOSTA-M8-1')).toBe(0);
+  });
+
+  it('o worker real despacha uma vez, com a credencial da conexão, e só o recibo confirma', async () => {
+    const casosAntes = await contar('sac_cases', 'organizacao_id = $1', ORG.a);
+    expect(await despachar()).toMatchObject({ reivindicados: 1, enviados: 1 });
+    expect(await despachar()).toMatchObject({ reivindicados: 0 });
+    expect(await noChatwoot('RESPOSTA-M8-1')).toBe(1);
+
+    const { rows: [espelho] } = await admin.query(
+      `select m.id_externo, m.message_type, e.command_id from public.chatwoot_messages m
+         join public.chatwoot_envios e on e.id = m.envio_id where m.content = 'RESPOSTA-M8-1'`);
+    expect(espelho).toMatchObject({ message_type: 'outgoing' });
+
+    // O Chatwoot entrega o webhook da própria resposta: consumido, sem caso novo nem outra linha.
+    expect(await esperarEntrega(daMensagem(Number(espelho.id_externo)))).toMatchObject({ status: 200 });
+    expect(await consumir('w-m8-propria')).toMatchObject({ falhas: 0 });
+    expect(await contar('sac_cases', 'organizacao_id = $1', ORG.a)).toBe(casosAntes);
+    expect(await contar('chatwoot_messages', 'organizacao_id = $1 and id_externo = $2 and envio_id is not null', ORG.a, espelho.id_externo)).toBe(1);
+
+    const { GET } = await import('@/app/api/chatwoot/send/route');
+    const lista = await (await GET(new Request(`https://orbita.test/api/chatwoot/send?conversaId=${await conversaLocal()}`))).json();
+    expect(lista.envios).toEqual(expect.arrayContaining([expect.objectContaining({ commandId: espelho.command_id, estado: 'enviado' })]));
+  });
+
+  it.each([
+    ['sucesso remoto com ACK perdido', 'derrubar', 'ack_perdido', 'RESPOSTA-M8-ACK'],
+    ['2xx inválido depois do efeito', 'dois_xx_invalido', 'resposta_invalida', 'RESPOSTA-M8-2XX'],
+  ] as const)('%s: a mensagem chegou uma vez, o envio fica unknown e nada é reenviado', async (_caso, modo, motivo, conteudo) => {
+    const id = comando();
+    expect((await enviarPelaRota({ conversaId: await conversaLocal(), commandId: id, content: conteudo })).status).toBe(202);
+    const meio = await intermediario(modo);
+    try {
+      const porta = criarPortaDoConsumidorEnvio(cliente);
+      const pelaRedeRuim: PortaDoConsumidorEnvio = {
+        ...porta,
+        resolverCanal: async () => ({ _tag: 'Canal', canal: ChatwootAdapter.forTesting({ apiUrl: meio.url, apiToken: contas.a.token, accountId: String(contas.a.accountId), conexaoId: CONEXAO.a }) }),
+      };
+      expect(await despachar(pelaRedeRuim)).toMatchObject({ reivindicados: 1, desconhecidos: 1 });
+    } finally {
+      await meio.fechar();
+    }
+    expect(await statusDoEnvio(id)).toMatchObject({ status: 'unknown', motivo_bloqueio: motivo, mensagem_id_local: null });
+    expect(await despachar()).toMatchObject({ reivindicados: 0 });
+    expect(await noChatwoot(conteudo)).toBe(1);
+    // O operador repete com o mesmo comando: a mesma intenção, desconhecida, sem novo envio.
+    const repetido = await enviarPelaRota({ conversaId: await conversaLocal(), commandId: id, content: conteudo });
+    expect(repetido).toMatchObject({ status: 202, body: { envio: { estado: 'desconhecido', duplicado: true } } });
+    expect(await despachar()).toMatchObject({ reivindicados: 0 });
+    expect(await noChatwoot(conteudo)).toBe(1);
+  });
+
+  it('recusa definitiva real (conversa que o Chatwoot não conhece): dead_letter, sem mensagem', async () => {
+    // Uma conversa local cuja contraparte remota não existe nesta conta.
+    const evento = (await admin.query(
+      "select evento_id from public.aceitar_entrega_inbox_chatwoot($1, $2, null, 1, null, 'm8-fantasma', 'message_created', '{}'::jsonb)", [ORG.a, CONEXAO.a])).rows[0].evento_id;
+    const { rows: [claim] } = await admin.query("select fencing_token from public.reivindicar_eventos_inbox_chatwoot('w-m8-fantasma', 50, 60, 'epoch') where evento_id = $1", [evento]);
+    await admin.query('select * from public.aplicar_evento_inbox_chatwoot($1, $2, $3, $4::jsonb)', [evento, 'w-m8-fantasma', claim.fencing_token, JSON.stringify({
+      evento: 'message_created', acao: 'espelhar', account_id: String(contas.a.accountId), abre_caso: false,
+      contato: { id: 999_001, nome: 'Fantasma' },
+      conversa: { id: 999_001, contato_id: 999_001, status: 'open', inbox_id: contas.a.inboxId, canal: 'Channel::Api' },
+      mensagem: { id: 999_001, conversa_id: 999_001, conteudo: 'x', tipo: 'outgoing', remetente_tipo: 'user', modo: 'preservar' },
+    })]);
+    const { rows: [fantasma] } = await admin.query("select id_local from public.chatwoot_conversations where conexao_id = $1 and id_externo = '999001'", [CONEXAO.a]);
+    const id = comando();
+    expect((await enviarPelaRota({ conversaId: fantasma.id_local, commandId: id, content: 'RESPOSTA-M8-404' })).status).toBe(202);
+
+    expect(await despachar()).toMatchObject({ reivindicados: 1, recusados: 1 });
+    expect(await statusDoEnvio(id)).toMatchObject({ status: 'dead_letter', mensagem_id_local: null });
+  });
+
+  it('o backlog do envio inline não é reivindicado pelo worker', async () => {
+    await admin.query(
+      "select * from public.registrar_evento_outbox($1, $2, $3, 'chatwoot_msg_legado_m8', 'chatwoot', 'message.send', $4::jsonb, 5)",
+      [ORG.a, CONEXAO.a, DONO.a, JSON.stringify({ conversaIdLocal: await conversaLocal(), content: 'LEGADO-M8' })]);
+    expect(await despachar()).toMatchObject({ reivindicados: 0 });
+    expect(await contar('outbox_eventos', "idempotency_key = 'chatwoot_msg_legado_m8' and status = 'pending'")).toBe(1);
+    expect(await noChatwoot('LEGADO-M8')).toBe(0);
   });
 });
