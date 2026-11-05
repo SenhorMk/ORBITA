@@ -20,12 +20,18 @@ import type { ChatwootMessage } from '@/types';
 export interface MensagemOtimista {
   /** Identidade local, negativa, que nunca colide com um id do Chatwoot. */
   readonly id: number;
+  /** A identidade do pedido no servidor (MSG-008): repetir com ela devolve o mesmo envio. */
+  readonly commandId: string;
   readonly conteudo: string;
   /**
-   * `incerta`: o servidor registrou o envio como desconhecido (MSG-007) — pode
-   * ter chegado. Diferente de `falhou`, não oferece recuperar para reenviar.
+   * - `enviando`: o pedido está indo ao servidor;
+   * - `pendente`: o servidor registrou e o worker ainda não tem recibo;
+   * - `sem_resposta`: não se sabe se o servidor registrou — só repetir o mesmo comando;
+   * - `falhou`: o servidor respondeu erro, nada foi registrado — o texto pode voltar;
+   * - `incerta`: desconhecido (MSG-007), pode ter chegado — nada a repetir daqui;
+   * - `recusada`: o Chatwoot recusou de forma definitiva — o texto pode voltar.
    */
-  readonly estado: 'enviando' | 'falhou' | 'incerta';
+  readonly estado: 'enviando' | 'pendente' | 'sem_resposta' | 'falhou' | 'incerta' | 'recusada';
   /** O motivo da falha, quando houve. */
   readonly erro: string | null;
   readonly criadaEm: string;
