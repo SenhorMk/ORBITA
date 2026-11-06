@@ -34,7 +34,9 @@ export interface Mensageria {
   readonly escreverRascunho: (texto: string) => void;
   readonly enviando: boolean;
   readonly enviar: () => void;
-  /** Devolve ao compositor o texto de um envio que falhou, e some com a linha falha. */
+  /** Repete o mesmo pedido de um envio sem resposta (mesmo comando, mesmo envio no servidor). */
+  readonly tentarDeNovo: (idOtimista: number) => void;
+  /** Devolve ao compositor o texto de um envio que comprovadamente não saiu, e some com a linha. */
   readonly recuperarRascunho: (idOtimista: number) => void;
 
   readonly alterandoStatus: boolean;
@@ -214,7 +216,7 @@ export function useMensageria(
     };
   }, [alterar, chaveDaConversa, conversaId, espelho, organizacaoId]);
 
-  const { escreverRascunho, enviar, recuperarRascunho } = useEnvio(
+  const { escreverRascunho, enviar, tentarDeNovo, recuperarRascunho } = useEnvio(
     fetchWithAuth,
     chaveDaConversaRef,
     alterar,
@@ -336,6 +338,7 @@ export function useMensageria(
     escreverRascunho,
     enviando: (estadoAtual?.otimistas ?? []).some((o) => o.estado === 'enviando'),
     enviar,
+    tentarDeNovo,
     recuperarRascunho,
 
     alterandoStatus: estadoAtual?.alterandoStatus ?? false,

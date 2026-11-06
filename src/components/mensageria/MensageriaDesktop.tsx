@@ -360,24 +360,36 @@ function Bolha({ mensagem }: { readonly mensagem: ChatwootMessage }) {
   );
 }
 
+/** O rótulo, a cor e a frase de cada estado de um envio que ainda não é histórico. */
+const APRESENTACAO_DO_ENVIO: Readonly<Record<MensagemOtimista['estado'], { readonly rotulo: string; readonly cor: string; readonly nota: string | null }>> = {
+  enviando: { rotulo: 'Enviando…', cor: 'var(--line)', nota: null },
+  pendente: { rotulo: 'Na fila de envio', cor: 'var(--line)', nota: 'Registrada. Aparece como enviada quando o Chatwoot confirmar.' },
+  sem_resposta: { rotulo: 'Sem resposta do servidor', cor: 'var(--warning)', nota: 'Tentar de novo repete o mesmo pedido: não cria uma segunda mensagem.' },
+  falhou: { rotulo: 'Não enviada', cor: 'var(--danger)', nota: 'O servidor recusou o pedido: nada foi registrado nem enviado.' },
+  incerta: { rotulo: 'Entrega não confirmada', cor: 'var(--warning)', nota: null },
+  recusada: { rotulo: 'Recusada pelo Chatwoot', cor: 'var(--danger)', nota: 'O Chatwoot não aplicou esta mensagem. Corrija a causa antes de enviar de novo.' },
+};
+
 /**
  * Uma mensagem que ainda não é histórico — e que não pode parecer que é.
  *
- * O contorno tracejado e o rótulo dizem o estado real. A versão anterior
- * desenhava a otimista idêntica a uma mensagem entregue, e apagava a linha
- * quando o envio falhava: a tela afirmava entrega que ninguém confirmou, e
- * depois escondia a prova de que não tinha havido nenhuma.
+ * O contorno tracejado e o rótulo dizem o estado real. Ela só vira histórico
+ * quando o worker grava o recibo do Chatwoot (MSG-008); até lá, nenhum estado
+ * afirma entrega. Só aparece botão onde agir é seguro: repetir o mesmo comando
+ * (sem resposta) ou reescrever o que comprovadamente não saiu (falhou,
+ * recusada). Desconhecida não tem botão: pode ter chegado.
  */
 function BolhaNaoConfirmada({
   otimista,
+  aoTentarDeNovo,
   aoRecuperar,
 }: {
   readonly otimista: MensagemOtimista;
+  readonly aoTentarDeNovo: () => void;
   readonly aoRecuperar: () => void;
 }) {
-  const falhou = otimista.estado === 'falhou';
-  const incerta = otimista.estado === 'incerta';
-  const cor = falhou ? 'var(--danger)' : incerta ? 'var(--warning)' : 'var(--line)';
+  const { rotulo, cor, nota } = APRESENTACAO_DO_ENVIO[otimista.estado];
+  const emAndamento = otimista.estado === 'enviando' || otimista.estado === 'pendente';
   return (
     <article
       className="flex flex-col max-w-[min(560px,78%)] self-end"
@@ -389,36 +401,31 @@ function BolhaNaoConfirmada({
         border: `1px dashed ${cor}`,
       }}
     >
-      <span className="orbita-eyebrow" style={{ color: falhou || incerta ? cor : 'var(--txt3)' }}>
-        {falhou ? 'Não enviada' : incerta ? 'Entrega não confirmada' : 'Enviando…'}
+      <span className="orbita-eyebrow" style={{ color: emAndamento ? 'var(--txt3)' : cor }}>
+        {rotulo}
       </span>
       <p className="m-0" style={{ font: '400 12.5px/1.5 var(--font-archivo), sans-serif', color: 'var(--txt2)' }}>
         {otimista.conteudo}
       </p>
-      {incerta && (
-        // Sem "Recuperar texto": reenviar daqui criaria uma segunda mensagem
-        // se a primeira chegou. A decisão é de quem confere no Chatwoot.
-        <output className="m-0 block" style={{ fontSize: 11, color: 'var(--txt2)' }}>
+      {otimista.erro !== null && (
+        <output className="m-0 block" role={otimista.estado === 'falhou' ? 'alert' : undefined} style={{ fontSize: 11, color: 'var(--txt2)' }}>
           {otimista.erro}
         </output>
       )}
-      {falhou && (
-        <>
-          <p className="m-0" role="alert" style={{ fontSize: 11, color: 'var(--danger)' }}>
-            {otimista.erro}
-          </p>
-          <p className="m-0" style={{ fontSize: 10.5, color: 'var(--txt3)' }}>
-            Não sabemos se o Chatwoot chegou a receber esta mensagem. Nada foi reenviado automaticamente.
-          </p>
-          <button
-            type="button"
-            onClick={aoRecuperar}
-            className="orbita-chip cursor-pointer self-start"
-            style={{ height: 28, fontSize: 11 }}
-          >
-            Recuperar texto
-          </button>
-        </>
+      {nota !== null && (
+        <p className="m-0" style={{ fontSize: 10.5, color: 'var(--txt3)' }}>
+          {nota}
+        </p>
+      )}
+      {otimista.estado === 'sem_resposta' && (
+        <button type="button" onClick={aoTentarDeNovo} className="orbita-chip cursor-pointer self-start" style={{ height: 28, fontSize: 11 }}>
+          Tentar de novo
+        </button>
+      )}
+      {(otimista.estado === 'falhou' || otimista.estado === 'recusada') && (
+        <button type="button" onClick={aoRecuperar} className="orbita-chip cursor-pointer self-start" style={{ height: 28, fontSize: 11 }}>
+          Recuperar texto
+        </button>
       )}
     </article>
   );
@@ -469,6 +476,7 @@ function Historico({ mensageria }: { readonly mensageria: Mensageria }) {
         <BolhaNaoConfirmada
           key={otimista.id}
           otimista={otimista}
+          aoTentarDeNovo={() => mensageria.tentarDeNovo(otimista.id)}
           aoRecuperar={() => mensageria.recuperarRascunho(otimista.id)}
         />
       ))}

@@ -259,29 +259,6 @@ export class OutboxService {
   }
 
   /**
-   * Reivindica um evento da organização verificada (envio inline). Devolve o
-   * fencing token da posse, ou `null` se o evento não estava na fila — por
-   * exemplo, porque já está em voo ou desconhecido.
-   */
-  async claimOne(
-    supabase: SupabaseClient,
-    scope: VerifiedOrganizationScope,
-    eventoId: string,
-    workerId: string,
-    leaseTtlSeconds = 60,
-  ): Promise<number | null> {
-    const { data, error } = await supabase.rpc('reivindicar_evento_outbox', {
-      p_organizacao_id: scope.organizationId,
-      p_evento_id: eventoId,
-      p_worker_id: workerId,
-      p_lease_ttl_sec: leaseTtlSeconds,
-    });
-    if (error) throw new Error(`Falha ao reivindicar evento do outbox: ${error.message}`);
-    const linhas = z.array(z.object({ fencing_token: z.coerce.number().int().positive() })).parse(data ?? []);
-    return linhas[0]?.fencing_token ?? null;
-  }
-
-  /**
    * Último passo antes da rede: grava `in_flight` e a tentativa. `false` quando
    * a posse não é mais deste token — o chamador não pode despachar.
    */

@@ -41,7 +41,7 @@ try {
   resultado = aplicado._tag === 'err' ? aplicado : await rodarProvaComPostgrest({
     config: 'vitest.chatwoot-real.config.ts',
     env: { CHATWOOT_REAL_URL: base, CHATWOOT_REAL_SENHA_POSTGRES: segredos.CHATWOOT_POSTGRES_PASSWORD },
-    relato: (testes) => `prova do MSG-001 contra o Chatwoot CE ${VERSAO_FIXADA} real: ${testes} testes`,
+    relato: (testes) => `prova do MSG-001 e do MSG-008 contra o Chatwoot CE ${VERSAO_FIXADA} real: ${testes} testes`,
   });
 } catch (causa) {
   resultado = err('ChatwootDevFalhou', causa instanceof Error ? causa.message : 'Falha inesperada');

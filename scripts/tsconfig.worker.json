@@ -6,5 +6,8 @@
     "moduleResolution": "node",
     "noEmit": false
   },
-  "include": ["worker-inbox-chatwoot.ts"]
+  "include": [
+    "worker-inbox-chatwoot.ts",
+    "worker-envio-chatwoot.ts"
+  ]
 }

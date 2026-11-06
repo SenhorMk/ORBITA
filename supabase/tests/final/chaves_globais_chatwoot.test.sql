@@ -43,7 +43,8 @@ select col_is_pk('public', 'chatwoot_contacts', 'id_local', '1. PK do contato é
 select col_is_pk('public', 'chatwoot_messages', 'id_local', '2. PK da mensagem é id_local');
 select is((select count(*)::int from pg_constraint
             where contype = 'f' and confrelid in ('public.chatwoot_contacts'::regclass, 'public.chatwoot_conversations'::regclass)
-              and conname not in ('fk_chatwoot_conversations_contato_local', 'fk_chatwoot_messages_conversa_local', 'fk_sac_cases_conversa')), 0,
+              and conname not in ('fk_chatwoot_conversations_contato_local', 'fk_chatwoot_messages_conversa_local', 'fk_sac_cases_conversa',
+                                  'fk_chatwoot_envios_conversa')), 0,
           '3. nenhuma FK pelo id remoto');
 select hasnt_index('public', 'chatwoot_contacts', 'uq_chatwoot_contacts_org_id', '4. sem o único (organizacao_id, id)');
 select hasnt_index('public', 'chatwoot_inboxes', 'uq_chatwoot_inboxes_org_inbox', '5. inbox único só por conexão');

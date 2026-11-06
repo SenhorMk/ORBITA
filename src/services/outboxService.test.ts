@@ -195,22 +195,7 @@ describe('outboxService', () => {
     });
   });
 
-  describe('claimOne, startDispatch and concludeAttempt', () => {
-    it('claims one event only inside the verified organization', async () => {
-      mockRpc.mockResolvedValueOnce({ data: [{ fencing_token: 4, lease_expires_at: 'x' }], error: null });
-
-      expect(await outboxService.claimOne(mockSupabase, scope, 'evt-1', 'inline')).toBe(4);
-      expect(mockRpc).toHaveBeenCalledWith('reivindicar_evento_outbox', expect.objectContaining({
-        p_organizacao_id: 'org-1', p_evento_id: 'evt-1', p_worker_id: 'inline',
-      }));
-    });
-
-    it('returns null when the event is not claimable (already in flight or unknown)', async () => {
-      mockRpc.mockResolvedValueOnce({ data: [], error: null });
-
-      expect(await outboxService.claimOne(mockSupabase, scope, 'evt-1', 'inline')).toBeNull();
-    });
-
+  describe('startDispatch and concludeAttempt', () => {
     it('starts the dispatch with owner and token', async () => {
       mockRpc.mockResolvedValueOnce({ data: true, error: null });
 

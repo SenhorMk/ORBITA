@@ -174,6 +174,11 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   // tentativa e código; nunca o payload nem o conteúdo da mensagem.
   ['sac.case_opened', 'sac', 'info', 'system', 1825, 'Caso SAC aberto em TRIAGE pelo consumidor da inbox.', undefined, ['payload', 'content']],
   ['chatwoot.inbox_event_failed', 'integrations', 'warning', 'system', 365, 'Evento da inbox do Chatwoot em falha definitiva: não será retomado sem correção.', undefined, ['payload', 'content']],
+  // Envio pelo cockpit (migration 90, MSG-008). Metadata: conexão, evento e
+  // código da recusa; nunca o texto da resposta nem o destinatário.
+  ['chatwoot.send_requested', 'integrations', 'info', 'user', 1825, 'Resposta registrada no cockpit para envio pelo worker.', undefined, ['payload', 'content', 'conteudo']],
+  ['chatwoot.send_confirmed', 'integrations', 'info', 'system', 1825, 'Resposta confirmada pelo recibo do Chatwoot.', undefined, ['payload', 'content', 'conteudo']],
+  ['chatwoot.send_rejected', 'integrations', 'warning', 'system', 1825, 'Resposta recusada de forma definitiva; não será repetida.', undefined, ['payload', 'content', 'conteudo']],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 

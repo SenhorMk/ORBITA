@@ -378,114 +378,170 @@ describe('MensageriaDesktop — envio', () => {
     return espelhoDublado;
   }
 
-  it('a falha deixa a mensagem não confirmada, o erro visível e o texto recuperável', async () => {
-    const fetchWithAuth = vi.fn().mockResolvedValue(
-      respostaJson({ success: false, error: 'Falha ao enviar mensagem no Chatwoot (Unauthorized)' }, 502),
-    );
-    await abrirComposer(fetchWithAuth);
+  /**
+   * O servidor dublado: o POST registra (ou falha como pedido) e o GET lista os
+   * envios da conversa. `lista` é lida a cada GET, para o teste mudar o desfecho.
+   */
+  function servidor(opcoes: {
+    readonly post?: () => Promise<Response>;
+    readonly lista?: () => readonly unknown[];
+  }) {
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        if (opcoes.post) return opcoes.post();
+        const { commandId } = JSON.parse(String(init.body));
+        return respostaJson({ success: true, envio: { id: 'envio-1', commandId, estado: 'pendente', duplicado: false } }, 202);
+      }
+      expect(url).toBe(`/api/chatwoot/send?conversaId=${uuidDaConversa(1)}`);
+      return respostaJson({ success: true, envios: opcoes.lista?.() ?? [] });
+    });
+  }
 
-    await userEvent.type(screen.getByLabelText('Mensagem'), 'preciso confirmar o pedido');
+  const postsDe = (fetchWithAuth: ReturnType<typeof servidor>) =>
+    fetchWithAuth.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init!.body)));
+
+  async function escreverEEnviar(texto: string) {
+    await userEvent.type(screen.getByLabelText('Mensagem'), texto);
     await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
+  }
+
+  it('o servidor recusa o pedido: não enviada, nada registrado, e o texto volta', async () => {
+    const fetchWithAuth = servidor({
+      post: async () => respostaJson({ success: false, error: 'Conversa não encontrada' }, 404),
+    });
+    await abrirComposer(fetchWithAuth);
+    await escreverEEnviar('preciso confirmar o pedido');
 
     await waitFor(() => expect(screen.getByText('Não enviada')).toBeInTheDocument());
-    expect(screen.getByText('Falha ao enviar mensagem no Chatwoot (Unauthorized)')).toBeInTheDocument();
-    // Não confirmada é o ponto: o texto está na tela, mas nunca como histórico.
-    expect(screen.getByText(/Nada foi reenviado automaticamente/)).toBeInTheDocument();
-    expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Conversa não encontrada')).toBeInTheDocument();
+    expect(screen.getByText(/nada foi registrado nem enviado/)).toBeInTheDocument();
+    expect(postsDe(fetchWithAuth)).toHaveLength(1);
 
     await userEvent.click(screen.getByRole('button', { name: 'Recuperar texto' }));
     expect(screen.getByLabelText('Mensagem')).toHaveValue('preciso confirmar o pedido');
     expect(screen.queryByText('Não enviada')).not.toBeInTheDocument();
   });
 
-  it('o envio bem-sucedido confirma a mensagem uma vez só', async () => {
-    const fetchWithAuth = vi.fn().mockResolvedValue(
-      respostaJson({ success: true, message: { id_local: uuidDaMensagem(55), created_at: '2026-09-10T12:05:00.000Z' } }),
-    );
+  it('MSG-008: enviar registra e mostra na fila; só o recibo transforma em histórico, uma vez', async () => {
+    let estado = 'pendente';
+    const fetchWithAuth = servidor({
+      lista: () => (estado === 'pendente' ? [] : [{
+        commandId: postsDe(fetchWithAuth)[0].commandId, conteudo: 'já está a caminho', estado: 'enviado',
+        explicacao: 'Confirmado pelo provedor.', mensagemIdLocal: uuidDaMensagem(55), criadoEm: '2026-09-10T12:05:00.000Z',
+      }]),
+    });
     await abrirComposer(fetchWithAuth);
+    await escreverEEnviar('já está a caminho');
 
-    await userEvent.type(screen.getByLabelText('Mensagem'), 'já está a caminho');
-    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
-
-    await waitFor(() => expect(screen.queryByText('Enviando…')).not.toBeInTheDocument());
-    expect(screen.getAllByText('já está a caminho')).toHaveLength(1);
+    await waitFor(() => expect(screen.getByText('Na fila de envio')).toBeInTheDocument());
     expect(screen.getByLabelText('Mensagem')).toHaveValue('');
+    estado = 'enviado';
+    await waitFor(() => expect(screen.queryByText('Na fila de envio')).not.toBeInTheDocument(), { timeout: 4_000 });
+    expect(screen.getAllByText('já está a caminho')).toHaveLength(1);
   });
 
-  it('MSG-003B: o envio referencia a conversa só pelo UUID local', async () => {
-    const fetchWithAuth = vi.fn().mockResolvedValue(
-      respostaJson({ success: true, message: { id_local: uuidDaMensagem(56), created_at: '2026-09-10T12:05:00.000Z' } }),
-    );
+  it('MSG-008: o pedido leva o UUID local da conversa e um commandId gerado antes da rede', async () => {
+    const fetchWithAuth = servidor({});
     await abrirComposer(fetchWithAuth);
+    await escreverEEnviar('segue o código');
 
-    await userEvent.type(screen.getByLabelText('Mensagem'), 'segue o código');
-    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
-
-    await waitFor(() => expect(fetchWithAuth).toHaveBeenCalledTimes(1));
-    const [url, init] = fetchWithAuth.mock.calls[0]!;
-    expect(url).toBe('/api/chatwoot/send');
-    expect(JSON.parse(init.body)).toEqual({ conversaId: uuidDaConversa(1), content: 'segue o código' });
+    await waitFor(() => expect(postsDe(fetchWithAuth)).toHaveLength(1));
+    const [corpo] = postsDe(fetchWithAuth);
+    expect(corpo).toEqual({ conversaId: uuidDaConversa(1), commandId: expect.stringMatching(/^[0-9a-f-]{36}$/), content: 'segue o código' });
   });
 
-  it('MSG-003B: resposta só com o id numérico do Chatwoot não confirma a entrega', async () => {
-    const fetchWithAuth = vi.fn().mockResolvedValue(
-      respostaJson({ success: true, message: { id: 55, created_at: '2026-09-10T12:05:00.000Z' } }),
-    );
+  it('MSG-008: sem resposta do servidor, "Tentar de novo" repete o mesmo comando, e não um envio novo', async () => {
+    let falhar = true;
+    const fetchWithAuth = servidor({
+      post: async () => {
+        if (falhar) throw new Error('Failed to fetch');
+        return respostaJson({ success: true, envio: { id: 'envio-1', commandId: postsDe(fetchWithAuth)[0].commandId, estado: 'pendente', duplicado: true } }, 202);
+      },
+    });
     await abrirComposer(fetchWithAuth);
+    await escreverEEnviar('confirmado?');
 
-    await userEvent.type(screen.getByLabelText('Mensagem'), 'confirmado?');
-    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
-
-    await waitFor(() => expect(screen.getByText('Não enviada')).toBeInTheDocument());
-    expect(screen.getByText('O servidor respondeu em um formato inesperado.')).toBeInTheDocument();
-  });
-
-  it('MSG-007: envio desconhecido no servidor fica "não confirmada", sem oferecer reenvio', async () => {
-    const fetchWithAuth = vi.fn().mockResolvedValue(respostaJson({
-      success: false,
-      desfecho: 'desconhecido',
-      eventoId: '11111111-1111-4111-8111-111111111111',
-      error: 'Não foi possível confirmar a entrega. A mensagem pode ter chegado: não reenvie; confira em Integrações.',
-    }, 202));
-    await abrirComposer(fetchWithAuth);
-
-    await userEvent.type(screen.getByLabelText('Mensagem'), 'chegou?');
-    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
-
-    await waitFor(() => expect(screen.getByText('Entrega não confirmada')).toBeInTheDocument());
-    expect(screen.getByText(/não reenvie/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Sem resposta do servidor')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'Recuperar texto' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Não enviada')).not.toBeInTheDocument();
-    expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+    falhar = false;
+    await userEvent.click(screen.getByRole('button', { name: 'Tentar de novo' }));
+
+    await waitFor(() => expect(screen.getByText('Na fila de envio')).toBeInTheDocument());
+    const [primeiro, segundo] = postsDe(fetchWithAuth);
+    expect(segundo).toEqual(primeiro);
+  });
+
+  it('MSG-008: resposta sem a intenção de volta não vira fila nem entrega', async () => {
+    const fetchWithAuth = servidor({
+      post: async () => respostaJson({ success: true, message: { id: 55, created_at: '2026-09-10T12:05:00.000Z' } }),
+    });
+    await abrirComposer(fetchWithAuth);
+    await escreverEEnviar('confirmado?');
+
+    await waitFor(() => expect(screen.getByText('Sem resposta do servidor')).toBeInTheDocument());
+    expect(screen.getByText('O servidor respondeu em um formato inesperado.')).toBeInTheDocument();
+    expect(screen.queryByText('Na fila de envio')).not.toBeInTheDocument();
+  });
+
+  it('MSG-007/008: o worker registrou desconhecido — "não confirmada", com a explicação, sem botão de reenvio', async () => {
+    let estado = 'pendente';
+    const fetchWithAuth = servidor({
+      lista: () => (estado === 'pendente' ? [] : [{
+        commandId: postsDe(fetchWithAuth)[0].commandId, conteudo: 'chegou?', estado: 'desconhecido',
+        explicacao: 'O provedor não respondeu a tempo. A mensagem pode ter sido entregue. Não reenvie: confira no provedor e registre o resultado.',
+        mensagemIdLocal: null, criadoEm: '2026-09-10T12:05:00.000Z',
+      }]),
+    });
+    await abrirComposer(fetchWithAuth);
+    await escreverEEnviar('chegou?');
+    await waitFor(() => expect(screen.getByText('Na fila de envio')).toBeInTheDocument());
+    estado = 'desconhecido';
+
+    await waitFor(() => expect(screen.getByText('Entrega não confirmada')).toBeInTheDocument(), { timeout: 4_000 });
+    expect(screen.getByText(/Não reenvie/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Recuperar texto' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Tentar de novo' })).not.toBeInTheDocument();
+    expect(postsDe(fetchWithAuth)).toHaveLength(1);
+  });
+
+  it('MSG-008: depois de um reload, o envio ainda na fila volta à tela, sem novo pedido', async () => {
+    const fetchWithAuth = servidor({
+      lista: () => [{
+        commandId: 'a0000000-0000-4000-8000-000000000001', conteudo: 'enviado antes do reload', estado: 'pendente',
+        explicacao: 'Ainda não enviado.', mensagemIdLocal: null, criadoEm: '2026-09-10T12:04:00.000Z',
+      }],
+    });
+    await abrirComposer(fetchWithAuth);
+
+    await waitFor(() => expect(screen.getByText('enviado antes do reload')).toBeInTheDocument());
+    expect(screen.getByText('Na fila de envio')).toBeInTheDocument();
+    expect(postsDe(fetchWithAuth)).toHaveLength(0);
   });
 
   it('a indisponibilidade da integração bloqueia o envio e é dita como tal', async () => {
-    const fetchWithAuth = vi.fn().mockResolvedValue(
-      respostaJson({ success: false, error: 'Integração Chatwoot não configurada' }, 409),
-    );
+    const fetchWithAuth = servidor({
+      post: async () => respostaJson({ success: false, error: 'Integração Chatwoot indisponível para esta conversa.', motivo: 'conexao_indisponivel' }, 409),
+    });
     await abrirComposer(fetchWithAuth);
+    await escreverEEnviar('alguém aí?');
 
-    await userEvent.type(screen.getByLabelText('Mensagem'), 'alguém aí?');
-    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
-
-    await waitFor(() => expect(screen.getByText(/Integração Chatwoot indisponível/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText(/Integração Chatwoot indisponível/).length).toBeGreaterThan(0));
     expect(screen.getByLabelText('Mensagem')).toBeDisabled();
     expect(screen.getByRole('button', { name: /Enviar/ })).toBeDisabled();
   });
 
   it('a falha tardia de A não devolve texto nenhum em B', async () => {
     let responderEnvio: (resposta: Response) => void = () => {};
-    const fetchWithAuth = vi.fn().mockImplementation(
-      () => new Promise<Response>((resolver) => { responderEnvio = resolver; }),
-    );
+    const fetchWithAuth = vi.fn((_url: string, init?: RequestInit) => (init?.method === 'POST'
+      ? new Promise<Response>((resolver) => { responderEnvio = resolver; })
+      : Promise.resolve(respostaJson({ success: true, envios: [] }))));
     const { espelho, conversas, mensagens } = criarEspelho();
     const { trocar } = montar(espelho, ORG_A, fetchWithAuth);
     await responder(conversas, CONVERSA);
     await abrir('Ana');
     await responder(mensagens, []);
 
-    await userEvent.type(screen.getByLabelText('Mensagem'), 'texto de A');
-    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
+    await escreverEEnviar('texto de A');
 
     await act(async () => {
       trocar(ORG_B);
@@ -542,9 +598,10 @@ describe('MensageriaDesktop — deduplicação', () => {
 describe('MensageriaDesktop — resolver e reabrir', () => {
   it('a resposta de status altera só a conversa que a iniciou', async () => {
     let responderStatus: (resposta: Response) => void = () => {};
-    const fetchWithAuth = vi.fn().mockImplementation(
-      () => new Promise<Response>((resolver) => { responderStatus = resolver; }),
-    );
+    // Os GETs são a leitura dos envios ao abrir a conversa (MSG-008); o POST é o status.
+    const fetchWithAuth = vi.fn((_url: string, init?: RequestInit) => (init?.method === 'POST'
+      ? new Promise<Response>((resolver) => { responderStatus = resolver; })
+      : Promise.resolve(respostaJson({ success: true, envios: [] }))));
     const { espelho, conversas, mensagens } = criarEspelho();
     montar(espelho, ORG_A, fetchWithAuth);
     await responder(conversas, [conversa(1, 'Ana'), conversa(2, 'Bruno')]);
@@ -553,7 +610,8 @@ describe('MensageriaDesktop — resolver e reabrir', () => {
     await responder(mensagens, []);
     await userEvent.click(screen.getByRole('button', { name: 'Marcar resolvida' }));
     // MSG-003B: o status também referencia a conversa só pelo UUID local.
-    expect(JSON.parse(fetchWithAuth.mock.calls[0]![1].body)).toEqual({ conversaId: uuidDaConversa(1), status: 'resolved' });
+    const [, pedidoDeStatus] = fetchWithAuth.mock.calls.find(([url]) => url === '/api/chatwoot/status')!;
+    expect(JSON.parse(String(pedidoDeStatus!.body))).toEqual({ conversaId: uuidDaConversa(1), status: 'resolved' });
 
     await abrir('Bruno');
     await responder(mensagens, []);

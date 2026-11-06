@@ -44,7 +44,7 @@ export function lerConfiguracaoDoWorkerInbox(ambiente: Readonly<Record<string, s
 }
 
 /** Espera `ms` ou até o sinal de parada. */
-function esperar(ms: number, sinal: AbortSignal): Promise<void> {
+export function esperar(ms: number, sinal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (sinal.aborted) {
       resolve();
