@@ -39,8 +39,13 @@ async function esperarRest() {
   return false;
 }
 
-/** @returns {Promise<object>} Resultado tagueado da prova integrada. */
-export async function runIntegracaoConsumidorInbox() {
+/**
+ * Sobe o PostgREST do laboratório e roda uma prova integrada do Vitest.
+ *
+ * @param {{ readonly config: string, readonly env?: Record<string, string>, readonly relato: (testes: string) => string }} prova - Config do Vitest, ambiente extra e linha de evidência.
+ * @returns {Promise<object>} Resultado tagueado da prova integrada.
+ */
+export async function rodarProvaComPostgrest({ config, env = {}, relato }) {
   const segredo = crypto.randomBytes(32).toString('hex');
   docker(['rm', '-f', CONTAINER]);
   try {
@@ -65,7 +70,7 @@ export async function runIntegracaoConsumidorInbox() {
       return err('IntegracaoPostgrestSemResposta', 'O PostgREST do laboratório não respondeu', { logs: String(docker(['logs', '--tail', '20', CONTAINER]).stderr).slice(-600) });
     }
 
-    const execucao = spawnSync(process.execPath, ['node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.integracao.config.ts'], {
+    const execucao = spawnSync(process.execPath, ['node_modules/vitest/vitest.mjs', 'run', '--config', config], {
       cwd: process.cwd(),
       encoding: 'utf8',
       shell: false,
@@ -76,6 +81,7 @@ export async function runIntegracaoConsumidorInbox() {
         ORBITA_LAB_REST_PORT: String(PORTA_REST),
         ORBITA_LAB_PROXY_PORT: String(PORTA_PROXY),
         ORBITA_LAB_JWT_SECRET: segredo,
+        ...env,
       },
     });
     const saida = `${execucao.stdout ?? ''}\n${execucao.stderr ?? ''}`;
@@ -84,12 +90,18 @@ export async function runIntegracaoConsumidorInbox() {
       return err('IntegracaoConsumidorFalhou', `Prova integrada falhou:\n${relevante}`, { exit: execucao.status });
     }
     const testes = /Tests\s+(\d+) passed/.exec(saida)?.[1] ?? '?';
-    return ok(Object.freeze({
-      relato: `prova integrada do MSG-006 (webhook real, PostgREST real, worker real, processo morto e reiniciado): ${testes} testes; NÃO é E2E com Chatwoot real`,
-    }));
+    return ok(Object.freeze({ relato: relato(testes) }));
   } catch (cause) {
     return err('IntegracaoConsumidorErro', 'Falha inesperada na prova integrada', {}, cause);
   } finally {
     docker(['rm', '-f', CONTAINER]);
   }
+}
+
+/** @returns {Promise<object>} Resultado tagueado da prova integrada do MSG-006. */
+export function runIntegracaoConsumidorInbox() {
+  return rodarProvaComPostgrest({
+    config: 'vitest.integracao.config.ts',
+    relato: (testes) => `prova integrada do MSG-006 (webhook real, PostgREST real, worker real, processo morto e reiniciado): ${testes} testes`,
+  });
 }

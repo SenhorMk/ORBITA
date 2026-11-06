@@ -179,8 +179,9 @@ export class ChatwootAdapter implements ChatwootPort {
       return { _tag: 'ChatwootFailed', reason: 'invalid-response', retryable: false };
     }
 
-    const payload = (raw as { payload?: unknown })?.payload ?? [];
-    const parsed = ChatwootConversationSchema.array().safeParse(payload);
+    // A listagem vem em `data.payload` (4.19.1). Outro formato é resposta inválida, nunca "sem conversas".
+    const envelope = raw as { data?: { payload?: unknown }; payload?: unknown } | null;
+    const parsed = ChatwootConversationSchema.array().safeParse(envelope?.data?.payload ?? envelope?.payload);
     if (!parsed.success) {
       return { _tag: 'ChatwootFailed', reason: 'invalid-response', retryable: false };
     }
@@ -201,8 +202,8 @@ export class ChatwootAdapter implements ChatwootPort {
       return { _tag: 'ChatwootFailed', reason: 'invalid-response', retryable: false };
     }
 
-    const payload = (raw as { payload?: unknown })?.payload ?? [];
-    const parsed = ChatwootMessageSchema.array().safeParse(payload);
+    // Sem `payload` é resposta inválida, nunca "sem mensagens".
+    const parsed = ChatwootMessageSchema.array().safeParse((raw as { payload?: unknown } | null)?.payload);
     if (!parsed.success) {
       return { _tag: 'ChatwootFailed', reason: 'invalid-response', retryable: false };
     }

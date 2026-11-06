@@ -1,5 +1,9 @@
 # Chatwoot integration contract
 
+Provado contra o Chatwoot CE 4.19.1 real em `docs/operations/msg-001-runbook.md`
+(`npm run test:chatwoot`). Onde isso diverge do texto abaixo, vale a prova. Payloads
+capturados: `src/services/chatwoot/__fixtures__/chatwoot-v4.19.1-webhooks.json`.
+
 Verified against `developers.chatwoot.com` (Application API introduction,
 `/api-reference/webhooks/add-a-webhook`) and public webhook payload examples
 (chatwoot/chatwoot GitHub issues #4267, #13993, #3140) on 2026-08-27, plus the
@@ -28,7 +32,7 @@ Zod schema in `src/services/chatwoot/chatwootPort.ts` and this file together.
 
 | Operation | Method | Path | Notes |
 |---|---|---|---|
-| List conversations | GET | `/conversations` | Response is `{ data: { payload: Conversation[] } }` in newer API responses or `{ payload: Conversation[] }` depending on version; ORBITA parses defensively for `payload`. |
+| List conversations | GET | `/conversations` | 4.19.1 responde `{ data: { meta, payload: Conversation[] } }`; aceita também `{ payload }`. Outro formato é `invalid-response`, nunca lista vazia. Sem filtro, a API só devolve conversas abertas: o sync não vê as resolvidas. |
 | List messages | GET | `/conversations/{conversation_id}/messages` | Response `{ payload: Message[] }`. |
 | Send message | POST | `/conversations/{conversation_id}/messages` | Body `{ content, message_type: "outgoing", private: false }`. |
 | Toggle conversation status | POST | `/conversations/{conversation_id}/toggle_status` | Body `{ status: "open" \| "resolved" \| "pending" }`. |
@@ -93,15 +97,33 @@ endpoint never triggers it. See `docs/operations/msg-006-runbook.md`.
   then HMAC over the original bytes, then 300 signed deliveries per minute per
   connection (`429`; `503` when the counter is unavailable).
 
+### Formato real das entregas (4.19.1)
+
+`ChatwootWebhookEventSchema` normaliza tudo isto num formato só:
+
+- `message_*`: contato em `conversation.meta.sender` e `conversation.contact_inbox.contact_id`;
+  não há `meta` no topo nem `conversation.contact_id`.
+- `sender` de contato vem **sem `type`**; o de agente traz `type: 'user'`. O `type` de contato
+  só é preenchido com prova: mensagem de entrada cujo `sender.id` é o contato da conversa.
+- `conversation_*`: a conversa vem no topo (`id`, `status`, `inbox_id`, `updated_at`), sem
+  `conversation` e sem `inbox`; `created_at` é numérico.
+- Status de conversa no provedor: `open`, `resolved`, `pending` e `snoozed`. A ORBITA lê os
+  quatro e só escreve os três primeiros.
+- `message_updated` não traz `updated_at` da mensagem; a revisão usa o id da entrega.
+- `X-Chatwoot-Delivery` veio em todas as entregas observadas, como UUID. Segue opcional.
+- Na API, `created_at` da mensagem são segundos desde a época; a aplicação recebe ISO.
+- **O Chatwoot não repete entrega recusada.** Um 401 ou 5xx perde aquela entrega
+  (`Webhooks::Trigger` só registra a falha; a prova confirma com 15 s de espera). Recuperar
+  o que se perdeu exige reconciliação, que não existe hoje.
+
 ### Known limitation (provider-side, tracked `needs-owner`)
 
 Chatwoot GitHub issue [#13809](https://github.com/chatwoot/chatwoot/issues/13809)
 (reported 2026) documents that on some Chatwoot versions the `secret` field
 returned by the webhook-creation API does not match the internal `hmac_token`
 actually used to sign deliveries, making signature verification fail even with
-the "correct" documented secret. This must be checked against the specific
-Chatwoot instance/version used for the first real connection (`needs-owner`,
-see the final evidence file) — if the instance is affected, the organization's
+the "correct" documented secret. Na 4.19.1 self-hosted o segredo da API é o que assina (MSG-001). Must still be
+checked against any other version or the Cloud offering before connecting it — if the instance is affected, the organization's
 webhook cannot be verified until the provider fixes it or exposes the real
 signing key, and ORBITA must refuse to accept unsigned/unverifiable deliveries
 rather than silently downgrading to a weaker check.
