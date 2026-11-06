@@ -130,8 +130,9 @@ export async function listarEnviosDaConversa(
     .eq('conversa_id_local', conversaId)
     .order('created_at', { ascending: false })
     .limit(50);
-  if (error) throw new RegistroDeEnvioIndisponivel();
-  return LinhaDoEnvioSchema.array().parse(data ?? []).map((linha) => ({
+  const linhas = LinhaDoEnvioSchema.array().safeParse(data ?? []);
+  if (error || !linhas.success) throw new RegistroDeEnvioIndisponivel();
+  return linhas.data.map((linha) => ({
     id: linha.id,
     commandId: linha.command_id,
     conteudo: linha.conteudo,

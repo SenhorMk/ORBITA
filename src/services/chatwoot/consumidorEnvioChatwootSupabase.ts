@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 
+import { conexaoDesligada } from '../../lib/integrations/conexaoDesligada';
 import { verifyOrganizationScope } from '../../lib/verifiedOrganizationScope';
 import type { DesfechoDoDespacho } from '../outbox/desfechoDoEfeito';
 import { ChatwootAdapter } from './chatwootAdapter';
@@ -77,6 +78,17 @@ export function criarPortaDoConsumidorEnvio(supabase: SupabaseClient): PortaDoCo
       const verificado = await verifyOrganizationScope(supabase, { organizationId: envio.organizacaoId, actorId: envio.atorId });
       if (verificado._tag === 'OrganizationScopeStoreUnavailable') throw new Error('Vínculo indisponível.');
       if (verificado._tag === 'OrganizationScopeDenied') return { _tag: 'SemVinculo' };
+      // Lido aqui, com o erro conferido: `forScope` trata falha de leitura como "não
+      // configurado", e isso recusaria para sempre uma resposta que nunca saiu.
+      const { data: conexao, error } = await supabase
+        .from('conexoes_integracao')
+        .select('status')
+        .eq('organizacao_id', envio.organizacaoId)
+        .eq('id', envio.conexaoId)
+        .eq('provedor', 'chatwoot')
+        .maybeSingle();
+      if (error) throw new Error('Conexão indisponível.');
+      if (!conexao || conexaoDesligada(conexao.status)) return { _tag: 'NaoConfigurado' };
       const adapter = await ChatwootAdapter.forScope(verificado.scope, envio.conexaoId);
       if (!adapter || adapter.conexaoId !== envio.conexaoId) return { _tag: 'NaoConfigurado' };
       return { _tag: 'Canal', canal: adapter };
