@@ -1,5 +1,9 @@
 # Workers da mensageria em container (MSG-020A)
 
+> **D5 revisada em 07/11/2026:** a Oracle São Paulo não teve capacidade para a A1. O host
+> temporário é o notebook Windows ([msg-020c-runbook.md](msg-020c-runbook.md)). Este runbook
+> continua valendo para uma VPS Linux futura.
+
 Fatia do MSG-020: empacotar e supervisionar os dois workers (inbox, MSG-006; envio,
 MSG-008) para rodarem fora da máquina de desenvolvimento. Host escolhido pela
 proprietária em 06/11/2026: **Oracle Cloud Always Free** (decisão D5). Alertas de

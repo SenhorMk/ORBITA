@@ -1,5 +1,9 @@
 # Chatwoot na VM do staging (MSG-020B)
 
+> **D5 revisada em 07/11/2026:** a Oracle São Paulo não teve capacidade para a A1. O host
+> temporário é o notebook Windows ([msg-020c-runbook.md](msg-020c-runbook.md)). Este runbook
+> continua valendo para uma VPS Linux futura.
+
 Fatia do MSG-020: hospedar o Chatwoot CE na mesma VM Oracle Always Free dos workers
 (decisão D5, 06/11/2026), com endereço público em HTTPS, para o staging ter uma conexão
 Chatwoot real. Isso destrava o gate 4 do MSG-008.
