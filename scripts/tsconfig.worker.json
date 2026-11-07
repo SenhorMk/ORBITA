@@ -8,6 +8,7 @@
   },
   "include": [
     "worker-inbox-chatwoot.ts",
-    "worker-envio-chatwoot.ts"
+    "worker-envio-chatwoot.ts",
+    "worker-supervisionado.ts"
   ]
 }

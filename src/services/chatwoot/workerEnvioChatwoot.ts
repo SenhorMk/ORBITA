@@ -56,6 +56,8 @@ export async function executarWorkerEnvio(
   porta: PortaDoConsumidorEnvio,
   configuracao: ConfiguracaoDoWorkerEnvio,
   sinal: AbortSignal,
+  /** Chamado a cada volta do laço: é o sinal de vida para a supervisão (MSG-020A). */
+  aoBater: () => void = () => {},
 ): Promise<void> {
   const { criadosDesde } = configuracao;
   if (!configuracao.ligado || criadosDesde === null) {
@@ -67,6 +69,7 @@ export async function executarWorkerEnvio(
   logger.info('chatwoot.envio.worker_iniciado', { subsystem: 'queue', workerId });
   let espera = configuracao.pollMs;
   while (!sinal.aborted) {
+    aoBater();
     try {
       const resumo = await consumirEnviosUmaVez(porta, {
         workerId,
