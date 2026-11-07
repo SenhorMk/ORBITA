@@ -85,15 +85,25 @@ function iniciar() {
   docker([...workers, 'up', '-d', '--build'], { env: ambienteWorkers });
 }
 
-function apiDoChatwoot() {
+function getLocal(path) {
   return new Promise((ok) => {
     // Certificado interno do Caddy para localhost: só esta checagem local o aceita.
-    https.get({ host: '127.0.0.1', port: PORTA_HTTPS, path: '/api', servername: 'localhost', headers: { host: 'localhost' }, rejectUnauthorized: false, timeout: 10_000 }, (res) => {
+    https.get({ host: '127.0.0.1', port: PORTA_HTTPS, path, servername: 'localhost', headers: { host: 'localhost' }, rejectUnauthorized: false, timeout: 10_000 }, (res) => {
       let corpo = '';
       res.on('data', (c) => { corpo += c; });
       res.on('end', () => ok({ status: res.statusCode, corpo }));
     }).on('error', (e) => ok({ status: 0, corpo: e.message }));
   });
+}
+
+/**
+ * O /api do Chatwoot responde `data_services: failing` quando a conexão do pool está
+ * ociosa (`connection.active?`), com o banco saudável. Uma página que consulta o banco
+ * reabre a conexão antes da checagem.
+ */
+async function apiDoChatwoot() {
+  await getLocal('/app/login');
+  return getLocal('/api');
 }
 
 async function verificar() {
