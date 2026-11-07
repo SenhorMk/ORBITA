@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { criarVigia, manterNoAr } from './supervisao';
+import { criarVigia, manterNoAr, vigiaCobreUmaPassada } from './supervisao';
 
 function relogioManual() {
   let agora = 0;
@@ -70,5 +70,24 @@ describe('manterNoAr', () => {
     const v = vigia();
     await manterNoAr(async (_sinal, bater) => { bater(); bater(); parada.abort(); }, parada.signal, v, 5);
     expect(v.bater).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('limite do vigia contra o tamanho do lote', () => {
+  it('padrão do envio cabe: 10 itens de até 10 s, com o dobro de margem, em 300 s', () => {
+    expect(vigiaCobreUmaPassada(300_000, 10, 10_000)).toBe(true);
+  });
+
+  it('lote máximo do envio não cabe em 300 s: o vigia derrubaria um worker sadio', () => {
+    expect(vigiaCobreUmaPassada(300_000, 50, 10_000)).toBe(false);
+  });
+
+  it('o limite mínimo é o dobro de lote × pior item', () => {
+    expect(vigiaCobreUmaPassada(400_000, 20, 10_000)).toBe(true);
+    expect(vigiaCobreUmaPassada(399_999, 20, 10_000)).toBe(false);
+  });
+
+  it('sem chamada a provedor (inbox), qualquer limite cobre', () => {
+    expect(vigiaCobreUmaPassada(5_000, 50, 0)).toBe(true);
   });
 });

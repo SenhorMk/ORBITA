@@ -52,8 +52,9 @@ services:
       CHATWOOT_DOMAIN: ${CHATWOOT_DOMAIN:?defina em infra/chatwoot-vm/.env}
       ACME_EMAIL: ${ACME_EMAIL:?defina em infra/chatwoot-vm/.env}
     ports:
-      - ${CHATWOOT_HTTP_PORT:-80}:80
-      - ${CHATWOOT_HTTPS_PORT:-443}:443
+      # No notebook (MSG-020C) CHATWOOT_BIND=127.0.0.1: nada fica acessível pela rede.
+      - ${CHATWOOT_BIND:-0.0.0.0}:${CHATWOOT_HTTP_PORT:-80}:80
+      - ${CHATWOOT_BIND:-0.0.0.0}:${CHATWOOT_HTTPS_PORT:-443}:443
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

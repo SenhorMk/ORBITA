@@ -19,7 +19,8 @@ const ConfiguracaoSchema = z.object({
   // Maior que o timeout do adapter (10 s), com folga para gravar o desfecho.
   CHATWOOT_SEND_WORKER_LEASE_SECONDS: z.coerce.number().int().min(30).max(300).default(60),
   CHATWOOT_SEND_WORKER_BATCH: z.coerce.number().int().min(1).max(50).default(10),
-  CHATWOOT_SEND_WORKER_BACKLOG_DESDE: z.string().datetime({ offset: true }).optional(),
+  // Vazio (como no .env de modelo) é ausência: o worker desligado tem de subir.
+  CHATWOOT_SEND_WORKER_BACKLOG_DESDE: z.preprocess((v) => (v === '' ? undefined : v), z.string().datetime({ offset: true }).optional()),
 });
 
 export interface ConfiguracaoDoWorkerEnvio {

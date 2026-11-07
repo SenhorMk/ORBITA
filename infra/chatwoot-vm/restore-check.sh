@@ -3,10 +3,13 @@
 # e conta contas, conversas e mensagens. Uso: ./restore-check.sh [arquivo.dump]
 set -euo pipefail
 cd "$(dirname "$0")"
-set -a; . ./.env; set +a
+# CHATWOOT_ENV_FILE: .env fora do repositório (MSG-020C, notebook).
+env_file="${CHATWOOT_ENV_FILE:-./.env}"
+set -a; . "$env_file"; set +a
+compose() { docker compose --env-file "$env_file" "$@"; }
 
 dump="${1:-$(ls -1t "${BACKUP_DIR:-/var/backups/chatwoot}"/chatwoot-*.dump | head -n 1)}"
-imagem="$(docker compose config --images | grep pgvector)"
+imagem="$(compose config --images | grep pgvector)"
 nome="chatwoot-restore-check-$$"
 senha="$(openssl rand -hex 16)"
 

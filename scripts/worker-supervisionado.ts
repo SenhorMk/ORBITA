@@ -7,11 +7,12 @@
 import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import { logger } from '../src/lib/observability/logger';
+import { CHATWOOT_TIMEOUT_MS } from '../src/services/chatwoot/chatwootAdapter';
 import { criarPortaDoConsumidorEnvio } from '../src/services/chatwoot/consumidorEnvioChatwootSupabase';
 import { criarPortaDoConsumidorInbox } from '../src/services/chatwoot/consumidorInboxChatwootSupabase';
 import { executarWorkerEnvio, lerConfiguracaoDoWorkerEnvio } from '../src/services/chatwoot/workerEnvioChatwoot';
 import { executarWorkerInbox, lerConfiguracaoDoWorkerInbox } from '../src/services/chatwoot/workerInboxChatwoot';
-import { criarVigia, manterNoAr } from '../src/services/worker/supervisao';
+import { criarVigia, manterNoAr, vigiaCobreUmaPassada } from '../src/services/worker/supervisao';
 
 const SupervisaoSchema = z.object({
   // Maior que uma passada inteira: lote × timeout do provedor, com folga.
@@ -32,11 +33,17 @@ if (!url || !chave) {
 
 const { WORKER_WATCHDOG_SECONDS: limite } = SupervisaoSchema.parse(process.env);
 const supabase = createClient(url, chave, { auth: { persistSession: false, autoRefreshToken: false } });
-const rodar = tipo === 'inbox'
-  ? ((configuracao) => (sinal: AbortSignal, bater: () => void) =>
-      executarWorkerInbox(criarPortaDoConsumidorInbox(supabase), configuracao, sinal, bater))(lerConfiguracaoDoWorkerInbox(process.env))
-  : ((configuracao) => (sinal: AbortSignal, bater: () => void) =>
-      executarWorkerEnvio(criarPortaDoConsumidorEnvio(supabase), configuracao, sinal, bater))(lerConfiguracaoDoWorkerEnvio(process.env));
+const inbox = tipo === 'inbox' ? lerConfiguracaoDoWorkerInbox(process.env) : null;
+const envio = tipo === 'envio' ? lerConfiguracaoDoWorkerEnvio(process.env) : null;
+// A inbox não chama provedor; o envio espera até o timeout do Chatwoot por item.
+const lote = inbox?.lote ?? envio?.lote ?? 0;
+if (!vigiaCobreUmaPassada(limite * 1_000, lote, envio ? CHATWOOT_TIMEOUT_MS : 0)) {
+  console.error(`Worker ${tipo}: WORKER_WATCHDOG_SECONDS=${limite} não cobre um lote de ${lote}; aumente o limite ou reduza o lote.`);
+  process.exit(2);
+}
+const rodar = inbox
+  ? (sinal: AbortSignal, bater: () => void) => executarWorkerInbox(criarPortaDoConsumidorInbox(supabase), inbox, sinal, bater)
+  : (sinal: AbortSignal, bater: () => void) => executarWorkerEnvio(criarPortaDoConsumidorEnvio(supabase), envio!, sinal, bater);
 
 const parada = new AbortController();
 process.on('SIGINT', () => parada.abort());

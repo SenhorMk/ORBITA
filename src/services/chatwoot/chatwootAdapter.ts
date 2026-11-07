@@ -10,7 +10,7 @@ import {
   type ChatwootPort,
 } from './chatwootPort';
 
-const CHATWOOT_TIMEOUT_MS = 10_000;
+export const CHATWOOT_TIMEOUT_MS = 10_000;
 
 /** Default Chatwoot Cloud origin used only when a connection omits `api_url`
  * (self-hosted deployments always provide their own). Overridable via env for

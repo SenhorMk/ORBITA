@@ -9,7 +9,8 @@ x-worker: &worker
     context: ../..
     dockerfile: infra/worker/Dockerfile
   image: orbita-worker:local
-  env_file: .env
+  # WORKER_ENV_FILE aponta para um .env fora do repositório (MSG-020C, notebook).
+  env_file: ${WORKER_ENV_FILE:-.env}
   restart: unless-stopped
   init: true
   read_only: true

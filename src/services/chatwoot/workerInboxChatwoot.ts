@@ -15,7 +15,8 @@ const ConfiguracaoSchema = z.object({
   CHATWOOT_INBOX_WORKER_IDLE_MAX_MS: z.coerce.number().int().min(100).max(60_000).default(5_000),
   CHATWOOT_INBOX_WORKER_LEASE_SECONDS: z.coerce.number().int().min(5).max(300).default(60),
   CHATWOOT_INBOX_WORKER_BATCH: z.coerce.number().int().min(1).max(50).default(10),
-  CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: z.string().datetime({ offset: true }).optional(),
+  // Vazio (como no .env de modelo) é ausência: o worker desligado tem de subir.
+  CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: z.preprocess((v) => (v === '' ? undefined : v), z.string().datetime({ offset: true }).optional()),
 });
 
 export interface ConfiguracaoDoWorkerInbox {

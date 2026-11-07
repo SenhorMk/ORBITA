@@ -236,6 +236,12 @@ describe('worker: kill switch e configuração', () => {
     expect(() => lerConfiguracaoDoWorkerInbox({ CHATWOOT_INBOX_WORKER_ENABLED: 'true', CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: 'ontem' })).toThrow();
   });
 
+  it('corte vazio, como vem no .env de modelo, é ausência: desligado sobe, ligado recusa', () => {
+    expect(lerConfiguracaoDoWorkerInbox({ CHATWOOT_INBOX_WORKER_ENABLED: 'false', CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: '' }))
+      .toMatchObject({ ligado: false, recebidosDesde: null });
+    expect(() => lerConfiguracaoDoWorkerInbox({ CHATWOOT_INBOX_WORKER_ENABLED: 'true', CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: '' })).toThrow(/BACKLOG_DESDE/u);
+  });
+
   it('o corte chega ao claim', async () => {
     const p = porta({ _tag: 'PossePerdida' }, []);
     await consumirInboxUmaVez(p, OPCOES);

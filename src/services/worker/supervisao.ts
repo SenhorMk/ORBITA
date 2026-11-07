@@ -50,6 +50,16 @@ export function criarVigia(
 }
 
 /**
+ * O vigia só bate entre passadas. Se uma passada saudável (lote inteiro, cada item
+ * no pior tempo do provedor, com o dobro de margem para o banco) pode passar do
+ * limite, o vigia derruba um worker sadio no meio do lote: o processo recusa subir
+ * assim (MSG-020C).
+ */
+export function vigiaCobreUmaPassada(limiteMs: number, lote: number, piorItemMs: number): boolean {
+  return limiteMs >= 2 * lote * piorItemMs;
+}
+
+/**
  * Roda o laço e, se ele terminar sem pedido de parada (worker desligado), mantém
  * o processo parado e batendo até o sinal.
  */

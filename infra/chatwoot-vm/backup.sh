@@ -3,7 +3,10 @@
 # Roda na pasta infra/chatwoot-vm do host. Agendar pelo cron do host, ver o runbook.
 set -euo pipefail
 cd "$(dirname "$0")"
-set -a; . ./.env; set +a
+# CHATWOOT_ENV_FILE: .env fora do repositório (MSG-020C, notebook).
+env_file="${CHATWOOT_ENV_FILE:-./.env}"
+set -a; . "$env_file"; set +a
+compose() { docker compose --env-file "$env_file" "$@"; }
 
 destino="${BACKUP_DIR:-/var/backups/chatwoot}"
 reter="${BACKUP_RETENTION_DAYS:-7}"
@@ -12,14 +15,17 @@ umask 077
 mkdir -p "$destino"
 
 # Escreve em .partial e só renomeia no fim: um backup interrompido nunca parece completo.
-docker compose exec -T postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U postgres -Fc chatwoot' \
+compose exec -T postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U postgres -Fc chatwoot' \
   > "$destino/chatwoot-$carimbo.dump.partial"
 mv "$destino/chatwoot-$carimbo.dump.partial" "$destino/chatwoot-$carimbo.dump"
 
-docker compose exec -T rails tar czf - -C /app/storage . > "$destino/storage-$carimbo.tar.gz.partial"
+compose exec -T rails tar czf - -C /app/storage . > "$destino/storage-$carimbo.tar.gz.partial"
 mv "$destino/storage-$carimbo.tar.gz.partial" "$destino/storage-$carimbo.tar.gz"
 
-find "$destino" -maxdepth 1 -type f \( -name 'chatwoot-*.dump' -o -name 'storage-*.tar.gz' \) -mtime "+$reter" -delete
+# 0 desliga a retenção: nenhum backup é apagado (padrão do notebook).
+if [ "$reter" -gt 0 ]; then
+  find "$destino" -maxdepth 1 -type f \( -name 'chatwoot-*.dump' -o -name 'storage-*.tar.gz' \) -mtime "+$reter" -delete
+fi
 
 if [ -n "${BACKUP_RCLONE_REMOTE:-}" ]; then
   rclone copy "$destino" "$BACKUP_RCLONE_REMOTE" --include "*-$carimbo.*"
