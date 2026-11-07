@@ -44,6 +44,7 @@ vi.mock('@/lib/supabaseServer', async () => {
 
 const laboratorio = { chaveDeServico: () => jwtDoLaboratorio('service_role') };
 const IMAGEM = 'orbita-worker:local';
+const PLATAFORMA = process.env.WORKER_PLATFORM ? ['--platform', process.env.WORKER_PLATFORM] : [];
 const ORG = 'e0200000-0000-4000-8000-00000000000a';
 const DONO = 'e0200000-0000-4000-8000-0000000000a1';
 const CONEXAO = 'e0200000-0000-4000-8000-0000000000c1';
@@ -72,7 +73,7 @@ function subir(nome: string, tipo: 'inbox' | 'envio', env: Record<string, string
     ENCRYPTION_KEY: process.env.ENCRYPTION_KEY ?? '',
     ...env,
   }).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
-  const r = docker(['run', '-d', '--name', nome, '--add-host', 'host.docker.internal:host-gateway', '--init', '--read-only',
+  const r = docker(['run', '-d', ...PLATAFORMA, '--name', nome, '--add-host', 'host.docker.internal:host-gateway', '--init', '--read-only',
     '--tmpfs', '/tmp', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', ...extras, ...variaveis, IMAGEM, tipo]);
   expect(r.status, String(r.stderr)).toBe(0);
 }

@@ -13,11 +13,14 @@ import { err, failureMessage } from './script-result.mjs';
 /**
  * MSG-020A. Constrói a imagem do worker a partir do código atual e prova o
  * container contra o laboratório descartável. Não fala com nenhum provedor.
+ * WORKER_PLATFORM=linux/arm64 prova a imagem da VM Ampere por emulação.
  */
+
+const plataforma = process.env.WORKER_PLATFORM ? ['--platform', process.env.WORKER_PLATFORM] : [];
 
 let resultado;
 try {
-  const build = spawnSync('docker', ['build', '-f', 'infra/worker/Dockerfile', '-t', 'orbita-worker:local', '.'], {
+  const build = spawnSync('docker', ['build', ...plataforma, '-f', 'infra/worker/Dockerfile', '-t', 'orbita-worker:local', '.'], {
     encoding: 'utf8', shell: false, maxBuffer: 64 * 1024 * 1024, timeout: 900_000,
   });
   if (build.status !== 0) throw new Error(`A imagem do worker não foi construída: ${String(build.stderr).slice(-600)}`);
