@@ -7,7 +7,7 @@ import path from 'path';
  */
 export default defineConfig({
   test: {
-    include: ['src/services/worker/workerContainer.integracao.test.ts'],
+    include: ['src/services/worker/workerContainer.integracao.test.ts', 'scripts/restore-check.integracao.test.ts'],
     testTimeout: 180_000,
     hookTimeout: 120_000,
     pool: 'forks',
