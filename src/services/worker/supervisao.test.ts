@@ -1,13 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { criarVigia, manterNoAr, vigiaCobreUmaPassada } from './supervisao';
+import { criarVigia, manterNoAr, vigiaCobreUmItem } from './supervisao';
 
+/** Relógio em que a checagem do vigia roda no intervalo pedido, como o setInterval. */
 function relogioManual() {
   let agora = 0;
+  let intervalo = 1_000;
   let verificar: () => void = () => {};
   return {
-    relogio: { agora: () => agora, aCada: (fn: () => void) => { verificar = fn; return () => { verificar = () => {}; }; } },
-    avancar(ms: number) { agora += ms; verificar(); },
+    relogio: { agora: () => agora, aCada: (fn: () => void, ms: number) => { verificar = fn; intervalo = ms; return () => { verificar = () => {}; }; } },
+    avancar(ms: number) {
+      for (let passado = 0; passado < ms; passado += intervalo) { agora += Math.min(intervalo, ms - passado); verificar(); }
+    },
+    /** Host suspenso: o processo inteiro congela, e a checagem só roda de novo ao acordar. */
+    suspender(ms: number) { agora += ms; verificar(); },
   };
 }
 
@@ -32,6 +38,26 @@ describe('vigia do worker', () => {
       vigia.bater();
     }
     expect(aoTravar).not.toHaveBeenCalled();
+  });
+
+  it('suspensão do host não é travamento: o salto do relógio re-arma o prazo', () => {
+    const { relogio, avancar, suspender } = relogioManual();
+    const aoTravar = vi.fn();
+    criarVigia(10_000, aoTravar, relogio);
+    avancar(4_000);
+    suspender(2 * 60 * 60 * 1_000);
+    expect(aoTravar).not.toHaveBeenCalled();
+    avancar(9_000);
+    expect(aoTravar).not.toHaveBeenCalled();
+  });
+
+  it('depois da suspensão, sem batida além do limite, dispara', () => {
+    const { relogio, avancar, suspender } = relogioManual();
+    const aoTravar = vi.fn();
+    criarVigia(10_000, aoTravar, relogio);
+    suspender(2 * 60 * 60 * 1_000);
+    avancar(12_000);
+    expect(aoTravar).toHaveBeenCalledTimes(1);
   });
 
   it('parado, o vigia não dispara mais', () => {
@@ -73,21 +99,17 @@ describe('manterNoAr', () => {
   });
 });
 
-describe('limite do vigia contra o tamanho do lote', () => {
-  it('padrão do envio cabe: 10 itens de até 10 s, com o dobro de margem, em 300 s', () => {
-    expect(vigiaCobreUmaPassada(300_000, 10, 10_000)).toBe(true);
+describe('limite do vigia contra o pior item', () => {
+  it('o padrão de 300 s cobre um envio de até 10 s, qualquer que seja o lote', () => {
+    expect(vigiaCobreUmItem(300_000, 10_000)).toBe(true);
   });
 
-  it('lote máximo do envio não cabe em 300 s: o vigia derrubaria um worker sadio', () => {
-    expect(vigiaCobreUmaPassada(300_000, 50, 10_000)).toBe(false);
-  });
-
-  it('o limite mínimo é o dobro de lote × pior item', () => {
-    expect(vigiaCobreUmaPassada(400_000, 20, 10_000)).toBe(true);
-    expect(vigiaCobreUmaPassada(399_999, 20, 10_000)).toBe(false);
+  it('o limite mínimo é o dobro do pior item', () => {
+    expect(vigiaCobreUmItem(20_000, 10_000)).toBe(true);
+    expect(vigiaCobreUmItem(19_999, 10_000)).toBe(false);
   });
 
   it('sem chamada a provedor (inbox), qualquer limite cobre', () => {
-    expect(vigiaCobreUmaPassada(5_000, 50, 0)).toBe(true);
+    expect(vigiaCobreUmItem(5_000, 0)).toBe(true);
   });
 });

@@ -12,7 +12,7 @@ import { criarPortaDoConsumidorEnvio } from '../src/services/chatwoot/consumidor
 import { criarPortaDoConsumidorInbox } from '../src/services/chatwoot/consumidorInboxChatwootSupabase';
 import { executarWorkerEnvio, lerConfiguracaoDoWorkerEnvio } from '../src/services/chatwoot/workerEnvioChatwoot';
 import { executarWorkerInbox, lerConfiguracaoDoWorkerInbox } from '../src/services/chatwoot/workerInboxChatwoot';
-import { criarVigia, manterNoAr, vigiaCobreUmaPassada } from '../src/services/worker/supervisao';
+import { criarVigia, manterNoAr, vigiaCobreUmItem } from '../src/services/worker/supervisao';
 
 const SupervisaoSchema = z.object({
   // Maior que uma passada inteira: lote × timeout do provedor, com folga.
@@ -36,9 +36,8 @@ const supabase = createClient(url, chave, { auth: { persistSession: false, autoR
 const inbox = tipo === 'inbox' ? lerConfiguracaoDoWorkerInbox(process.env) : null;
 const envio = tipo === 'envio' ? lerConfiguracaoDoWorkerEnvio(process.env) : null;
 // A inbox não chama provedor; o envio espera até o timeout do Chatwoot por item.
-const lote = inbox?.lote ?? envio?.lote ?? 0;
-if (!vigiaCobreUmaPassada(limite * 1_000, lote, envio ? CHATWOOT_TIMEOUT_MS : 0)) {
-  console.error(`Worker ${tipo}: WORKER_WATCHDOG_SECONDS=${limite} não cobre um lote de ${lote}; aumente o limite ou reduza o lote.`);
+if (!vigiaCobreUmItem(limite * 1_000, envio ? CHATWOOT_TIMEOUT_MS : 0)) {
+  console.error(`Worker ${tipo}: WORKER_WATCHDOG_SECONDS=${limite} não cobre um envio de até ${CHATWOOT_TIMEOUT_MS / 1_000} s; aumente o limite.`);
   process.exit(2);
 }
 const rodar = inbox

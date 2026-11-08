@@ -35,14 +35,26 @@ export function criarVigia(
     },
   },
 ): Vigia {
+  const intervalo = Math.max(1_000, Math.floor(limiteMs / 4));
   let ultima = relogio.agora();
+  let ultimaChecagem = ultima;
   let disparou = false;
   const cancelar = relogio.aCada(() => {
-    if (!disparou && relogio.agora() - ultima > limiteMs) {
+    const agora = relogio.agora();
+    // A própria checagem atrasou: o processo inteiro ficou congelado (host suspenso,
+    // VM pausada), não o laço. Esperar I/O pendurado não atrasa o timer. Re-arma o prazo
+    // em vez de derrubar um worker sadio ao acordar (MSG-020C, Modern Standby).
+    const congelado = agora - ultimaChecagem > 2 * intervalo;
+    ultimaChecagem = agora;
+    if (congelado) {
+      ultima = agora;
+      return;
+    }
+    if (!disparou && agora - ultima > limiteMs) {
       disparou = true;
       aoTravar();
     }
-  }, Math.max(1_000, Math.floor(limiteMs / 4)));
+  }, intervalo);
   return {
     bater: () => { ultima = relogio.agora(); },
     parar: cancelar,
@@ -50,13 +62,12 @@ export function criarVigia(
 }
 
 /**
- * O vigia só bate entre passadas. Se uma passada saudável (lote inteiro, cada item
- * no pior tempo do provedor, com o dobro de margem para o banco) pode passar do
- * limite, o vigia derruba um worker sadio no meio do lote: o processo recusa subir
- * assim (MSG-020C).
+ * O laço bate no vigia a cada item do lote. Se um item saudável, no pior tempo do
+ * provedor e com o dobro de margem para o banco, pode passar do limite, o vigia
+ * derrubaria um worker sadio: o processo recusa subir assim (MSG-020C).
  */
-export function vigiaCobreUmaPassada(limiteMs: number, lote: number, piorItemMs: number): boolean {
-  return limiteMs >= 2 * lote * piorItemMs;
+export function vigiaCobreUmItem(limiteMs: number, piorItemMs: number): boolean {
+  return limiteMs >= 2 * piorItemMs;
 }
 
 /**

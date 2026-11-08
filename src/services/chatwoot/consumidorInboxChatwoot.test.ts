@@ -266,6 +266,23 @@ describe('worker: kill switch e configuração', () => {
     expect(p.aplicar).not.toHaveBeenCalled();
   });
 
+  it('ligado: cada item do lote conta como sinal de vida para o vigia, não só a passada', async () => {
+    const parada = new AbortController();
+    const p = porta({ _tag: 'Aplicado', disposicao: 'caso_aberto', casoId: 'c' });
+    p.reivindicar.mockResolvedValueOnce([EVENTO, EVENTO, EVENTO]);
+    let aplicados = 0;
+    p.aplicar.mockImplementation(async () => {
+      aplicados += 1;
+      if (aplicados === 3) parada.abort();
+      return { _tag: 'Aplicado', disposicao: 'caso_aberto', casoId: 'c' };
+    });
+    const aoBater = vi.fn();
+    await executarWorkerInbox(p, lerConfiguracaoDoWorkerInbox(LIGADO), parada.signal, aoBater);
+    expect(aplicados).toBe(3);
+    // Uma batida no início da passada e uma antes de cada item.
+    expect(aoBater.mock.calls.length).toBeGreaterThanOrEqual(4);
+  });
+
   it('banco fora no claim: não derruba o processo, recua e continua', async () => {
     const parada = new AbortController();
     const p = porta({ _tag: 'PossePerdida' });

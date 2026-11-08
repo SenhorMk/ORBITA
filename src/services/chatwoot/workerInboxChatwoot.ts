@@ -90,7 +90,8 @@ export async function executarWorkerInbox(
         limite: configuracao.lote,
         leaseSegundos: configuracao.leaseSegundos,
         recebidosDesde,
-        deveParar: () => sinal.aborted,
+        // Cada item é sinal de vida: o vigia mede progresso por item, não por lote (MSG-020C).
+        deveParar: () => { aoBater(); return sinal.aborted; },
       });
       espera = resumo.reivindicados > 0 ? configuracao.pollMs : Math.min(espera * 2, configuracao.ociosoMaxMs);
       if (resumo.reivindicados > 0) logger.info('chatwoot.inbox.passada', { subsystem: 'queue', workerId, ...resumo });
