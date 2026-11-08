@@ -163,6 +163,18 @@ describe('a imagem do worker', () => {
     expect(logs('orbita-m20-desligado')).toContain('worker.encerrado');
   });
 
+  it('host suspenso (container congelado) não é travamento: acorda sem reinício', async () => {
+    // `docker pause` congela o processo como o Modern Standby do Windows congela a VM.
+    subir('orbita-m20-suspenso', 'inbox', { WORKER_WATCHDOG_SECONDS: '6' }, ['--restart', 'unless-stopped']);
+    expect(await esperarAte(() => logs('orbita-m20-suspenso').includes('chatwoot.inbox.worker_desligado'), 30_000)).toBe(true);
+    expect(docker(['pause', 'orbita-m20-suspenso']).status).toBe(0);
+    await new Promise((resolve) => { setTimeout(resolve, 20_000); });
+    expect(docker(['unpause', 'orbita-m20-suspenso']).status).toBe(0);
+    await new Promise((resolve) => { setTimeout(resolve, 10_000); });
+    expect(estado('orbita-m20-suspenso')).toMatchObject({ rodando: true, reinicios: 0 });
+    expect(logs('orbita-m20-suspenso')).not.toContain('worker.travado');
+  });
+
   it('ligado, o container consome uma entrega real da inbox e abre o caso', async () => {
     const corpo = JSON.stringify(capturas.entrada_do_cliente_api_publica);
     const timestamp = String(Math.floor(Date.now() / 1000));
