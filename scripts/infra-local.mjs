@@ -1,10 +1,11 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import https from 'node:https';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { getHttpsLocal } from './infra-local-http.mjs';
 
 /**
  * MSG-020C. Host local do notebook: Chatwoot do laboratório (Modo A) e workers
@@ -76,25 +77,44 @@ function preparar() {
   console.log(`configuração em ${pasta}`);
 }
 
-function iniciar() {
+const engineNoAr = () => spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], { encoding: 'utf8' }).status === 0;
+
+/** Abre o Docker Desktop do usuário se o engine não responde, e espera até 3 min. */
+async function garantirDocker() {
+  if (engineNoAr()) return;
+  if (process.platform !== 'win32') throw new Error('Docker não responde: inicie o Docker.');
+  console.log('Docker Desktop não está iniciado: abrindo...');
+  const app = join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Docker', 'Docker', 'Docker Desktop.exe');
+  if (!existsSync(app)) throw new Error(`Docker Desktop não encontrado em ${app}`);
+  spawn(app, [], { detached: true, stdio: 'ignore' }).unref();
+  for (let i = 0; i < 90 && !engineNoAr(); i += 1) await new Promise((r) => { setTimeout(r, 2_000); });
+  if (!engineNoAr()) throw new Error('Docker Desktop não respondeu em 3 minutos.');
+}
+
+const SERVICOS = { chatwoot: ['caddy', 'rails', 'sidekiq', 'postgres', 'redis'], workers: ['inbox', 'envio'] };
+
+function rodando(base, env) {
+  const saida = docker([...base, 'ps', '--status', 'running', '--services'], { env, mostrar: false });
+  return new Set(saida.split('\n').map((s) => s.trim()).filter(Boolean));
+}
+
+async function iniciar() {
   exigirPreparado();
+  await garantirDocker();
+  const noAr = new Set([...rodando(chatwoot), ...rodando(workers, ambienteWorkers)]);
+  if ([...SERVICOS.chatwoot, ...SERVICOS.workers].every((s) => noAr.has(s))) {
+    console.log('Laboratório já está no ar: nada a iniciar. Use "verificar".');
+    return;
+  }
   docker([...chatwoot, 'up', '-d', '--wait', 'postgres', 'redis']);
   // Idempotente: cria o banco na primeira vez e aplica migrações depois.
   docker([...chatwoot, 'run', '--rm', '--no-deps', 'rails', 'bundle', 'exec', 'rails', 'db:chatwoot_prepare']);
   docker([...chatwoot, 'up', '-d']);
-  docker([...workers, 'up', '-d', '--build'], { env: ambienteWorkers });
+  // Sem --build: a imagem existente basta; "atualizar" reconstrói.
+  docker([...workers, 'up', '-d'], { env: ambienteWorkers });
 }
 
-function getLocal(path) {
-  return new Promise((ok) => {
-    // Certificado interno do Caddy para localhost: só esta checagem local o aceita.
-    https.get({ host: '127.0.0.1', port: PORTA_HTTPS, path, servername: 'localhost', headers: { host: 'localhost' }, rejectUnauthorized: false, timeout: 10_000 }, (res) => {
-      let corpo = '';
-      res.on('data', (c) => { corpo += c; });
-      res.on('end', () => ok({ status: res.statusCode, corpo }));
-    }).on('error', (e) => ok({ status: 0, corpo: e.message }));
-  });
-}
+const getLocal = (path) => getHttpsLocal({ port: PORTA_HTTPS, path, timeoutMs: 10_000 });
 
 /**
  * O /api do Chatwoot responde `data_services: failing` quando a conexão do pool está
@@ -108,6 +128,7 @@ async function apiDoChatwoot() {
 
 async function verificar() {
   exigirPreparado();
+  if (!engineNoAr()) throw new Error('Laboratório indisponível: o Docker Desktop não está iniciado. Rode "iniciar".');
   const falhas = [];
   const conferir = (ok, texto) => { console.log(`${ok ? 'ok   ' : 'FALHA'} ${texto}`); if (!ok) falhas.push(texto); };
 
@@ -122,9 +143,16 @@ async function verificar() {
     .flatMap((l) => (JSON.parse(l).Publishers ?? []).filter((p) => p.PublishedPort).map((p) => `${JSON.parse(l).Service}@${p.URL}:${p.PublishedPort}`));
   conferir(publicadas.length > 0 && publicadas.every((p) => p.startsWith('caddy@127.0.0.1:')), `portas publicadas só em 127.0.0.1: ${publicadas.join(', ')}`);
 
-  for (const servico of ['inbox', 'envio']) {
+  for (const servico of SERVICOS.chatwoot) {
+    const id = docker([...chatwoot, 'ps', '-q', servico], { mostrar: false }).trim();
+    const [noAr, reinicios] = id ? docker(['inspect', '--format', '{{.State.Running}} {{.RestartCount}}', id], { mostrar: false }).trim().split(' ') : ['false', '?'];
+    conferir(noAr === 'true' && reinicios === '0', `chatwoot ${servico} de pé, ${reinicios} reinícios inesperados`);
+  }
+
+  for (const servico of SERVICOS.workers) {
     const id = docker([...workers, 'ps', '-q', servico], { env: ambienteWorkers, mostrar: false }).trim();
     if (!id) { conferir(false, `worker ${servico} instalado`); continue; }
+    // Reinício inesperado: um worker desligado não tem motivo para reiniciar.
     const [rodando, reinicios, rede] = docker(['inspect', '--format', '{{.State.Running}} {{.RestartCount}} {{.HostConfig.NetworkMode}}', id], { mostrar: false }).trim().split(' ');
     const env = docker(['inspect', '--format', '{{range .Config.Env}}{{println .}}{{end}}', id], { mostrar: false });
     const chave = servico === 'inbox' ? 'CHATWOOT_INBOX_WORKER_ENABLED' : 'CHATWOOT_SEND_WORKER_ENABLED';
@@ -136,7 +164,9 @@ async function verificar() {
   }
 
   console.log(docker(['stats', '--no-stream', '--format', '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}'], { mostrar: false }));
-  if (falhas.length) throw new Error(`${falhas.length} verificação(ões) falharam`);
+  console.log(docker(['system', 'df', '--format', '{{.Type}}\t{{.Size}}\t(recuperável {{.Reclaimable}})'], { mostrar: false }));
+  if (falhas.length) throw new Error(`Laboratório com problema: ${falhas.length} verificação(ões) falharam.`);
+  console.log(`Laboratório no ar: abra https://localhost:${PORTA_HTTPS}`);
 }
 
 function parar() {
@@ -144,9 +174,14 @@ function parar() {
   docker([...chatwoot, 'stop']);
 }
 
-function atualizar() {
+async function atualizar() {
   exigirPreparado();
-  iniciar();
+  await garantirDocker();
+  docker([...chatwoot, 'up', '-d', '--wait', 'postgres', 'redis']);
+  docker([...chatwoot, 'run', '--rm', '--no-deps', 'rails', 'bundle', 'exec', 'rails', 'db:chatwoot_prepare']);
+  docker([...chatwoot, 'up', '-d']);
+  // Reconstrói a imagem dos workers com o código deste checkout e recria os containers.
+  docker([...workers, 'up', '-d', '--build'], { env: ambienteWorkers });
 }
 
 /** Bash do Git for Windows; `bash` no PATH pode ser o do WSL. */
