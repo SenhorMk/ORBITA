@@ -19,6 +19,7 @@ const envio: EnvioReivindicado = {
   atorId: ATOR,
   conversaIdExterno: 10,
   conteudo: 'RESPOSTA',
+  privada: false,
   correlationId: null,
   fencingToken: 1,
 };
@@ -65,5 +66,54 @@ describe('resolverCanal do worker de envio', () => {
       conexoes_integracao: { data: { status: 'conectado' }, error: null },
     }));
     await expect(porta.resolverCanal(envio)).resolves.toEqual({ _tag: 'Canal', canal });
+  });
+});
+
+describe('claim e início do despacho pelo protocolo do MSG-009', () => {
+  function comRpc(responder: (fn: string, args: Record<string, unknown>) => { data: unknown; error: unknown }) {
+    const chamadas: Array<{ fn: string; args: Record<string, unknown> }> = [];
+    const supabase = {
+      rpc: async (fn: string, args: Record<string, unknown>) => {
+        chamadas.push({ fn, args });
+        return responder(fn, args);
+      },
+    } as unknown as SupabaseClient;
+    return { porta: criarPortaDoConsumidorEnvio(supabase), chamadas };
+  }
+
+  it('o claim manda o protocolo 2 e lê se o envio é nota privada', async () => {
+    const { porta, chamadas } = comRpc(() => ({
+      data: [{
+        evento_id: envio.eventoId, organizacao_id: ORG, conexao_id: CONEXAO, envio_id: envio.envioId, ator_id: ATOR,
+        conversa_id_externo: '10', conteudo: 'NOTA', privada: true, correlation_id: null, fencing_token: '3',
+      }],
+      error: null,
+    }));
+    const [lido] = await porta.reivindicar({ workerId: 'w', limite: 5, leaseSegundos: 60, criadosDesde: '2026-11-09T00:00:00Z' });
+
+    expect(chamadas[0]).toMatchObject({ fn: 'reivindicar_envios_chatwoot', args: { p_protocolo: 2 } });
+    expect(lido).toMatchObject({ privada: true, fencingToken: 3, conversaIdExterno: 10 });
+  });
+
+  it('linha do claim sem o campo privada é recusada: nunca se adivinha que é mensagem', async () => {
+    const { porta } = comRpc(() => ({
+      data: [{
+        evento_id: envio.eventoId, organizacao_id: ORG, conexao_id: CONEXAO, envio_id: envio.envioId, ator_id: ATOR,
+        conversa_id_externo: '10', conteudo: 'X', correlation_id: null, fencing_token: '3',
+      }],
+      error: null,
+    }));
+    await expect(porta.reivindicar({ workerId: 'w', limite: 5, leaseSegundos: 60, criadosDesde: '2026-11-09T00:00:00Z' })).rejects.toThrow();
+  });
+
+  it.each(['iniciado', 'invalidado', 'posse_perdida'] as const)('o início usa iniciar_envio_chatwoot e devolve %s', async (resultado) => {
+    const { porta, chamadas } = comRpc(() => ({ data: resultado, error: null }));
+    await expect(porta.iniciarDespacho({ eventoId: envio.eventoId, workerId: 'w', fencingToken: 3 })).resolves.toBe(resultado);
+    expect(chamadas[0]!.fn).toBe('iniciar_envio_chatwoot');
+  });
+
+  it('início com resposta fora do contrato falha, sem afirmar que começou', async () => {
+    const { porta } = comRpc(() => ({ data: true, error: null }));
+    await expect(porta.iniciarDespacho({ eventoId: envio.eventoId, workerId: 'w', fencingToken: 3 })).rejects.toThrow();
   });
 });

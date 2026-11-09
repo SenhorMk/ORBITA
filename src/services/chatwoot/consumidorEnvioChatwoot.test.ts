@@ -32,6 +32,7 @@ const ENVIO: EnvioReivindicado = {
   atorId: 'ator-1',
   conversaIdExterno: 50,
   conteudo: 'olá',
+  privada: false,
   correlationId: null,
   fencingToken: 0,
 };
@@ -39,6 +40,8 @@ const ENVIO: EnvioReivindicado = {
 class PortaEmMemoria implements PortaDoConsumidorEnvio {
   readonly eventos = new Map<string, Evento>([['evt-1', { status: 'pending', token: 0, vencida: false }]]);
   readonly posts: Array<{ conversa: number; conteudo: string }> = [];
+  readonly notas: Array<{ conversa: number; conteudo: string }> = [];
+  privada = false;
   readonly conclusoes: Array<{ desfecho: DesfechoDoDespacho; mensagem: MensagemDoRecibo | null }> = [];
   resposta: () => Promise<ChatwootApiResult<ChatwootMessage>> = async () =>
     ({ _tag: 'ChatwootSuccess', data: { id: 9001, sender: { id: 7, name: 'Agente', type: 'user' }, created_at: '2026-11-05T12:00:00Z' } });
@@ -49,9 +52,15 @@ class PortaEmMemoria implements PortaDoConsumidorEnvio {
         this.posts.push({ conversa, conteudo });
         return this.resposta();
       },
+      sendPrivateNote: async (conversa, conteudo) => {
+        this.notas.push({ conversa, conteudo });
+        return this.resposta();
+      },
     },
   });
   iniciarRecusa = false;
+  /** O controle do atendimento mudou depois do registro (MSG-009). */
+  controleMudou = false;
   concluirFalha = false;
   concluirSemPosse = false;
 
@@ -71,7 +80,7 @@ class PortaEmMemoria implements PortaDoConsumidorEnvio {
       if (evento.status !== 'pending' && evento.status !== 'failed_transient') continue;
       evento.status = 'processing';
       evento.token++;
-      lote.push({ ...ENVIO, eventoId: id, fencingToken: evento.token });
+      lote.push({ ...ENVIO, eventoId: id, fencingToken: evento.token, privada: this.privada });
     }
     return lote;
   }
@@ -82,9 +91,13 @@ class PortaEmMemoria implements PortaDoConsumidorEnvio {
 
   async iniciarDespacho(posse: PosseDoEnvio) {
     const evento = this.eventos.get(posse.eventoId)!;
-    if (this.iniciarRecusa || evento.status !== 'processing' || evento.token !== posse.fencingToken) return false;
+    if (this.iniciarRecusa || evento.status !== 'processing' || evento.token !== posse.fencingToken) return 'posse_perdida' as const;
+    if (this.controleMudou && !this.privada) {
+      evento.status = 'dead_letter';
+      return 'invalidado' as const;
+    }
     evento.status = 'in_flight';
-    return true;
+    return 'iniciado' as const;
   }
 
   async concluir(posse: PosseDoEnvio, desfecho: DesfechoDoDespacho, mensagem: MensagemDoRecibo | null) {
@@ -229,5 +242,49 @@ describe('consumidor de envio do Chatwoot (MSG-008)', () => {
 
     expect(porta.posts).toHaveLength(1);
     expect(porta.eventos.get('evt-2')!.status).toBe('processing');
+  });
+});
+
+describe('consumidor de envio com controle do atendimento (MSG-009)', () => {
+  it('takeover antes do despacho: o envio é invalidado pelo banco, sem POST e sem conclusão', async () => {
+    const porta = new PortaEmMemoria();
+    porta.controleMudou = true;
+    const resumo = await consumirEnviosUmaVez(porta, opcoes);
+
+    expect(porta.posts).toHaveLength(0);
+    expect(porta.conclusoes).toHaveLength(0);
+    expect(resumo).toMatchObject({ reivindicados: 1, invalidados: 1, enviados: 0, semPosse: 0 });
+    expect(await consumirEnviosUmaVez(porta, opcoes)).toMatchObject({ reivindicados: 0 });
+  });
+
+  it('nota privada sai pelo método privado, nunca como mensagem à cliente', async () => {
+    const porta = new PortaEmMemoria();
+    porta.privada = true;
+    porta.resposta = async () => ({ _tag: 'ChatwootSuccess', data: { id: 9002, private: true } });
+    const resumo = await consumirEnviosUmaVez(porta, opcoes);
+
+    expect(porta.posts).toHaveLength(0);
+    expect(porta.notas).toEqual([{ conversa: 50, conteudo: 'olá' }]);
+    expect(resumo).toMatchObject({ enviados: 1 });
+  });
+
+  it('nota privada cujo recibo não diz private: unknown para inspeção, nunca confirmada nem repetida', async () => {
+    const porta = new PortaEmMemoria();
+    porta.privada = true;
+    porta.resposta = async () => ({ _tag: 'ChatwootSuccess', data: { id: 9003, private: false } });
+    const resumo = await consumirEnviosUmaVez(porta, opcoes);
+
+    expect(resumo).toMatchObject({ desconhecidos: 1, enviados: 0 });
+    expect(porta.conclusoes).toEqual([{ desfecho: expect.objectContaining({ _tag: 'Desconhecido', motivo: 'resposta_invalida' }), mensagem: null }]);
+    await consumirEnviosUmaVez(porta, opcoes);
+    expect(porta.notas).toHaveLength(1);
+  });
+
+  it('nota privada não é invalidada por mudança de controle: ela é o registro da mudança', async () => {
+    const porta = new PortaEmMemoria();
+    porta.privada = true;
+    porta.controleMudou = true;
+    porta.resposta = async () => ({ _tag: 'ChatwootSuccess', data: { id: 9004, private: true } });
+    expect(await consumirEnviosUmaVez(porta, opcoes)).toMatchObject({ enviados: 1, invalidados: 0 });
   });
 });

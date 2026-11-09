@@ -215,12 +215,26 @@ export class ChatwootAdapter implements ChatwootPort {
     content: string,
     fetchImpl: typeof fetch = fetch,
   ): Promise<ChatwootApiResult<ChatwootMessage>> {
+    return this.postMessage(conversationId, { content, message_type: 'outgoing', private: false }, fetchImpl);
+  }
+
+  /** Nota privada (MSG-009): visível só aos atendentes no Chatwoot. */
+  async sendPrivateNote(
+    conversationId: number,
+    content: string,
+    fetchImpl: typeof fetch = fetch,
+  ): Promise<ChatwootApiResult<ChatwootMessage>> {
+    return this.postMessage(conversationId, { content, message_type: 'outgoing', private: true }, fetchImpl);
+  }
+
+  private async postMessage(
+    conversationId: number,
+    body: { content: string; message_type: 'outgoing'; private: boolean },
+    fetchImpl: typeof fetch,
+  ): Promise<ChatwootApiResult<ChatwootMessage>> {
     const result = await this.request(
       `/conversations/${conversationId}/messages`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ content, message_type: 'outgoing', private: false }),
-      },
+      { method: 'POST', body: JSON.stringify(body) },
       fetchImpl,
     );
     if (!result.ok) return result.failure;

@@ -179,6 +179,8 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   ['chatwoot.send_requested', 'integrations', 'info', 'user', 1825, 'Resposta registrada no cockpit para envio pelo worker.', undefined, ['payload', 'content', 'conteudo']],
   ['chatwoot.send_confirmed', 'integrations', 'info', 'system', 1825, 'Resposta confirmada pelo recibo do Chatwoot.', undefined, ['payload', 'content', 'conteudo']],
   ['chatwoot.send_rejected', 'integrations', 'warning', 'system', 1825, 'Resposta recusada de forma definitiva; não será repetida.', undefined, ['payload', 'content', 'conteudo']],
+  ['chatwoot.control_changed', 'integrations', 'info', 'user', 1825, 'Controle do atendimento mudou: assumido, devolvido à automação ou aguardando humano.', undefined, ['payload', 'content', 'conteudo', 'nota']],
+  ['chatwoot.send_invalidated', 'integrations', 'warning', 'system', 1825, 'Resposta na fila invalidada porque o controle do atendimento mudou antes do despacho.', undefined, ['payload', 'content', 'conteudo']],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 
