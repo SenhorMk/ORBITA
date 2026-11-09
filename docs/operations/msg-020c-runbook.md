@@ -36,12 +36,18 @@ PostgREST e Postgres efêmeros), não o Modo B. **Laboratório local não é sta
 
 ## 3. Operar
 
-Da raiz do checkout com esta branch, `node scripts/infra-local.mjs <comando>`. De qualquer
-pasta, pelo PowerShell:
+Da raiz do checkout, `node scripts/infra-local.mjs <comando>`, ou pelo atalho PowerShell:
 
 ```powershell
-& "$env:USERPROFILEOneDriveDocumentosMKORBITA-msg-020cinfralocalorbita-local.ps1" verificar
+.\infra\local\orbita-local.ps1 verificar
 ```
+
+O atalho acha a raiz pelo próprio caminho (`$PSScriptRoot`), então também funciona de
+outra pasta, chamado pelo caminho do checkout:
+`& "<checkout>\infra\local\orbita-local.ps1" verificar`. Ele devolve o código de saída do
+Node (0 ok, 1 falha) e recusa comando desconhecido. Se a política de execução bloquear
+scripts locais, rode só naquele processo, sem mudar a política da máquina:
+`powershell -ExecutionPolicy Bypass -File .\infra\local\orbita-local.ps1 verificar`.
 
 Comandos:
 
