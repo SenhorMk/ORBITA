@@ -1,0 +1,113 @@
+# Chatwoot CE na VM do staging (MSG-020B). Mesmas imagens e digests do laboratório do MSG-001,
+# todas com amd64 e arm64. Diferenças em relação ao laboratório:
+# - Caddy na frente com HTTPS automático; Rails, Postgres e Redis sem porta no host.
+# - Sem SAFE_FETCH_ALLOW_PRIVATE_NETWORK: o webhook só sai para endereço público.
+# - Reinício automático, log rotacionado e SMTP opcional.
+# Dados reais continuam bloqueados pelo MSG-021: esta instância é para dados sintéticos.
+name: orbita-chatwoot
+
+x-log: &log
+  logging:
+    driver: json-file
+    options: { max-size: 10m, max-file: '5' }
+
+x-chatwoot: &chatwoot
+  image: chatwoot/chatwoot:v4.19.1@sha256:a0d571a3a2f78f4fa4b1d7c21a53309c0184068d6021b3664ab37788faef04c1
+  restart: unless-stopped
+  <<: *log
+  environment:
+    NODE_ENV: production
+    RAILS_ENV: production
+    INSTALLATION_ENV: docker
+    RAILS_LOG_TO_STDOUT: 'true'
+    SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:?defina em infra/chatwoot-vm/.env}
+    FRONTEND_URL: https://${CHATWOOT_DOMAIN:?defina em infra/chatwoot-vm/.env}
+    ENABLE_ACCOUNT_SIGNUP: 'false'
+    POSTGRES_HOST: postgres
+    POSTGRES_USERNAME: postgres
+    POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:?defina em infra/chatwoot-vm/.env}
+    POSTGRES_DATABASE: chatwoot
+    REDIS_URL: redis://redis:6379
+    REDIS_PASSWORD: ${CHATWOOT_REDIS_PASSWORD:?defina em infra/chatwoot-vm/.env}
+    ACTIVE_STORAGE_SERVICE: local
+    MAILER_SENDER_EMAIL: ${CHATWOOT_MAILER_SENDER:-}
+    SMTP_ADDRESS: ${SMTP_ADDRESS:-}
+    SMTP_PORT: ${SMTP_PORT:-587}
+    SMTP_USERNAME: ${SMTP_USERNAME:-}
+    SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    SMTP_AUTHENTICATION: login
+    SMTP_ENABLE_STARTTLS_AUTO: 'true'
+  volumes:
+    - storage:/app/storage
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+
+services:
+  caddy:
+    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    <<: *log
+    environment:
+      CHATWOOT_DOMAIN: ${CHATWOOT_DOMAIN:?defina em infra/chatwoot-vm/.env}
+      ACME_EMAIL: ${ACME_EMAIL:?defina em infra/chatwoot-vm/.env}
+    ports:
+      # No notebook (MSG-020C) CHATWOOT_BIND=127.0.0.1: nada fica acessível pela rede.
+      - ${CHATWOOT_BIND:-0.0.0.0}:${CHATWOOT_HTTP_PORT:-80}:80
+      - ${CHATWOOT_BIND:-0.0.0.0}:${CHATWOOT_HTTPS_PORT:-443}:443
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ['no-new-privileges:true']
+    depends_on: [rails]
+
+  rails:
+    <<: *chatwoot
+    entrypoint: docker/entrypoints/rails.sh
+    command: ['bundle', 'exec', 'rails', 's', '-p', '3000', '-b', '0.0.0.0']
+
+  sidekiq:
+    <<: *chatwoot
+    command: ['bundle', 'exec', 'sidekiq', '-C', 'config/sidekiq.yml']
+
+  postgres:
+    image: pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
+    restart: unless-stopped
+    <<: *log
+    environment:
+      POSTGRES_DB: chatwoot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:?defina em infra/chatwoot-vm/.env}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d chatwoot']
+      interval: 5s
+      timeout: 3s
+      retries: 40
+
+  redis:
+    image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f
+    restart: unless-stopped
+    <<: *log
+    environment:
+      REDISCLI_AUTH: ${CHATWOOT_REDIS_PASSWORD:?defina em infra/chatwoot-vm/.env}
+    command: ['sh', '-c', 'exec redis-server --requirepass "$$REDISCLI_AUTH" --appendonly yes']
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 40
+
+volumes:
+  storage:
+  postgres:
+  redis:
+  caddy_data:
+  caddy_config:

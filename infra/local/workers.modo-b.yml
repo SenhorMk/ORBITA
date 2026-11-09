@@ -1,0 +1,9 @@
+# MSG-020C, Modo B: workers instalados e logicamente desligados, sem rede nenhuma.
+# Sobreposto a infra/worker/docker-compose.yml. Sem rede, nenhuma chamada ao Supabase
+# ou ao Chatwoot é possível, mesmo com credencial errada ou kill switch trocado por engano.
+# Ligar para o staging é outro gate (docs/operations/msg-020c-runbook.md §8).
+services:
+  inbox:
+    network_mode: none
+  envio:
+    network_mode: none

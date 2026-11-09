@@ -19,7 +19,8 @@ const ConfiguracaoSchema = z.object({
   // Maior que o timeout do adapter (10 s), com folga para gravar o desfecho.
   CHATWOOT_SEND_WORKER_LEASE_SECONDS: z.coerce.number().int().min(30).max(300).default(60),
   CHATWOOT_SEND_WORKER_BATCH: z.coerce.number().int().min(1).max(50).default(10),
-  CHATWOOT_SEND_WORKER_BACKLOG_DESDE: z.string().datetime({ offset: true }).optional(),
+  // Vazio (como no .env de modelo) é ausência: o worker desligado tem de subir.
+  CHATWOOT_SEND_WORKER_BACKLOG_DESDE: z.preprocess((v) => (v === '' ? undefined : v), z.string().datetime({ offset: true }).optional()),
 });
 
 export interface ConfiguracaoDoWorkerEnvio {
@@ -56,6 +57,8 @@ export async function executarWorkerEnvio(
   porta: PortaDoConsumidorEnvio,
   configuracao: ConfiguracaoDoWorkerEnvio,
   sinal: AbortSignal,
+  /** Chamado a cada volta do laço: é o sinal de vida para a supervisão (MSG-020A). */
+  aoBater: () => void = () => {},
 ): Promise<void> {
   const { criadosDesde } = configuracao;
   if (!configuracao.ligado || criadosDesde === null) {
@@ -67,13 +70,15 @@ export async function executarWorkerEnvio(
   logger.info('chatwoot.envio.worker_iniciado', { subsystem: 'queue', workerId });
   let espera = configuracao.pollMs;
   while (!sinal.aborted) {
+    aoBater();
     try {
       const resumo = await consumirEnviosUmaVez(porta, {
         workerId,
         limite: configuracao.lote,
         leaseSegundos: configuracao.leaseSegundos,
         criadosDesde,
-        deveParar: () => sinal.aborted,
+        // Cada item é sinal de vida: o vigia mede progresso por item, não por lote (MSG-020C).
+        deveParar: () => { aoBater(); return sinal.aborted; },
       });
       espera = resumo.reivindicados > 0 ? configuracao.pollMs : Math.min(espera * 2, configuracao.ociosoMaxMs);
       if (resumo.reivindicados > 0 || resumo.reaped > 0) logger.info('chatwoot.envio.passada', { subsystem: 'queue', workerId, ...resumo });

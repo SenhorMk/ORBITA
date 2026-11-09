@@ -236,6 +236,12 @@ describe('worker: kill switch e configuração', () => {
     expect(() => lerConfiguracaoDoWorkerInbox({ CHATWOOT_INBOX_WORKER_ENABLED: 'true', CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: 'ontem' })).toThrow();
   });
 
+  it('corte vazio, como vem no .env de modelo, é ausência: desligado sobe, ligado recusa', () => {
+    expect(lerConfiguracaoDoWorkerInbox({ CHATWOOT_INBOX_WORKER_ENABLED: 'false', CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: '' }))
+      .toMatchObject({ ligado: false, recebidosDesde: null });
+    expect(() => lerConfiguracaoDoWorkerInbox({ CHATWOOT_INBOX_WORKER_ENABLED: 'true', CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: '' })).toThrow(/BACKLOG_DESDE/u);
+  });
+
   it('o corte chega ao claim', async () => {
     const p = porta({ _tag: 'PossePerdida' }, []);
     await consumirInboxUmaVez(p, OPCOES);
@@ -258,6 +264,23 @@ describe('worker: kill switch e configuração', () => {
     await executarWorkerInbox(p, config, parada.signal);
     expect(p.reivindicar).toHaveBeenCalledTimes(1);
     expect(p.aplicar).not.toHaveBeenCalled();
+  });
+
+  it('ligado: cada item do lote conta como sinal de vida para o vigia, não só a passada', async () => {
+    const parada = new AbortController();
+    const p = porta({ _tag: 'Aplicado', disposicao: 'caso_aberto', casoId: 'c' });
+    p.reivindicar.mockResolvedValueOnce([EVENTO, EVENTO, EVENTO]);
+    let aplicados = 0;
+    p.aplicar.mockImplementation(async () => {
+      aplicados += 1;
+      if (aplicados === 3) parada.abort();
+      return { _tag: 'Aplicado', disposicao: 'caso_aberto', casoId: 'c' };
+    });
+    const aoBater = vi.fn();
+    await executarWorkerInbox(p, lerConfiguracaoDoWorkerInbox(LIGADO), parada.signal, aoBater);
+    expect(aplicados).toBe(3);
+    // Uma batida no início da passada e uma antes de cada item.
+    expect(aoBater.mock.calls.length).toBeGreaterThanOrEqual(4);
   });
 
   it('banco fora no claim: não derruba o processo, recua e continua', async () => {

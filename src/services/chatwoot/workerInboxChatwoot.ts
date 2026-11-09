@@ -15,7 +15,8 @@ const ConfiguracaoSchema = z.object({
   CHATWOOT_INBOX_WORKER_IDLE_MAX_MS: z.coerce.number().int().min(100).max(60_000).default(5_000),
   CHATWOOT_INBOX_WORKER_LEASE_SECONDS: z.coerce.number().int().min(5).max(300).default(60),
   CHATWOOT_INBOX_WORKER_BATCH: z.coerce.number().int().min(1).max(50).default(10),
-  CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: z.string().datetime({ offset: true }).optional(),
+  // Vazio (como no .env de modelo) é ausência: o worker desligado tem de subir.
+  CHATWOOT_INBOX_WORKER_BACKLOG_DESDE: z.preprocess((v) => (v === '' ? undefined : v), z.string().datetime({ offset: true }).optional()),
 });
 
 export interface ConfiguracaoDoWorkerInbox {
@@ -69,6 +70,8 @@ export async function executarWorkerInbox(
   porta: PortaDoConsumidorInbox,
   configuracao: ConfiguracaoDoWorkerInbox,
   sinal: AbortSignal,
+  /** Chamado a cada volta do laço: é o sinal de vida para a supervisão (MSG-020A). */
+  aoBater: () => void = () => {},
 ): Promise<void> {
   const { recebidosDesde } = configuracao;
   if (!configuracao.ligado || recebidosDesde === null) {
@@ -80,13 +83,15 @@ export async function executarWorkerInbox(
   logger.info('chatwoot.inbox.worker_iniciado', { subsystem: 'queue', workerId });
   let espera = configuracao.pollMs;
   while (!sinal.aborted) {
+    aoBater();
     try {
       const resumo = await consumirInboxUmaVez(porta, {
         workerId,
         limite: configuracao.lote,
         leaseSegundos: configuracao.leaseSegundos,
         recebidosDesde,
-        deveParar: () => sinal.aborted,
+        // Cada item é sinal de vida: o vigia mede progresso por item, não por lote (MSG-020C).
+        deveParar: () => { aoBater(); return sinal.aborted; },
       });
       espera = resumo.reivindicados > 0 ? configuracao.pollMs : Math.min(espera * 2, configuracao.ociosoMaxMs);
       if (resumo.reivindicados > 0) logger.info('chatwoot.inbox.passada', { subsystem: 'queue', workerId, ...resumo });

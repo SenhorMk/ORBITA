@@ -1,0 +1,12 @@
+# Nada de segredo, build local ou histórico na imagem do worker.
+.env*
+!.env.example
+.git
+.next
+node_modules
+dist-worker
+coverage
+e2e
+graphify-out
+supabase/.temp
+infra/**/.env
