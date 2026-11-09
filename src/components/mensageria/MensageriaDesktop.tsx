@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle, MessageCircle, RefreshCw, Search, Send } from 'lucide-react';
+import { CheckCircle, MessageCircle, RefreshCw, Search, Send } from 'lucide-react';
 
 import { Pilula } from '@/components/ui/StatusPill';
 import { EstadoCarregando, EstadoDeErro, EstadoVazio } from '@/components/ui/estados';
@@ -11,6 +11,8 @@ import type { ChatwootConversation, ChatwootMessage } from '@/types';
 import type { EspelhoDaMensageria } from './espelhoDaMensageria';
 import type { MensagemOtimista } from './estadoDaConversa';
 import { useMensageria, type Mensageria } from './useMensageria';
+import { Aviso } from './Aviso';
+import { BarraDoAtendimento } from './BarraDoAtendimento';
 
 type Filtro = 'open' | 'resolved' | 'all';
 
@@ -65,24 +67,6 @@ function Conexao({ ativo, rotulo }: { readonly ativo: boolean; readonly rotulo: 
       rotulo={ativo ? `${rotulo} ao vivo` : `${rotulo} sem tempo real`}
       cor={ativo ? 'var(--accent)' : 'var(--txt3)'}
     />
-  );
-}
-
-/** Um aviso curto na cor do seu significado, sempre com texto e nunca só cor. */
-function Aviso({ tom, children }: { readonly tom: 'erro' | 'atencao'; readonly children: React.ReactNode }) {
-  return (
-    <div
-      className="flex items-start gap-2 px-3 py-2 rounded-xl text-xs"
-      role="alert"
-      style={{
-        background: 'var(--chip)',
-        border: '1px solid var(--line)',
-        color: tom === 'erro' ? 'var(--danger)' : 'var(--warning)',
-      }}
-    >
-      <AlertCircle className="w-4 h-4 shrink-0 mt-px" aria-hidden />
-      <span style={{ minWidth: 0 }}>{children}</span>
-    </div>
   );
 }
 
@@ -368,6 +352,7 @@ const APRESENTACAO_DO_ENVIO: Readonly<Record<MensagemOtimista['estado'], { reado
   falhou: { rotulo: 'Não enviada', cor: 'var(--danger)', nota: 'O servidor recusou o pedido: nada foi registrado nem enviado.' },
   incerta: { rotulo: 'Entrega não confirmada', cor: 'var(--warning)', nota: null },
   recusada: { rotulo: 'Recusada pelo Chatwoot', cor: 'var(--danger)', nota: 'O Chatwoot não aplicou esta mensagem. Corrija a causa antes de enviar de novo.' },
+  invalidada: { rotulo: 'Não enviada', cor: 'var(--danger)', nota: 'O atendimento mudou de responsável antes do envio; nada saiu.' },
 };
 
 /**
@@ -422,7 +407,7 @@ function BolhaNaoConfirmada({
           Tentar de novo
         </button>
       )}
-      {(otimista.estado === 'falhou' || otimista.estado === 'recusada') && (
+      {(otimista.estado === 'falhou' || otimista.estado === 'recusada' || otimista.estado === 'invalidada') && (
         <button type="button" onClick={aoRecuperar} className="orbita-chip cursor-pointer self-start" style={{ height: 28, fontSize: 11 }}>
           Recuperar texto
         </button>
@@ -527,7 +512,7 @@ function Compositor({ mensageria }: { readonly mensageria: Mensageria }) {
 }
 
 /** A coluna da direita: cabeçalho, histórico e compositor da conversa aberta. */
-function Conversa({ mensageria }: { readonly mensageria: Mensageria }) {
+function Conversa({ mensageria, fetchWithAuth }: { readonly mensageria: Mensageria; readonly fetchWithAuth: AuthenticatedFetch }) {
   const { selecionada } = mensageria;
 
   if (selecionada === null) {
@@ -551,6 +536,7 @@ function Conversa({ mensageria }: { readonly mensageria: Mensageria }) {
     >
       <CabecalhoDaConversa mensageria={mensageria} selecionada={selecionada} />
       <Historico mensageria={mensageria} />
+      <BarraDoAtendimento fetchWithAuth={fetchWithAuth} mensageria={mensageria} />
       <Compositor mensageria={mensageria} />
     </section>
   );
@@ -628,7 +614,7 @@ export function MensageriaDesktop({
         aoFiltrar={setFiltro}
         visiveis={visiveis}
       />
-      <Conversa mensageria={mensageria} />
+      <Conversa mensageria={mensageria} fetchWithAuth={fetchWithAuth} />
     </div>
   );
 }

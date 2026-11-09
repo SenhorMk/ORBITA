@@ -385,8 +385,19 @@ describe('MensageriaDesktop — envio', () => {
   function servidor(opcoes: {
     readonly post?: () => Promise<Response>;
     readonly lista?: () => readonly unknown[];
+    readonly controle?: () => Record<string, unknown>;
+    readonly postControle?: (corpo: Record<string, unknown>) => Promise<Response>;
   }) {
     return vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('/api/chatwoot/controle')) {
+        if (init?.method === 'POST') {
+          const corpo = JSON.parse(String(init.body));
+          if (opcoes.postControle) return opcoes.postControle(corpo);
+          return respostaJson({ success: false, error: 'não esperado' }, 500);
+        }
+        expect(url).toBe(`/api/chatwoot/controle?conversaId=${uuidDaConversa(1)}`);
+        return respostaJson({ success: true, controle: opcoes.controle?.() ?? { modo: 'HUMAN_REQUIRED', responsavelId: null, souResponsavel: false, versao: 0 } });
+      }
       if (init?.method === 'POST') {
         if (opcoes.post) return opcoes.post();
         const { commandId } = JSON.parse(String(init.body));
@@ -398,7 +409,87 @@ describe('MensageriaDesktop — envio', () => {
   }
 
   const postsDe = (fetchWithAuth: ReturnType<typeof servidor>) =>
-    fetchWithAuth.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init!.body)));
+    fetchWithAuth.mock.calls.filter(([url, init]) => init?.method === 'POST' && url === '/api/chatwoot/send')
+      .map(([, init]) => JSON.parse(String(init!.body)));
+  const postsDeControle = (fetchWithAuth: ReturnType<typeof servidor>) =>
+    fetchWithAuth.mock.calls.filter(([url, init]) => init?.method === 'POST' && url === '/api/chatwoot/controle')
+      .map(([, init]) => JSON.parse(String(init!.body)));
+
+  describe('atendimento (MSG-009)', () => {
+    it('assumir manda a versão vista e mostra a resposta já em voo', async () => {
+      const fetchWithAuth = servidor({
+        postControle: async () => respostaJson({
+          success: true, duplicado: false, invalidados: 0, emVoo: 1, notaRegistrada: true,
+          controle: { modo: 'HUMAN', responsavelId: 'eu', souResponsavel: true, versao: 1 },
+        }),
+      });
+      await abrirComposer(fetchWithAuth);
+      await waitFor(() => expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Aguardando atendente'));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Assumir atendimento' }));
+
+      await waitFor(() => expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Com você'));
+      expect(postsDeControle(fetchWithAuth)).toEqual([
+        { conversaId: uuidDaConversa(1), commandId: expect.any(String), acao: 'assumir', versaoEsperada: 0 },
+      ]);
+      expect(screen.getByText(/1 resposta já estava sendo enviada e pode chegar à cliente/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Assumir atendimento' })).not.toBeInTheDocument();
+    });
+
+    it('outra aba mudou antes: mostra o motivo e o estado atual do servidor', async () => {
+      const fetchWithAuth = servidor({
+        postControle: async () => respostaJson({
+          success: false, error: 'O atendimento mudou desde que você abriu a conversa.', motivo: 'conflito_versao',
+          controle: { modo: 'HUMAN', responsavelId: 'outra', souResponsavel: false, versao: 3 },
+        }, 409),
+      });
+      await abrirComposer(fetchWithAuth);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Assumir atendimento' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('button', { name: 'Assumir atendimento' }));
+
+      await waitFor(() => expect(screen.getByText('O atendimento mudou desde que você abriu a conversa.')).toBeInTheDocument());
+      expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Com outro atendente');
+    });
+
+    it('devolver exige resumo, que vai ao servidor como nota', async () => {
+      const fetchWithAuth = servidor({
+        controle: () => ({ modo: 'HUMAN', responsavelId: 'eu', souResponsavel: true, versao: 2 }),
+        postControle: async () => respostaJson({
+          success: true, duplicado: false, invalidados: 0, emVoo: 0, notaRegistrada: true,
+          controle: { modo: 'AI', responsavelId: null, souResponsavel: false, versao: 3 },
+        }),
+      });
+      await abrirComposer(fetchWithAuth);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Devolver à automação' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('button', { name: 'Devolver à automação' }));
+      expect(screen.getByRole('button', { name: 'Devolver' })).toBeDisabled();
+      await userEvent.type(screen.getByLabelText('Resumo para a nota privada'), 'Pedido localizado');
+      await userEvent.click(screen.getByRole('button', { name: 'Devolver' }));
+
+      await waitFor(() => expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Automação responde'));
+      expect(postsDeControle(fetchWithAuth)).toEqual([
+        { conversaId: uuidDaConversa(1), commandId: expect.any(String), acao: 'devolver', versaoEsperada: 2, nota: 'Pedido localizado' },
+      ]);
+      expect(screen.getByRole('button', { name: 'Pedir atendente' })).toBeInTheDocument();
+    });
+
+    it('envio invalidado pela troca de responsável aparece como não enviado, com o texto recuperável', async () => {
+      const fetchWithAuth = servidor({
+        lista: () => [{
+          id: 'envio-9', commandId: '90000000-0000-4000-8000-000000000009', conteudo: 'resposta antiga', estado: 'invalidado',
+          explicacao: 'Não enviada: o atendimento mudou de responsável antes do envio.', mensagemIdLocal: null, criadoEm: '2026-11-09T12:00:00Z',
+        }],
+      });
+      await abrirComposer(fetchWithAuth);
+
+      await waitFor(() => expect(screen.getByText('resposta antiga')).toBeInTheDocument());
+      expect(screen.getByText(/mudou de responsável antes do envio; nada saiu/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Recuperar texto' }));
+      expect(screen.getByLabelText('Mensagem')).toHaveValue('resposta antiga');
+    });
+  });
 
   async function escreverEEnviar(texto: string) {
     await userEvent.type(screen.getByLabelText('Mensagem'), texto);

@@ -31,7 +31,7 @@ const LEITURA_MAIS_ESPACADA_MS = 15_000;
 interface EnvioDoServidor {
   readonly commandId: string;
   readonly conteudo: string;
-  readonly estado: 'pendente' | 'enviando' | 'enviado' | 'recusado' | 'desconhecido';
+  readonly estado: 'pendente' | 'enviando' | 'enviado' | 'recusado' | 'desconhecido' | 'invalidado';
   readonly explicacao: string;
   readonly mensagemIdLocal: string | null;
   readonly criadoEm: string;
@@ -50,6 +50,7 @@ function estadoDaBolha(envio: EnvioDoServidor): MensagemOtimista['estado'] | nul
     case 'enviado': return null;
     case 'recusado': return 'recusada';
     case 'desconhecido': return 'incerta';
+    case 'invalidado': return 'invalidada';
     default: return 'pendente';
   }
 }
@@ -195,6 +196,10 @@ export function useEnvio(
           marcar('incerta', { mensagem: 'A entrega não foi confirmada e pode ter acontecido. Não reenvie: confira no Chatwoot.', indisponivel: false });
           return;
         }
+        if (envio.estado === 'invalidado') {
+          marcar('invalidada', { mensagem: 'Não enviada: o atendimento mudou de responsável antes do envio.', indisponivel: false });
+          return;
+        }
         if (envio.estado === 'recusado') {
           marcar('recusada', { mensagem: 'O Chatwoot recusou esta mensagem.', indisponivel: false });
           return;
@@ -252,7 +257,7 @@ export function useEnvio(
       if (chave === null) return;
       alterar(chave, (anterior) => {
         // Só o que comprovadamente não foi aplicado volta como texto novo.
-        const alvo = anterior.otimistas.find((o) => o.id === idOtimista && (o.estado === 'falhou' || o.estado === 'recusada'));
+        const alvo = anterior.otimistas.find((o) => o.id === idOtimista && (o.estado === 'falhou' || o.estado === 'recusada' || o.estado === 'invalidada'));
         if (!alvo) return anterior;
         return {
           ...anterior,

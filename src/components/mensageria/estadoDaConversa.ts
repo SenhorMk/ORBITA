@@ -29,9 +29,10 @@ export interface MensagemOtimista {
    * - `sem_resposta`: não se sabe se o servidor registrou — só repetir o mesmo comando;
    * - `falhou`: o servidor respondeu erro, nada foi registrado — o texto pode voltar;
    * - `incerta`: desconhecido (MSG-007), pode ter chegado — nada a repetir daqui;
-   * - `recusada`: o Chatwoot recusou de forma definitiva — o texto pode voltar.
+   * - `recusada`: o Chatwoot recusou de forma definitiva — o texto pode voltar;
+   * - `invalidada`: o atendimento mudou de responsável antes do envio (MSG-009) — não saiu.
    */
-  readonly estado: 'enviando' | 'pendente' | 'sem_resposta' | 'falhou' | 'incerta' | 'recusada';
+  readonly estado: 'enviando' | 'pendente' | 'sem_resposta' | 'falhou' | 'incerta' | 'recusada' | 'invalidada';
   /** O motivo da falha, quando houve. */
   readonly erro: string | null;
   readonly criadaEm: string;
