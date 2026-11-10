@@ -19,6 +19,8 @@ import { ClienteDetailModal } from '@/components/ClienteDetailModal';
 import { ProductDetailModal } from '@/components/ProductDetailModal';
 import { ClientesEContatos } from '@/components/clientes/ClientesEContatos';
 import { EstoqueEProdutos } from '@/components/estoque/EstoqueEProdutos';
+import { FinanceiroTab } from '@/components/financeiro/FinanceiroTab';
+import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import { VisaoGeral } from '@/components/painel/VisaoGeral';
 import { EstadoVazio } from '@/components/ui/estados';
 import { VendasEPedidos } from '@/components/vendas/VendasEPedidos';
@@ -27,7 +29,7 @@ import { CATEGORIAS, CLIENTES, DADOS_DO_PAINEL, PEDIDOS, PRODUTOS, isolarDaRede 
 
 isolarDaRede();
 
-const ABAS_DA_DEMO: ReadonlySet<TabType> = new Set<TabType>(['dashboard', 'sales', 'inventory', 'contacts', 'sac']);
+const ABAS_DA_DEMO: ReadonlySet<TabType> = new Set<TabType>(['dashboard', 'sales', 'inventory', 'contacts', 'finance', 'sac']);
 const SINCRONIZADO_EM = new Date(Date.now() - 4 * 60_000);
 
 const AGORA = Date.now();
@@ -277,12 +279,18 @@ export default function DemoDoOrbita() {
             />
           )}
 
+          {aba === 'finance' && (
+            <div className="flex flex-col flex-1 min-h-0">
+              <FinanceiroTab fetchWithAuth={fetchWithAuth} ativo pedidos={PEDIDOS} organizacaoId={null} />
+            </div>
+          )}
+
           {aba === 'sac' && <MensageriaVisual mensageria={mensageria} />}
 
           {!ABAS_DA_DEMO.has(aba) && (
             <EstadoVazio
               titulo="Fora desta demonstração"
-              descricao="Esta área não faz parte do roteiro. Use Painel, Vendas, Estoque, Clientes ou Atendimento."
+              descricao="Esta área não faz parte do roteiro. Use Painel, Vendas, Estoque, Clientes, Financeiro ou Atendimento."
             />
           )}
         </main>

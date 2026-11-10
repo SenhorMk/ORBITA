@@ -7,6 +7,7 @@
 
 import { supabase } from '@/lib/supabaseClient';
 import type { DadosDoPainel } from '@/components/painel/useLeituraDoPainel';
+import type { TituloFinanceiro } from '@/components/financeiro/useLeituraFinanceira';
 import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import type { BlingPedido, Categoria, Cliente, ItemPedido, Produto } from '@/types';
 
@@ -209,6 +210,86 @@ export const DADOS_DO_PAINEL: DadosDoPainel = {
   },
 };
 
+const diaDe = (iso: string) => iso.slice(0, 10);
+
+/** Cada pedido vira um título a receber; os cancelados entram como cancelados. */
+const A_RECEBER: TituloFinanceiro[] = PEDIDOS.map((pedido, indice) => {
+  const quitado = pedido.status === 'Entregue' || pedido.status === 'Atendido';
+  return {
+    id: `tit-r-${indice + 1}`,
+    bling_id: 200_000_000 + indice,
+    tipo: 'receber',
+    situacao: pedido.status === 'Cancelado' ? 'cancelado' : quitado ? 'pago' : 'aberto',
+    valor: pedido.total,
+    data_vencimento: diaDe(pedido.data),
+    ...(quitado ? { data_pagamento: diaDe(pedido.data) } : {}),
+    titulo: `Pedido #${pedido.numero}`,
+    descricao: `Pedido #${pedido.numero} - ${pedido.cliente?.nome ?? ''}`,
+    categoria: { descricao: 'Vendas', cor: '#c6f432' },
+    pedido_id: pedido.id,
+  };
+});
+
+/** [dias atrás (negativo = a vencer), fornecedor, descrição, categoria, valor, pago?] */
+const CONTAS: ReadonlyArray<readonly [number, string, string, string, number, boolean]> = [
+  [-6, 'Ateliê Mãos da Mata', 'Lote de kuripes e tepis', 'Fornecedores', 1480, false],
+  [-3, 'Vidros Verde Embalagens', 'Frascos 15ml e 20ml', 'Embalagens', 620, false],
+  [-1, 'Contabilidade Horizonte', 'Honorários do mês', 'Serviços', 450, false],
+  [2, 'Transportadora Rota Sul', 'Postagens da semana', 'Frete', 386.4, true],
+  [4, 'Ervas da Serra', 'Ervas para defumador', 'Fornecedores', 940, true],
+  [7, 'Gráfica Rótulo Bom', 'Rótulos e etiquetas', 'Embalagens', 312, true],
+  [9, 'Transportadora Rota Sul', 'Postagens da semana', 'Frete', 402.7, true],
+  [12, 'Anúncios online', 'Campanha do lote novo', 'Marketing', 800, true],
+  [15, 'Sistema de gestão', 'Mensalidade', 'Serviços', 189.9, true],
+  [18, 'Ateliê Mãos da Mata', 'Lote de kuripes', 'Fornecedores', 1260, true],
+  [22, 'Transportadora Rota Sul', 'Postagens da semana', 'Frete', 358.2, true],
+  [26, 'Vidros Verde Embalagens', 'Frascos e tampas', 'Embalagens', 540, true],
+  [31, 'Contabilidade Horizonte', 'Honorários do mês', 'Serviços', 450, true],
+  [37, 'Ervas da Serra', 'Ervas para defumador', 'Fornecedores', 880, true],
+  [45, 'Anúncios online', 'Campanha de inverno', 'Marketing', 650, true],
+  [51, 'Ateliê Mãos da Mata', 'Lote de tepis', 'Fornecedores', 1120, true],
+];
+
+const CORES_DE_DESPESA: Record<string, string> = {
+  Fornecedores: '#ff6b5e',
+  Embalagens: '#b9a3ff',
+  Serviços: '#5ec8ff',
+  Frete: '#ffb347',
+  Marketing: '#ff8fd0',
+};
+
+const A_PAGAR: TituloFinanceiro[] = CONTAS.map(([dias, fornecedor, descricao, categoria, valor, pago], indice) => ({
+  id: `tit-p-${indice + 1}`,
+  bling_id: 210_000_000 + indice,
+  tipo: 'pagar',
+  situacao: pago ? 'pago' : 'aberto',
+  valor,
+  data_vencimento: diaDe(haDias(dias)),
+  ...(pago ? { data_pagamento: diaDe(haDias(dias)) } : {}),
+  titulo: descricao,
+  descricao: `${descricao} - ${fornecedor}`,
+  categoria: { descricao: categoria, cor: CORES_DE_DESPESA[categoria] },
+  fornecedor_bling_id: 220_000_000 + indice,
+  fornecedor_nome: fornecedor,
+}));
+
+const TITULOS: TituloFinanceiro[] = [...A_RECEBER, ...A_PAGAR].sort((a, b) =>
+  b.data_vencimento.localeCompare(a.data_vencimento),
+);
+
+function leituraFinanceira(tipo: string | null) {
+  const vivos = TITULOS.filter((t) => t.situacao === 'aberto' || t.situacao === 'pago');
+  const total = (qual: 'receber' | 'pagar') =>
+    Math.round(vivos.filter((t) => t.tipo === qual).reduce((soma, t) => soma + t.valor, 0) * 100) / 100;
+  const receitas = total('receber');
+  const despesas = total('pagar');
+  return {
+    titulos: tipo === 'receber' || tipo === 'pagar' ? TITULOS.filter((t) => t.tipo === tipo) : TITULOS,
+    resumo: { receitas, despesas, saldo: Math.round((receitas - despesas) * 100) / 100 },
+    categorias: ['Vendas', ...Object.keys(CORES_DE_DESPESA)].map((descricao, i) => ({ id: `catfin-${i + 1}`, descricao })),
+  };
+}
+
 /** O detalhe de pedido no formato que o drawer espera receber do ERP. */
 function detalheDoPedido(blingId: string): BlingPedido | null {
   const pedido = PEDIDOS.find((p) => p.bling_id === blingId);
@@ -261,6 +342,13 @@ function respostaDaApi(caminho: string): Response {
     const detalhe = detalheDoPedido(decodeURIComponent(pedido[1]));
     return detalhe ? json({ success: true, data: detalhe }) : json({ error: 'Pedido não encontrado' }, 404);
   }
+  if (caminho.startsWith('/api/financeiro/operacoes')) {
+    return json({ success: true, operacoes: [], total: 0, incompleta: false, proximoCursor: null });
+  }
+  if (/^\/api\/financeiro(\?|$)/.test(caminho)) {
+    const tipo = new URLSearchParams(caminho.split('?')[1] ?? '').get('tipo');
+    return json({ success: true, data: leituraFinanceira(tipo) });
+  }
   if (caminho.startsWith('/api/categorias')) return json({ success: true, data: CATEGORIAS });
   if (caminho.startsWith('/api/produtos/bling/')) {
     return json({ success: true, obrigatorios: { tipo: 'P', situacao: 'A', formato: 'S', unidade: 'UN' } });
@@ -287,7 +375,7 @@ export function isolarDaRede(): void {
   const fetchReal = window.fetch.bind(window);
   window.fetch = async (entrada, opcoes) => {
     const url = typeof entrada === 'string' ? entrada : entrada instanceof URL ? entrada.href : entrada.url;
-    const caminho = url.startsWith('http') ? new URL(url).pathname : url;
+    const caminho = url.startsWith('http') ? new URL(url).pathname + new URL(url).search : url;
     if (caminho.startsWith('/api/')) return respostaDaApi(caminho);
     return fetchReal(entrada, opcoes);
   };
