@@ -7,7 +7,7 @@
 
 begin;
 
-select plan(64);
+select plan(85);
 
 set local request.jwt.claim.role = 'service_role';
 
@@ -338,6 +338,137 @@ select is(pg_temp.enviar('e9000000-0000-4000-8000-00000000000b', 'e9000000-0000-
           'registrado', '63. outra atendente responde e assume a conversa sem dono');
 select is(pg_temp.controle((select valor::uuid from t_ctx where nome = 'b')),
           'HUMAN:e9000000-0000-4000-8000-0000000000b3:2', '64. a nova dona, na versão seguinte');
+
+-- ---------------------------------------------------------------------------
+-- Revisão da PR #141: fila em `failed_transient`, efeito `unknown`, despacho
+-- pelo caminho genérico da outbox, responsável fora da organização, replay de
+-- comando antigo, trilha sem texto privado e transferência auditada.
+-- ---------------------------------------------------------------------------
+select pg_temp.inbox('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000c1', 'm9-a-3', 9103, 72);
+insert into t_ctx values ('a72', pg_temp.conversa('e9000000-0000-4000-8000-0000000000c1', 72)::text);
+
+-- c21: o worker pegou e provou que não enviou (`failed_transient`, volta à fila).
+select pg_temp.enviar('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000a1',
+                      (select valor::uuid from t_ctx where nome = 'a72'), 'c9000000-0000-4000-8000-000000000021', 'vai falhar');
+insert into t_ctx values ('tok21', pg_temp.token(pg_temp.evento('e9000000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-000000000021'), 'w-rev')::text);
+select status from public.concluir_envio_chatwoot(pg_temp.evento('e9000000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-000000000021'),
+    'w-rev', (select valor::bigint from t_ctx where nome = 'tok21'), 'nao_enviado', null, null, 'recusou conexão', 'transient', 600);
+-- c23: despachou e a lease venceu (o reaper o torna `unknown`). c22: na fila,
+-- registrada depois do claim (que leva tudo o que está `pending`).
+select pg_temp.enviar('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000a1',
+                      (select valor::uuid from t_ctx where nome = 'a72'), 'c9000000-0000-4000-8000-000000000023', 'talvez saiu');
+insert into t_ctx values ('tok23', pg_temp.token(pg_temp.evento('e9000000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-000000000023'), 'w-rev')::text);
+select public.iniciar_envio_chatwoot(pg_temp.evento('e9000000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-000000000023'),
+                                     'w-rev', (select valor::bigint from t_ctx where nome = 'tok23'));
+update public.outbox_eventos set lease_expires_at = now() - interval '1 second'
+ where id = pg_temp.evento('e9000000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-000000000023');
+select * from public.liberar_leases_expirados_outbox();
+select pg_temp.enviar('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000a1',
+                      (select valor::uuid from t_ctx where nome = 'a72'), 'c9000000-0000-4000-8000-000000000022', 'na fila');
+insert into t_ctx values ('saude_antes', (select health_status from public.conexoes_integracao where id = 'e9000000-0000-4000-8000-0000000000c1'));
+insert into t_ctx values ('token21_antes', (select fencing_token::text from public.outbox_eventos
+    where id = pg_temp.evento('e9000000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-000000000021')));
+
+create temp table t_rev on commit drop as
+select * from public.alterar_controle_atendimento_chatwoot(
+    'e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000a2',
+    (select valor::uuid from t_ctx where nome = 'a72'), 'd9000000-0000-4000-8000-000000000021', 'assumir', 1);
+
+select is((select resultado || ':' || invalidados from t_rev), 'aplicado:2',
+          '65. takeover cancela a resposta na fila e a que voltou de failed_transient');
+select is((select o.status || ':' || (e.invalidado_em is not null)::text from public.outbox_eventos o
+             join public.chatwoot_envios e on e.outbox_evento_id = o.id
+            where e.command_id = 'c9000000-0000-4000-8000-000000000021'), 'dead_letter:true',
+          '66. failed_transient invalidado: dead_letter com marca no envio');
+select ok((select fencing_token > (select valor::bigint from t_ctx where nome = 'token21_antes') and lease_owner is null
+             and attempts = 1 from public.outbox_eventos
+            where id = pg_temp.evento('e9000000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-000000000021')),
+          '67. a invalidação passa pelo fencing (token sobe, sem dono, tentativas intactas)');
+select is((select health_status from public.conexoes_integracao where id = 'e9000000-0000-4000-8000-0000000000c1'),
+          (select valor from t_ctx where nome = 'saude_antes'), '68. cancelamento administrativo não mexe na saúde da conexão');
+select is((select em_voo from t_rev), 1, '69. efeito unknown conta como resposta que pode ter chegado');
+select is((select o.status || ':' || (e.invalidado_em is null)::text from public.outbox_eventos o
+             join public.chatwoot_envios e on e.outbox_evento_id = o.id
+            where e.command_id = 'c9000000-0000-4000-8000-000000000023'), 'unknown:true',
+          '70. unknown nunca vira cancelado nem volta à fila');
+select is((select count(*)::int from public.eventos_auditoria_sistema where acao = 'chatwoot.send_invalidated'
+            and metadata ->> 'evento_id' = pg_temp.evento('e9000000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-000000000021')::text), 1,
+          '71. invalidação do failed_transient auditada');
+
+-- c24: claim pelo caminho genérico da outbox, sem conferir o controle.
+select pg_temp.enviar('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000a2',
+                      (select valor::uuid from t_ctx where nome = 'a72'), 'c9000000-0000-4000-8000-000000000024', 'pelo atalho');
+insert into t_ctx values ('tok24', (select r.fencing_token::text from public.reivindicar_evento_outbox('e9000000-0000-4000-8000-00000000000a',
+    pg_temp.evento('e9000000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-000000000024'), 'w-generico', 60) r));
+select pg_temp.alterar('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000a0',
+                       (select valor::uuid from t_ctx where nome = 'a72'), 'd9000000-0000-4000-8000-000000000022', 'assumir', 2);
+select throws_ok(format($q$ select public.iniciar_despacho_outbox(%L, 'w-generico', %s) $q$,
+                        pg_temp.evento('e9000000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-000000000024'),
+                        (select valor from t_ctx where nome = 'tok24')),
+                 '55000', null, '72. resposta do Chatwoot não inicia pelo despacho genérico');
+select is((select status from public.outbox_eventos
+            where id = pg_temp.evento('e9000000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-000000000024')), 'processing',
+          '73. nada em voo pelo atalho');
+select is(public.iniciar_envio_chatwoot(pg_temp.evento('e9000000-0000-4000-8000-00000000000a', 'c9000000-0000-4000-8000-000000000024'),
+                                        'w-generico', (select valor::bigint from t_ctx where nome = 'tok24')),
+          'invalidado', '74. pelo caminho do controle, a versão vencida invalida');
+
+-- Responsável que saiu da organização não segura a conversa.
+select pg_temp.alterar('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000a1',
+                       (select valor::uuid from t_ctx where nome = 'a72'), 'd9000000-0000-4000-8000-000000000023', 'assumir', 3);
+delete from public.membros_organizacao
+ where organizacao_id = 'e9000000-0000-4000-8000-00000000000a' and user_id = 'e9000000-0000-4000-8000-0000000000a1';
+select is(pg_temp.enviar('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000a2',
+                         (select valor::uuid from t_ctx where nome = 'a72'), 'c9000000-0000-4000-8000-000000000025', 'assumo'),
+          'registrado', '75. responsável fora da organização: outra atendente responde e assume');
+select is(pg_temp.controle((select valor::uuid from t_ctx where nome = 'a72')),
+          'HUMAN:e9000000-0000-4000-8000-0000000000a2:5', '76. a nova dona, na versão seguinte');
+
+-- Comando antigo repetido depois de transições posteriores.
+select is(pg_temp.alterar('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000a2',
+                          (select valor::uuid from t_ctx where nome = 'a'), 'd9000000-0000-4000-8000-000000000002', 'assumir', 1,
+                          'Cliente pediu troca.'),
+          'existente', '77. comando antigo repetido: existente, nada reaplicado');
+select ok(pg_temp.controle((select valor::uuid from t_ctx where nome = 'a')) = 'HUMAN_REQUIRED:-:5'
+          and (select count(*) = 1 from public.chatwoot_controle_historico where command_id = 'd9000000-0000-4000-8000-000000000002'),
+          '78. o replay antigo não volta o controle nem duplica o histórico');
+
+-- Trilha: nenhum texto de resposta ou nota.
+select ok(not exists (select 1 from public.eventos_auditoria_sistema
+                       where organizacao_id = 'e9000000-0000-4000-8000-00000000000a'
+                         and acao in ('chatwoot.control_changed', 'chatwoot.send_invalidated', 'chatwoot.send_requested')
+                         and (metadata ? 'conteudo' or metadata ? 'nota' or metadata::text like '%vai falhar%'
+                              or metadata::text like '%Pedido localizado%')),
+          '79. a trilha não carrega conteúdo nem nota');
+
+-- Transferência: quem tinha a conversa fica registrado (por último: a coluna
+-- é nova e, sem ela, este teste aborta a transação).
+select is((select h.responsavel_anterior::text || ':' || (select a.metadata ->> 'transferencia' from public.eventos_auditoria_sistema a
+              where a.acao = 'chatwoot.control_changed' and a.metadata ->> 'versao' = '2'
+                and a.recurso_id = (select valor from t_ctx where nome = 'a72'))
+             from public.chatwoot_controle_historico h where h.command_id = 'd9000000-0000-4000-8000-000000000021'),
+          'e9000000-0000-4000-8000-0000000000a1:true', '80. transferência registra o responsável anterior');
+
+-- Leitura para a tela: mesma regra das escritas.
+create function pg_temp.ler(p_org uuid, p_conversa uuid)
+returns text language sql as $$
+    select resultado || ':' || coalesce(ownership_mode, '-') || ':' || coalesce(responsavel_id::text, '-') || ':'
+           || coalesce(control_version::text, '-')
+      from public.ler_controle_atendimento_chatwoot(p_org, p_conversa);
+$$;
+select pg_temp.inbox('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000c1', 'm9-a-4', 9104, 73);
+select is(pg_temp.ler('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000ff'),
+          'conversa_inexistente:-:-:-', '81. conversa inexistente: nenhum estado fictício');
+select is(pg_temp.ler('e9000000-0000-4000-8000-00000000000b', (select valor::uuid from t_ctx where nome = 'a')),
+          'conversa_inexistente:-:-:-', '82. conversa de outra organização: não encontrada');
+select is(pg_temp.ler('e9000000-0000-4000-8000-00000000000a', pg_temp.conversa('e9000000-0000-4000-8000-0000000000c1', 73)),
+          'encontrada:HUMAN_REQUIRED:-:0', '83. conversa sem controle: aguardando atendente, versão 0');
+select is(pg_temp.ler('e9000000-0000-4000-8000-00000000000a', (select valor::uuid from t_ctx where nome = 'a71')),
+          'encontrada:HUMAN:-:4', '84. dono que saiu da organização não aparece como responsável');
+select ok(has_function_privilege('service_role', 'public.ler_controle_atendimento_chatwoot(uuid,uuid)', 'execute')
+          and not has_function_privilege('authenticated', 'public.ler_controle_atendimento_chatwoot(uuid,uuid)', 'execute')
+          and not has_function_privilege('anon', 'public.ler_controle_atendimento_chatwoot(uuid,uuid)', 'execute'),
+          '85. só o servidor lê o controle');
 
 select * from finish();
 rollback;

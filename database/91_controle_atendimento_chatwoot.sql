@@ -19,16 +19,21 @@
 --      foi registrado), `privada` (nota privada do Chatwoot) e `invalidado_em`.
 --   4. `alterar_controle_atendimento_chatwoot`: assumir, devolver à automação e
 --      exigir humano, com compare-and-set na versão. Cada mudança invalida os
---      envios ainda na fila e informa os que já estão em voo.
---   5. `registrar_envio_chatwoot`: responder quando a conversa não tem dono é
---      assumi-la; responder conversa de outra pessoa é `outro_responsavel`.
+--      envios na fila (`pending` e `failed_transient`) e informa os que podem
+--      ter chegado (`in_flight` e `unknown`).
+--   5. `registrar_envio_chatwoot`: responder quando a conversa não tem dono
+--      (ou o dono saiu da organização) é assumi-la; responder conversa de
+--      outra pessoa é `outro_responsavel`.
 --   6. `iniciar_envio_chatwoot`: antes de marcar `in_flight`, confere a versão
 --      sob trava; versão vencida invalida o envio sem chamar o Chatwoot.
+--      `iniciar_despacho_outbox` recusa evento de `chatwoot_envios` (55000):
+--      o caminho genérico não despacha sem a conferência.
 --   7. `reivindicar_envios_chatwoot` ganha `p_protocolo` (= 2) e devolve
 --      `privada`: um worker anterior a esta migration falha fechado, em vez de
 --      despachar nota privada como mensagem ou ignorar a versão.
 --
--- O QUE NÃO MUDA: a máquina de estados da outbox (MSG-007), o consumo da inbox
+-- O QUE NÃO MUDA: a máquina de estados da outbox (MSG-007; a invalidação de
+-- `failed_transient` usa só transições que ela já admite), o consumo da inbox
 -- (MSG-006) e a conclusão do envio (MSG-008), salvo que nota privada não vira
 -- mensagem espelhada. Envios já registrados ficam com `controle_versao = 0`: a
 -- primeira mudança de controle da conversa os invalida.
@@ -81,6 +86,9 @@ create table if not exists public.chatwoot_controle_historico (
     modo_novo          text not null,
     versao_resultante  bigint not null,
     ator_id            uuid references auth.users(id) on delete set null,
+    -- Quem tinha a conversa antes: distingue assumir conversa livre de
+    -- transferir o atendimento de outra pessoa.
+    responsavel_anterior uuid references auth.users(id) on delete set null,
     -- Nota privada: fica no ORBITA mesmo quando o Chatwoot está fora.
     nota               text,
     nota_envio_id      uuid,
@@ -219,9 +227,18 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 6. Invalidação. Só o que nunca foi reivindicado muda aqui (`pending` →
--- `dead_letter` é transição permitida); o que já está com um worker é
--- invalidado por `iniciar_envio_chatwoot`, que espera a trava do controle.
+-- 6. Invalidação do que está na fila, sem dono e sem efeito possível:
+--   - `pending`: nunca despachou; `pending` → `dead_letter` é transição da
+--     máquina da migration 86.
+--   - `failed_transient`: só nasce de `nao_enviado` (prova de que o provedor
+--     não aplicou) ou de `processing` vencido (nunca despachou). A máquina não
+--     tem `failed_transient` → `dead_letter`; a invalidação faz o caminho que
+--     ela já admite, reivindicar e recusar (`failed_transient` → `processing`
+--     → `dead_letter`), na mesma transação. O gatilho sobe o fencing token na
+--     reivindicação, então nenhuma posse antiga conclui depois.
+-- `processing` e `in_flight` têm dono: quem está com o worker é invalidado por
+-- `iniciar_envio_chatwoot`, que espera a trava do controle. `unknown` nunca é
+-- tocado: o efeito pode ter acontecido. A saúde da conexão não muda.
 -- Nota privada não é invalidada: ela é o registro da própria mudança.
 -- ---------------------------------------------------------------------------
 create or replace function public.invalidar_envios_na_fila_chatwoot(
@@ -239,7 +256,7 @@ declare
     v_total integer := 0;
 begin
     for v_envio in
-        select e.id, e.outbox_evento_id, e.conexao_id
+        select e.id, e.outbox_evento_id, e.conexao_id, o.status
           from public.chatwoot_envios e
           join public.outbox_eventos o on o.organizacao_id = e.organizacao_id and o.id = e.outbox_evento_id
          where e.organizacao_id = p_organizacao_id
@@ -247,13 +264,22 @@ begin
            and not e.privada
            and e.invalidado_em is null
            and e.controle_versao < p_versao_vigente
-           and o.status = 'pending'
+           and o.status in ('pending', 'failed_transient')
            for update of o, e
     loop
+        if v_envio.status = 'failed_transient' then
+            update public.outbox_eventos
+               set status = 'processing',
+                   lease_owner = 'msg009:invalidacao',
+                   lease_expires_at = now(),
+                   updated_at = now()
+             where id = v_envio.outbox_evento_id;
+        end if;
         update public.outbox_eventos
            set status = 'dead_letter',
                last_error = 'Envio invalidado: o controle do atendimento mudou antes do despacho.',
                last_error_category = 'permanent',
+               lease_owner = null, lease_expires_at = null,
                updated_at = now()
          where id = v_envio.outbox_evento_id;
         update public.chatwoot_envios set invalidado_em = now() where id = v_envio.id;
@@ -266,7 +292,9 @@ begin
 end;
 $$;
 
--- Envios da conversa que já podem ter chegado ao Chatwoot: `in_flight`.
+-- Envios da conversa que podem ter chegado ao Chatwoot: `in_flight` e
+-- `unknown` (inclusive o que o reaper tirou de `in_flight`), salvo o `unknown`
+-- já provado não aplicado.
 create or replace function public.contar_envios_em_voo_chatwoot(
     p_organizacao_id    uuid,
     p_conversa_id_local uuid
@@ -283,7 +311,8 @@ as $$
      where e.organizacao_id = p_organizacao_id
        and e.conversa_id_local = p_conversa_id_local
        and not e.privada
-       and o.status = 'in_flight';
+       and (o.status = 'in_flight'
+            or (o.status = 'unknown' and o.resolucao is distinct from 'provado_nao_aplicado'));
 $$;
 
 -- ---------------------------------------------------------------------------
@@ -475,14 +504,16 @@ begin
 
     insert into public.chatwoot_controle_historico
         (organizacao_id, conversa_id_local, command_id, acao, comando_digest, modo_anterior, modo_novo,
-         versao_resultante, ator_id, nota, nota_envio_id, invalidados, em_voo)
+         versao_resultante, ator_id, responsavel_anterior, nota, nota_envio_id, invalidados, em_voo)
     values (p_organizacao_id, p_conversa_id_local, p_command_id, p_acao, v_digest, v_controle.ownership_mode, v_novo_modo,
-            v_versao, p_ator_id, p_nota, v_nota_id, v_invalid, v_em_voo);
+            v_versao, p_ator_id, v_controle.responsavel_id, p_nota, v_nota_id, v_invalid, v_em_voo);
 
     -- Sem o texto da nota: a trilha diz o que mudou, não o que foi escrito.
+    -- `transferencia`: a conversa estava com outra pessoa.
     perform public.auditar_controle_chatwoot(p_organizacao_id, p_ator_id, p_conversa_id_local,
         jsonb_build_object('acao', p_acao, 'de', v_controle.ownership_mode, 'para', v_novo_modo, 'versao', v_versao,
-                           'invalidados', v_invalid, 'em_voo', v_em_voo, 'nota_projetada', v_nota_id is not null));
+                           'invalidados', v_invalid, 'em_voo', v_em_voo, 'nota_projetada', v_nota_id is not null,
+                           'transferencia', v_controle.responsavel_id is not null and v_controle.responsavel_id <> p_ator_id));
 
     return query select 'aplicado'::text, v_novo_modo, case when v_novo_modo = 'HUMAN' then p_ator_id end, v_versao,
                         v_invalid, v_em_voo, v_nota_id;
@@ -494,7 +525,8 @@ $$;
 --
 -- Novo resultado: `outro_responsavel` (a conversa está com outra pessoa).
 -- Responder conversa sem dono (AI, HUMAN_REQUIRED ou dono removido) é
--- assumi-la, na mesma transação. A repetição do mesmo comando continua
+-- assumi-la, na mesma transação; dono que saiu da organização também não
+-- segura a conversa. A repetição do mesmo comando continua
 -- devolvendo `existente` antes de qualquer conferência de controle.
 -- ---------------------------------------------------------------------------
 create or replace function public.registrar_envio_chatwoot(
@@ -521,6 +553,7 @@ declare
     v_versao    bigint;
     v_invalid   integer;
     v_em_voo    integer;
+    v_dono_ativo boolean;
 begin
     if p_organizacao_id is null or p_ator_id is null or p_conversa_id_local is null or p_command_id is null
        or p_conteudo is null or p_conteudo <> btrim(p_conteudo) or char_length(p_conteudo) not between 1 and 4096 then
@@ -564,14 +597,17 @@ begin
     end if;
 
     v_controle := public.travar_controle_chatwoot(p_organizacao_id, p_conversa_id_local, false);
-    if v_controle.ownership_mode = 'HUMAN' and v_controle.responsavel_id is not null
-       and v_controle.responsavel_id <> p_ator_id then
+    -- Quem saiu da organização não segura a conversa (como quem foi apagado).
+    v_dono_ativo := v_controle.ownership_mode = 'HUMAN' and v_controle.responsavel_id is not null
+        and exists (select 1 from public.membros_organizacao m
+                     where m.organizacao_id = p_organizacao_id and m.user_id = v_controle.responsavel_id);
+    if v_dono_ativo and v_controle.responsavel_id <> p_ator_id then
         return query select 'outro_responsavel'::text, null::uuid, null::uuid, null::text;
         return;
     end if;
 
     v_versao := v_controle.control_version;
-    if v_controle.ownership_mode <> 'HUMAN' or v_controle.responsavel_id is null then
+    if not v_dono_ativo then
         -- Responder é assumir: a automação para e a fila antiga perde a vez.
         v_versao := v_versao + 1;
         update public.chatwoot_conversa_controle c
@@ -581,12 +617,13 @@ begin
         v_em_voo := public.contar_envios_em_voo_chatwoot(p_organizacao_id, p_conversa_id_local);
         insert into public.chatwoot_controle_historico
             (organizacao_id, conversa_id_local, command_id, acao, comando_digest, modo_anterior, modo_novo,
-             versao_resultante, ator_id, invalidados, em_voo)
+             versao_resultante, ator_id, responsavel_anterior, invalidados, em_voo)
         values (p_organizacao_id, p_conversa_id_local, p_command_id, 'assumir_por_envio', v_digest,
-                v_controle.ownership_mode, 'HUMAN', v_versao, p_ator_id, v_invalid, v_em_voo);
+                v_controle.ownership_mode, 'HUMAN', v_versao, p_ator_id, v_controle.responsavel_id, v_invalid, v_em_voo);
         perform public.auditar_controle_chatwoot(p_organizacao_id, p_ator_id, p_conversa_id_local,
             jsonb_build_object('acao', 'assumir_por_envio', 'de', v_controle.ownership_mode, 'para', 'HUMAN',
-                               'versao', v_versao, 'invalidados', v_invalid, 'em_voo', v_em_voo, 'nota_projetada', false));
+                               'versao', v_versao, 'invalidados', v_invalid, 'em_voo', v_em_voo, 'nota_projetada', false,
+                               'transferencia', v_controle.responsavel_id is not null));
     end if;
 
     select r.evento_id into v_evento
@@ -701,7 +738,49 @@ $$;
 -- compartilhada no controle faz uma mudança concorrente esperar este início, e
 -- este início esperar uma mudança em andamento: depois de `iniciado`, a
 -- mudança vê o envio como em voo.
+--
+-- É o único caminho para `in_flight` de uma resposta ou nota do Chatwoot:
+-- `iniciar_despacho_outbox` (genérico, MSG-007) passa a recusar evento com
+-- intenção em `chatwoot_envios`, para que
+-- um claim pelo caminho genérico não despache sem conferir a versão.
 -- ---------------------------------------------------------------------------
+create or replace function public.iniciar_despacho_outbox(
+    p_evento_id      uuid,
+    p_worker_id      text,
+    p_fencing_token  bigint
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_evt record;
+begin
+    select * into v_evt from public.outbox_eventos where id = p_evento_id for update;
+    if found and exists (select 1 from public.chatwoot_envios e
+                          where e.organizacao_id = v_evt.organizacao_id and e.outbox_evento_id = v_evt.id) then
+        raise exception 'MSG-009: resposta do Chatwoot so inicia por iniciar_envio_chatwoot.' using errcode = '55000';
+    end if;
+    if not found
+       or v_evt.status <> 'processing'
+       or v_evt.lease_owner is distinct from p_worker_id
+       or v_evt.fencing_token is distinct from p_fencing_token
+       or v_evt.lease_expires_at is null
+       or v_evt.lease_expires_at < now() then
+        return false;
+    end if;
+
+    update public.outbox_eventos
+       set status = 'in_flight', despachado_em = now(), updated_at = now()
+     where id = p_evento_id;
+
+    insert into public.outbox_tentativas (organizacao_id, evento_id, fencing_token, worker_id)
+    values (v_evt.organizacao_id, v_evt.id, v_evt.fencing_token, p_worker_id);
+    return true;
+end;
+$$;
+
 create or replace function public.iniciar_envio_chatwoot(
     p_evento_id     uuid,
     p_worker_id     text,
@@ -726,15 +805,20 @@ begin
 
     if not v_envio.privada then
         v_controle := public.travar_controle_chatwoot(v_envio.organizacao_id, v_envio.conversa_id_local, true);
+    end if;
+
+    select o.* into v_evento from public.outbox_eventos o where o.id = p_evento_id for update;
+    if not found
+       or v_evento.status <> 'processing'
+       or v_evento.lease_owner is distinct from p_worker_id
+       or v_evento.fencing_token is distinct from p_fencing_token
+       or v_evento.lease_expires_at is null
+       or v_evento.lease_expires_at < now() then
+        return 'posse_perdida';
+    end if;
+
+    if not v_envio.privada then
         if v_controle.control_version <> v_envio.controle_versao then
-            select o.* into v_evento from public.outbox_eventos o where o.id = p_evento_id for update;
-            if v_evento.status <> 'processing'
-               or v_evento.lease_owner is distinct from p_worker_id
-               or v_evento.fencing_token is distinct from p_fencing_token
-               or v_evento.lease_expires_at is null
-               or v_evento.lease_expires_at < now() then
-                return 'posse_perdida';
-            end if;
             update public.outbox_eventos
                set status = 'dead_letter',
                    last_error = 'Envio invalidado: o controle do atendimento mudou antes do despacho.',
@@ -750,8 +834,12 @@ begin
         end if;
     end if;
 
-    return case when public.iniciar_despacho_outbox(p_evento_id, p_worker_id, p_fencing_token)
-                then 'iniciado' else 'posse_perdida' end;
+    update public.outbox_eventos
+       set status = 'in_flight', despachado_em = now(), updated_at = now()
+     where id = p_evento_id;
+    insert into public.outbox_tentativas (organizacao_id, evento_id, fencing_token, worker_id)
+    values (v_evento.organizacao_id, v_evento.id, v_evento.fencing_token, p_worker_id);
+    return 'iniciado';
 end;
 $$;
 
@@ -842,7 +930,46 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 13. Superfície: só o servidor. Os auxiliares nem pelo servidor.
+-- 13. Leitura do controle para a tela, com a mesma regra das escritas:
+-- conversa de outra organização (ou inexistente) é `conversa_inexistente`,
+-- nunca um estado padrão; sem linha, HUMAN_REQUIRED versão 0; responsável que
+-- saiu da organização não aparece como dono.
+-- ---------------------------------------------------------------------------
+create or replace function public.ler_controle_atendimento_chatwoot(
+    p_organizacao_id    uuid,
+    p_conversa_id_local uuid
+)
+returns table (resultado text, ownership_mode text, responsavel_id uuid, control_version bigint)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+begin
+    if p_organizacao_id is null or p_conversa_id_local is null then
+        raise exception 'MSG-009: leitura de controle invalida.' using errcode = '22023';
+    end if;
+    if not exists (select 1 from public.chatwoot_conversations c
+                    where c.organizacao_id = p_organizacao_id and c.id_local = p_conversa_id_local) then
+        return query select 'conversa_inexistente'::text, null::text, null::uuid, null::bigint;
+        return;
+    end if;
+    return query
+    select 'encontrada'::text,
+           coalesce(k.ownership_mode, 'HUMAN_REQUIRED'),
+           case when exists (select 1 from public.membros_organizacao m
+                              where m.organizacao_id = p_organizacao_id and m.user_id = k.responsavel_id)
+                then k.responsavel_id end,
+           coalesce(k.control_version, 0)
+      from (select 1) as uma
+      left join public.chatwoot_conversa_controle k
+        on k.organizacao_id = p_organizacao_id and k.conversa_id_local = p_conversa_id_local;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 14. Superfície: só o servidor. Os auxiliares nem pelo servidor.
 -- ---------------------------------------------------------------------------
 revoke all on function public.auditar_controle_chatwoot(uuid, uuid, uuid, jsonb) from public, anon, authenticated, service_role;
 revoke all on function public.travar_controle_chatwoot(uuid, uuid, boolean) from public, anon, authenticated, service_role;
@@ -865,6 +992,8 @@ grant execute on function public.reivindicar_envios_chatwoot(text, integer, inte
 grant execute on function public.iniciar_envio_chatwoot(uuid, text, bigint) to service_role;
 grant execute on function public.concluir_envio_chatwoot(uuid, text, bigint, text, text, text, text, text, integer, jsonb)
     to service_role;
+revoke all on function public.ler_controle_atendimento_chatwoot(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.ler_controle_atendimento_chatwoot(uuid, uuid) to service_role;
 
 -- Autoverificação: nada desta migration fica acessível ao navegador, e o
 -- servidor não escreve no controle sem passar pelas funções.
@@ -878,6 +1007,7 @@ begin
        or has_function_privilege('authenticated',
               'public.alterar_controle_atendimento_chatwoot(uuid,uuid,uuid,uuid,text,bigint,text)', 'execute')
        or has_function_privilege('authenticated', 'public.iniciar_envio_chatwoot(uuid,text,bigint)', 'execute')
+       or has_function_privilege('authenticated', 'public.ler_controle_atendimento_chatwoot(uuid,uuid)', 'execute')
        or has_function_privilege('service_role', 'public.travar_controle_chatwoot(uuid,uuid,boolean)', 'execute')
        or exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                    where n.nspname = 'public' and p.proname = 'reivindicar_envios_chatwoot' and p.pronargs = 4) then

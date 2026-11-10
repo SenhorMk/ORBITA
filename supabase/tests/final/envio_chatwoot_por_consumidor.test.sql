@@ -195,8 +195,8 @@ select ok((select status = 'processing' and conexao_id = 'e8000000-0000-4000-800
 -- ---------------------------------------------------------------------------
 -- Conclusão: só com recibo, mensagem espelhada com proveniência, uma vez.
 -- ---------------------------------------------------------------------------
-select ok(public.iniciar_despacho_outbox(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000001'),
-                                         'w-1', 1), '31. despacho iniciado antes da rede');
+select is(public.iniciar_envio_chatwoot(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000001'),
+                                        'w-1', 1), 'iniciado', '31. despacho iniciado antes da rede');
 select throws_ok($$ select * from public.concluir_envio_chatwoot(
                        pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000001'),
                        'w-1', 1, 'confirmado', 'abc') $$,
@@ -232,7 +232,7 @@ select ok((select count(*) = 1 and bool_and(envio_id is not null) from public.ch
 select pg_temp.registrar('e8000000-0000-4000-8000-00000000000a', 'e8000000-0000-4000-8000-0000000000a1',
                          (select valor::uuid from t_ctx where nome = 'a2'), 'c8000000-0000-4000-8000-000000000007', 'Pela A2');
 insert into t_ctx values ('token2', pg_temp.token(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000007'), 'w-3')::text);
-select public.iniciar_despacho_outbox(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000007'),
+select public.iniciar_envio_chatwoot(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000007'),
                                       'w-3', (select valor::bigint from t_ctx where nome = 'token2'));
 select pg_temp.inbox('e8000000-0000-4000-8000-00000000000a', 'e8000000-0000-4000-8000-0000000000c2', 'a2-propria', 9102, 50,
                      'outgoing', 'user', false);
@@ -253,7 +253,7 @@ select is((select count(*)::int from public.chatwoot_messages
 select pg_temp.registrar('e8000000-0000-4000-8000-00000000000a', 'e8000000-0000-4000-8000-0000000000a1',
                          (select valor::uuid from t_ctx where nome = 'a1'), 'c8000000-0000-4000-8000-000000000008', 'Timeout');
 insert into t_ctx values ('token3', pg_temp.token(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000008'), 'w-4')::text);
-select public.iniciar_despacho_outbox(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000008'),
+select public.iniciar_envio_chatwoot(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000008'),
                                       'w-4', (select valor::bigint from t_ctx where nome = 'token3'));
 select is((select c.status from public.concluir_envio_chatwoot(
                pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000008'),
@@ -275,7 +275,7 @@ select is(pg_temp.registrar('e8000000-0000-4000-8000-00000000000a', 'e8000000-00
 select pg_temp.registrar('e8000000-0000-4000-8000-00000000000a', 'e8000000-0000-4000-8000-0000000000a1',
                          (select valor::uuid from t_ctx where nome = 'a1'), 'c8000000-0000-4000-8000-000000000009', 'Queda');
 insert into t_ctx values ('token4', pg_temp.token(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000009'), 'w-6')::text);
-select public.iniciar_despacho_outbox(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000009'),
+select public.iniciar_envio_chatwoot(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000009'),
                                       'w-6', (select valor::bigint from t_ctx where nome = 'token4'));
 update public.outbox_eventos set lease_expires_at = now() - interval '1 second'
  where id = pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000009');

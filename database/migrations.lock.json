@@ -469,7 +469,7 @@
     {
       "order": 94,
       "path": "../database/91_controle_atendimento_chatwoot.sql",
-      "sha256": "65408ba17bbf3b0c7c50b0da9213f905674bc9156ce23b420003f77c1713b2bd"
+      "sha256": "49f3be5a3cd3656e02c2b5eecdfc69a6d793d7b8509b60485bdb138c341ea8e2"
     }
   ],
   "references": [

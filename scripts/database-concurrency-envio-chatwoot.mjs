@@ -119,7 +119,7 @@ async function quedaDepoisDoDespacho({ admin, pool, novoCliente }) {
   const { rows: [registro] } = await pool[0].query(REGISTRAR, [alvo.org, alvo.ator, alvo.conversa, alvo.org, 'em voo']);
   const worker = await novoCliente();
   const lote = (await worker.query(REIVINDICAR, ['w-voo', 50])).rows.find((r) => r.evento_id === registro.evento_id);
-  await worker.query('select public.iniciar_despacho_outbox($1, $2, $3)', [registro.evento_id, 'w-voo', lote.fencing_token]);
+  await worker.query('select public.iniciar_envio_chatwoot($1, $2, $3)', [registro.evento_id, 'w-voo', lote.fencing_token]);
   // O POST saiu; o processo morre antes de gravar o recibo.
   const { rows: [{ pid }] } = await worker.query('select pg_backend_pid() as pid');
   await admin.query('select pg_terminate_backend($1)', [pid]);
@@ -137,7 +137,7 @@ async function zumbi({ admin, pool }) {
   const alvo = await novaConversa(admin, pool[0], 'zumbi');
   const { rows: [registro] } = await pool[0].query(REGISTRAR, [alvo.org, alvo.ator, alvo.conversa, alvo.org, 'zumbi']);
   const lote = (await pool[1].query(REIVINDICAR, ['w-zumbi', 50])).rows.find((r) => r.evento_id === registro.evento_id);
-  await pool[1].query('select public.iniciar_despacho_outbox($1, $2, $3)', [registro.evento_id, 'w-zumbi', lote.fencing_token]);
+  await pool[1].query('select public.iniciar_envio_chatwoot($1, $2, $3)', [registro.evento_id, 'w-zumbi', lote.fencing_token]);
   await admin.query("update public.outbox_eventos set lease_expires_at = clock_timestamp() - interval '1 second' where id = $1", [registro.evento_id]);
   const { rows: [conclusao] } = await pool[1].query(
     "select * from public.concluir_envio_chatwoot($1, 'w-zumbi', $2, 'confirmado', '880001')", [registro.evento_id, lote.fencing_token]);

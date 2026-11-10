@@ -13,7 +13,10 @@ import { aceitar, aplicar, comandoDaMensagem, novaOrganizacao, reivindicar } fro
  * 3. início do despacho com a trava compartilhada: o takeover espera e, ao
  *    passar, conta a resposta em voo;
  * 4. vinte corridas soltas takeover × início: cada envio termina invalidado
- *    ou em voo contado pelo takeover, nunca em voo sem ninguém saber.
+ *    ou em voo contado pelo takeover, nunca em voo sem ninguém saber;
+ * 5. vinte corridas com a resposta em `failed_transient`, takeover × novo
+ *    claim e início: cancelada pelo takeover, invalidada no início ou em voo
+ *    contado; a saúde da conexão não muda.
  *
  * Contraprova medida e revertida: sem conferir a versão no início, o envio de
  * uma conversa assumida depois do registro sairia.
@@ -132,6 +135,48 @@ async function corridasSoltas({ admin, novoCliente }) {
   return ok({ resumo: `20 corridas soltas: ${contagem.invalidados} invalidados, ${contagem.emVoo} em voo contados; nenhum invisível` });
 }
 
+/**
+ * Resposta que voltou à fila em `failed_transient` (o worker provou que não
+ * enviou) contra um takeover e um novo claim simultâneos: ou o takeover a
+ * cancela, ou o novo início a invalida, ou ela sai e o takeover a conta.
+ */
+async function failedTransientNaCorrida({ admin, novoCliente }) {
+  const [worker, dono] = [await novoCliente(), await novoCliente()];
+  const contagem = { cancelados: 0, invalidadosNoInicio: 0, emVoo: 0 };
+  for (let i = 0; i < 20; i++) {
+    const alvo = await envioReivindicado(admin, worker, `ft-${i}`);
+    await worker.query("select * from public.concluir_envio_chatwoot($1, $2, $3, 'nao_enviado', null, null, 'recusou', 'transient', 1)",
+      [alvo.evento, alvo.worker, alvo.token]);
+    await admin.query("update public.outbox_eventos set next_retry_at = clock_timestamp() - interval '1 second' where id = $1", [alvo.evento]);
+    const { rows: [{ fencing_token: tokenAntes }] } = await admin.query('select fencing_token from public.outbox_eventos where id = $1', [alvo.evento]);
+    const reenvio = (async () => {
+      const lote = (await worker.query(REIVINDICAR, [`w-ft2-${i}`])).rows.find((r) => r.evento_id === alvo.evento);
+      if (!lote) return 'sem_claim';
+      return (await worker.query(INICIAR, [alvo.evento, `w-ft2-${i}`, lote.fencing_token])).rows[0].inicio;
+    })();
+    const [inicio, { rows: [mudanca] }] = await Promise.all([
+      reenvio,
+      dono.query(ALTERAR, [alvo.org, alvo.b, alvo.conversa, 'assumir', 1, null]),
+    ]);
+    const estado = await estadoDoEnvio(admin, alvo.evento);
+    const { rows: [{ fencing_token: tokenDepois, health_status: saude }] } = await admin.query(
+      `select o.fencing_token, c.health_status from public.outbox_eventos o
+         join public.conexoes_integracao c on c.id = o.conexao_id where o.id = $1`, [alvo.evento]);
+    const cancelado = inicio === 'sem_claim' && mudanca.invalidados === 1 && estado.status === 'dead_letter'
+      && estado.invalidado && Number(tokenDepois) > Number(tokenAntes);
+    const invalidadoNoInicio = inicio === 'invalidado' && mudanca.invalidados === 0 && estado.status === 'dead_letter';
+    const emVoo = inicio === 'iniciado' && mudanca.em_voo === 1 && estado.status === 'in_flight';
+    if (mudanca.resultado !== 'aplicado' || saude !== 'degraded' || !(cancelado || invalidadoNoInicio || emVoo)) {
+      return err('FailedTransientEscapou', 'resposta em failed_transient escapou do takeover', { i, inicio, mudanca, estado, saude });
+    }
+    contagem[cancelado ? 'cancelados' : invalidadoNoInicio ? 'invalidadosNoInicio' : 'emVoo']++;
+  }
+  return ok({
+    resumo: `20 corridas com failed_transient: ${contagem.cancelados} cancelados pelo takeover, `
+      + `${contagem.invalidadosNoInicio} invalidados no início, ${contagem.emVoo} em voo contados; saúde intacta`,
+  });
+}
+
 async function contraprovaSemConferirVersao({ admin, novoCliente }) {
   const cliente = await novoCliente();
   const alvo = await envioReivindicado(admin, cliente, 'contraprova');
@@ -143,8 +188,10 @@ async function contraprovaSemConferirVersao({ admin, novoCliente }) {
     await admin.query(`
       create or replace function public.iniciar_envio_chatwoot(p_evento_id uuid, p_worker_id text, p_fencing_token bigint)
       returns text language sql security definer set search_path = '' as $$
-        select case when public.iniciar_despacho_outbox(p_evento_id, p_worker_id, p_fencing_token)
-                    then 'iniciado' else 'posse_perdida' end;
+        update public.outbox_eventos set status = 'in_flight', despachado_em = now(), updated_at = now()
+         where id = p_evento_id and status = 'processing' and lease_owner = p_worker_id
+           and fencing_token = p_fencing_token and lease_expires_at >= now()
+        returning 'iniciado'::text;
       $$`);
     ({ rows: [{ inicio: resultado }] } = await admin.query(INICIAR, [alvo.evento, alvo.worker, alvo.token]));
   } finally {
@@ -177,7 +224,8 @@ export async function runControleChatwootRaceRehearsal() {
     const pool = await Promise.all(Array.from({ length: 8 }, novoCliente));
     const ctx = { admin, pool, novoCliente };
     const resumos = [];
-    for (const etapa of [abasConcorrentes, takeoverPrimeiro, inicioPrimeiro, corridasSoltas, contraprovaSemConferirVersao]) {
+    for (const etapa of [abasConcorrentes, takeoverPrimeiro, inicioPrimeiro, corridasSoltas, failedTransientNaCorrida,
+      contraprovaSemConferirVersao]) {
       const resultado = await etapa(ctx);
       if (resultado._tag === 'err') return resultado;
       resumos.push(resultado.value.resumo);
