@@ -4,7 +4,7 @@ Responder no cockpit **registra uma intenção**; um processo worker separado
 despacha ao Chatwoot. A mensagem só vira histórico com o recibo do Chatwoot
 gravado. Arquivo na ordem 93 do ledger, empilhado sobre o MSG-001 (#136).
 
-> **Desde o MSG-009** (migration 91, [runbook](msg-009-runbook.md)): o claim exige `p_protocolo = 2` e devolve `privada`; o worker inicia o despacho por `iniciar_envio_chatwoot`, que confere a versão do controle do atendimento; responder conversa de outra pessoa é 409 `outro_responsavel`.
+> **Desde o MSG-009** (migration 91, [runbook](msg-009-runbook.md)): o claim exige `p_protocolo = 2` e devolve `privada`; o worker inicia o despacho por `iniciar_envio_chatwoot`, que confere a versão do controle do atendimento (o genérico `iniciar_despacho_outbox` passa a recusar evento de `chatwoot_envios`, 55000); responder conversa de outra pessoa é 409 `outro_responsavel`.
 
 ## 1. Caminho
 
