@@ -46,11 +46,11 @@ function conversa(id: string, nome: string, telefone: string, status: string, mi
 
 const CONVERSAS_INICIAIS: ChatwootConversation[] = [
   conversa('c1', 'Mariana Souza', '+55 11 98842-1107', 'open', 2),
-  conversa('c2', 'Auto Peças Ribeiro', '+55 31 99731-4420', 'open', 9),
+  conversa('c2', 'Casa de Ervas Aruanda', '+55 31 99731-4420', 'open', 9),
   conversa('c3', 'Lucas Andrade', '+55 21 99610-7734', 'open', 26),
-  conversa('c4', 'Mercado Bom Preço', '+55 41 98455-0912', 'open', 58),
+  conversa('c4', 'Loja Raízes da Mata', '+55 41 98455-0912', 'open', 58),
   conversa('c5', 'Camila Ferraz', '+55 11 97120-3388', 'resolved', 190),
-  conversa('c6', 'Distribuidora Aurora', '+55 62 99288-6601', 'resolved', 420),
+  conversa('c6', 'Espaço Terapêutico Jaci', '+55 62 99288-6601', 'resolved', 420),
 ];
 
 type Fala = readonly ['in' | 'out', string, number];
@@ -62,16 +62,16 @@ const ROTEIROS: Record<string, { nome: string; falas: readonly Fala[] }> = {
       ['in', 'Oi! Fiz o pedido #10482 ontem e queria saber se já saiu para entrega.', 14],
       ['out', 'Oi, Mariana! Vou conferir agora mesmo no sistema, só um instante.', 12],
       ['out', 'Encontrei: o pedido #10482 foi faturado hoje cedo e a nota fiscal já foi emitida.', 11],
-      ['in', 'Que ótimo! E vocês ainda têm o kit de pastilhas dianteiras? Queria incluir mais um.', 6],
+      ['in', 'Que ótimo! E vocês ainda têm o Rapé Cravo de 15ml? Queria incluir mais um.', 6],
       ['out', 'Temos sim, 14 unidades em estoque. Posso abrir um novo pedido com o mesmo endereço?', 4],
       ['in', 'Pode sim, por favor! Mesmo endereço e mesma forma de pagamento.', 2],
     ],
   },
   c2: {
-    nome: 'Auto Peças Ribeiro',
+    nome: 'Casa de Ervas Aruanda',
     falas: [
-      ['in', 'Bom dia, preciso de uma cotação para 40 filtros de óleo.', 31],
-      ['out', 'Bom dia! Para 40 unidades conseguimos R$ 18,90 cada, com frete incluso.', 24],
+      ['in', 'Bom dia, preciso de uma cotação para 20 defumadores líquidos Portal do Guardião.', 31],
+      ['out', 'Bom dia! Para 20 unidades conseguimos R$ 36,00 cada, com frete incluso.', 24],
       ['in', 'Fechado. Pode faturar no CNPJ de sempre?', 9],
     ],
   },
@@ -83,7 +83,7 @@ const ROTEIROS: Record<string, { nome: string; falas: readonly Fala[] }> = {
     ],
   },
   c4: {
-    nome: 'Mercado Bom Preço',
+    nome: 'Loja Raízes da Mata',
     falas: [
       ['in', 'Vocês entregam em Curitiba ainda esta semana?', 70],
       ['out', 'Entregamos! Pedidos fechados até quarta chegam na sexta.', 58],
@@ -97,7 +97,7 @@ const ROTEIROS: Record<string, { nome: string; falas: readonly Fala[] }> = {
     ],
   },
   c6: {
-    nome: 'Distribuidora Aurora',
+    nome: 'Espaço Terapêutico Jaci',
     falas: [
       ['in', 'Podem reenviar a nota fiscal do pedido #10398?', 430],
       ['out', 'Reenviada para o e-mail do cadastro.', 420],
