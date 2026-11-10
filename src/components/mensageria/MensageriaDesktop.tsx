@@ -584,8 +584,6 @@ export function MensageriaDesktop({
   readonly espelho?: EspelhoDaMensageria;
 }) {
   const mensageria = useMensageria(fetchWithAuth, selecao, espelho);
-  const [busca, setBusca] = useState('');
-  const [filtro, setFiltro] = useState<Filtro>('open');
 
   const { conversas, selecionar } = mensageria;
   const atendidoRef = useRef<string | null>(null);
@@ -596,6 +594,24 @@ export function MensageriaDesktop({
     const encontrada = conversas.find((c) => finalDoTelefone(c.contact?.phone_number ?? undefined) === alvo);
     if (encontrada) selecionar(encontrada);
   }, [conversas, selecionar, telefoneParaAbrir]);
+
+  if (selecao === null) {
+    return (
+      <EstadoVazio
+        titulo="Nenhuma organização ativa"
+        descricao="Abra a aba Organização e selecione uma organização para ver o atendimento dela."
+      />
+    );
+  }
+
+  return <MensageriaVisual mensageria={mensageria} />;
+}
+
+/** As duas colunas, só a partir do estado — é o que a rota de demonstração reusa. */
+export function MensageriaVisual({ mensageria }: { readonly mensageria: Mensageria }) {
+  const [busca, setBusca] = useState('');
+  const [filtro, setFiltro] = useState<Filtro>('open');
+  const { conversas } = mensageria;
 
   const visiveis = useMemo(() => {
     const termo = busca.trim().toLowerCase();
@@ -608,15 +624,6 @@ export function MensageriaDesktop({
       return nome.includes(termo) || (digitos !== '' && telefone.replace(/\D/g, '').includes(digitos));
     });
   }, [busca, conversas, filtro]);
-
-  if (selecao === null) {
-    return (
-      <EstadoVazio
-        titulo="Nenhuma organização ativa"
-        descricao="Abra a aba Organização e selecione uma organização para ver o atendimento dela."
-      />
-    );
-  }
 
   return (
     <div className="flex flex-1 min-h-0" style={{ gap: 16 }}>
