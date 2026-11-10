@@ -3,19 +3,29 @@ import { z } from 'zod';
 import { supabaseServer } from '../../../../lib/supabaseServer';
 import { organizationContextStatus } from '../../../../lib/organizationAuthorization';
 import { resolveActiveRequestOrganizationContext } from '../../../../lib/requestOrganizationContext';
-import { escopoTemCapacidade, organizationContextToScope } from '../../../../lib/verifiedOrganizationScope';
+import {
+  escopoTemCapacidade,
+  organizationContextToScope,
+  type VerifiedOrganizationScope,
+} from '../../../../lib/verifiedOrganizationScope';
+import { automacaoDoAtendimentoAtiva } from '../../../../services/chatwoot/automacaoDoAtendimento';
 import {
   alterarControle,
   ControleIndisponivel,
   lerControle,
+  permissoesDoControle,
+  type ControleDaConversa,
 } from '../../../../services/chatwoot/controleAtendimento';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * Assumir e exigir humano: quem acessa a organização (a mesma regra de quem
- * responde). Devolver à automação liga de novo a autorresposta: só quem
- * gerencia. O banco confere o papel outra vez.
+ * responde). Assumir a conversa de outra pessoa é uma transferência: vale com
+ * o mesmo acesso, fica registrada com o responsável anterior, e a tela pede
+ * confirmação. Devolver à automação liga de novo a autorresposta: só quem
+ * gerencia, e só com automação ativa (sem ela, a conversa ficaria sem
+ * ninguém). O banco confere o papel outra vez.
  */
 const CAPACIDADE_DE_ATENDER = 'organization:access' as const;
 const CAPACIDADE_DE_DEVOLVER = 'organization:manage' as const;
@@ -51,6 +61,14 @@ async function escopoDaSessao(request: Request) {
   return { _tag: 'Autorizado' as const, scope };
 }
 
+/** O controle e o que a tela pode oferecer a partir dele. */
+function comPermissoes(scope: VerifiedOrganizationScope, controle: ControleDaConversa) {
+  return {
+    controle,
+    permissoes: permissoesDoControle(controle, escopoTemCapacidade(scope, CAPACIDADE_DE_DEVOLVER), automacaoDoAtendimentoAtiva()),
+  };
+}
+
 function indisponivel() {
   return recusar('Controle do atendimento indisponível. Nada foi alterado.', 503);
 }
@@ -67,6 +85,10 @@ export async function POST(request: Request) {
   if (corpo.acao === 'devolver' && !escopoTemCapacidade(sessao.scope, CAPACIDADE_DE_DEVOLVER)) {
     return recusar('Sem permissão para devolver o atendimento à automação.', 403);
   }
+  if (corpo.acao === 'devolver' && !automacaoDoAtendimentoAtiva()) {
+    return recusar('A automação ainda não responde conversas: devolver deixaria a conversa sem atendente.', 409,
+      { motivo: 'automacao_inativa' });
+  }
 
   try {
     const resultado = await alterarControle(supabaseServer, sessao.scope, {
@@ -81,15 +103,15 @@ export async function POST(request: Request) {
         return NextResponse.json({
           success: true,
           duplicado: resultado.duplicado,
-          controle: resultado.controle,
+          ...comPermissoes(sessao.scope, resultado.controle),
           invalidados: resultado.invalidados,
           emVoo: resultado.emVoo,
           notaRegistrada: resultado.notaRegistrada,
         });
       case 'ConflitoDeVersao':
-        return recusar('O atendimento mudou desde que você abriu a conversa.', 409, { motivo: 'conflito_versao', controle: resultado.controle });
+        return recusar('O atendimento mudou desde que você abriu a conversa.', 409, { motivo: 'conflito_versao', ...comPermissoes(sessao.scope, resultado.controle) });
       case 'TransicaoInvalida':
-        return recusar('Esta ação não vale para o estado atual do atendimento.', 409, { motivo: 'transicao_invalida', controle: resultado.controle });
+        return recusar('Esta ação não vale para o estado atual do atendimento.', 409, { motivo: 'transicao_invalida', ...comPermissoes(sessao.scope, resultado.controle) });
       case 'ConflitoDeComando':
         return recusar('Este comando já foi usado com outros dados.', 409, { motivo: 'conflito_comando' });
       case 'ConversaNaoEncontrada':
@@ -113,7 +135,9 @@ export async function GET(request: Request) {
   if (!parsed.success) return recusar('Parâmetro conversaId (UUID) é obrigatório.', 400);
 
   try {
-    return NextResponse.json({ success: true, controle: await lerControle(supabaseServer, sessao.scope, parsed.data.conversaId) });
+    const leitura = await lerControle(supabaseServer, sessao.scope, parsed.data.conversaId);
+    if (leitura._tag === 'ConversaNaoEncontrada') return recusar('Conversa não encontrada', 404);
+    return NextResponse.json({ success: true, ...comPermissoes(sessao.scope, leitura.controle) });
   } catch (error: unknown) {
     if (error instanceof ControleIndisponivel) return indisponivel();
     throw error;

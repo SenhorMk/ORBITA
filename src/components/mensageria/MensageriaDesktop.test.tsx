@@ -386,6 +386,7 @@ describe('MensageriaDesktop — envio', () => {
     readonly post?: () => Promise<Response>;
     readonly lista?: () => readonly unknown[];
     readonly controle?: () => Record<string, unknown>;
+    readonly permissoes?: () => Record<string, unknown>;
     readonly postControle?: (corpo: Record<string, unknown>) => Promise<Response>;
   }) {
     return vi.fn(async (url: string, init?: RequestInit) => {
@@ -396,7 +397,11 @@ describe('MensageriaDesktop — envio', () => {
           return respostaJson({ success: false, error: 'não esperado' }, 500);
         }
         expect(url).toBe(`/api/chatwoot/controle?conversaId=${uuidDaConversa(1)}`);
-        return respostaJson({ success: true, controle: opcoes.controle?.() ?? { modo: 'HUMAN_REQUIRED', responsavelId: null, souResponsavel: false, versao: 0 } });
+        return respostaJson({
+          success: true,
+          controle: opcoes.controle?.() ?? { modo: 'HUMAN_REQUIRED', responsavelId: null, souResponsavel: false, versao: 0 },
+          permissoes: opcoes.permissoes?.() ?? SEM_DEVOLVER,
+        });
       }
       if (init?.method === 'POST') {
         if (opcoes.post) return opcoes.post();
@@ -407,6 +412,8 @@ describe('MensageriaDesktop — envio', () => {
       return respostaJson({ success: true, envios: opcoes.lista?.() ?? [] });
     });
   }
+
+  const SEM_DEVOLVER = { devolver: false, motivoSemDevolver: 'nao_e_responsavel', automacaoAtiva: false };
 
   const postsDe = (fetchWithAuth: ReturnType<typeof servidor>) =>
     fetchWithAuth.mock.calls.filter(([url, init]) => init?.method === 'POST' && url === '/api/chatwoot/send')
@@ -432,7 +439,7 @@ describe('MensageriaDesktop — envio', () => {
       expect(postsDeControle(fetchWithAuth)).toEqual([
         { conversaId: uuidDaConversa(1), commandId: expect.any(String), acao: 'assumir', versaoEsperada: 0 },
       ]);
-      expect(screen.getByText(/1 resposta já estava sendo enviada e pode chegar à cliente/)).toBeInTheDocument();
+      expect(screen.getByText(/1 resposta já estava em envio e pode ter chegado à cliente/)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Assumir atendimento' })).not.toBeInTheDocument();
     });
 
@@ -452,12 +459,15 @@ describe('MensageriaDesktop — envio', () => {
       expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Com outro atendente');
     });
 
-    it('devolver exige resumo, que vai ao servidor como nota', async () => {
+    it('com automação ativa e permissão do servidor, devolver exige resumo, que vai como nota', async () => {
+      const ativa = { devolver: true, motivoSemDevolver: null, automacaoAtiva: true };
       const fetchWithAuth = servidor({
         controle: () => ({ modo: 'HUMAN', responsavelId: 'eu', souResponsavel: true, versao: 2 }),
+        permissoes: () => ativa,
         postControle: async () => respostaJson({
           success: true, duplicado: false, invalidados: 0, emVoo: 0, notaRegistrada: true,
           controle: { modo: 'AI', responsavelId: null, souResponsavel: false, versao: 3 },
+          permissoes: { ...ativa, devolver: false, motivoSemDevolver: 'nao_e_responsavel' },
         }),
       });
       await abrirComposer(fetchWithAuth);
@@ -473,6 +483,61 @@ describe('MensageriaDesktop — envio', () => {
         { conversaId: uuidDaConversa(1), commandId: expect.any(String), acao: 'devolver', versaoEsperada: 2, nota: 'Pedido localizado' },
       ]);
       expect(screen.getByRole('button', { name: 'Pedir atendente' })).toBeInTheDocument();
+    });
+
+    it.each([
+      ['dono comum: ser responsável não é poder gerenciar', 'sem_capacidade', 'Só quem gerencia a organização devolve à automação.'],
+      ['dono gestor sem automação ativa', 'automacao_inativa', 'Devolver à automação fica disponível quando a automação estiver ativa.'],
+    ])('%s: não oferece devolver e diz por quê', async (_nome, motivo, explicacao) => {
+      const fetchWithAuth = servidor({
+        controle: () => ({ modo: 'HUMAN', responsavelId: 'eu', souResponsavel: true, versao: 2 }),
+        permissoes: () => ({ devolver: false, motivoSemDevolver: motivo, automacaoAtiva: false }),
+      });
+      await abrirComposer(fetchWithAuth);
+
+      await waitFor(() => expect(screen.getByText(explicacao)).toBeInTheDocument());
+      expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Com você');
+      expect(screen.queryByRole('button', { name: 'Devolver à automação' })).not.toBeInTheDocument();
+    });
+
+    it('conversa em AI sem automação ativa: não promete resposta automática e pede que alguém assuma', async () => {
+      const fetchWithAuth = servidor({ controle: () => ({ modo: 'AI', responsavelId: null, souResponsavel: false, versao: 4 }) });
+      await abrirComposer(fetchWithAuth);
+
+      await waitFor(() => expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Sem atendente'));
+      expect(screen.queryByText('Automação responde')).not.toBeInTheDocument();
+      expect(screen.getByText(/A automação ainda não responde conversas: ninguém está atendendo esta/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Assumir atendimento' })).toBeInTheDocument();
+    });
+
+    it('assumir a conversa de outro atendente pede confirmação antes de transferir', async () => {
+      const fetchWithAuth = servidor({
+        controle: () => ({ modo: 'HUMAN', responsavelId: 'outra', souResponsavel: false, versao: 3 }),
+        postControle: async () => respostaJson({
+          success: true, duplicado: false, invalidados: 1, emVoo: 0, notaRegistrada: true,
+          controle: { modo: 'HUMAN', responsavelId: 'eu', souResponsavel: true, versao: 4 },
+          permissoes: { devolver: false, motivoSemDevolver: 'sem_capacidade', automacaoAtiva: false },
+        }),
+      });
+      await abrirComposer(fetchWithAuth);
+      await waitFor(() => expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Com outro atendente'));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Assumir atendimento' }));
+      expect(postsDeControle(fetchWithAuth)).toEqual([]);
+      expect(screen.getByRole('group', { name: 'Confirmar transferência' })).toHaveTextContent('Esta conversa está com outro atendente');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+      expect(screen.queryByRole('group', { name: 'Confirmar transferência' })).not.toBeInTheDocument();
+      expect(postsDeControle(fetchWithAuth)).toEqual([]);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Assumir atendimento' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Transferir para mim' }));
+
+      await waitFor(() => expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Com você'));
+      expect(postsDeControle(fetchWithAuth)).toEqual([
+        { conversaId: uuidDaConversa(1), commandId: expect.any(String), acao: 'assumir', versaoEsperada: 3 },
+      ]);
+      expect(screen.getByText('1 resposta na fila foi cancelada.')).toBeInTheDocument();
     });
 
     it('envio invalidado pela troca de responsável aparece como não enviado, com o texto recuperável', async () => {

@@ -15,11 +15,20 @@ import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizatio
 export type ModoDoAtendimento = 'AI' | 'HUMAN_REQUIRED' | 'HUMAN';
 export type AcaoDoAtendimento = 'assumir' | 'devolver' | 'exigir_humano';
 
+/** Por que o servidor não oferece devolver (o contrato da rota). */
+const MOTIVOS = ['nao_e_responsavel', 'sem_capacidade', 'automacao_inativa'] as const;
+
 export interface ControleVisto {
   readonly modo: ModoDoAtendimento;
+  /** Só quem ainda é da organização; null também quando o dono saiu. */
   readonly responsavelId: string | null;
   readonly souResponsavel: boolean;
   readonly versao: number;
+  /** Calculado pelo servidor a partir do escopo verificado; a rota confere de novo. */
+  readonly podeDevolver: boolean;
+  readonly motivoSemDevolver: (typeof MOTIVOS)[number] | null;
+  /** Sem automação ativa, `AI` quer dizer que ninguém responde. */
+  readonly automacaoAtiva: boolean;
 }
 
 /** O estado guardado leva a conversa de onde veio: o de outra conversa não aparece. */
@@ -36,12 +45,22 @@ interface EstadoCarimbado {
 const MODOS: readonly ModoDoAtendimento[] = ['AI', 'HUMAN_REQUIRED', 'HUMAN'];
 const ERRO_DE_LEITURA = 'Não foi possível ler quem atende esta conversa.';
 
-function controleValido(valor: unknown): ControleVisto | null {
-  const c = valor as Partial<ControleVisto> | null;
+/** O controle e as permissões da resposta. Sem permissões legíveis, nada é oferecido (falha fechada). */
+function controleValido(corpo: { controle?: unknown; permissoes?: unknown } | null): ControleVisto | null {
+  const c = corpo?.controle as Partial<ControleVisto> | null | undefined;
   if (!c || !MODOS.includes(c.modo as ModoDoAtendimento) || typeof c.versao !== 'number' || typeof c.souResponsavel !== 'boolean') {
     return null;
   }
-  return { modo: c.modo as ModoDoAtendimento, responsavelId: c.responsavelId ?? null, souResponsavel: c.souResponsavel, versao: c.versao };
+  const p = corpo?.permissoes as { devolver?: unknown; motivoSemDevolver?: unknown; automacaoAtiva?: unknown } | null | undefined;
+  return {
+    modo: c.modo as ModoDoAtendimento,
+    responsavelId: c.responsavelId ?? null,
+    souResponsavel: c.souResponsavel,
+    versao: c.versao,
+    podeDevolver: p?.devolver === true,
+    motivoSemDevolver: MOTIVOS.find((motivo) => motivo === p?.motivoSemDevolver) ?? null,
+    automacaoAtiva: p?.automacaoAtiva === true,
+  };
 }
 
 function plural(n: number, um: string, varios: string): string {
@@ -54,8 +73,8 @@ function avisoDaMudanca(invalidados: number, emVoo: number): string | null {
     partes.push(plural(invalidados, '1 resposta na fila foi cancelada.', '# respostas na fila foram canceladas.'));
   }
   if (emVoo > 0) {
-    partes.push(plural(emVoo, '1 resposta já estava sendo enviada e pode chegar à cliente.',
-      '# respostas já estavam sendo enviadas e podem chegar à cliente.'));
+    partes.push(plural(emVoo, '1 resposta já estava em envio e pode ter chegado à cliente.',
+      '# respostas já estavam em envio e podem ter chegado à cliente.'));
   }
   return partes.length > 0 ? partes.join(' ') : null;
 }
@@ -86,7 +105,7 @@ export function useControle(fetchWithAuth: AuthenticatedFetch, conversaId: strin
     try {
       const resposta = await fetchWithAuth(`/api/chatwoot/controle?conversaId=${alvo}`);
       const corpo = await resposta.json().catch(() => null);
-      controle = resposta.ok ? controleValido(corpo?.controle) : null;
+      controle = resposta.ok ? controleValido(corpo) : null;
     } catch {
       controle = null;
     }
@@ -114,7 +133,7 @@ export function useControle(fetchWithAuth: AuthenticatedFetch, conversaId: strin
       });
       const corpo = await resposta.json().catch(() => null);
       if (atual.current !== alvo) return false;
-      const controle = controleValido(corpo?.controle);
+      const controle = controleValido(corpo);
       const aplicado = resposta.ok && corpo?.success === true && controle !== null;
       setGuardado((anterior) => {
         const base = daConversa(anterior, alvo);

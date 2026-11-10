@@ -116,31 +116,71 @@ export async function alterarControle(
   }
 }
 
-const LinhaLidaSchema = z.object({
-  ownership_mode: z.enum(MODOS_DE_ATENDIMENTO),
-  responsavel_id: z.string().uuid().nullable(),
-  control_version: versao,
-});
+const LinhaLidaSchema = z.discriminatedUnion('resultado', [
+  z.object({
+    resultado: z.literal('encontrada'),
+    ownership_mode: z.enum(MODOS_DE_ATENDIMENTO),
+    responsavel_id: z.string().uuid().nullable(),
+    control_version: versao,
+  }),
+  z.object({ resultado: z.literal('conversa_inexistente') }),
+]);
+
+export type LeituraDoControle =
+  | { readonly _tag: 'Encontrado'; readonly controle: ControleDaConversa }
+  | { readonly _tag: 'ConversaNaoEncontrada' };
 
 /**
- * O controle vigente. Sem linha, a conversa nunca mudou de controle: aguarda
- * humano, versão 0. O `service_role` ignora RLS: o filtro por organização é
- * que isola.
+ * O controle vigente, lido pelo banco com a regra das escritas: conversa de
+ * outra organização (ou inexistente) não tem estado; sem linha, aguarda
+ * humano, versão 0; dono que saiu da organização não aparece como dono.
  */
 export async function lerControle(
   supabase: SupabaseClient,
   scope: VerifiedOrganizationScope,
   conversaId: string,
-): Promise<ControleDaConversa> {
-  const { data, error } = await supabase
-    .from('chatwoot_conversa_controle')
-    .select('ownership_mode, responsavel_id, control_version')
-    .eq('organizacao_id', scope.organizationId)
-    .eq('conversa_id_local', conversaId)
-    .maybeSingle();
+): Promise<LeituraDoControle> {
+  const { data, error } = await supabase.rpc('ler_controle_atendimento_chatwoot', {
+    p_organizacao_id: scope.organizationId,
+    p_conversa_id_local: conversaId,
+  });
   if (error) throw new ControleIndisponivel();
-  if (data === null) return controle(scope, 'HUMAN_REQUIRED', null, 0);
-  const linha = LinhaLidaSchema.safeParse(data);
-  if (!linha.success) throw new ControleIndisponivel();
-  return controle(scope, linha.data.ownership_mode, linha.data.responsavel_id, linha.data.control_version);
+  const lido = LinhaLidaSchema.safeParse(Array.isArray(data) ? data[0] : data);
+  if (!lido.success) throw new ControleIndisponivel();
+  if (lido.data.resultado === 'conversa_inexistente') return { _tag: 'ConversaNaoEncontrada' };
+  return {
+    _tag: 'Encontrado',
+    controle: controle(scope, lido.data.ownership_mode, lido.data.responsavel_id, lido.data.control_version),
+  };
+}
+
+/** Por que a pessoa não pode devolver esta conversa agora (null: pode). */
+export type MotivoSemDevolver = 'nao_e_responsavel' | 'sem_capacidade' | 'automacao_inativa';
+
+export interface PermissoesDoControle {
+  readonly devolver: boolean;
+  readonly motivoSemDevolver: MotivoSemDevolver | null;
+  readonly automacaoAtiva: boolean;
+}
+
+/**
+ * O que a tela pode oferecer, derivado do escopo verificado: ser responsável
+ * não é poder gerenciar, e devolver à automação não vale sem automação ativa.
+ * A rota e a RPC conferem tudo de novo; isto só evita oferecer o que seria
+ * recusado.
+ */
+export function permissoesDoControle(
+  conversa: ControleDaConversa,
+  podeGerenciar: boolean,
+  automacaoAtiva: boolean,
+): PermissoesDoControle {
+  const motivo = motivoSemDevolver(conversa, podeGerenciar, automacaoAtiva);
+  return { devolver: motivo === null, motivoSemDevolver: motivo, automacaoAtiva };
+}
+
+function motivoSemDevolver(conversa: ControleDaConversa, podeGerenciar: boolean, automacaoAtiva: boolean): MotivoSemDevolver | null {
+  if (!(conversa.modo === 'HUMAN' && conversa.souResponsavel)) return 'nao_e_responsavel';
+  if (!podeGerenciar) return 'sem_capacidade';
+  if (!automacaoAtiva) return 'automacao_inativa';
+  return null;
 }

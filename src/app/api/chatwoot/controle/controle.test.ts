@@ -24,8 +24,9 @@ const estado = vi.hoisted(() => ({
   chamadas: [] as Array<{ fn: string; args: Record<string, unknown> }>,
   resposta: null as Linha | null,
   bancoFora: false,
-  controle: null as Linha | null,
-  consultas: [] as Array<Record<string, unknown>>,
+  /** A conversa como o banco a vê: organização dona e controle (sem controle, linha ausente). */
+  conversa: null as Linha | null,
+  automacaoAtiva: false,
 }));
 
 vi.mock('../../../../lib/supabaseServer', () => ({
@@ -33,23 +34,23 @@ vi.mock('../../../../lib/supabaseServer', () => ({
     rpc: async (fn: string, args: Record<string, unknown>) => {
       estado.chamadas.push({ fn, args });
       if (estado.bancoFora) return { data: null, error: { message: 'banco caiu' } };
+      if (fn === 'ler_controle_atendimento_chatwoot') {
+        const c = estado.conversa;
+        if (!c || c.organizacao_id !== args.p_organizacao_id) return { data: [{ resultado: 'conversa_inexistente' }], error: null };
+        return {
+          data: [{
+            resultado: 'encontrada', ownership_mode: c.ownership_mode ?? 'HUMAN_REQUIRED',
+            responsavel_id: c.responsavel_id ?? null, control_version: c.control_version ?? 0,
+          }],
+          error: null,
+        };
+      }
       return { data: estado.resposta ? [estado.resposta] : [], error: null };
     },
-    from: (tabela: string) => {
-      const filtros: Record<string, unknown> = { tabela };
-      const consulta = {
-        select: () => consulta,
-        eq: (coluna: string, valor: unknown) => { filtros[coluna] = valor; return consulta; },
-        maybeSingle: async () => {
-          estado.consultas.push(filtros);
-          if (estado.bancoFora) return { data: null, error: { message: 'banco caiu' } };
-          const linha = estado.controle;
-          return { data: linha && linha.organizacao_id === filtros.organizacao_id ? linha : null, error: null };
-        },
-      };
-      return consulta;
-    },
   },
+}));
+vi.mock('../../../../services/chatwoot/automacaoDoAtendimento', () => ({
+  automacaoDoAtendimentoAtiva: () => estado.automacaoAtiva,
 }));
 vi.mock('../../../../lib/requestOrganizationContext', () => ({
   resolveActiveRequestOrganizationContext: vi.fn(async () => (estado.sessao.resolvida
@@ -79,8 +80,8 @@ async function alterar(corpo: unknown, organizacao = ORG_A, capacidades = ['orga
   return { status: res.status, body: await res.json() };
 }
 
-async function ler(conversaId: string, organizacao = ORG_A) {
-  estado.sessao = { organizacao, capacidades: ['organization:access'], resolvida: true };
+async function ler(conversaId: string, organizacao = ORG_A, capacidades = ['organization:access']) {
+  estado.sessao = { organizacao, capacidades, resolvida: true };
   const { GET } = await import('./route');
   const res = await GET(new Request(`https://orbita.test/api/chatwoot/controle?conversaId=${conversaId}`));
   return { status: res.status, body: await res.json() };
@@ -88,10 +89,10 @@ async function ler(conversaId: string, organizacao = ORG_A) {
 
 beforeEach(() => {
   estado.chamadas.length = 0;
-  estado.consultas.length = 0;
   estado.resposta = null;
   estado.bancoFora = false;
-  estado.controle = null;
+  estado.conversa = null;
+  estado.automacaoAtiva = false;
 });
 
 describe('POST /api/chatwoot/controle (MSG-009)', () => {
@@ -114,6 +115,7 @@ describe('POST /api/chatwoot/controle (MSG-009)', () => {
       success: true,
       duplicado: false,
       controle: { modo: 'HUMAN', responsavelId: ATOR, souResponsavel: true, versao: 1 },
+      permissoes: { devolver: false, motivoSemDevolver: 'sem_capacidade', automacaoAtiva: false },
       invalidados: 2,
       emVoo: 1,
       notaRegistrada: true,
@@ -170,7 +172,19 @@ describe('POST /api/chatwoot/controle (MSG-009)', () => {
     expect(estado.chamadas).toHaveLength(0);
   });
 
-  it('quem gerencia devolve com resumo; o resumo vai ao banco aparado', async () => {
+  it('sem automação ativa, devolver é 409 automacao_inativa sem chamar o banco: a conversa não fica sem ninguém', async () => {
+    const { status, body } = await alterar(
+      { conversaId: CONVERSA, commandId: COMANDO, acao: 'devolver', versaoEsperada: 1, nota: 'Resolvido.' },
+      ORG_A, ['organization:access', 'organization:manage'],
+    );
+
+    expect(status).toBe(409);
+    expect(body).toMatchObject({ success: false, motivo: 'automacao_inativa' });
+    expect(estado.chamadas).toHaveLength(0);
+  });
+
+  it('com automação ativa, quem gerencia devolve com resumo; o resumo vai ao banco aparado', async () => {
+    estado.automacaoAtiva = true;
     estado.resposta = aplicado('AI', 2, { nota_envio_id: 'a0000000-0000-4000-8000-000000000002' });
     const { status, body } = await alterar(
       { conversaId: CONVERSA, commandId: COMANDO, acao: 'devolver', versaoEsperada: 1, nota: '  Pedido localizado.  ' },
@@ -225,26 +239,63 @@ describe('POST /api/chatwoot/controle (MSG-009)', () => {
 });
 
 describe('GET /api/chatwoot/controle (MSG-009)', () => {
-  it('conversa sem linha de controle está aguardando humano, versão 0', async () => {
+  const OUTRA = '70000000-0000-4000-8000-0000000000ff';
+
+  it('conversa sem linha de controle está aguardando humano, versão 0; lida pela organização da sessão', async () => {
+    estado.conversa = { organizacao_id: ORG_A };
     const { status, body } = await ler(CONVERSA);
 
     expect(status).toBe(200);
     expect(body.controle).toEqual({ modo: 'HUMAN_REQUIRED', responsavelId: null, souResponsavel: false, versao: 0 });
-    expect(estado.consultas[0]).toMatchObject({ tabela: 'chatwoot_conversa_controle', organizacao_id: ORG_A, conversa_id_local: CONVERSA });
+    expect(estado.chamadas).toEqual([{
+      fn: 'ler_controle_atendimento_chatwoot', args: { p_organizacao_id: ORG_A, p_conversa_id_local: CONVERSA },
+    }]);
   });
 
-  it('o controle de outra organização não aparece: filtro pela organização da sessão', async () => {
-    estado.controle = { organizacao_id: ORG_A, ownership_mode: 'HUMAN', responsavel_id: ATOR, control_version: 4 };
-    const { body } = await ler(CONVERSA, ORG_B);
+  it('conversa inexistente: 404, nunca um estado fictício', async () => {
+    const { status, body } = await ler(CONVERSA);
 
-    expect(body.controle).toMatchObject({ modo: 'HUMAN_REQUIRED', versao: 0 });
+    expect(status).toBe(404);
+    expect(body).toEqual({ success: false, error: 'Conversa não encontrada' });
+  });
+
+  it('conversa de outra organização: 404 (a sessão de B não alcança a conversa de A)', async () => {
+    estado.conversa = { organizacao_id: ORG_A, ownership_mode: 'HUMAN', responsavel_id: ATOR, control_version: 4 };
+    const { status, body } = await ler(CONVERSA, ORG_B);
+
+    expect(status).toBe(404);
+    expect(body.controle).toBeUndefined();
   });
 
   it('com a conversa assumida pela própria pessoa, souResponsavel é verdadeiro', async () => {
-    estado.controle = { organizacao_id: ORG_A, ownership_mode: 'HUMAN', responsavel_id: ATOR, control_version: 4 };
+    estado.conversa = { organizacao_id: ORG_A, ownership_mode: 'HUMAN', responsavel_id: ATOR, control_version: 4 };
     const { body } = await ler(CONVERSA);
 
     expect(body.controle).toEqual({ modo: 'HUMAN', responsavelId: ATOR, souResponsavel: true, versao: 4 });
+  });
+
+  it.each([
+    ['dono comum (membro): ser responsável não dá permissão de gerenciar', ATOR, ['organization:access'], false,
+      { devolver: false, motivoSemDevolver: 'sem_capacidade', automacaoAtiva: false }],
+    ['dono gestor, sem automação ativa', ATOR, ['organization:access', 'organization:manage'], false,
+      { devolver: false, motivoSemDevolver: 'automacao_inativa', automacaoAtiva: false }],
+    ['dono gestor, com automação ativa', ATOR, ['organization:access', 'organization:manage'], true,
+      { devolver: true, motivoSemDevolver: null, automacaoAtiva: true }],
+    ['gestor, mas a conversa é de outra pessoa', OUTRA, ['organization:access', 'organization:manage'], true,
+      { devolver: false, motivoSemDevolver: 'nao_e_responsavel', automacaoAtiva: true }],
+  ])('permissões efetivas — %s', async (_nome, responsavel, capacidades, automacao, esperado) => {
+    estado.conversa = { organizacao_id: ORG_A, ownership_mode: 'HUMAN', responsavel_id: responsavel, control_version: 2 };
+    estado.automacaoAtiva = automacao;
+    const { status, body } = await ler(CONVERSA, ORG_A, capacidades);
+
+    expect(status).toBe(200);
+    expect(body.permissoes).toEqual(esperado);
+  });
+
+  it('resposta do banco fora do contrato: 503', async () => {
+    estado.conversa = { organizacao_id: ORG_A, ownership_mode: 'DONO' };
+    const { status } = await ler(CONVERSA);
+    expect(status).toBe(503);
   });
 
   it('conversaId inválido: 400', async () => {
