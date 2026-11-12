@@ -4,7 +4,11 @@
  * Protocolo da outbox (MSG-007), sem atalho: liberar leases vencidas →
  * reivindicar só envios registrados desde o corte → resolver o canal (autor
  * ainda membro, conexão ligada) → gravar `in_flight` → POST ao Chatwoot →
- * concluir por fencing. Só um recibo confirma, e a mensagem espelhada nasce na
+ * concluir por fencing. Desde o MSG-009, gravar `in_flight` confere a versão do
+ * controle do atendimento sob trava: uma versão vencida (alguém assumiu ou
+ * devolveu depois do registro) invalida o envio no banco, sem chamar o
+ * Chatwoot. Nota privada sai pelo método privado e só é confirmada se o
+ * recibo disser `private`. Só um recibo confirma, e a mensagem espelhada nasce na
  * mesma transação da confirmação. Timeout, ACK perdido, 2xx inválido, 5xx, 429
  * e exceção depois do despacho viram `unknown`, que nenhum claim reenvia; uma
  * queda antes de gravar o desfecho deixa `in_flight`, que o reaper leva a
@@ -26,6 +30,8 @@ export interface EnvioReivindicado {
   readonly atorId: string | null;
   readonly conversaIdExterno: number;
   readonly conteudo: string;
+  /** Nota privada do Chatwoot (MSG-009): nunca vai à cliente. */
+  readonly privada: boolean;
   readonly correlationId: string | null;
   readonly fencingToken: number;
 }
@@ -44,10 +50,18 @@ export interface MensagemDoRecibo {
   readonly criadaEm: string | null;
 }
 
-/** O canal de uma conexão: só o envio, para o worker não alcançar mais nada. */
+/**
+ * O canal de uma conexão: só o envio, para o worker não alcançar mais nada.
+ * Mensagem e nota privada são métodos distintos: nenhum parâmetro decide se o
+ * texto vai à cliente.
+ */
 export interface CanalDeEnvio {
   sendMessage(conversaIdExterno: number, conteudo: string): Promise<ChatwootApiResult<ChatwootMessage>>;
+  sendPrivateNote(conversaIdExterno: number, conteudo: string): Promise<ChatwootApiResult<ChatwootMessage>>;
 }
+
+/** `invalidado`: o controle mudou depois do registro; o banco já gravou o desfecho. */
+export type InicioDoDespacho = 'iniciado' | 'invalidado' | 'posse_perdida';
 
 export type ResolucaoDoCanal =
   | { readonly _tag: 'Canal'; readonly canal: CanalDeEnvio }
@@ -64,7 +78,7 @@ export interface PortaDoConsumidorEnvio {
   }): Promise<readonly EnvioReivindicado[]>;
   /** Quem pediu ainda é membro e a conexão está ligada? Lido antes da rede. */
   resolverCanal(envio: EnvioReivindicado): Promise<ResolucaoDoCanal>;
-  iniciarDespacho(posse: PosseDoEnvio): Promise<boolean>;
+  iniciarDespacho(posse: PosseDoEnvio): Promise<InicioDoDespacho>;
   /** Status gravado, ou `null` quando o fencing recusou. */
   concluir(posse: PosseDoEnvio, desfecho: DesfechoDoDespacho, mensagem: MensagemDoRecibo | null): Promise<string | null>;
 }
@@ -76,6 +90,8 @@ export interface ResumoDoEnvio {
   readonly recusados: number;
   readonly repetiveis: number;
   readonly desconhecidos: number;
+  /** Invalidados pelo controle do atendimento antes da rede (MSG-009). */
+  readonly invalidados: number;
   /** Posse perdida antes do despacho ou recusada na conclusão. */
   readonly semPosse: number;
   /** Desfecho que não chegou ao banco: fica `in_flight` até o reaper. */
@@ -132,7 +148,12 @@ async function despachar(
     return;
   }
 
-  if (!(await porta.iniciarDespacho(posse))) {
+  const inicio = await porta.iniciarDespacho(posse);
+  if (inicio === 'invalidado') {
+    contagem.invalidados++;
+    return;
+  }
+  if (inicio !== 'iniciado') {
     contagem.semPosse++;
     return;
   }
@@ -140,8 +161,13 @@ async function despachar(
   let desfecho: DesfechoDoDespacho;
   let mensagem: MensagemDoRecibo | null = null;
   try {
-    const resultado = await resolucao.canal.sendMessage(envio.conversaIdExterno, envio.conteudo);
-    desfecho = validarDesfecho(desfechoDoEnvioChatwoot(resultado));
+    const resultado = envio.privada
+      ? await resolucao.canal.sendPrivateNote(envio.conversaIdExterno, envio.conteudo)
+      : await resolucao.canal.sendMessage(envio.conversaIdExterno, envio.conteudo);
+    desfecho = validarDesfecho(envio.privada && resultado._tag === 'ChatwootSuccess' && resultado.data.private !== true
+      // Algo foi criado e o recibo não prova que é privado: só uma pessoa decide.
+      ? { _tag: 'Desconhecido', motivo: 'resposta_invalida', erro: 'Recibo da nota sem a marca de nota privada.' }
+      : desfechoDoEnvioChatwoot(resultado));
     mensagem = mensagemDoRecibo(resultado);
   } catch {
     desfecho = desfechoDeFalhaAposDespacho();
@@ -173,7 +199,7 @@ export async function consumirEnviosUmaVez(
   const reaped = await porta.liberarLeasesVencidas();
   const lote = await porta.reivindicar(opcoes);
   const contagem: Contagem = {
-    reaped, reivindicados: lote.length, enviados: 0, recusados: 0, repetiveis: 0, desconhecidos: 0, semPosse: 0, semDesfechoGravado: 0,
+    reaped, reivindicados: lote.length, enviados: 0, recusados: 0, repetiveis: 0, desconhecidos: 0, invalidados: 0, semPosse: 0, semDesfechoGravado: 0,
   };
   for (const envio of lote) {
     if (opcoes.deveParar?.()) break;

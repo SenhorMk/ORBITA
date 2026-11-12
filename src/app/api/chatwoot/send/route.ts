@@ -74,6 +74,8 @@ export async function POST(request: Request) {
         return recusar('Integração Chatwoot indisponível para esta conversa.', 409, { motivo: 'conexao_indisponivel' });
       case 'SemVinculo':
         return recusar('Não autorizado', 403);
+      case 'OutroResponsavel':
+        return recusar('Esta conversa está com outro atendente. Assuma o atendimento para responder.', 409, { motivo: 'outro_responsavel' });
     }
   } catch (error: unknown) {
     if (!(error instanceof RegistroDeEnvioIndisponivel)) throw error;

@@ -30,7 +30,7 @@ const estado = vi.hoisted(() => ({
   enqueue: vi.fn(),
   bancoFora: false,
   /** Resultado que o banco devolve antes de olhar a intenção (vínculo, conexão). */
-  recusaDoBanco: null as null | 'sem_vinculo' | 'conexao_indisponivel',
+  recusaDoBanco: null as null | 'sem_vinculo' | 'conexao_indisponivel' | 'outro_responsavel',
   consultas: [] as Array<Record<string, unknown>>,
 }));
 
@@ -49,6 +49,7 @@ vi.mock('../../../../lib/supabaseServer', () => ({
         select: () => consulta,
         eq: (coluna: string, valor: unknown) => { filtros[coluna] = valor; return consulta; },
         order: () => consulta,
+        is: (coluna: string, valor: unknown) => { filtros[`${coluna}:is`] = valor; return consulta; },
         limit: async () => {
           estado.consultas.push(filtros);
           const linhas = [...estado.intencoes.entries()]
@@ -257,7 +258,7 @@ describe('GET /api/chatwoot/send (MSG-008)', () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(estado.consultas).toEqual([{ tabela: 'chatwoot_envios', organizacao_id: ORG_A, conversa_id_local: conversa }]);
+    expect(estado.consultas).toEqual([{ tabela: 'chatwoot_envios', organizacao_id: ORG_A, conversa_id_local: conversa, privada: false }]);
     expect(body.envios).toEqual([expect.objectContaining({ commandId: COMANDO, estado: 'desconhecido' })]);
     expect(body.envios[0].explicacao).toContain('Não reenvie');
   });
@@ -266,5 +267,26 @@ describe('GET /api/chatwoot/send (MSG-008)', () => {
     estado.sessao = { organizacao: ORG_A, papel: 'member' };
     const { GET } = await import('./route');
     expect((await GET(new Request('https://orbita.test/api/chatwoot/send?conversaId=50'))).status).toBe(400);
+  });
+});
+
+describe('envio com controle do atendimento (MSG-009)', () => {
+  it('conversa com outra pessoa: 409 outro_responsavel, sem intenção', async () => {
+    const conversa = semearConversa(ORG_A, CONEXAO_A1);
+    estado.recusaDoBanco = 'outro_responsavel';
+    const { status, body } = await enviar({ conversaId: conversa, commandId: COMANDO, content: 'olá' });
+
+    expect(status).toBe(409);
+    expect(body.motivo).toBe('outro_responsavel');
+    expect(estado.enviadas).toHaveLength(0);
+  });
+
+  it('a lista de envios da conversa deixa de fora as notas privadas', async () => {
+    const conversa = semearConversa(ORG_A, CONEXAO_A1);
+    estado.sessao = { organizacao: ORG_A, papel: 'member' };
+    const { GET } = await import('./route');
+    await GET(new Request(`https://orbita.test/api/chatwoot/send?conversaId=${conversa}`));
+
+    expect(estado.consultas.at(-1)).toMatchObject({ organizacao_id: ORG_A, conversa_id_local: conversa, privada: false });
   });
 });

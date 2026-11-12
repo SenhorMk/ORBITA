@@ -17,10 +17,14 @@ import { z } from 'zod';
 import type { VerifiedOrganizationScope } from '../../lib/verifiedOrganizationScope';
 import { desfechoVisivel, explicarEstado } from '../outbox/desfechoDoEfeito';
 
-/** O que o operador vê de um envio. `sent` exige recibo gravado. */
-export type EstadoDoEnvio = 'pendente' | 'enviando' | 'enviado' | 'recusado' | 'desconhecido';
+/**
+ * O que o operador vê de um envio. `sent` exige recibo gravado; `invalidado` é
+ * o envio que o controle do atendimento tirou da fila antes da rede (MSG-009).
+ */
+export type EstadoDoEnvio = 'pendente' | 'enviando' | 'enviado' | 'recusado' | 'desconhecido' | 'invalidado';
 
-export function estadoDoEnvio(statusDoEvento: string): EstadoDoEnvio {
+export function estadoDoEnvio(statusDoEvento: string, invalidado = false): EstadoDoEnvio {
+  if (invalidado) return 'invalidado';
   if (statusDoEvento === 'in_flight') return 'enviando';
   switch (desfechoVisivel(statusDoEvento)) {
     case 'confirmado': return 'enviado';
@@ -42,10 +46,13 @@ export type ResultadoDoRegistro =
   | { readonly _tag: 'Conflito' }
   | { readonly _tag: 'ConversaNaoEncontrada' }
   | { readonly _tag: 'ConexaoIndisponivel' }
-  | { readonly _tag: 'SemVinculo' };
+  | { readonly _tag: 'SemVinculo' }
+  | { readonly _tag: 'OutroResponsavel' };
 
 const LinhaDoRegistroSchema = z.object({
-  resultado: z.enum(['registrado', 'existente', 'conflito', 'sem_vinculo', 'conversa_inexistente', 'conexao_indisponivel']),
+  resultado: z.enum([
+    'registrado', 'existente', 'conflito', 'sem_vinculo', 'conversa_inexistente', 'conexao_indisponivel', 'outro_responsavel',
+  ]),
   envio_id: z.string().nullable(),
   evento_id: z.string().nullable(),
   status: z.string().nullable(),
@@ -80,6 +87,7 @@ export async function registrarEnvio(
     case 'conversa_inexistente': return { _tag: 'ConversaNaoEncontrada' };
     case 'conexao_indisponivel': return { _tag: 'ConexaoIndisponivel' };
     case 'sem_vinculo': return { _tag: 'SemVinculo' };
+    case 'outro_responsavel': return { _tag: 'OutroResponsavel' };
     case 'registrado':
     case 'existente':
       if (envioId === null || status === null) throw new RegistroDeEnvioIndisponivel();
@@ -106,6 +114,7 @@ const LinhaDoEnvioSchema = z.object({
   command_id: z.string(),
   conteudo: z.string(),
   mensagem_id_local: z.string().nullable(),
+  invalidado_em: z.string().nullable().optional(),
   created_at: z.string(),
   outbox_eventos: z.object({
     status: z.string(),
@@ -125,9 +134,11 @@ export async function listarEnviosDaConversa(
 ): Promise<readonly EnvioDaConversa[]> {
   const { data, error } = await supabase
     .from('chatwoot_envios')
-    .select('id, command_id, conteudo, mensagem_id_local, created_at, outbox_eventos!fk_chatwoot_envios_evento(status, motivo_bloqueio, resolucao)')
+    .select('id, command_id, conteudo, mensagem_id_local, invalidado_em, created_at, outbox_eventos!fk_chatwoot_envios_evento(status, motivo_bloqueio, resolucao)')
     .eq('organizacao_id', scope.organizationId)
     .eq('conversa_id_local', conversaId)
+    // Notas privadas não são respostas à cliente (MSG-009).
+    .eq('privada', false)
     .order('created_at', { ascending: false })
     .limit(50);
   const linhas = LinhaDoEnvioSchema.array().safeParse(data ?? []);
@@ -136,8 +147,10 @@ export async function listarEnviosDaConversa(
     id: linha.id,
     commandId: linha.command_id,
     conteudo: linha.conteudo,
-    estado: estadoDoEnvio(linha.outbox_eventos.status),
-    explicacao: explicarEstado({
+    estado: estadoDoEnvio(linha.outbox_eventos.status, Boolean(linha.invalidado_em)),
+    explicacao: linha.invalidado_em
+      ? 'Não enviada: o atendimento mudou de responsável antes do envio.'
+      : explicarEstado({
       status: linha.outbox_eventos.status,
       motivoBloqueio: linha.outbox_eventos.motivo_bloqueio,
       resolucao: linha.outbox_eventos.resolucao,

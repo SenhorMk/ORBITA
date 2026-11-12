@@ -15,9 +15,15 @@ const ReivindicadoSchema = z.object({
   ator_id: z.string().uuid().nullable(),
   conversa_id_externo: z.string().regex(/^[1-9][0-9]{0,9}$/u).transform(Number),
   conteudo: z.string().min(1),
+  privada: z.boolean(),
   correlation_id: z.string().nullable(),
   fencing_token: z.coerce.number().int().positive(),
 });
+
+/** Versão do contrato do claim: um worker anterior ao MSG-009 não a envia e falha. */
+const PROTOCOLO_DO_CLAIM = 2;
+
+const InicioSchema = z.enum(['iniciado', 'invalidado', 'posse_perdida']);
 
 const ConclusaoSchema = z.array(z.object({ status: z.string().nullable() }));
 
@@ -58,6 +64,7 @@ export function criarPortaDoConsumidorEnvio(supabase: SupabaseClient): PortaDoCo
         p_limit: limite,
         p_lease_ttl_sec: leaseSegundos,
         p_criados_desde: criadosDesde,
+        p_protocolo: PROTOCOLO_DO_CLAIM,
       });
       if (error) throw new Error('Falha ao reivindicar envios do Chatwoot.');
       return ReivindicadoSchema.array().parse(data ?? []).map((linha): EnvioReivindicado => ({
@@ -68,6 +75,7 @@ export function criarPortaDoConsumidorEnvio(supabase: SupabaseClient): PortaDoCo
         atorId: linha.ator_id,
         conversaIdExterno: linha.conversa_id_externo,
         conteudo: linha.conteudo,
+        privada: linha.privada,
         correlationId: linha.correlation_id,
         fencingToken: linha.fencing_token,
       }));
@@ -95,13 +103,14 @@ export function criarPortaDoConsumidorEnvio(supabase: SupabaseClient): PortaDoCo
     },
 
     async iniciarDespacho(posse) {
-      const { data, error } = await supabase.rpc('iniciar_despacho_outbox', {
+      // Confere o controle do atendimento sob trava antes de gravar `in_flight`.
+      const { data, error } = await supabase.rpc('iniciar_envio_chatwoot', {
         p_evento_id: posse.eventoId,
         p_worker_id: posse.workerId,
         p_fencing_token: posse.fencingToken,
       });
       if (error) throw new Error('Falha ao iniciar o despacho.');
-      return data === true;
+      return InicioSchema.parse(data);
     },
 
     async concluir(posse, desfecho, mensagem: MensagemDoRecibo | null) {

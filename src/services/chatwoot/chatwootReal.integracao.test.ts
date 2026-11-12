@@ -385,7 +385,7 @@ describe('Chatwoot CE real → ORBITA', () => {
     expect(entregas.filter(daMensagem(id))).toHaveLength(1);
   });
 
-  it('resposta do agente, nota privada e atualização: espelhadas, sem abrir caso; o status chega', async () => {
+  it('resposta do agente e atualização espelhadas; nota privada fora do espelho (MSG-009); nada abre caso; o status chega', async () => {
     const adapter = ChatwootAdapter.forTesting({ apiUrl: BASE, apiToken: contas.a.token, accountId: String(contas.a.accountId), conexaoId: CONEXAO.a });
     const resposta = await adapter.sendMessage(contas.a.conversaId, 'RESPOSTA-SINTETICA');
     if (resposta._tag !== 'ChatwootSuccess') throw new Error(`Envio falhou: ${resposta.reason}`);
@@ -405,7 +405,7 @@ describe('Chatwoot CE real → ORBITA', () => {
     expect(pendentes).toEqual([{ event_type: 'conversation_created', status: 'ignored', disposicao: 'evento_desconhecido', last_error: null }]);
     expect(await contar('inbox_eventos_chatwoot', "conexao_id = $1 and disposicao = 'classificacao_inconclusiva'", CONEXAO.a)).toBe(0);
     expect(await contar('chatwoot_conversations', "conexao_id = $1 and id_externo = $2 and status = 'resolved'", CONEXAO.a, String(contas.a.conversaId))).toBe(1);
-    expect(await contar('chatwoot_messages', 'organizacao_id = $1 and id_externo = $2', ORG.a, String(nota.id))).toBe(1);
+    expect(await contar('chatwoot_messages', 'organizacao_id = $1 and id_externo = $2', ORG.a, String(nota.id))).toBe(0);
   });
 
   it('o agente adia a conversa no Chatwoot: o status snoozed chega ao espelho e passa pelo contrato da listagem', async () => {
@@ -617,5 +617,93 @@ describe('MSG-008: resposta pelo cockpit → worker → Chatwoot real', () => {
     expect(await despachar()).toMatchObject({ reivindicados: 0 });
     expect(await contar('outbox_eventos', "idempotency_key = 'chatwoot_msg_legado_m8' and status = 'pending'")).toBe(1);
     expect(await noChatwoot('LEGADO-M8')).toBe(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // MSG-009: controle do atendimento, com o mesmo worker e o Chatwoot real.
+  // ---------------------------------------------------------------------------
+  async function controlePelaRota(corpo?: Record<string, unknown>) {
+    const rota = await import('@/app/api/chatwoot/controle/route');
+    const conversaId = await conversaLocal();
+    if (!corpo) {
+      const res = await rota.GET(new Request(`https://orbita.test/api/chatwoot/controle?conversaId=${conversaId}`));
+      return { status: res.status, body: await res.json() };
+    }
+    const res = await rota.POST(new Request('https://orbita.test/api/chatwoot/controle', {
+      method: 'POST', body: JSON.stringify({ conversaId, commandId: comando(), ...corpo }),
+    }));
+    return { status: res.status, body: await res.json() };
+  }
+
+  async function notasNoChatwoot(trecho: string) {
+    const mensagens = await adapterReal().getMessages(contas.a.conversaId);
+    if (mensagens._tag !== 'ChatwootSuccess') throw new Error('Leitura do Chatwoot falhou');
+    return mensagens.data.filter((m) => (m.content ?? '').includes(trecho));
+  }
+
+  it('MSG-009: assumir pela rota grava nota privada; o worker a entrega como nota privada real, fora do espelho e sem caso', async () => {
+    const casosAntes = await contar('sac_cases', 'organizacao_id = $1', ORG.a);
+    const atual = await controlePelaRota();
+    expect(atual.status).toBe(200);
+    // A sessão é a de quem já respondeu pelo cockpit: dona da conversa. Pedir humano
+    // não vale fora da automação, e assumir o que já é seu também não muda nada.
+    const outra = await controlePelaRota({ acao: 'exigir_humano', versaoEsperada: atual.body.controle.versao });
+    expect(outra).toMatchObject({ status: 409, body: { motivo: 'transicao_invalida' } });
+
+    // Outra atendente assume direto no banco; a sessão assume de volta pela rota, com nota.
+    const { rows: [{ outra: atendente }] } = await admin.query('select gen_random_uuid() as outra');
+    await admin.query("insert into auth.users (id, email) values ($1, 'outra-m9@orbita.test')", [atendente]);
+    await admin.query("insert into public.membros_organizacao (organizacao_id, user_id, papel) values ($1, $2, 'member')", [ORG.a, atendente]);
+    await admin.query('select * from public.alterar_controle_atendimento_chatwoot($1, $2, $3, gen_random_uuid(), $4, $5, null)',
+      [ORG.a, atendente, await conversaLocal(), 'assumir', atual.body.controle.versao]);
+    const visto = (await controlePelaRota()).body.controle;
+    expect(visto).toMatchObject({ modo: 'HUMAN', souResponsavel: false });
+
+    const assumido = await controlePelaRota({ acao: 'assumir', versaoEsperada: visto.versao, nota: 'NOTA-M9-ASSUMIR' });
+    expect(assumido).toMatchObject({ status: 200, body: { controle: { modo: 'HUMAN', souResponsavel: true }, notaRegistrada: true } });
+    // A aba que ficou na versão antiga perde.
+    expect(await controlePelaRota({ acao: 'assumir', versaoEsperada: visto.versao })).toMatchObject({ status: 409, body: { motivo: 'conflito_versao' } });
+    // Membro não devolve à automação.
+    expect((await controlePelaRota({ acao: 'devolver', versaoEsperada: assumido.body.controle.versao, nota: 'resumo' })).status).toBe(403);
+
+    // Notas das duas mudanças na fila; o worker entrega como notas privadas.
+    expect(await despachar()).toMatchObject({ enviados: 2, desconhecidos: 0 });
+    const [nota] = await notasNoChatwoot('NOTA-M9-ASSUMIR');
+    expect(nota).toMatchObject({ private: true });
+
+    // O webhook da nota chega: consumido, sem virar mensagem nem caso.
+    expect(await esperarEntrega(daMensagem(Number(nota!.id)))).toMatchObject({ status: 200 });
+    expect(await consumir('w-m9-nota')).toMatchObject({ falhas: 0 });
+    expect(await contar('chatwoot_messages', 'organizacao_id = $1 and id_externo = $2', ORG.a, String(nota!.id))).toBe(0);
+    expect(await contar('sac_cases', 'organizacao_id = $1', ORG.a)).toBe(casosAntes);
+  });
+
+  it('MSG-009: takeover entre o claim e o despacho: o worker real não chama o Chatwoot e o cockpit vê "não enviada"', async () => {
+    const id = comando();
+    expect((await enviarPelaRota({ conversaId: await conversaLocal(), commandId: id, content: 'RESPOSTA-M9-INVALIDADA' })).status).toBe(202);
+    const { rows: [{ outra }] } = await admin.query("select user_id as outra from public.membros_organizacao where organizacao_id = $1 and user_id <> $2 limit 1", [ORG.a, DONO.a]);
+
+    const porta = criarPortaDoConsumidorEnvio(cliente);
+    const comTakeover: PortaDoConsumidorEnvio = {
+      ...porta,
+      iniciarDespacho: async (posse) => {
+        // Depois do claim e antes de gravar in_flight, outra atendente assume.
+        const { rows: [controle] } = await admin.query(
+          'select control_version from public.chatwoot_conversa_controle where conversa_id_local = $1', [await conversaLocal()]);
+        await admin.query('select * from public.alterar_controle_atendimento_chatwoot($1, $2, $3, gen_random_uuid(), $4, $5, null)',
+          [ORG.a, outra, await conversaLocal(), 'assumir', controle.control_version]);
+        return porta.iniciarDespacho(posse);
+      },
+    };
+    expect(await despachar(comTakeover)).toMatchObject({ reivindicados: 1, invalidados: 1, enviados: 0 });
+    expect(await statusDoEnvio(id)).toMatchObject({ status: 'dead_letter', mensagem_id_local: null });
+    expect(await noChatwoot('RESPOSTA-M9-INVALIDADA')).toBe(0);
+
+    const { GET } = await import('@/app/api/chatwoot/send/route');
+    const lista = await (await GET(new Request(`https://orbita.test/api/chatwoot/send?conversaId=${await conversaLocal()}`))).json();
+    expect(lista.envios).toEqual(expect.arrayContaining([expect.objectContaining({ commandId: id, estado: 'invalidado' })]));
+    // Com a conversa de outra pessoa, a sessão não responde mais.
+    expect(await enviarPelaRota({ conversaId: await conversaLocal(), commandId: comando(), content: 'RESPOSTA-M9-INTRUSA' }))
+      .toMatchObject({ status: 409, body: { motivo: 'outro_responsavel' } });
   });
 });

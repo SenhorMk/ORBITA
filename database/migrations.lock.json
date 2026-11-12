@@ -465,6 +465,11 @@
       "order": 93,
       "path": "../database/90_envio_chatwoot_por_consumidor.sql",
       "sha256": "f6e198f57254ca987b81f58bc14e3b57b52010daa40157ff9bdb30ece89321ac"
+    },
+    {
+      "order": 94,
+      "path": "../database/91_controle_atendimento_chatwoot.sql",
+      "sha256": "49f3be5a3cd3656e02c2b5eecdfc69a6d793d7b8509b60485bdb138c341ea8e2"
     }
   ],
   "references": [

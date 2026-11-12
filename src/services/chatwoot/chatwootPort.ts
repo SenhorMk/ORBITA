@@ -51,6 +51,8 @@ export const ChatwootMessageSchema = z.object({
   id: z.coerce.number().int(),
   content: z.string().optional().nullable(),
   message_type: z.union([z.enum(['incoming', 'outgoing', 'system', 'template']), z.number(), z.string()]).optional(),
+  // Nota privada (MSG-009): o recibo da nota precisa provar `true`; o sync a ignora.
+  private: z.boolean().optional(),
   sender: z
     .object({
       id: z.coerce.number().int().optional(),

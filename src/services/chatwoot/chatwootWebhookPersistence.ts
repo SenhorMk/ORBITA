@@ -184,7 +184,9 @@ export function traduzirEventoDaInbox(
   }
 
   const contato = dadosDoContato(evento);
-  const mensagem = dadosDaMensagem(evento);
+  // Nota privada é conversa entre atendentes: não entra no espelho de mensagens
+  // da conversa com a cliente (MSG-009). Contato e conversa seguem espelhados.
+  const mensagem = evento.private ? undefined : dadosDaMensagem(evento);
   const classificacao = eventType === 'message_created' && idDoEspelho(evento.id) !== null ? classificarMensagem(evento) : 'nao_cliente';
   return {
     _tag: 'Comando',

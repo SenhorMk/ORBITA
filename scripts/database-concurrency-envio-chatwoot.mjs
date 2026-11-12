@@ -21,7 +21,7 @@ import { aceitar, aplicar, comandoDaMensagem, novaOrganizacao, reivindicar } fro
 
 const WORKERS = 8;
 const REGISTRAR = 'select * from public.registrar_envio_chatwoot($1, $2, $3, $4, $5)';
-const REIVINDICAR = "select * from public.reivindicar_envios_chatwoot($1, $2, 60, 'epoch'::timestamptz)";
+const REIVINDICAR = "select * from public.reivindicar_envios_chatwoot($1, $2, 60, 'epoch'::timestamptz, 2)";
 
 async function novaConversa(admin, cliente, sufixo, conversaRemota = 50) {
   const { org, conexao } = await novaOrganizacao(admin, `m8-${sufixo}`);
@@ -119,7 +119,7 @@ async function quedaDepoisDoDespacho({ admin, pool, novoCliente }) {
   const { rows: [registro] } = await pool[0].query(REGISTRAR, [alvo.org, alvo.ator, alvo.conversa, alvo.org, 'em voo']);
   const worker = await novoCliente();
   const lote = (await worker.query(REIVINDICAR, ['w-voo', 50])).rows.find((r) => r.evento_id === registro.evento_id);
-  await worker.query('select public.iniciar_despacho_outbox($1, $2, $3)', [registro.evento_id, 'w-voo', lote.fencing_token]);
+  await worker.query('select public.iniciar_envio_chatwoot($1, $2, $3)', [registro.evento_id, 'w-voo', lote.fencing_token]);
   // O POST saiu; o processo morre antes de gravar o recibo.
   const { rows: [{ pid }] } = await worker.query('select pg_backend_pid() as pid');
   await admin.query('select pg_terminate_backend($1)', [pid]);
@@ -137,7 +137,7 @@ async function zumbi({ admin, pool }) {
   const alvo = await novaConversa(admin, pool[0], 'zumbi');
   const { rows: [registro] } = await pool[0].query(REGISTRAR, [alvo.org, alvo.ator, alvo.conversa, alvo.org, 'zumbi']);
   const lote = (await pool[1].query(REIVINDICAR, ['w-zumbi', 50])).rows.find((r) => r.evento_id === registro.evento_id);
-  await pool[1].query('select public.iniciar_despacho_outbox($1, $2, $3)', [registro.evento_id, 'w-zumbi', lote.fencing_token]);
+  await pool[1].query('select public.iniciar_envio_chatwoot($1, $2, $3)', [registro.evento_id, 'w-zumbi', lote.fencing_token]);
   await admin.query("update public.outbox_eventos set lease_expires_at = clock_timestamp() - interval '1 second' where id = $1", [registro.evento_id]);
   const { rows: [conclusao] } = await pool[1].query(
     "select * from public.concluir_envio_chatwoot($1, 'w-zumbi', $2, 'confirmado', '880001')", [registro.evento_id, lote.fencing_token]);
@@ -179,14 +179,14 @@ async function contraprovaSemFiltroDeIntencao({ admin }) {
   try {
     // Sabotagem: o claim sem o join com a intenção.
     await admin.query(`
-      create or replace function public.reivindicar_envios_chatwoot(p_worker_id text, p_limit integer, p_lease_ttl_sec integer, p_criados_desde timestamptz)
+      create or replace function public.reivindicar_envios_chatwoot(p_worker_id text, p_limit integer, p_lease_ttl_sec integer, p_criados_desde timestamptz, p_protocolo integer)
       returns table (evento_id uuid, organizacao_id uuid, conexao_id uuid, envio_id uuid, ator_id uuid, conversa_id_local uuid,
-                     conversa_id_externo text, conteudo text, correlation_id text, fencing_token bigint, lease_expires_at timestamptz)
+                     conversa_id_externo text, conteudo text, privada boolean, correlation_id text, fencing_token bigint, lease_expires_at timestamptz)
       language sql security definer set search_path = '' as $$
         update public.outbox_eventos o set status = 'processing', lease_owner = p_worker_id,
                lease_expires_at = now() + make_interval(secs => p_lease_ttl_sec)
          where o.destination = 'chatwoot' and o.event_type = 'message.send' and o.status = 'pending'
-        returning o.id, o.organizacao_id, o.conexao_id, null::uuid, null::uuid, null::uuid, null::text, null::text,
+        returning o.id, o.organizacao_id, o.conexao_id, null::uuid, null::uuid, null::uuid, null::text, null::text, false,
                   o.correlation_id, o.fencing_token, o.lease_expires_at;
       $$`);
     const { rows } = await admin.query(REIVINDICAR, ['w-sabotado', 50]);

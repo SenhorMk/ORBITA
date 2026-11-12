@@ -65,7 +65,7 @@ $$;
 -- Reivindica o envio do evento para o worker; devolve o token.
 create function pg_temp.token(p_evento uuid, p_worker text, p_desde timestamptz default 'epoch')
 returns bigint language sql as $$
-    select r.fencing_token from public.reivindicar_envios_chatwoot(p_worker, 50, 60, p_desde) r where r.evento_id = p_evento;
+    select r.fencing_token from public.reivindicar_envios_chatwoot(p_worker, 50, 60, p_desde, 2) r where r.evento_id = p_evento;
 $$;
 
 create function pg_temp.evento(p_org uuid, p_comando uuid)
@@ -97,7 +97,7 @@ select ok(not has_table_privilege('service_role', 'public.chatwoot_envios', 'ins
 select is(
     (select count(*)::int
        from (values ('public.registrar_envio_chatwoot(uuid,uuid,uuid,uuid,text)'),
-                    ('public.reivindicar_envios_chatwoot(text,integer,integer,timestamptz)'),
+                    ('public.reivindicar_envios_chatwoot(text,integer,integer,timestamptz,integer)'),
                     ('public.concluir_envio_chatwoot(uuid,text,bigint,text,text,text,text,text,integer,jsonb)'),
                     ('public.auditar_envio_chatwoot(uuid,uuid,text,uuid,jsonb)')) as f(assinatura)
       cross join (values ('authenticated'), ('anon'), ('public')) as r(rolname)
@@ -173,18 +173,18 @@ select ok((select actor_id = 'e8000000-0000-4000-8000-0000000000a1' and not (met
 -- ---------------------------------------------------------------------------
 -- Claim: só intenções registradas, só desde o corte.
 -- ---------------------------------------------------------------------------
-select throws_ok($$ select * from public.reivindicar_envios_chatwoot('w-1', 10, 60, null) $$, '22023', null,
+select throws_ok($$ select * from public.reivindicar_envios_chatwoot('w-1', 10, 60, null, 2) $$, '22023', null,
                  '25. claim sem corte do backlog é recusado');
 -- Backlog do envio inline: evento sem intenção.
 select evento_id from public.registrar_evento_outbox('e8000000-0000-4000-8000-00000000000a', 'e8000000-0000-4000-8000-0000000000c1',
     'e8000000-0000-4000-8000-0000000000a1', 'chatwoot_msg_legado_1', 'chatwoot', 'message.send', '{"content":"antigo"}'::jsonb, 5);
-select is((select count(*)::int from public.reivindicar_envios_chatwoot('w-corte', 50, 60, now() + interval '1 second')),
+select is((select count(*)::int from public.reivindicar_envios_chatwoot('w-corte', 50, 60, now() + interval '1 second', 2)),
           0, '26. intenção anterior ao corte não é reivindicada');
 insert into t_ctx values ('token1', pg_temp.token(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000001'), 'w-1')::text);
 select is((select valor::bigint from t_ctx where nome = 'token1'), 1::bigint, '27. o worker reivindica o envio com token 1');
 select is((select status from public.outbox_eventos where idempotency_key = 'chatwoot_msg_legado_1'),
           'pending', '28. o backlog inline (sem intenção) nunca é reivindicado');
-select is((select count(*)::int from public.reivindicar_envios_chatwoot('w-2', 50, 60, 'epoch')
+select is((select count(*)::int from public.reivindicar_envios_chatwoot('w-2', 50, 60, 'epoch', 2)
             where evento_id = pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000001')),
           0, '29. um segundo worker não pega o envio reivindicado');
 -- B entrou no lote junto com A: o evento de B segue a conexão da conversa de B.
@@ -195,8 +195,8 @@ select ok((select status = 'processing' and conexao_id = 'e8000000-0000-4000-800
 -- ---------------------------------------------------------------------------
 -- Conclusão: só com recibo, mensagem espelhada com proveniência, uma vez.
 -- ---------------------------------------------------------------------------
-select ok(public.iniciar_despacho_outbox(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000001'),
-                                         'w-1', 1), '31. despacho iniciado antes da rede');
+select is(public.iniciar_envio_chatwoot(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000001'),
+                                        'w-1', 1), 'iniciado', '31. despacho iniciado antes da rede');
 select throws_ok($$ select * from public.concluir_envio_chatwoot(
                        pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000001'),
                        'w-1', 1, 'confirmado', 'abc') $$,
@@ -232,7 +232,7 @@ select ok((select count(*) = 1 and bool_and(envio_id is not null) from public.ch
 select pg_temp.registrar('e8000000-0000-4000-8000-00000000000a', 'e8000000-0000-4000-8000-0000000000a1',
                          (select valor::uuid from t_ctx where nome = 'a2'), 'c8000000-0000-4000-8000-000000000007', 'Pela A2');
 insert into t_ctx values ('token2', pg_temp.token(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000007'), 'w-3')::text);
-select public.iniciar_despacho_outbox(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000007'),
+select public.iniciar_envio_chatwoot(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000007'),
                                       'w-3', (select valor::bigint from t_ctx where nome = 'token2'));
 select pg_temp.inbox('e8000000-0000-4000-8000-00000000000a', 'e8000000-0000-4000-8000-0000000000c2', 'a2-propria', 9102, 50,
                      'outgoing', 'user', false);
@@ -253,7 +253,7 @@ select is((select count(*)::int from public.chatwoot_messages
 select pg_temp.registrar('e8000000-0000-4000-8000-00000000000a', 'e8000000-0000-4000-8000-0000000000a1',
                          (select valor::uuid from t_ctx where nome = 'a1'), 'c8000000-0000-4000-8000-000000000008', 'Timeout');
 insert into t_ctx values ('token3', pg_temp.token(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000008'), 'w-4')::text);
-select public.iniciar_despacho_outbox(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000008'),
+select public.iniciar_envio_chatwoot(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000008'),
                                       'w-4', (select valor::bigint from t_ctx where nome = 'token3'));
 select is((select c.status from public.concluir_envio_chatwoot(
                pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000008'),
@@ -264,7 +264,7 @@ select ok((select mensagem_id_local is null from public.chatwoot_envios where co
 select ok(exists (select 1 from public.eventos_auditoria_sistema where acao = 'outbox.effect_unknown'
                    and recurso = 'chatwoot_envio' and organizacao_id = 'e8000000-0000-4000-8000-00000000000a'),
           '45. unknown auditado');
-select is((select count(*)::int from public.reivindicar_envios_chatwoot('w-5', 50, 60, 'epoch')
+select is((select count(*)::int from public.reivindicar_envios_chatwoot('w-5', 50, 60, 'epoch', 2)
             where evento_id = pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000008')),
           0, '46. unknown não volta a ser reivindicado');
 select is(pg_temp.registrar('e8000000-0000-4000-8000-00000000000a', 'e8000000-0000-4000-8000-0000000000a1',
@@ -275,7 +275,7 @@ select is(pg_temp.registrar('e8000000-0000-4000-8000-00000000000a', 'e8000000-00
 select pg_temp.registrar('e8000000-0000-4000-8000-00000000000a', 'e8000000-0000-4000-8000-0000000000a1',
                          (select valor::uuid from t_ctx where nome = 'a1'), 'c8000000-0000-4000-8000-000000000009', 'Queda');
 insert into t_ctx values ('token4', pg_temp.token(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000009'), 'w-6')::text);
-select public.iniciar_despacho_outbox(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000009'),
+select public.iniciar_envio_chatwoot(pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000009'),
                                       'w-6', (select valor::bigint from t_ctx where nome = 'token4'));
 update public.outbox_eventos set lease_expires_at = now() - interval '1 second'
  where id = pg_temp.evento('e8000000-0000-4000-8000-00000000000a', 'c8000000-0000-4000-8000-000000000009');

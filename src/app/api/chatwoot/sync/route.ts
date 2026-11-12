@@ -48,6 +48,7 @@ async function syncChatwootMessages(
     try {
       const tipo = mapChatwootMessageType(rawMsg.message_type);
       if (tipo === null) continue; // tipo desconhecido não vira incoming por suposição
+      if (rawMsg.private) continue; // nota privada não é mensagem da conversa com a cliente (MSG-009)
       await gravarMensagem(espelho, escopo, {
         idExterno: rawMsg.id,
         conversaIdExterno: conversationId,

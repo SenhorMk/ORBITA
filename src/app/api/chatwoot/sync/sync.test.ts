@@ -16,6 +16,7 @@ const estado = vi.hoisted(() => ({
   store: null as unknown as EspelhoChatwootFake,
   sessao: { organizacao: '' },
   antesDasMensagens: null as (() => void) | null,
+  comNotaPrivada: false,
 }));
 
 vi.mock('../../../../services/chatwoot/espelhoChatwootSupabase', () => ({
@@ -55,7 +56,12 @@ vi.mock('../../../../services/chatwoot/chatwootAdapter', () => ({
         estado.antesDasMensagens?.();
         return Promise.resolve({
           _tag: 'ChatwootSuccess',
-          data: [{ id: 500, content: `oi de ${scope.organizationId}`, message_type: 0, created_at: '2026-10-25T00:00:00Z' }],
+          data: [
+            { id: 500, content: `oi de ${scope.organizationId}`, message_type: 0, created_at: '2026-10-25T00:00:00Z' },
+            ...(estado.comNotaPrivada
+              ? [{ id: 501, content: 'nota interna', message_type: 1, private: true, created_at: '2026-10-25T00:01:00Z' }]
+              : []),
+          ],
         });
       },
     })),
@@ -86,6 +92,7 @@ async function novoStore(pkGlobal: boolean) {
   const { EspelhoChatwootFake } = await import('../../../../services/__testkit__/espelhoChatwootFake');
   estado.store = new EspelhoChatwootFake({ pkGlobal });
   estado.antesDasMensagens = null;
+  estado.comNotaPrivada = false;
 }
 
 async function sincronizar(organizacao: string) {
@@ -206,5 +213,17 @@ describe('POST /api/chatwoot/sync depois do MSG-004 (sem PK global)', () => {
       expect(arvore.conversa).toMatchObject({ organizacao_id: org, conexao_id: conexao });
       expect(arvore.contato).toMatchObject({ organizacao_id: org, conexao_id: conexao });
     }
+  });
+});
+
+describe('POST /api/chatwoot/sync — nota privada (MSG-009)', () => {
+  beforeEach(() => novoStore(true));
+
+  it('nota privada do Chatwoot não vira mensagem no espelho nem na contagem', async () => {
+    estado.comNotaPrivada = true;
+    const { status, body } = await sincronizar(ORG_A);
+    expect(status).toBe(200);
+    expect(body.stats.messages).toBe(1);
+    expect(estado.store.linhas.mensagem.map((l) => l.content)).toEqual([`oi de ${ORG_A}`]);
   });
 });

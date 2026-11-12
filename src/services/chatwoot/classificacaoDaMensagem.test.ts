@@ -93,3 +93,31 @@ describe('mapChatwootMessageType', () => {
     expect(mapChatwootMessageType(bruto)).toBeNull();
   });
 });
+
+describe('nota privada não entra no espelho de mensagens (MSG-009)', () => {
+  const NOTA = { ...CLIENTE, message_type: 'outgoing', private: true, content: 'nota interna', sender: { id: 9, type: 'user' } };
+
+  it.each([
+    ['nota criada', NOTA],
+    ['nota editada', { ...NOTA, event: 'message_updated' }],
+    ['nota marcada como incoming do contato', { ...CLIENTE, private: true }],
+  ])('%s: o comando não carrega a mensagem nem abre caso', (_nome, payload) => {
+    const c = comando(payload);
+    expect(c.mensagem).toBeUndefined();
+    expect(c.abre_caso).toBe(false);
+  });
+
+  it('a conversa da nota continua espelhada (status e contato não dependem da nota)', () => {
+    expect(comando(NOTA).conversa).toMatchObject({ id: 50 });
+  });
+});
+
+describe('label do Chatwoot não aprova nem muda o atendimento (MSG-009)', () => {
+  it.each([
+    ['conversation_updated com labels', { event: 'conversation_updated', account: { id: 7 }, id: 50, labels: ['aprovado', 'humano'] }],
+    ['assignee trocado no Chatwoot', { event: 'assignee_changed', account: { id: 7 }, id: 50, assignee: { id: 9 } }],
+  ])('%s: ignorado, sem comando de espelho nem de controle', (_nome, payload) => {
+    const t = traduzirEventoDaInbox(String(payload.event), 1, payload);
+    expect(t).toEqual({ _tag: 'Comando', comando: { evento: payload.event, acao: 'ignorar' } });
+  });
+});
