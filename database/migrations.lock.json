@@ -470,6 +470,11 @@
       "order": 94,
       "path": "../database/91_controle_atendimento_chatwoot.sql",
       "sha256": "49f3be5a3cd3656e02c2b5eecdfc69a6d793d7b8509b60485bdb138c341ea8e2"
+    },
+    {
+      "order": 95,
+      "path": "../database/92_vinculo_cliente_conversa.sql",
+      "sha256": "006ba80527e3bcaac6c70997f881eb797db8be12d5d2127ad8c5cec4db090609"
     }
   ],
   "references": [

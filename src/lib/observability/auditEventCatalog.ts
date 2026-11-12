@@ -181,6 +181,11 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   ['chatwoot.send_rejected', 'integrations', 'warning', 'system', 1825, 'Resposta recusada de forma definitiva; não será repetida.', undefined, ['payload', 'content', 'conteudo']],
   ['chatwoot.control_changed', 'integrations', 'info', 'user', 1825, 'Controle do atendimento mudou: assumido, devolvido à automação ou aguardando humano.', undefined, ['payload', 'content', 'conteudo', 'nota']],
   ['chatwoot.send_invalidated', 'integrations', 'warning', 'system', 1825, 'Resposta na fila invalidada porque o controle do atendimento mudou antes do despacho.', undefined, ['payload', 'content', 'conteudo']],
+  // Verificação do cliente na conversa (migration 92, MSG-010). Metadata: ids
+  // técnicos, método e desfecho; nunca documento, telefone ou número de pedido.
+  ['sac.customer_verified', 'sac', 'info', 'user', 1825, 'Atendente confirmou o cliente da conversa; a consulta de pedidos fica liberada para esse cliente.', undefined, ['payload', 'content', 'documento', 'telefone', 'numero']],
+  ['sac.customer_verification_revoked', 'sac', 'info', 'user', 1825, 'Atendente desfez a confirmação do cliente da conversa.', undefined, ['payload', 'content', 'documento', 'telefone', 'numero']],
+  ['sac.order_lookup_blocked', 'sac', 'warning', 'system', 1825, 'Consulta de pedido por número bloqueada na conversa depois de tentativas seguidas sem resultado.', undefined, ['payload', 'content', 'documento', 'telefone', 'numero']],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 
