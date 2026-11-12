@@ -390,6 +390,13 @@ describe('MensageriaDesktop — envio', () => {
     readonly postControle?: (corpo: Record<string, unknown>) => Promise<Response>;
   }) {
     return vi.fn(async (url: string, init?: RequestInit) => {
+      // O painel do cliente (MSG-010) tem os próprios testes; aqui a conversa fica sem prova.
+      if (url.startsWith('/api/sac/')) {
+        return respostaJson({
+          success: true, versao: 1, candidatos: [],
+          verificacao: { estado: 'sem_prova', cliente: null, verificadoEm: null, expiraEm: null, totalDeCandidatos: 0, consultaPorNumeroBloqueada: false },
+        });
+      }
       if (url.startsWith('/api/chatwoot/controle')) {
         if (init?.method === 'POST') {
           const corpo = JSON.parse(String(init.body));
