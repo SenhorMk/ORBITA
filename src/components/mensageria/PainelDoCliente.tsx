@@ -5,6 +5,7 @@ import { useState } from 'react';
 import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizationPanel';
 import type { PedidoDoCliente } from '@/lib/integrations/contratoDaVerificacao';
 import { Aviso } from './Aviso';
+import { RetratoDoPedido } from './RetratoDoPedido';
 import { useVerificacao } from './useVerificacao';
 
 const CHIP = { height: 28, fontSize: 11 } as const;
@@ -13,7 +14,11 @@ const TEXTO = { fontSize: 12, color: 'var(--txt)' } as const;
 
 const ROTULO_SEM_CLIENTE = { sem_prova: 'Não confirmado', expirada: 'Confirmação vencida' } as const;
 
-function Pedidos({ titulo, pedidos }: { readonly titulo: string; readonly pedidos: readonly PedidoDoCliente[] }) {
+function Pedidos({ titulo, pedidos, onDetalhes }: {
+  readonly titulo: string;
+  readonly pedidos: readonly PedidoDoCliente[];
+  readonly onDetalhes: (pedidoId: string) => void;
+}) {
   if (pedidos.length === 0) return <span style={NOTA}>{titulo}: nenhum pedido.</span>;
   return (
     <ul aria-label={titulo} className="flex flex-col" style={{ gap: 4, margin: 0, padding: 0, listStyle: 'none' }}>
@@ -23,6 +28,10 @@ function Pedidos({ titulo, pedidos }: { readonly titulo: string; readonly pedido
           <span style={NOTA}>
             {new Date(pedido.data).toLocaleDateString('pt-BR')} · {pedido.status} · {pedido.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
           </span>
+          <button type="button" onClick={() => onDetalhes(pedido.id)} className="orbita-chip cursor-pointer" style={CHIP}
+            aria-label={`Detalhes do pedido ${pedido.numero ?? 'sem número'}`}>
+            Detalhes
+          </button>
         </li>
       ))}
     </ul>
@@ -44,6 +53,12 @@ export function PainelDoCliente({
 }) {
   const v = useVerificacao(fetchWithAuth, conversaId);
   const [numero, setNumero] = useState('');
+  // O pedido aberto leva a conversa de onde veio: trocar de conversa fecha os detalhes.
+  const [aberto, setAberto] = useState<{ readonly conversa: string; readonly pedido: string } | null>(null);
+  const pedidoAberto = aberto !== null && aberto.conversa === conversaId ? aberto.pedido : null;
+  const abrir = (pedido: string) => {
+    if (conversaId !== null) setAberto({ conversa: conversaId, pedido });
+  };
   const confirmado = v.verificacao?.estado === 'verificado' ? v.verificacao : null;
 
   return (
@@ -91,7 +106,10 @@ export function PainelDoCliente({
 
       {confirmado !== null && v.pedidos !== null && (
         <>
-          <Pedidos titulo="Pedidos recentes" pedidos={v.pedidos} />
+          <Pedidos titulo="Pedidos recentes" pedidos={v.pedidos} onDetalhes={abrir} />
+          {pedidoAberto !== null && conversaId !== null && (
+            <RetratoDoPedido fetchWithAuth={fetchWithAuth} conversaId={conversaId} pedidoId={pedidoAberto} onFechar={() => setAberto(null)} />
+          )}
           <form
             className="flex items-center"
             style={{ gap: 8 }}
@@ -111,7 +129,7 @@ export function PainelDoCliente({
             <span style={NOTA}>A busca por número parou depois de várias tentativas sem resultado. Ela volta em alguns minutos.</span>
           )}
           {v.busca !== null && ('pedidos' in v.busca
-            ? <Pedidos titulo="Resultado da busca" pedidos={v.busca.pedidos} />
+            ? <Pedidos titulo="Resultado da busca" pedidos={v.busca.pedidos} onDetalhes={abrir} />
             : <span style={TEXTO}>{v.busca.mensagem}</span>)}
         </>
       )}
