@@ -45,7 +45,8 @@ select is((select count(*)::int from pg_constraint
             where contype = 'f' and confrelid in ('public.chatwoot_contacts'::regclass, 'public.chatwoot_conversations'::regclass)
               and conname not in ('fk_chatwoot_conversations_contato_local', 'fk_chatwoot_messages_conversa_local', 'fk_sac_cases_conversa',
                                   'fk_chatwoot_envios_conversa', 'fk_chatwoot_conversa_controle_conversa',
-                                  'fk_chatwoot_controle_historico_conversa')), 0,
+                                  'fk_chatwoot_controle_historico_conversa', 'fk_sac_vinculos_cliente_conversa',
+                                  'fk_sac_consultas_recusadas_conversa')), 0,
           '3. nenhuma FK pelo id remoto');
 select hasnt_index('public', 'chatwoot_contacts', 'uq_chatwoot_contacts_org_id', '4. sem o único (organizacao_id, id)');
 select hasnt_index('public', 'chatwoot_inboxes', 'uq_chatwoot_inboxes_org_inbox', '5. inbox único só por conexão');
