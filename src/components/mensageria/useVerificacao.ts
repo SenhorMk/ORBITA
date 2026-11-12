@@ -47,6 +47,62 @@ async function lerJson(resposta: Response): Promise<unknown> {
   return resposta.json().catch(() => null);
 }
 
+type Leitura = Partial<EstadoCarimbado>;
+
+/**
+ * O estado da conversa e, com cliente confirmado, os pedidos dele. A prova pode
+ * vencer entre a leitura e a consulta (409): nesse caso o estado é lido mais uma vez.
+ * `null`: a conversa mudou no meio do caminho e nada deve ser gravado.
+ */
+async function lerEstado(fetchWithAuth: AuthenticatedFetch, alvo: string, aindaAtual: () => boolean): Promise<Leitura | null> {
+  for (let tentativa = 0; tentativa < 2; tentativa += 1) {
+    let lida;
+    try {
+      const resposta = await fetchWithAuth(`/api/sac/verificacao?conversaId=${alvo}`);
+      lida = resposta.ok ? RespostaDaVerificacaoSchema.safeParse(await lerJson(resposta)) : null;
+    } catch {
+      lida = null;
+    }
+    if (!aindaAtual()) return null;
+    if (!lida?.success) return { erro: ERRO_DE_LEITURA };
+    const { verificacao, candidatos } = lida.data;
+    if (verificacao.estado !== 'verificado') return { verificacao, candidatos };
+
+    try {
+      const resposta = await fetchWithAuth(`/api/sac/pedidos?conversaId=${alvo}`);
+      if (resposta.status === 409) continue;
+      const pedidos = resposta.ok ? RespostaDosPedidosSchema.safeParse(await lerJson(resposta)) : null;
+      return pedidos?.success ? { verificacao, candidatos, pedidos: pedidos.data.pedidos } : { verificacao, candidatos, erro: ERRO_DE_PEDIDOS };
+    } catch {
+      return { verificacao, candidatos, erro: ERRO_DE_PEDIDOS };
+    }
+  }
+  return { erro: ERRO_DE_LEITURA };
+}
+
+/** Manda confirmar ou revogar. Devolve a mensagem de erro, ou `null` se o servidor aceitou. */
+async function enviarAlteracao(fetchWithAuth: AuthenticatedFetch, corpo: Record<string, unknown>): Promise<string | null> {
+  try {
+    const resposta = await fetchWithAuth('/api/sac/verificacao', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(corpo) });
+    return resposta.ok ? null : mensagemDoServidor(await lerJson(resposta), 'Não foi possível alterar a verificação. Nada foi alterado.');
+  } catch {
+    return 'Sem resposta do servidor. Confira o estado antes de agir de novo.';
+  }
+}
+
+async function buscarPedido(fetchWithAuth: AuthenticatedFetch, alvo: string, numero: string): Promise<NonNullable<EstadoCarimbado['busca']>> {
+  try {
+    const resposta = await fetchWithAuth('/api/sac/pedidos', {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ conversaId: alvo, numero }),
+    });
+    const corpo = await lerJson(resposta);
+    const pedidos = resposta.ok ? RespostaDosPedidosSchema.safeParse(corpo) : null;
+    return pedidos?.success ? { pedidos: pedidos.data.pedidos } : { mensagem: mensagemDoServidor(corpo, 'Não foi possível buscar o pedido.') };
+  } catch {
+    return { mensagem: 'Não foi possível buscar o pedido.' };
+  }
+}
+
 export function useVerificacao(fetchWithAuth: AuthenticatedFetch, conversaId: string | null) {
   const [guardado, setGuardado] = useState<EstadoCarimbado>(() => vazio(conversaId));
   // Uma resposta de outra conversa não pode cair nesta.
@@ -60,35 +116,8 @@ export function useVerificacao(fetchWithAuth: AuthenticatedFetch, conversaId: st
   const recarregar = useCallback(async () => {
     const alvo = conversaId;
     if (alvo === null) return;
-    const gravar = (parte: Partial<EstadoCarimbado>) => {
-      if (atual.current === alvo) setGuardado({ ...vazio(alvo), ...parte });
-    };
-    // A prova pode vencer entre a leitura e a consulta: nesse caso o estado é lido mais uma vez.
-    for (let tentativa = 0; tentativa < 2; tentativa += 1) {
-      let lida;
-      try {
-        const resposta = await fetchWithAuth(`/api/sac/verificacao?conversaId=${alvo}`);
-        lida = resposta.ok ? RespostaDaVerificacaoSchema.safeParse(await lerJson(resposta)) : null;
-      } catch {
-        lida = null;
-      }
-      if (atual.current !== alvo) return;
-      if (!lida?.success) return gravar({ erro: ERRO_DE_LEITURA });
-      const { verificacao, candidatos } = lida.data;
-      if (verificacao.estado !== 'verificado') return gravar({ verificacao, candidatos });
-
-      try {
-        const resposta = await fetchWithAuth(`/api/sac/pedidos?conversaId=${alvo}`);
-        if (resposta.status === 409) continue;
-        const pedidos = resposta.ok ? RespostaDosPedidosSchema.safeParse(await lerJson(resposta)) : null;
-        return gravar(pedidos?.success
-          ? { verificacao, candidatos, pedidos: pedidos.data.pedidos }
-          : { verificacao, candidatos, erro: ERRO_DE_PEDIDOS });
-      } catch {
-        return gravar({ verificacao, candidatos, erro: ERRO_DE_PEDIDOS });
-      }
-    }
-    gravar({ erro: ERRO_DE_LEITURA });
+    const leitura = await lerEstado(fetchWithAuth, alvo, () => atual.current === alvo);
+    if (leitura !== null && atual.current === alvo) setGuardado({ ...vazio(alvo), ...leitura });
   }, [conversaId, fetchWithAuth]);
 
   useEffect(() => {
@@ -99,19 +128,12 @@ export function useVerificacao(fetchWithAuth: AuthenticatedFetch, conversaId: st
   const alterar = useCallback(async (corpo: Record<string, unknown>) => {
     const alvo = conversaId;
     if (alvo === null) return;
-    setGuardado((anterior) => ({ ...(anterior.conversa === alvo ? anterior : vazio(alvo)), agindo: true, erro: null, busca: null }));
-    let erro: string | null = null;
-    try {
-      const resposta = await fetchWithAuth('/api/sac/verificacao', {
-        method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ ...corpo, conversaId: alvo }),
-      });
-      if (!resposta.ok) erro = mensagemDoServidor(await lerJson(resposta), 'Não foi possível alterar a verificação. Nada foi alterado.');
-    } catch {
-      erro = 'Sem resposta do servidor. Confira o estado antes de agir de novo.';
-    }
+    const desta = (anterior: EstadoCarimbado) => (anterior.conversa === alvo ? anterior : vazio(alvo));
+    setGuardado((anterior) => ({ ...desta(anterior), agindo: true, erro: null, busca: null }));
+    const erro = await enviarAlteracao(fetchWithAuth, { ...corpo, conversaId: alvo });
     if (atual.current !== alvo) return;
     if (erro === null) return recarregar();
-    setGuardado((anterior) => ({ ...(anterior.conversa === alvo ? anterior : vazio(alvo)), agindo: false, erro }));
+    setGuardado((anterior) => ({ ...desta(anterior), agindo: false, erro }));
   }, [conversaId, fetchWithAuth, recarregar]);
 
   const confirmar = useCallback((clienteId: string) => alterar({ acao: 'confirmar', clienteId, commandId: crypto.randomUUID() }), [alterar]);
@@ -120,17 +142,7 @@ export function useVerificacao(fetchWithAuth: AuthenticatedFetch, conversaId: st
   const localizar = useCallback(async (numero: string) => {
     const alvo = conversaId;
     if (alvo === null) return;
-    let busca: EstadoCarimbado['busca'];
-    try {
-      const resposta = await fetchWithAuth('/api/sac/pedidos', {
-        method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ conversaId: alvo, numero }),
-      });
-      const corpo = await lerJson(resposta);
-      const pedidos = resposta.ok ? RespostaDosPedidosSchema.safeParse(corpo) : null;
-      busca = pedidos?.success ? { pedidos: pedidos.data.pedidos } : { mensagem: mensagemDoServidor(corpo, 'Não foi possível buscar o pedido.') };
-    } catch {
-      busca = { mensagem: 'Não foi possível buscar o pedido.' };
-    }
+    const busca = await buscarPedido(fetchWithAuth, alvo, numero);
     if (atual.current !== alvo) return;
     setGuardado((anterior) => (anterior.conversa === alvo ? { ...anterior, busca } : anterior));
   }, [conversaId, fetchWithAuth]);
