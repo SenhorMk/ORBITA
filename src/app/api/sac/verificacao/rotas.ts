@@ -4,6 +4,7 @@ import { MENSAGEM_PUBLICA_DE_FALHA, registrarFalhaInterna } from '@/lib/observab
 import { resolveActiveRequestOrganizationContext } from '@/lib/requestOrganizationContext';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { confirmarCliente, criarConsultaDePedidos, lerVerificacao, revogarVerificacao } from '@/services/sac/clienteVerificado';
+import { lerRetratoDoPedido } from '@/services/sac/retratoDoPedido';
 
 import { criarRotasDaVerificacao } from './handlers';
 
@@ -14,6 +15,7 @@ const rotas = criarRotasDaVerificacao({
   confirmar: (scope, comando) => confirmarCliente(supabaseServer, scope, comando),
   revogar: (scope, conversaId) => revogarVerificacao(supabaseServer, scope, conversaId),
   consultaDePedidos: (scope, conversaId) => criarConsultaDePedidos(supabaseServer, scope, conversaId),
+  retrato: (scope, conversaId, pedidoId) => lerRetratoDoPedido(supabaseServer, scope, conversaId, pedidoId),
 });
 
 /** Falha inesperada: registrada sem mensagem do banco e respondida sem detalhe. */
