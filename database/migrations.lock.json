@@ -475,6 +475,11 @@
       "order": 95,
       "path": "../database/92_vinculo_cliente_conversa.sql",
       "sha256": "006ba80527e3bcaac6c70997f881eb797db8be12d5d2127ad8c5cec4db090609"
+    },
+    {
+      "order": 96,
+      "path": "../database/93_retrato_do_pedido_sac.sql",
+      "sha256": "a28493aa87891686085d467f5f58a71391cb60d6997ce0e150fa95a619fa5708"
     }
   ],
   "references": [
