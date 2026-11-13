@@ -9,6 +9,7 @@
   "include": [
     "worker-inbox-chatwoot.ts",
     "worker-envio-chatwoot.ts",
+    "worker-triagem-sac.ts",
     "worker-supervisionado.ts"
   ]
 }
