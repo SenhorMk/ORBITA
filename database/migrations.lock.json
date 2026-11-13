@@ -475,6 +475,11 @@
       "order": 95,
       "path": "../database/92_vinculo_cliente_conversa.sql",
       "sha256": "006ba80527e3bcaac6c70997f881eb797db8be12d5d2127ad8c5cec4db090609"
+    },
+    {
+      "order": 96,
+      "path": "../database/94_triagem_ia_sac.sql",
+      "sha256": "b6a87e957441bb3930498ba0ee3985c49ace64a3965d30126c7e2bcb89b2b570"
     }
   ],
   "references": [
