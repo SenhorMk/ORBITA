@@ -40,6 +40,7 @@ function deps(contexto: OrganizationContextResult, consulta: ResultadoDaConsulta
     })),
     revogar: vi.fn<DependenciasDaVerificacao['revogar']>(async () => ({ _tag: 'Revogada' })),
     consultaDePedidos: vi.fn<DependenciasDaVerificacao['consultaDePedidos']>(() => pedidos),
+    retrato: vi.fn<DependenciasDaVerificacao['retrato']>(async () => ({ _tag: 'NaoEncontrado' })),
     pedidos,
   };
 }
@@ -48,12 +49,13 @@ const post = (url: string, corpo: unknown) => new Request(url, { method: 'POST',
 
 afterEach(() => vi.restoreAllMocks());
 
-describe('autorização: a mesma para as quatro rotas', () => {
+describe('autorização: a mesma para as cinco rotas', () => {
   const chamadas = [
     (r: ReturnType<typeof criarRotasDaVerificacao>) => r.lerVerificacao(new Request(`${URL_VERIFICACAO}?conversaId=${CONVERSA}`)),
     (r: ReturnType<typeof criarRotasDaVerificacao>) => r.alterarVerificacao(post(URL_VERIFICACAO, { acao: 'confirmar', conversaId: CONVERSA, commandId: COMANDO, clienteId: CLIENTE })),
     (r: ReturnType<typeof criarRotasDaVerificacao>) => r.listarPedidos(new Request(`${URL_PEDIDOS}?conversaId=${CONVERSA}`)),
     (r: ReturnType<typeof criarRotasDaVerificacao>) => r.localizarPedido(post(URL_PEDIDOS, { conversaId: CONVERSA, numero: '1001' })),
+    (r: ReturnType<typeof criarRotasDaVerificacao>) => r.lerRetrato(new Request(`${URL_PEDIDOS}/retrato?conversaId=${CONVERSA}&pedidoId=${PEDIDO}`)),
   ];
 
   it('sem sessão, sem vínculo ou autorização fora: nega e não chega ao banco', async () => {
@@ -64,6 +66,7 @@ describe('autorização: a mesma para as quatro rotas', () => {
         expect(d.ler).not.toHaveBeenCalled();
         expect(d.confirmar).not.toHaveBeenCalled();
         expect(d.consultaDePedidos).not.toHaveBeenCalled();
+        expect(d.retrato).not.toHaveBeenCalled();
       }
     }
   });
@@ -75,6 +78,7 @@ describe('autorização: a mesma para as quatro rotas', () => {
       expect(d.ler).not.toHaveBeenCalled();
       expect(d.confirmar).not.toHaveBeenCalled();
       expect(d.consultaDePedidos).not.toHaveBeenCalled();
+      expect(d.retrato).not.toHaveBeenCalled();
     }
   });
 });

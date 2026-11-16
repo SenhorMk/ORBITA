@@ -206,3 +206,35 @@ describe('PainelDoCliente — troca de conversa', () => {
     expect(fetchWithAuth.mock.calls.some(([url]) => url.startsWith('/api/sac/pedidos'))).toBe(false);
   });
 });
+
+describe('PainelDoCliente — detalhes do pedido (MSG-011)', () => {
+  const atual = { situacao: 'atual', sincronizadoEm: '2026-11-12T11:00:00+00:00', motivo: null };
+  const retrato = {
+    success: true, versao: 1,
+    retrato: {
+      pedido: { id: PEDIDO, numero: '1001', data: '2026-11-08T10:00:00+00:00', status: 'Pendente', total: 10, frete: null, desconto: null, formaDePagamento: null },
+      itens: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', produtoId: null, nome: 'Item Sintético', codigo: null, quantidade: 1, valorUnitario: 10,
+        estoque: { situacao: 'desconhecido', disponivel: null } }],
+      totalDeItens: 1, itensOmitidos: 0,
+      pagamento: { situacao: 'desconhecido', vencido: false, valor: null, vencimento: null, pagoEm: null },
+      rastreio: { situacao: 'desconhecido', motivo: 'sem_fonte' },
+      frescor: { pedido: atual, estoque: atual, pagamento: atual },
+    },
+  };
+
+  it('Detalhes abre o retrato do pedido da conversa; trocar de conversa fecha', async () => {
+    const fetchWithAuth = vi.fn(async (url: string) => {
+      if (url.startsWith('/api/sac/pedidos/retrato')) return respostaJson(retrato);
+      if (url.startsWith('/api/sac/pedidos')) return respostaJson(pedidos);
+      return respostaJson(url.includes(CONVERSA_A) ? verificada : semProva([]));
+    });
+    const { rerender } = render(<PainelDoCliente fetchWithAuth={fetchWithAuth} conversaId={CONVERSA_A} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Detalhes do pedido 1001' }));
+    expect(await screen.findByText('Item Sintético')).toBeInTheDocument();
+    expect(fetchWithAuth).toHaveBeenCalledWith(`/api/sac/pedidos/retrato?conversaId=${CONVERSA_A}&pedidoId=${PEDIDO}`);
+
+    rerender(<PainelDoCliente fetchWithAuth={fetchWithAuth} conversaId={CONVERSA_B} />);
+    await waitFor(() => expect(screen.queryByText('Item Sintético')).not.toBeInTheDocument());
+  });
+});
