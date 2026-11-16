@@ -114,19 +114,20 @@ Variáveis (nomes em `.env.example`): `SAC_TRIAGEM_WORKER_ENABLED`,
 3. Limites escolhidos na implementação: 5 mensagens, 2000 caracteres, 3
    tentativas, 20 s por chamada, uma reparação. Confirmar ou ajustar.
 
-## 5. Integração com a #148 e implantação da migration 94 (preflight)
+## 5. Integração com a `main` (93 já mesclada) e implantação da migration 94 (preflight)
 
-A 94 vem depois da 93 (MSG-011, #148). Ensaiado localmente em 16/11/2026 (#148
-em `347606e` + #149): `test:db` com a cadeia 92 → 93 → 94 nas ordens 95, 96 e
-97, dois ciclos, concorrência e provas integradas, exit 0.
+A #148 (MSG-011, migration 93) foi mesclada na `main` em `dba206c`. O #149 foi
+integrado localmente por merge da `main` (sem rebase, então sem force-push): a
+93 fica na ordem 96 e a 94 na ordem 97. A 93 só cria uma função; a 94 não
+toca em nenhum objeto da 93.
 
 **Estado medido no Staging (`etqjqeqqbjrzyyxodntv`), só leitura, 16/11/2026:**
 95 migrations aplicadas (até a 92); `ai_runs`, a função da 93 e a da 94 não
 existem; `outbox_eventos` com 0 linhas (80 kB) e `sac_cases` com 0 linhas. A
 única check da outbox que menciona `destination` é
-`outbox_eventos_destination_check`, a que a 94 substitui. Medido a partir da
-branch do #149 sozinha, o status planeja a 94 como **ordem 96**: é a ordem
-errada. Nunca aplicar a 94 a partir de uma base sem a 93.
+`outbox_eventos_destination_check`, a que a 94 substitui. Nunca aplicar a 94 a
+partir de uma base sem a 93: a partir do #149 antigo, o status a planejava como
+ordem 96.
 
 | Banco \ App | App anterior | App deste PR |
 |---|---|---|
@@ -135,21 +136,21 @@ errada. Nunca aplicar a 94 a partir de uma base sem a 93.
 
 Ordem. Cada passo remoto exige autorização explícita, separada:
 
-1. **93 no Staging**, a partir de um checkout da #148: `npm run db:remoto:status`
-   tem de planejar só `ordem 96 93_retrato_do_pedido_sac.sql`. A 93 só cria uma
+1. **93 no Staging**, a partir de um checkout da `main` (`dba206c`), não do
+   #149 (que planejaria a 93 e a 94 juntas): `npm run db:remoto:status` tem de
+   planejar só `ordem 96 93_retrato_do_pedido_sac.sql`. A 93 só cria uma
    função (sem tabela, sem trava relevante). Validação: a função existe e só
-   `service_role` executa. Depois, merge da #148.
-2. **Rebase do #149 sobre a nova `main`**, local:
-   - `supabase/config.toml`: conflito; manter a 93 e depois a 94;
-   - `scripts/check-database-drift.test.ts`: **mescla sem conflito com a contagem
-     errada**; corrigir para 98 arquivos e 97 migrations;
-   - `database/migrations.lock.json`: `npm run db:ledger:write`;
-   - `database/catalog-reference.json`: `npm run db:catalog:rebuild`;
-   - `docs/privacy/data-inventory.md`: conferir que as linhas 28f e 28g ficaram;
-   - `npm run test:db` e os gates; depois `git push --force-with-lease`
-     (autorização separada) e CI verde no HEAD rebaseado.
-3. **Conferir o alvo**, só leitura, a partir do #149 rebaseado:
-   `npm run db:remoto:status` tem de planejar só
+   `service_role` executa.
+2. **Fechar a integração do #149**, local:
+   - feito: `supabase/config.toml` com a 93 e depois a 94; teste de drift com
+     98 arquivos e 97 migrations; ledger regravado (`db:drift:check` verde);
+     linhas 28f e 28g do inventário presentes;
+   - falta: `npm run db:catalog:rebuild` (usa o laboratório Docker; o
+     fingerprint fica `PENDENTE-...` até lá, e o `test:db` reprova de propósito)
+     e `npm run test:db` com a cadeia 93 → 94;
+   - depois: `git push` comum (autorização separada) e CI verde no novo HEAD.
+3. **Conferir o alvo**, só leitura, a partir do #149 integrado e com a 93 já
+   aplicada: `npm run db:remoto:status` tem de planejar só
    `ordem 97 94_triagem_ia_sac.sql` com o checksum do ledger. Qualquer outra
    coisa: parar.
 4. **Aplicar a 94** (`npm run db:remoto:aplicar -- --confirmar`), com os workers

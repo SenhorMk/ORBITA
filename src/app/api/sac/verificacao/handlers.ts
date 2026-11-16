@@ -6,6 +6,7 @@ import {
   RespostaDosPedidosSchema,
   VERSAO_DO_CONTRATO_DA_VERIFICACAO,
 } from '@/lib/integrations/contratoDaVerificacao';
+import { RespostaDoRetratoSchema, VERSAO_DO_CONTRATO_DO_RETRATO } from '@/lib/integrations/contratoDoRetrato';
 import { getCorrelationId } from '@/lib/observability/correlation';
 import { logger } from '@/lib/observability/logger';
 import { organizationContextStatus, type OrganizationContextResult } from '@/lib/organizationAuthorization';
@@ -18,6 +19,7 @@ import {
   type ResultadoDaConsulta,
   type ResultadoDaRevogacao,
 } from '@/services/sac/clienteVerificado';
+import type { ResultadoDoRetrato } from '@/services/sac/retratoDoPedido';
 
 /** As fronteiras que as rotas usam; produção liga o Supabase, o teste liga fakes. */
 export interface DependenciasDaVerificacao {
@@ -29,6 +31,7 @@ export interface DependenciasDaVerificacao {
   ) => Promise<ResultadoDaConfirmacao>;
   readonly revogar: (scope: VerifiedOrganizationScope, conversaId: string) => Promise<ResultadoDaRevogacao>;
   readonly consultaDePedidos: (scope: VerifiedOrganizationScope, conversaId: string) => ConsultaDePedidos;
+  readonly retrato: (scope: VerifiedOrganizationScope, conversaId: string, pedidoId: string) => Promise<ResultadoDoRetrato>;
 }
 
 /**
@@ -44,6 +47,7 @@ const AlteracaoSchema = z.discriminatedUnion('acao', [
   z.object({ acao: z.literal('revogar'), conversaId: z.string().uuid() }),
 ]);
 const LocalizacaoSchema = z.object({ conversaId: z.string().uuid(), numero: z.string().trim().min(1).max(40) });
+const RetratoQuerySchema = z.object({ conversaId: z.string().uuid(), pedidoId: z.string().uuid() });
 
 function recusar(error: string, status: number, motivo?: string) {
   return NextResponse.json({ success: false, error, ...(motivo ? { motivo } : {}) }, { status });
@@ -60,6 +64,12 @@ const RECUSA_DA_CONSULTA = {
   SemProva: ['Confirme o cliente da conversa antes de consultar pedidos.', 409, 'sem_prova'],
   Bloqueada: ['Muitas tentativas sem resultado. A consulta por número volta em alguns minutos.', 429, 'bloqueada'],
   NaoEncontrado: ['Nenhum pedido deste cliente com esse número.', 404, 'nao_encontrado'],
+  ConversaNaoEncontrada: ['Conversa não encontrada', 404, 'conversa_nao_encontrada'],
+} as const;
+
+const RECUSA_DO_RETRATO = {
+  SemProva: ['Confirme o cliente da conversa antes de consultar pedidos.', 409, 'sem_prova'],
+  NaoEncontrado: ['Pedido não encontrado entre os deste cliente.', 404, 'nao_encontrado'],
   ConversaNaoEncontrada: ['Conversa não encontrada', 404, 'conversa_nao_encontrada'],
 } as const;
 
@@ -187,6 +197,36 @@ async function localizarPedido(deps: DependenciasDaVerificacao, request: Request
     responderConsulta(request, sessao.scope, conversaId, await deps.consultaDePedidos(sessao.scope, conversaId).localizar(numero)));
 }
 
+/**
+ * O retrato de um pedido do cliente confirmado (MSG-011). Só leitura. O log
+ * leva o desfecho e o frescor de cada parte, nunca item, valor ou número.
+ */
+async function lerRetrato(deps: DependenciasDaVerificacao, request: Request) {
+  const sessao = await sessaoDe(deps, request);
+  if (sessao._tag === 'Recusado') return sessao.resposta;
+  const busca = new URL(request.url).searchParams;
+  const parsed = RetratoQuerySchema.safeParse({ conversaId: busca.get('conversaId'), pedidoId: busca.get('pedidoId') });
+  if (!parsed.success) return recusar('Parâmetros conversaId e pedidoId (UUID) são obrigatórios.', 400);
+  const { conversaId, pedidoId } = parsed.data;
+
+  return protegido(async () => {
+    const resultado = await deps.retrato(sessao.scope, conversaId, pedidoId);
+    if (resultado._tag !== 'Retrato') {
+      const [mensagem, status, motivo] = RECUSA_DO_RETRATO[resultado._tag];
+      registrar(request, sessao.scope, 'sac.retrato_do_pedido', { conversaId, outcome: motivo }, true);
+      return recusar(mensagem, status, motivo);
+    }
+    const resposta = RespostaDoRetratoSchema.parse({ success: true, versao: VERSAO_DO_CONTRATO_DO_RETRATO, retrato: resultado.retrato });
+    const { frescor } = resposta.retrato;
+    registrar(request, sessao.scope, 'sac.retrato_do_pedido', {
+      conversaId,
+      outcome: 'retrato',
+      frescor: { pedido: frescor.pedido.situacao, estoque: frescor.estoque.situacao, pagamento: frescor.pagamento.situacao },
+    }, false);
+    return NextResponse.json(resposta);
+  });
+}
+
 /** Verificação do cliente e consulta de pedidos da conversa, só da organização da sessão. */
 export function criarRotasDaVerificacao(deps: DependenciasDaVerificacao) {
   return {
@@ -194,5 +234,6 @@ export function criarRotasDaVerificacao(deps: DependenciasDaVerificacao) {
     alterarVerificacao: (request: Request) => alterarVerificacao(deps, request),
     listarPedidos: (request: Request) => listarPedidos(deps, request),
     localizarPedido: (request: Request) => localizarPedido(deps, request),
+    lerRetrato: (request: Request) => lerRetrato(deps, request),
   };
 }

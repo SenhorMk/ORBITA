@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "fingerprint": "061c9e4bb666628ff2f1bf6495e19dce3b6529013b38194b35185b4d9eab54af",
+  "fingerprint": "PENDENTE-npm-run-db-catalog-rebuild",
   "counts": {
     "relations": 72,
     "columns": 795,
     "policies": 76,
-    "functions": 189,
+    "functions": 190,
     "constraints": 422,
     "indexes": 286,
     "triggers": 89

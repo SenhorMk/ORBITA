@@ -478,6 +478,11 @@
     },
     {
       "order": 96,
+      "path": "../database/93_retrato_do_pedido_sac.sql",
+      "sha256": "a28493aa87891686085d467f5f58a71391cb60d6997ce0e150fa95a619fa5708"
+    },
+    {
+      "order": 97,
       "path": "../database/94_triagem_ia_sac.sql",
       "sha256": "1dc5cedc05ad2e0af384f132f41cad3d4ab0de9e8cfb9958431dbc864ca660a6"
     }
