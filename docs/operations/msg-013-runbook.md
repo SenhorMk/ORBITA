@@ -67,7 +67,8 @@ cockpit: GET /api/sac/triagem?conversaId=…  → painel "Triagem"
 - **Modelos aprovados.** Só a família Flash do Gemini (`gemini-…-flash`),
   validada no código. Outro modelo é mudança de código e de runbook.
 - **Logs.** `sac.triagem.*` com correlação, organização, caso, evento,
-  execução, desfecho, motivo, tokens e latência. Nunca o texto nem o resultado.
+  execução, desfecho, motivo, tokens, latência e o booleano `precisaDeHumano`
+  (taxa de handoff). Nunca o texto da cliente nem os campos livres da triagem.
 
 ## 3. Operar
 
