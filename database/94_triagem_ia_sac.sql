@@ -132,6 +132,9 @@ $$;
 -- ---------------------------------------------------------------------------
 create table if not exists public.ai_runs (
     id                uuid primary key default gen_random_uuid(),
+    -- Ordem de criação monotônica. `created_at` é o início da transação e
+    -- empata; o id é aleatório. Só esta coluna desempata execuções da mesma versão.
+    sequencia         bigint generated always as identity,
     organizacao_id    uuid not null references public.organizacoes(id) on delete cascade,
     tarefa            text not null default 'sac.triagem',
     caso_id           uuid not null,
@@ -178,7 +181,7 @@ create table if not exists public.ai_runs (
         references public.outbox_eventos(organizacao_id, id) on delete cascade
 );
 
-create index if not exists idx_ai_runs_caso on public.ai_runs (organizacao_id, caso_id, created_at desc);
+create index if not exists idx_ai_runs_caso on public.ai_runs (organizacao_id, caso_id, mensagens_ate desc, sequencia desc);
 create index if not exists idx_ai_runs_orcamento on public.ai_runs (organizacao_id, created_at);
 
 alter table public.ai_runs enable row level security;
@@ -194,6 +197,7 @@ as $$
 begin
     if old.status <> 'em_andamento'
        or new.id is distinct from old.id
+       or new.sequencia is distinct from old.sequencia
        or new.organizacao_id is distinct from old.organizacao_id
        or new.tarefa is distinct from old.tarefa
        or new.caso_id is distinct from old.caso_id
@@ -546,16 +550,22 @@ begin
         return jsonb_build_object('resultado', 'conversa_inexistente');
     end if;
 
+    -- O caso aberto (no máximo um, por índice único); sem ele, o último.
     select * into v_caso from public.sac_cases s
      where s.organizacao_id = p_organizacao_id and s.conversa_id_local = p_conversa_id_local
-     order by s.created_at desc limit 1;
+     order by (s.phase not in ('RESOLVED', 'CLOSED', 'CANCELLED')) desc, s.created_at desc, s.id desc
+     limit 1;
     if v_caso.id is null then
         return jsonb_build_object('resultado', 'sem_caso');
     end if;
 
     select * into v_run from public.ai_runs r
      where r.organizacao_id = p_organizacao_id and r.caso_id = v_caso.id
-     order by r.created_at desc, r.id desc limit 1;
+     -- A triagem que vale é a da versão mais nova do caso (`mensagens_ate`), não
+     -- a última criada: um evento antigo processado com atraso grava `obsoleta`
+     -- depois da conclusão da versão atual. Na mesma versão (retomada depois de
+     -- queda), a tentativa mais nova pela sequência.
+     order by r.mensagens_ate desc, r.sequencia desc limit 1;
 
     select exists (select 1 from public.outbox_eventos o
                     where o.organizacao_id = p_organizacao_id and o.destination = 'interno'

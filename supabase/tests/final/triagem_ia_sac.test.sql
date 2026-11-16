@@ -7,7 +7,7 @@
 
 begin;
 
-select plan(35);
+select plan(38);
 
 set local request.jwt.claim.role = 'service_role';
 
@@ -194,6 +194,19 @@ select is(public.ler_triagem_do_caso_sac('ec000000-0000-4000-8000-00000000000a',
 select is(public.ler_triagem_do_caso_sac('ec000000-0000-4000-8000-00000000000b', pg_temp.c('a90')) ->> 'resultado',
           'conversa_inexistente', '28. Org B não lê a triagem da Org A');
 
+-- Um evento antigo processado com atraso grava `obsoleta` DEPOIS da conclusão
+-- da versão atual (outra transação, created_at maior). Simulado direto na
+-- tabela, como a transação atrasada gravaria.
+insert into public.ai_runs (organizacao_id, caso_id, evento_outbox_id, fencing_token, mensagens_ate, provedor, modelo,
+                            versao_prompt, versao_schema, status, motivo, concluida_em, created_at)
+select organizacao_id, caso_id, evento_outbox_id, 999, mensagens_ate, provedor, modelo, versao_prompt, versao_schema,
+       'obsoleta', 'caso_mudou', now() + interval '1 second', now() + interval '1 second'
+  from public.ai_runs where evento_outbox_id = pg_temp.c('evt_velho');
+select is((select status from public.ai_runs where caso_id = pg_temp.c('caso_a') order by created_at desc, id desc limit 1),
+          'obsoleta', '27a. contraprova: a ordenação antiga (created_at, id) escolheria a execução obsoleta atrasada');
+select is(public.ler_triagem_do_caso_sac('ec000000-0000-4000-8000-00000000000a', pg_temp.c('a90')) -> 'execucao' ->> 'status',
+          'concluida', '27b. o cockpit mostra a triagem da versão mais nova do caso, não a última gravada');
+
 -- ---------------------------------------------------------------------------
 -- Falha do provedor, orçamento e caso que muda durante a execução.
 -- ---------------------------------------------------------------------------
@@ -234,6 +247,9 @@ select public.liberar_leases_expirados_outbox();
 update public.outbox_eventos set next_retry_at = now() where id = pg_temp.c('evt_6');
 select pg_temp.reivindicar();
 select is(pg_temp.iniciar(pg_temp.c('evt_6'), 10) ->> 'resultado', 'iniciada', '33. o trabalho retomado começa de novo');
+-- Mesma versão e mesma transação: created_at empata e o id é aleatório; a sequência decide.
+select is(public.ler_triagem_do_caso_sac('ec000000-0000-4000-8000-00000000000a', pg_temp.c('a90')) -> 'execucao' ->> 'status',
+          'em_andamento', '33a. na mesma versão, o cockpit mostra a tentativa mais nova, não a interrompida');
 select is((select status || ':' || motivo || ':' || chamou_modelo from public.ai_runs where id = pg_temp.c('run_6')),
           'falha:interrompida:true', '34. a execução interrompida fica registrada e conta no orçamento');
 select is((select count(*)::int from public.outbox_eventos where id = pg_temp.c('evt_6') and status = 'unknown'), 0,
