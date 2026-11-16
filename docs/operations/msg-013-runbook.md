@@ -60,12 +60,16 @@ cockpit: GET /api/sac/triagem?conversaId=…  → painel "Triagem"
 - **Versão do caso.** Cada trabalho se refere à última mensagem quando foi
   enfileirado. Mensagem nova antes do início: `obsoleta`, sem chamar o modelo.
   Mensagem nova durante a execução: o resultado fica como histórico
-  (`obsoleta`), e a triagem enfileirada pela mensagem nova é a que vale.
+  (`obsoleta`), e a triagem enfileirada pela mensagem nova é a que vale. A
+  conclusão lê o caso `for share`: segue a ordem de commit com a inbox (provado
+  com barreiras em `scripts/database-concurrency-triagem.mjs`).
 - **Orçamento.** `SAC_TRIAGEM_LIMITE_DIARIO_POR_ORGANIZACAO` execuções por dia
   (dia de Brasília), contadas sob trava por organização: em andamento e as que
   chamaram o modelo. Padrão 0: ligado sem limite, nada chama o modelo.
-- **Modelos aprovados.** Só a família Flash do Gemini (`gemini-…-flash`),
-  validada no código. Outro modelo é mudança de código e de runbook.
+- **Modelos aprovados.** Só os de texto da família Flash do Gemini
+  (`gemini-2.5-flash`, `-lite`, `-001`, `-preview`), validados no código.
+  Variantes `-image`, `-tts` e `-native-audio-*` ficam fora: não geram o objeto
+  da triagem. Outro modelo é mudança de código e de runbook.
 - **Logs.** `sac.triagem.*` com correlação, organização, caso, evento,
   execução, desfecho, motivo, tokens, latência e o booleano `precisaDeHumano`
   (taxa de handoff). Nunca o texto da cliente nem os campos livres da triagem.
@@ -80,9 +84,18 @@ Variáveis (nomes em `.env.example`): `SAC_TRIAGEM_WORKER_ENABLED`,
 
 - **Sem chave:** `SAC_TRIAGEM_PROVEDOR=fake`. O painel diz "modelo falso, sem
   IA real" e todo caso pede atendente.
-- **Com chave (DEV sintético):** crie a chave no Google AI Studio, ponha no
-  `.env.local`, `SAC_TRIAGEM_PROVEDOR=google`, `SAC_TRIAGEM_MODELO=gemini-2.5-flash`
-  (ou o Flash vigente), um limite diário pequeno, e rode `npm run worker:triagem`.
+- **Teste do modelo real (D3), sem banco:** a proprietária cria a chave no
+  Google AI Studio e a grava no `.env.local` do checkout onde vai rodar
+  (`GOOGLE_GENERATIVE_AI_API_KEY`), com `SAC_TRIAGEM_MODELO=gemini-2.5-flash`.
+  A chave nunca vai para chat, argumento, commit ou log. `npm run smoke:triagem`
+  confere a configuração e mostra o plano sem chamar nada;
+  `npm run smoke:triagem -- --confirmar` envia as 8 fixtures sintéticas
+  (7 chegam ao modelo, no máximo 14 chamadas) e imprime só desfecho,
+  intenção, tokens e latência. Aprovado = 7/7 com schema validado e a fixture
+  com senha bloqueada antes do modelo. Anexar a saída à evidência do ticket.
+- **Com chave, pelo worker (DEV sintético):** depois do smoke, com a migration 94
+  no banco de destino: `SAC_TRIAGEM_PROVEDOR=google`, o mesmo modelo, um limite
+  diário pequeno, e `npm run worker:triagem`.
 - **Desligar (triagem manual):** `SAC_TRIAGEM_WORKER_ENABLED=false`. As
   triagens ficam na fila e o painel mostra "Triagem na fila". Nada se perde.
 - **Ao ligar:** a fila acumulada com o worker desligado é processada, a mais
@@ -101,40 +114,82 @@ Variáveis (nomes em `.env.example`): `SAC_TRIAGEM_WORKER_ENABLED`,
 3. Limites escolhidos na implementação: 5 mensagens, 2000 caracteres, 3
    tentativas, 20 s por chamada, uma reparação. Confirmar ou ajustar.
 
-## 5. Implantação da migration 94
+## 5. Integração com a #148 e implantação da migration 94 (preflight)
 
-Numerada depois da 93 (MSG-011, PR #148). Se a #148 entrar antes, esta branch é
-rebaseada e o ledger e o catálogo regenerados.
+A 94 vem depois da 93 (MSG-011, #148). Ensaiado localmente em 16/11/2026 (#148
+em `347606e` + #149): `test:db` com a cadeia 92 → 93 → 94 nas ordens 95, 96 e
+97, dois ciclos, concorrência e provas integradas, exit 0.
+
+**Estado medido no Staging (`etqjqeqqbjrzyyxodntv`), só leitura, 16/11/2026:**
+95 migrations aplicadas (até a 92); `ai_runs`, a função da 93 e a da 94 não
+existem; `outbox_eventos` com 0 linhas (80 kB) e `sac_cases` com 0 linhas. A
+única check da outbox que menciona `destination` é
+`outbox_eventos_destination_check`, a que a 94 substitui. Medido a partir da
+branch do #149 sozinha, o status planeja a 94 como **ordem 96**: é a ordem
+errada. Nunca aplicar a 94 a partir de uma base sem a 93.
 
 | Banco \ App | App anterior | App deste PR |
 |---|---|---|
 | **Sem a 94** | funciona | O painel "Triagem" mostra erro (RPC ausente); o worker não sobe trabalho. O resto funciona |
 | **Com a 94** | funciona: os casos passam a enfileirar triagens que ninguém consome (ficam `pending`) | funciona |
 
-Ordem, cada passo com autorização explícita:
+Ordem. Cada passo remoto exige autorização explícita, separada:
 
-1. **Conferir o alvo, só leitura:** `npm run db:remoto:status` mostra só a 94 pendente.
-2. **Aplicar a 94** (`npm run db:remoto:aplicar`). Impacto: troca a constraint
-   de destino de `outbox_eventos` (`not valid` + `validate`: trava breve de
-   escrita e uma varredura da tabela), recria `reivindicar_tentativas_outbox`
-   com o filtro de destino, cria `ai_runs`, um gatilho em `sac_cases` e seis
-   funções. Nenhuma linha existente muda. `lock_timeout = 5s`.
-3. **Validar, só leitura:**
+1. **93 no Staging**, a partir de um checkout da #148: `npm run db:remoto:status`
+   tem de planejar só `ordem 96 93_retrato_do_pedido_sac.sql`. A 93 só cria uma
+   função (sem tabela, sem trava relevante). Validação: a função existe e só
+   `service_role` executa. Depois, merge da #148.
+2. **Rebase do #149 sobre a nova `main`**, local:
+   - `supabase/config.toml`: conflito; manter a 93 e depois a 94;
+   - `scripts/check-database-drift.test.ts`: **mescla sem conflito com a contagem
+     errada**; corrigir para 98 arquivos e 97 migrations;
+   - `database/migrations.lock.json`: `npm run db:ledger:write`;
+   - `database/catalog-reference.json`: `npm run db:catalog:rebuild`;
+   - `docs/privacy/data-inventory.md`: conferir que as linhas 28f e 28g ficaram;
+   - `npm run test:db` e os gates; depois `git push --force-with-lease`
+     (autorização separada) e CI verde no HEAD rebaseado.
+3. **Conferir o alvo**, só leitura, a partir do #149 rebaseado:
+   `npm run db:remoto:status` tem de planejar só
+   `ordem 97 94_triagem_ia_sac.sql` com o checksum do ledger. Qualquer outra
+   coisa: parar.
+4. **Aplicar a 94** (`npm run db:remoto:aplicar -- --confirmar`), com os workers
+   do notebook parados. Travas, todas sob `lock_timeout = 5s` (falha rápido e
+   pode ser repetida):
+   - `outbox_eventos`: `ACCESS EXCLUSIVE` breve para trocar a check de destino
+     (`not valid`), depois `SHARE UPDATE EXCLUSIVE` no `validate` (varredura;
+     0 linhas hoje);
+   - `sac_cases`: `SHARE ROW EXCLUSIVE` para criar o gatilho;
+   - `reivindicar_tentativas_outbox` recriada com o filtro de destino;
+   - cria `ai_runs` e seis funções. Nenhuma linha existente muda.
+5. **Validar**, só leitura:
 
    ```sql
-   select has_table_privilege('service_role', 'public.ai_runs', 'select');  -- false
-   select count(*) from public.outbox_eventos where destination = 'interno'; -- cresce com casos novos
+   select has_table_privilege('service_role', 'public.ai_runs', 'select');            -- false
+   select conname, convalidated from pg_constraint
+    where conrelid = 'public.outbox_eventos'::regclass
+      and conname in ('ck_outbox_eventos_destination', 'ck_outbox_eventos_interno', 'outbox_eventos_destination_check');
+   -- as duas novas, convalidated = true; a antiga, ausente
+   select tgname from pg_trigger where tgname = 'tg_sac_caso_enfileirar_triagem';  -- 1 linha
+   select attidentity from pg_attribute where attrelid = 'public.ai_runs'::regclass and attname = 'sequencia'; -- 'a'
+   select has_function_privilege('authenticated', 'public.ler_triagem_do_caso_sac(uuid,uuid)', 'execute'); -- false
    ```
 
-4. **Merge** (autorização separada).
+6. **Merge do #149** (autorização separada). O worker continua desligado e o
+   orçamento em 0 até o teste do modelo real.
 
 ### Rollback
 
 - **App/worker:** desligar o worker (`SAC_TRIAGEM_WORKER_ENABLED=false`) e,
-  se preciso, reimplantar o app anterior.
-- **Banco:** forward-only. Para parar de enfileirar sem migration:
+  se preciso, reimplantar o app anterior. As duas linhas da tabela acima
+  funcionam com o app anterior.
+- **Banco, sem migration:** parar de enfileirar com
   `alter table public.sac_cases disable trigger tg_sac_caso_enfileirar_triagem;`.
-  Preservar `ai_runs` e os eventos; não reprocessar triagens já usadas.
+  O claim genérico da outbox já ignora `interno`. Preservar `ai_runs` e os
+  eventos; não reprocessar triagens já usadas.
+- **Banco, reversão completa:** só por migration nova, forward-only (remover
+  gatilho e funções; voltar a check de destino sem `interno` exige antes não
+  haver linhas `interno`). A 93 só tem uma função: reverter é revogar ou
+  remover por migration nova. Nunca `--adotar`.
 
 ## 6. Verificação
 

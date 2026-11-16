@@ -13,12 +13,20 @@ import { aceitar, aplicar, comandoDaMensagem, novaOrganizacao, reivindicar } fro
  *    organização inicia exatamente 3 e as demais viram `sem_orcamento`, sem
  *    uma bloquear a conta da outra;
  * 3. depois da corrida, a leitura do cockpit mostra para cada caso a execução
- *    do próprio caso (em andamento ou sem orçamento), e a Org B não lê caso da A.
+ *    do próprio caso (em andamento ou sem orçamento), e a Org B não lê caso da A;
+ * 4. conclusão × mensagem nova da inbox, com barreiras: a inbox atualiza o caso
+ *    e segura a transação; a conclusão espera (wait_event=transactionid) e,
+ *    quando a inbox confirma, grava `obsoleta`. Na ordem inversa, a inbox
+ *    espera a conclusão, que grava `concluida` para a versão antiga, e a
+ *    mensagem nova enfileira a próxima triagem. Contraprova: a leitura sem
+ *    trava (como antes da correção) via a versão antiga com a mensagem nova
+ *    pronta para confirmar.
  */
 
 const INICIAR = "select public.iniciar_triagem_sac($1, $2, $3, $4, 'fake', 'falso-v1', 'triagem-v1', 1) as r";
 const LER = 'select public.ler_triagem_do_caso_sac($1, $2) as r';
 const WORKER = 'w-triagem-corrida';
+const CONCLUIR = "select public.concluir_triagem_sac($1, $2, $3, 'concluida', null, '{\"versao\":1}'::jsonb, true, 10, 5, 0::smallint, 100) as r";
 
 /** `quantos` casos novos numa organização nova; cada um enfileira uma triagem. */
 async function casosNovos(admin, cliente, sufixo, quantos, base) {
@@ -32,7 +40,7 @@ async function casosNovos(admin, cliente, sufixo, quantos, base) {
       'select id_local as conversa from public.chatwoot_conversations where conexao_id = $1 and id_externo = $2', [conexao, String(base + i)]);
     conversas.push(conversa);
   }
-  return { org, conversas };
+  return { org, conexao, conversas };
 }
 
 /** Reivindica as triagens pendentes; devolve as da organização pedida. */
@@ -41,10 +49,10 @@ async function triagensDe(cliente, orgs) {
   return rows.filter((linha) => orgs.includes(linha.organizacao_id));
 }
 
-async function esperarAdvisory(admin, pid) {
+async function esperarAdvisory(admin, pid, evento = 'advisory') {
   for (let i = 0; i < 100; i += 1) {
     const { rows: [linha] } = await admin.query('select wait_event_type, wait_event from pg_stat_activity where pid = $1', [pid]);
-    if (linha?.wait_event_type === 'Lock' && linha.wait_event === 'advisory') return true;
+    if (linha?.wait_event_type === 'Lock' && linha.wait_event === evento) return true;
     await new Promise((r) => { setTimeout(r, 50); });
   }
   return false;
@@ -98,6 +106,72 @@ async function corridaPorOrganizacao({ admin, pool }) {
   return ok({ resumo: '16 inícios simultâneos (8 da A, 8 da B) com limite 3: A iniciou 3 e 5 sem orçamento, B iniciou 3 e 5 sem orçamento; o cockpit leu a execução de cada caso e a B não leu caso da A' });
 }
 
+/** Um caso com triagem iniciada e a próxima mensagem do contato já aceita e reivindicada na inbox. */
+async function casoEmTriagem(admin, cliente, sufixo, base) {
+  const alvo = await casosNovos(admin, cliente, sufixo, 1, base);
+  const [triagem] = await triagensDe(cliente, [alvo.org]);
+  const inicio = (await cliente.query(INICIAR, [triagem.evento_id, WORKER, triagem.fencing_token, 5])).rows[0].r;
+  const { rows: [run] } = await admin.query('select mensagens_ate, caso_id from public.ai_runs where id = $1', [inicio.run_id]);
+  const evento = await aceitar(cliente, alvo.org, alvo.conexao, `m13-${sufixo}-nova-${alvo.conexao}`);
+  const inbox = (await reivindicar(cliente, `m13-inbox-${sufixo}`)).find((linha) => linha.evento_id === evento.evento_id);
+  return {
+    ...alvo, triagem, runId: inicio.run_id, inicio: inicio.resultado, mensagensAte: run.mensagens_ate, casoId: run.caso_id, inbox,
+    novaMensagem: comandoDaMensagem(base * 10 + 1, base, base),
+  };
+}
+
+async function estadoDoCaso(admin, alvo) {
+  const { rows: [linha] } = await admin.query(
+    `select r.status, r.motivo, r.mensagens_ate, s.ultima_mensagem_em,
+            (select count(*)::int from public.outbox_eventos o where o.destination = 'interno' and o.status = 'pending'
+              and o.payload ->> 'caso_id' = s.id::text and (o.payload ->> 'mensagens_ate')::timestamptz = s.ultima_mensagem_em) as proxima
+       from public.ai_runs r join public.sac_cases s on s.id = r.caso_id where r.id = $1`, [alvo.runId]);
+  return linha;
+}
+
+async function conclusaoContraInbox({ admin, pool }) {
+  const [x, y] = pool;
+  const { rows: [{ pid: pidY }] } = await y.query('select pg_backend_pid() as pid');
+  const { rows: [{ pid: pidX }] } = await x.query('select pg_backend_pid() as pid');
+
+  // Ordem 1: a mensagem nova chega primeiro e segura a transação.
+  const a = await casoEmTriagem(admin, pool[0], 'conclusao-depois', 9900);
+  await x.query('begin');
+  await aplicar(x, a.inbox.evento_id, 'm13-inbox-conclusao-depois', a.inbox.fencing_token, a.novaMensagem);
+  const { rows: [vista] } = await y.query('select ultima_mensagem_em from public.sac_cases where id = $1', [a.casoId]);
+  const semTravaViuAntiga = vista.ultima_mensagem_em.getTime() === a.mensagensAte.getTime();
+  const concluindo = y.query(CONCLUIR, [a.runId, WORKER, a.triagem.fencing_token]);
+  const conclusaoEsperou = await esperarAdvisory(admin, pidY, 'transactionid');
+  await x.query('commit');
+  const r1 = (await concluindo).rows[0].r;
+  const e1 = await estadoDoCaso(admin, a);
+
+  // Ordem 2: a conclusão chega primeiro e segura a transação.
+  const b = await casoEmTriagem(admin, pool[0], 'conclusao-antes', 9950);
+  await y.query('begin');
+  const r2 = (await y.query(CONCLUIR, [b.runId, WORKER, b.triagem.fencing_token])).rows[0].r;
+  const aplicando = aplicar(x, b.inbox.evento_id, 'm13-inbox-conclusao-antes', b.inbox.fencing_token, b.novaMensagem);
+  const inboxEsperou = await esperarAdvisory(admin, pidX, 'transactionid');
+  await y.query('commit');
+  await aplicando;
+  const e2 = await estadoDoCaso(admin, b);
+  const lido = (await pool[0].query(LER, [b.org, b.conversas[0]])).rows[0].r;
+
+  const certo = a.inicio === 'iniciada' && b.inicio === 'iniciada' && semTravaViuAntiga && conclusaoEsperou && inboxEsperou
+    && r1 === 'obsoleta' && e1.status === 'obsoleta' && e1.motivo === 'caso_mudou' && e1.ultima_mensagem_em > e1.mensagens_ate && e1.proxima === 1
+    && r2 === 'concluida' && e2.status === 'concluida' && e2.ultima_mensagem_em > e2.mensagens_ate && e2.proxima === 1
+    && lido.execucao?.status === 'concluida' && lido.pendente === true;
+  if (!certo) {
+    const fatos = `inícios ${a.inicio}/${b.inicio}; leitura sem trava viu a antiga: ${semTravaViuAntiga}; conclusão esperou: ${conclusaoEsperou}; `
+      + `ordem 1 gravou ${r1} (${e1.status}, próxima ${e1.proxima}); inbox esperou: ${inboxEsperou}; ordem 2 gravou ${r2} (${e2.status}, próxima ${e2.proxima}); `
+      + `cockpit ${lido.execucao?.status}, pendente ${lido.pendente}`;
+    return err('ConclusaoForaDeOrdem', `a conclusão e a mensagem nova não seguiram a ordem de commit: ${fatos}`, {
+      inicios: [a.inicio, b.inicio], semTravaViuAntiga, conclusaoEsperou, inboxEsperou, r1, e1, r2, e2, lido: { status: lido.execucao?.status, pendente: lido.pendente },
+    });
+  }
+  return ok({ resumo: 'conclusão × mensagem nova: com a inbox segurando o caso, a conclusão esperou (wait_event=transactionid) e gravou obsoleta; com a conclusão segurando, a inbox esperou (wait_event=transactionid), a conclusão gravou concluida para a versão antiga e a próxima triagem ficou na fila (cockpit: concluida, pendente); contraprova: a leitura sem trava via a versão antiga' });
+}
+
 /**
  * @returns {Promise<object>} Resultado tagueado do rehearsal.
  */
@@ -121,7 +195,7 @@ export async function runTriagemRaceRehearsal() {
     const pool = await Promise.all(Array.from({ length: 8 }, novoCliente));
     const ctx = { admin, pool };
     const resumos = [];
-    for (const etapa of [travaSerializa, corridaPorOrganizacao]) {
+    for (const etapa of [travaSerializa, corridaPorOrganizacao, conclusaoContraInbox]) {
       const resultado = await etapa(ctx);
       if (resultado._tag === 'err') return resultado;
       resumos.push(resultado.value.resumo);

@@ -479,7 +479,7 @@
     {
       "order": 96,
       "path": "../database/94_triagem_ia_sac.sql",
-      "sha256": "f362ea11aedbff509adfec20abffa0096b15959b7abfdba6501d1ad730d90fe9"
+      "sha256": "1dc5cedc05ad2e0af384f132f41cad3d4ab0de9e8cfb9958431dbc864ca660a6"
     }
   ],
   "references": [

@@ -10,6 +10,7 @@
     "worker-inbox-chatwoot.ts",
     "worker-envio-chatwoot.ts",
     "worker-triagem-sac.ts",
+    "smoke-triagem-gemini.ts",
     "worker-supervisionado.ts"
   ]
 }

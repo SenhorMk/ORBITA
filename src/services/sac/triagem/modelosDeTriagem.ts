@@ -18,8 +18,14 @@ import { TriagemV1Schema, type TriagemV1 } from '../../../lib/integrations/contr
 
 import type { ModeloDeTriagem, RespostaDoModelo, UsoDoModelo } from './triagemDoCaso';
 
-/** Modelos aprovados para a triagem: só a família Flash do Gemini. Outro modelo exige mudar o código. */
-export const MODELO_GEMINI_APROVADO = /^gemini-[0-9]+(?:\.[0-9]+)?-flash(?:-lite)?(?:-[0-9a-z]+)*$/u;
+/**
+ * Modelos aprovados para a triagem: só os de texto da família Flash do Gemini,
+ * estáveis (`gemini-2.5-flash`), com revisão (`-001`) ou prévia
+ * (`-preview`, `-preview-09-2025`). Variantes de imagem, voz e áudio
+ * (`-image`, `-tts`, `-native-audio-*`) não geram o objeto da triagem e ficam
+ * fora. Outro modelo exige mudar o código.
+ */
+export const MODELO_GEMINI_APROVADO = /^gemini-[0-9]+(?:\.[0-9]+)?-flash(?:-lite)?(?:-[0-9]{3}|-preview(?:-[0-9]{2}-[0-9]{4})?)?$/u;
 
 interface UsoDoAiSdk {
   readonly inputTokens?: number | undefined;

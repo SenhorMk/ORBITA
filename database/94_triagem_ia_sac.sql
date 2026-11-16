@@ -496,7 +496,15 @@ begin
     end if;
 
     -- O caso andou enquanto o modelo pensava: o resultado fica como histórico, não como atual.
-    select * into v_caso from public.sac_cases s where s.organizacao_id = v_run.organizacao_id and s.id = v_run.caso_id;
+    -- `for share` ordena esta conclusão com a mensagem nova pela ordem de commit:
+    -- a inbox que já atualizou o caso e ainda não confirmou faz esta leitura
+    -- esperar e ver a versão nova; a que chega depois espera esta conclusão. Sem
+    -- a trava, a leitura via a versão antiga e a triagem era confirmada como
+    -- atual depois de uma mensagem mais nova já confirmada. A inbox não pede
+    -- `ai_runs` nem o evento desta triagem, então não há ciclo de espera.
+    select * into v_caso from public.sac_cases s
+     where s.organizacao_id = v_run.organizacao_id and s.id = v_run.caso_id
+       for share;
     if v_status <> 'falha'
        and (v_caso.phase not in ('TRIAGE', 'COLLECTING_INFORMATION') or v_caso.ultima_mensagem_em > v_run.mensagens_ate) then
         v_status := 'obsoleta';

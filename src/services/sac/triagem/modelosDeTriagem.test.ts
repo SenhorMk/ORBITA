@@ -83,6 +83,13 @@ describe('modelos configurados', () => {
   it('Gemini: só a família Flash aprovada', () => {
     expect(MODELO_GEMINI_APROVADO.test('gemini-2.5-flash')).toBe(true);
     expect(MODELO_GEMINI_APROVADO.test('gemini-3-flash-lite')).toBe(true);
+    for (const aprovado of ['gemini-2.0-flash-001', 'gemini-2.5-flash-lite', 'gemini-2.5-flash-preview-09-2025', 'gemini-3-flash-preview', 'gemini-3.5-flash']) {
+      expect(MODELO_GEMINI_APROVADO.test(aprovado), aprovado).toBe(true);
+    }
+    // Da mesma família, mas não geram texto estruturado: configurá-los faria toda triagem falhar no provedor.
+    for (const fora of ['gemini-2.5-flash-image', 'gemini-2.5-flash-preview-tts', 'gemini-2.5-flash-native-audio-latest', 'gemini-3.1-flash-tts-preview']) {
+      expect(MODELO_GEMINI_APROVADO.test(fora), fora).toBe(false);
+    }
     expect(MODELO_GEMINI_APROVADO.test('gemini-2.5-pro')).toBe(false);
     expect(MODELO_GEMINI_APROVADO.test('gpt-5')).toBe(false);
     expect(() => criarModeloGemini({ chave: 'chave-de-teste', modelo: 'gemini-2.5-pro' })).toThrow(/fora da lista aprovada/u);
