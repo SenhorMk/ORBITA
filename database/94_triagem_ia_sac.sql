@@ -252,6 +252,60 @@ create trigger tg_sac_caso_enfileirar_triagem
     after insert or update of ultima_mensagem_em on public.sac_cases
     for each row execute function public.fn_sac_caso_enfileirar_triagem();
 
+-- Versão do caso para a triagem. A inbox grava `greatest(ultima_mensagem_em,
+-- criada_em)` (89) e o Chatwoot manda `created_at` em segundos: uma segunda
+-- mensagem no mesmo segundo, ou uma atrasada, não mudava a versão, então não
+-- enfileirava triagem nem tornava obsoleta a que estava em execução. Só a
+-- aplicação da inbox (marcada na transação) avança a versão; um UPDATE sem
+-- mensagem nova continua sem efeito.
+alter function public.aplicar_evento_inbox_chatwoot(uuid, text, bigint, jsonb)
+    rename to aplicar_evento_inbox_chatwoot_base_msg013;
+revoke all on function public.aplicar_evento_inbox_chatwoot_base_msg013(uuid, text, bigint, jsonb)
+    from public, anon, authenticated, service_role, orbita_worker_inbox;
+
+create function public.aplicar_evento_inbox_chatwoot(
+    p_evento_id uuid, p_worker text, p_fencing_token bigint, p_comando jsonb
+)
+returns table (
+    desfecho text, disposicao text, conversa_id_local uuid, mensagem_id_local uuid, caso_id uuid
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    v_anterior text := current_setting('orbita.aplicando_inbox', true);
+begin
+    perform set_config('orbita.aplicando_inbox', 'on', true);
+    return query select * from public.aplicar_evento_inbox_chatwoot_base_msg013(
+        p_evento_id, p_worker, p_fencing_token, p_comando);
+    perform set_config('orbita.aplicando_inbox', coalesce(v_anterior, ''), true);
+end;
+$$;
+revoke all on function public.aplicar_evento_inbox_chatwoot(uuid, text, bigint, jsonb)
+    from public, anon, authenticated;
+grant execute on function public.aplicar_evento_inbox_chatwoot(uuid, text, bigint, jsonb)
+    to service_role, orbita_worker_inbox;
+
+create or replace function public.avancar_versao_mensagem_sac()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+    if current_setting('orbita.aplicando_inbox', true) = 'on' then
+        new.ultima_mensagem_em := greatest(new.ultima_mensagem_em, old.ultima_mensagem_em + interval '1 microsecond');
+    end if;
+    return new;
+end;
+$$;
+revoke all on function public.avancar_versao_mensagem_sac() from public, anon, authenticated, service_role;
+
+drop trigger if exists tg_sac_caso_versao_da_mensagem on public.sac_cases;
+create trigger tg_sac_caso_versao_da_mensagem
+    before update of ultima_mensagem_em on public.sac_cases
+    for each row execute function public.avancar_versao_mensagem_sac();
+
 -- ---------------------------------------------------------------------------
 -- 4. Claim do worker de triagem.
 -- ---------------------------------------------------------------------------

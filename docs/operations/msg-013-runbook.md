@@ -63,6 +63,11 @@ cockpit: GET /api/sac/triagem?conversaId=…  → painel "Triagem"
   (`obsoleta`), e a triagem enfileirada pela mensagem nova é a que vale. A
   conclusão lê o caso `for share`: segue a ordem de commit com a inbox (provado
   com barreiras em `scripts/database-concurrency-triagem.mjs`).
+  A versão avança a cada mensagem aplicada pela inbox, mesmo no mesmo segundo
+  da anterior (o Chatwoot manda `created_at` em segundos) ou atrasada:
+  `tg_sac_caso_versao_da_mensagem` soma 1 µs quando a transação é da inbox
+  (`aplicar_evento_inbox_chatwoot` marca `orbita.aplicando_inbox`). Um UPDATE
+  sem mensagem nova não muda nada (pgTAP 7, 36–39).
 - **Orçamento.** `SAC_TRIAGEM_LIMITE_DIARIO_POR_ORGANIZACAO` execuções por dia
   (dia de Brasília), contadas sob trava por organização: em andamento e as que
   chamaram o modelo. Padrão 0: ligado sem limite, nada chama o modelo.
@@ -158,7 +163,11 @@ Ordem. Cada passo remoto exige autorização explícita, separada:
    - `outbox_eventos`: `ACCESS EXCLUSIVE` breve para trocar a check de destino
      (`not valid`), depois `SHARE UPDATE EXCLUSIVE` no `validate` (varredura;
      0 linhas hoje);
-   - `sac_cases`: `SHARE ROW EXCLUSIVE` para criar o gatilho;
+   - `sac_cases`: `SHARE ROW EXCLUSIVE` para criar os dois gatilhos;
+   - `aplicar_evento_inbox_chatwoot` renomeada para `..._base_msg013` e
+     substituída por um invólucro com a mesma assinatura e os mesmos grants
+     (`service_role`, `orbita_worker_inbox`). O worker da inbox também deve
+     estar parado;
    - `reivindicar_tentativas_outbox` recriada com o filtro de destino;
    - cria `ai_runs` e seis funções. Nenhuma linha existente muda.
 5. **Validar**, só leitura:
@@ -169,7 +178,10 @@ Ordem. Cada passo remoto exige autorização explícita, separada:
     where conrelid = 'public.outbox_eventos'::regclass
       and conname in ('ck_outbox_eventos_destination', 'ck_outbox_eventos_interno', 'outbox_eventos_destination_check');
    -- as duas novas, convalidated = true; a antiga, ausente
-   select tgname from pg_trigger where tgname = 'tg_sac_caso_enfileirar_triagem';  -- 1 linha
+   select count(*) from pg_trigger
+    where tgname in ('tg_sac_caso_enfileirar_triagem', 'tg_sac_caso_versao_da_mensagem');  -- 2
+   select has_function_privilege('orbita_worker_inbox', 'public.aplicar_evento_inbox_chatwoot(uuid,text,bigint,jsonb)', 'execute');          -- true
+   select has_function_privilege('orbita_worker_inbox', 'public.aplicar_evento_inbox_chatwoot_base_msg013(uuid,text,bigint,jsonb)', 'execute'); -- false
    select attidentity from pg_attribute where attrelid = 'public.ai_runs'::regclass and attname = 'sequencia'; -- 'a'
    select has_function_privilege('authenticated', 'public.ler_triagem_do_caso_sac(uuid,uuid)', 'execute'); -- false
    ```

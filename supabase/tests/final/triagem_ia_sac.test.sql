@@ -7,7 +7,7 @@
 
 begin;
 
-select plan(38);
+select plan(42);
 
 set local request.jwt.claim.role = 'service_role';
 
@@ -254,6 +254,30 @@ select is((select status || ':' || motivo || ':' || chamou_modelo from public.ai
           'falha:interrompida:true', '34. a execução interrompida fica registrada e conta no orçamento');
 select is((select count(*)::int from public.outbox_eventos where id = pg_temp.c('evt_6') and status = 'unknown'), 0,
           '35. nenhum trabalho de triagem vira efeito desconhecido');
+
+-- Mensagem no mesmo segundo da anterior (o Chatwoot manda created_at em segundos) e
+-- mensagem atrasada (criada antes da última): as duas são novas para a triagem.
+-- O evento da versão 10:21 é o `evt_6`, retomado no teste 33: a execução em andamento é a do token novo.
+insert into t_ctx select 'run_7', r.id from public.ai_runs r
+ where r.evento_outbox_id = pg_temp.c('evt_6') and r.status = 'em_andamento';
+insert into t_ctx values ('evt_7', pg_temp.c('evt_6'));
+select pg_temp.inbox('ec000000-0000-4000-8000-00000000000a', 'ec000000-0000-4000-8000-0000000000c1', 'm13-a-7', 9407, 90,
+                     'incoming', 'contact', 'E o código de rastreio?', '2026-11-12T10:21:00Z');
+select ok((select ultima_mensagem_em > '2026-11-12T10:21:00Z' from public.sac_cases where id = pg_temp.c('caso_a')),
+          '36. mensagem no mesmo segundo avança a versão do caso');
+select is(public.concluir_triagem_sac(pg_temp.c('run_7'), 'w-triagem', pg_temp.token(pg_temp.c('evt_7')), 'concluida', null,
+                                      pg_temp.triagem_valida(), true, 10, 10, 0::smallint, 100), 'obsoleta',
+          '37. mensagem no mesmo segundo durante a execução: resultado vira histórico');
+select is((select count(*)::int from public.outbox_eventos
+            where destination = 'interno' and payload ->> 'caso_id' = pg_temp.c('caso_a')::text and status = 'pending'
+              and (payload ->> 'mensagens_ate')::timestamptz > '2026-11-12T10:21:00Z'), 1,
+          '38. mensagem no mesmo segundo enfileira a próxima triagem');
+select pg_temp.inbox('ec000000-0000-4000-8000-00000000000a', 'ec000000-0000-4000-8000-0000000000c1', 'm13-a-8', 9408, 90,
+                     'incoming', 'contact', 'Mandei antes, chegou agora', '2026-11-12T10:15:00Z');
+select is((select count(*)::int from public.outbox_eventos
+            where destination = 'interno' and payload ->> 'caso_id' = pg_temp.c('caso_a')::text and status = 'pending'
+              and (payload ->> 'mensagens_ate')::timestamptz > '2026-11-12T10:21:00Z'), 2,
+          '39. mensagem atrasada também enfileira a próxima triagem');
 
 select * from finish();
 rollback;

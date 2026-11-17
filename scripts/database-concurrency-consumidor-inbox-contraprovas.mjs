@@ -30,7 +30,9 @@ async function sabotar(admin, assinatura, trechos) {
   };
 }
 
-const APLICAR_SIG = 'public.aplicar_evento_inbox_chatwoot(uuid,text,bigint,jsonb)';
+// A lógica da aplicação vive na função base; o nome público é o invólucro da 94
+// que marca a transação da inbox para o avanço de versão do caso.
+const APLICAR_SIG = 'public.aplicar_evento_inbox_chatwoot_base_msg013(uuid,text,bigint,jsonb)';
 const CLAIM_SIG = 'public.reivindicar_eventos_inbox_chatwoot(text,integer,integer,timestamptz)';
 
 export async function contraprovaSemFencing({ admin, clientA, clientB }) {
