@@ -25,9 +25,9 @@ import { aceitar, aplicar, comandoDaMensagem, novaOrganizacao, reivindicar } fro
  *    evento: a retomada trava o evento (primeiro passo do início) e segura a
  *    transação; a conclusão do primeiro espera no evento sem segurar a
  *    execução, a retomada fecha a execução antiga como interrompida, e a
- *    conclusão tardia recebe `posse_perdida`. Com a conclusão travando a
- *    execução antes do evento (ordem anterior), o Postgres derrubava a
- *    retomada com deadlock (40P01).
+ *    conclusão tardia recebe `posse_perdida`. Contraprova executada: com a
+ *    conclusão sabotada para travar a execução antes do evento (a ordem
+ *    anterior), a mesma corrida termina em deadlock (40P01).
  */
 
 const INICIAR = "select public.iniciar_triagem_sac($1, $2, $3, $4, 'fake', 'falso-v1', 'triagem-v1', 1) as r";
@@ -179,10 +179,23 @@ async function conclusaoContraInbox({ admin, pool }) {
   return ok({ resumo: 'conclusão × mensagem nova: com a inbox segurando o caso, a conclusão esperou (wait_event=transactionid) e gravou obsoleta; com a conclusão segurando, a inbox esperou (wait_event=transactionid), a conclusão gravou concluida para a versão antiga e a próxima triagem ficou na fila (cockpit: concluida, pendente); contraprova: a leitura sem trava via a versão antiga' });
 }
 
-async function zumbiContraRetomada({ admin, pool }) {
+const CONCLUIR_SIG = 'public.concluir_triagem_sac(uuid,text,bigint,text,text,jsonb,boolean,integer,integer,smallint,integer,integer)';
+// A ordem anterior à auditoria de 17/11: a conclusão travava a execução antes do evento.
+const LER_EVENTO_DA_EXECUCAO = '    select r.evento_outbox_id into v_evento_id from public.ai_runs r where r.id = p_run_id;';
+
+/** Troca a função por uma versão sabotada e devolve como restaurar (mesmo padrão das contraprovas do MSG-006). */
+async function sabotar(admin, assinatura, de, para) {
+  const { rows: [{ definicao }] } = await admin.query('select pg_get_functiondef($1::regprocedure) as definicao', [assinatura]);
+  if (!definicao.includes(de)) throw new Error(`Trecho da sabotagem não encontrado: ${de.slice(0, 60)}`);
+  await admin.query(definicao.replace(de, para));
+  return async () => { await admin.query(definicao); };
+}
+
+/** Um worker com a lease vencida conclui enquanto outro retoma o mesmo evento, com a retomada segurando o evento. */
+async function corridaZumbi({ admin, pool }, sufixo, base) {
   const [x, y, z] = pool;
   const { rows: [{ pid: pidX }] } = await x.query('select pg_backend_pid() as pid');
-  const alvo = await casosNovos(admin, z, 'zumbi', 1, 9980);
+  const alvo = await casosNovos(admin, z, sufixo, 1, base);
   const [triagem] = await triagensDe(z, [alvo.org]);
   const inicio = (await z.query(INICIAR, [triagem.evento_id, WORKER, triagem.fencing_token, 5])).rows[0].r;
 
@@ -208,17 +221,33 @@ async function zumbiContraRetomada({ admin, pool }) {
   }
   const concluiu = await concluindo;
   const { rows: [antiga] } = await admin.query('select status, motivo from public.ai_runs where id = $1', [inicio.run_id]);
+  return { inicio: inicio.resultado, reivindicada: retomada !== undefined, zumbiEsperou, retomou, concluiu, antiga };
+}
 
-  const certo = inicio.resultado === 'iniciada' && retomada !== undefined && zumbiEsperou
-    && retomou === 'iniciada' && concluiu === 'posse_perdida' && antiga.status === 'falha' && antiga.motivo === 'interrompida';
+async function zumbiContraRetomada(ctx) {
+  const f = await corridaZumbi(ctx, 'zumbi', 9980);
+  const certo = f.inicio === 'iniciada' && f.reivindicada && f.zumbiEsperou
+    && f.retomou === 'iniciada' && f.concluiu === 'posse_perdida' && f.antiga.status === 'falha' && f.antiga.motivo === 'interrompida';
   if (!certo) {
-    const fatos = `início ${inicio.resultado}; retomada reivindicada: ${retomada !== undefined}; conclusão esperou: ${zumbiEsperou}; `
-      + `retomada ${retomou}; conclusão ${concluiu}; execução antiga ${antiga.status}/${antiga.motivo}`;
-    return err('ConclusaoContraRetomada', `conclusão tardia e retomada não seguiram a mesma ordem de travas: ${fatos}`, {
-      inicio: inicio.resultado, zumbiEsperou, retomou, concluiu, antiga,
-    });
+    const fatos = `início ${f.inicio}; retomada reivindicada: ${f.reivindicada}; conclusão esperou: ${f.zumbiEsperou}; `
+      + `retomada ${f.retomou}; conclusão ${f.concluiu}; execução antiga ${f.antiga.status}/${f.antiga.motivo}`;
+    return err('ConclusaoContraRetomada', `conclusão tardia e retomada não seguiram a mesma ordem de travas: ${fatos}`, f);
   }
-  return ok({ resumo: 'conclusão com lease vencida × retomada: a conclusão esperou no evento (wait_event=transactionid) sem segurar a execução, a retomada iniciou e fechou a execução antiga como interrompida, e a conclusão tardia recebeu posse_perdida (sem 40P01)' });
+
+  // Contraprova: com a conclusão travando a execução antes do evento, a mesma corrida trava em ciclo.
+  const restaurar = await sabotar(ctx.admin, CONCLUIR_SIG, LER_EVENTO_DA_EXECUCAO,
+    `    perform 1 from public.ai_runs r where r.id = p_run_id for update;\n${LER_EVENTO_DA_EXECUCAO}`);
+  let c;
+  try {
+    c = await corridaZumbi(ctx, 'zumbi-contraprova', 9990);
+  } finally {
+    await restaurar();
+  }
+  if (!c.zumbiEsperou || (c.retomou !== 'erro:40P01' && c.concluiu !== 'erro:40P01')) {
+    return err('ContraprovaDeadlockNaoMordeu', `com a ordem antiga a corrida deveria terminar em 40P01: retomada ${c.retomou}; conclusão ${c.concluiu}`, c);
+  }
+  return ok({ resumo: 'conclusão com lease vencida × retomada: a conclusão esperou no evento (wait_event=transactionid) sem segurar a execução, a retomada iniciou e fechou a execução antiga como interrompida, e a conclusão tardia recebeu posse_perdida (sem 40P01); '
+    + `contraprova: com a execução travada antes do evento, a mesma corrida terminou em 40P01 (retomada ${c.retomou}, conclusão ${c.concluiu})` });
 }
 
 /**

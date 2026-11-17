@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { logger, sanitizeErrorForLog } from '../../../lib/observability/logger';
 import { esperar } from '../../chatwoot/workerInboxChatwoot';
 
-import { consumirTriagensUmaVez, type PortaDoConsumidorTriagem } from './consumidorTriagem';
+import { consumirTriagensUmaVez, MARGEM_DA_LEASE_MS, tempoMaximoPorItemMs, type PortaDoConsumidorTriagem } from './consumidorTriagem';
 import { criarModeloFalso, criarModeloGemini, MODELO_GEMINI_APROVADO } from './modelosDeTriagem';
 import type { ModeloDeTriagem } from './triagemDoCaso';
 
@@ -61,17 +61,17 @@ export function lerConfiguracaoDoWorkerTriagem(ambiente: Readonly<Record<string,
       modelo = criarModeloGemini({ chave: c.GOOGLE_GENERATIVE_AI_API_KEY, modelo: c.SAC_TRIAGEM_MODELO });
     }
   }
-  // Cada item pode fazer duas chamadas com timeout, e os itens do lote são
-  // processados um após o outro dentro da mesma lease: o lote é o que cabe nela.
-  const porItemSegundos = Math.ceil((2 * c.SAC_TRIAGEM_TIMEOUT_MS) / 1000);
-  const leaseSegundos = Math.max(c.SAC_TRIAGEM_LEASE_SECONDS, porItemSegundos + 15);
+  // Os itens do lote são processados um após o outro dentro da mesma lease, cada
+  // um com até duas chamadas e a gravação no banco: o lote é o que cabe nela.
+  const porItemMs = tempoMaximoPorItemMs(c.SAC_TRIAGEM_TIMEOUT_MS);
+  const leaseSegundos = Math.max(c.SAC_TRIAGEM_LEASE_SECONDS, Math.ceil((porItemMs + MARGEM_DA_LEASE_MS) / 1000));
   return {
     ligado,
     modelo,
     limiteDiario: c.SAC_TRIAGEM_LIMITE_DIARIO_POR_ORGANIZACAO,
     timeoutMs: c.SAC_TRIAGEM_TIMEOUT_MS,
     leaseSegundos,
-    lote: Math.max(1, Math.min(c.SAC_TRIAGEM_BATCH, Math.floor((leaseSegundos - 15) / porItemSegundos))),
+    lote: Math.max(1, Math.min(c.SAC_TRIAGEM_BATCH, Math.floor((leaseSegundos * 1000 - MARGEM_DA_LEASE_MS) / porItemMs))),
     pollMs: c.SAC_TRIAGEM_POLL_MS,
     ociosoMaxMs: Math.max(c.SAC_TRIAGEM_IDLE_MAX_MS, c.SAC_TRIAGEM_POLL_MS),
   };

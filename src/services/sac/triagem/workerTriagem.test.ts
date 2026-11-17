@@ -1,7 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { consumirTriagensUmaVez, PERSISTENCIA_POR_ITEM_MS, type PortaDoConsumidorTriagem } from './consumidorTriagem';
 import { criarPortaDoConsumidorTriagem, FilaDeTriagemIndisponivel } from './consumidorTriagemSupabase';
+import type { ModeloDeTriagem } from './triagemDoCaso';
 import { lerConfiguracaoDoWorkerTriagem } from './workerTriagem';
 
 const CHAVE = 'chave-sintetica-de-teste-000000';
@@ -40,23 +42,99 @@ describe('lerConfiguracaoDoWorkerTriagem', () => {
     expect(c.leaseSegundos).toBeGreaterThanOrEqual(135);
   });
 
-  it('o lote cabe na lease: os itens são processados um após o outro, cada um com até duas chamadas', () => {
-    // Padrão: lote 5, timeout 20 s, lease 120 s. Cinco itens de 2 × 20 s precisam de 200 s; o
-    // quarto começaria com a lease vencida e o terceiro concluiria depois dela (auditoria 17/11, R2).
-    for (const ambiente of [
-      {},
-      { SAC_TRIAGEM_BATCH: '20', SAC_TRIAGEM_TIMEOUT_MS: '60000', SAC_TRIAGEM_LEASE_SECONDS: '600' },
-      { SAC_TRIAGEM_BATCH: '1', SAC_TRIAGEM_TIMEOUT_MS: '60000', SAC_TRIAGEM_LEASE_SECONDS: '30' },
-    ]) {
-      const c = lerConfiguracaoDoWorkerTriagem(ambiente);
-      expect(c.lote).toBeGreaterThanOrEqual(1);
-      expect(c.lote * Math.ceil((2 * c.timeoutMs) / 1000) + 15).toBeLessThanOrEqual(c.leaseSegundos);
-    }
-    expect(lerConfiguracaoDoWorkerTriagem({}).lote).toBe(2);
+  it('o lote padrão é o que cabe na lease de 120 s com timeout de 20 s', () => {
+    expect(lerConfiguracaoDoWorkerTriagem({})).toMatchObject({ lote: 2, leaseSegundos: 120, timeoutMs: 20_000 });
   });
 
   it('falso: declarado como fake', () => {
     expect(lerConfiguracaoDoWorkerTriagem({ SAC_TRIAGEM_WORKER_ENABLED: 'true', SAC_TRIAGEM_PROVEDOR: 'fake' }).modelo?.provedor).toBe('fake');
+  });
+});
+
+/**
+ * Relógio virtual no pior caso: toda chamada ao modelo gasta o timeout inteiro (fora do schema e
+ * depois timeout, as duas chamadas permitidas) e cada ida ao banco gasta metade da persistência
+ * reservada. A lease conta do começo do pedido de reivindicação, o instante mais cedo possível.
+ */
+function passadaNoPiorCaso(configuracao: ReturnType<typeof lerConfiguracaoDoWorkerTriagem>, atrasoDoInicio: (i: number) => number = () => 0) {
+  let agora = 0;
+  let inicioDaLease = Number.NaN;
+  let iniciados = 0;
+  let chamadas = 0;
+  const conclusoes: number[] = [];
+  const meiaPersistencia = PERSISTENCIA_POR_ITEM_MS / 2;
+  const porta: PortaDoConsumidorTriagem = {
+    liberarLeasesVencidas: async () => 0,
+    reivindicar: async ({ limite }) => {
+      inicioDaLease = agora;
+      agora += 200;
+      return Array.from({ length: limite }, (_, i) => ({ ...ITEM, eventoId: `evento-${i}` }));
+    },
+    iniciar: async () => {
+      agora += meiaPersistencia + atrasoDoInicio(iniciados);
+      iniciados += 1;
+      return { _tag: 'Iniciada', runId: 'run', mensagens: [{ conteudo: 'Quero trocar o tamanho', criadaEm: '2026-11-17T10:00:00Z' }] };
+    },
+    concluir: async () => {
+      agora += meiaPersistencia;
+      conclusoes.push(agora);
+      return 'falha';
+    },
+  };
+  const modelo: ModeloDeTriagem = {
+    provedor: 'teste',
+    modelo: 'm',
+    gerar: async () => {
+      agora += configuracao.timeoutMs;
+      chamadas += 1;
+      return chamadas % 2 === 1 ? { _tag: 'Invalido', uso: { entrada: null, saida: null } } : { _tag: 'Timeout' };
+    },
+  };
+  return {
+    executar: () => consumirTriagensUmaVez(porta, modelo, {
+      workerId: 'w', limite: configuracao.lote, leaseSegundos: configuracao.leaseSegundos, limiteDiario: 10,
+      timeoutMs: configuracao.timeoutMs, relogio: () => agora,
+    }),
+    fim: () => ({ fimDaLease: inicioDaLease + configuracao.leaseSegundos * 1000, iniciados, conclusoes }),
+  };
+}
+
+describe('o worker não reivindica mais triagens do que conclui dentro da lease (auditoria 17/11, R2)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('em toda configuração válida, o lote inteiro conclui antes de a lease vencer', async () => {
+    // Antes: lease 55 s, timeout 1 s e lote 20 davam lote 20 (40 s só de modelo) sem tempo para o banco.
+    for (const lease of [30, 45, 55, 60, 95, 120, 300, 600]) {
+      for (const timeout of [1_000, 5_000, 20_000, 60_000]) {
+        for (const lote of [1, 5, 20]) {
+          const configuracao = lerConfiguracaoDoWorkerTriagem({
+            SAC_TRIAGEM_LEASE_SECONDS: String(lease), SAC_TRIAGEM_TIMEOUT_MS: String(timeout), SAC_TRIAGEM_BATCH: String(lote),
+          });
+          const passada = passadaNoPiorCaso(configuracao);
+          await passada.executar();
+          const { fimDaLease, iniciados, conclusoes } = passada.fim();
+          const caso = `lease ${lease}, timeout ${timeout}, lote ${lote} → lote ${configuracao.lote}, lease ${configuracao.leaseSegundos}`;
+          expect(configuracao.leaseSegundos, caso).toBeLessThanOrEqual(600);
+          expect(iniciados, caso).toBe(configuracao.lote);
+          expect(conclusoes, caso).toHaveLength(configuracao.lote);
+          expect(Math.max(...conclusoes), caso).toBeLessThanOrEqual(fimDaLease);
+        }
+      }
+    }
+  });
+
+  it('banco lento no meio do lote: o item que não cabe mais na lease nem começa', async () => {
+    const configuracao = lerConfiguracaoDoWorkerTriagem({});
+    // O primeiro início espera 40 s numa trava: o segundo item terminaria depois da lease.
+    const passada = passadaNoPiorCaso(configuracao, (i) => (i === 0 ? 40_000 : 0));
+    await passada.executar();
+    const { fimDaLease, iniciados, conclusoes } = passada.fim();
+    expect(iniciados).toBe(1);
+    expect(Math.max(...conclusoes)).toBeLessThanOrEqual(fimDaLease);
   });
 });
 

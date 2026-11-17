@@ -7,7 +7,7 @@
 
 begin;
 
-select plan(45);
+select plan(49);
 
 set local request.jwt.claim.role = 'service_role';
 
@@ -306,6 +306,33 @@ select is((select (j -> 'execucao' ->> 'status') || ':' || (j -> 'execucao' ->> 
           'falha:interrompida:false', '41. o cockpit mostra a execução órfã como interrompida, sem triagem na fila');
 select is((select count(*)::int from public.ai_runs where evento_outbox_id = pg_temp.c('evt_9') and status = 'em_andamento'), 1,
           '42. a execução órfã continua contando no orçamento do dia (pode ter chamado o modelo)');
+
+-- A órfã fica em `em_andamento` na tabela (só a leitura do cockpit a mostra como interrompida),
+-- mas não bloqueia nem distorce a próxima triagem: conta no orçamento como as duas execuções
+-- interrompidas que o início fechou, e a versão nova passa à frente no cockpit.
+create function pg_temp.triagem_mais_nova(p_conversa uuid) returns uuid language sql as $q$
+    select o.id from public.outbox_eventos o join public.sac_cases s on s.id::text = o.payload ->> 'caso_id'
+     where s.conversa_id_local = p_conversa and o.destination = 'interno'
+     order by (o.payload ->> 'mensagens_ate')::timestamptz desc limit 1;
+$q$;
+select pg_temp.inbox('ec000000-0000-4000-8000-00000000000b', 'ec000000-0000-4000-8000-0000000000d1', 'm13-b-10', 9510, 92,
+                     'incoming', 'contact', 'Pode ser o M?', '2026-11-12T11:05:00Z');
+insert into t_ctx values ('evt_10', pg_temp.triagem_mais_nova(pg_temp.c('b92')));
+select pg_temp.reivindicar();
+select is(pg_temp.iniciar(pg_temp.c('evt_10'), 3) ->> 'resultado', 'sem_orcamento',
+          '43. a órfã conta no orçamento como as interrompidas: três execuções da Org B esgotam o limite 3');
+select pg_temp.inbox('ec000000-0000-4000-8000-00000000000b', 'ec000000-0000-4000-8000-0000000000d1', 'm13-b-11', 9511, 92,
+                     'incoming', 'contact', 'Ou o G, tanto faz', '2026-11-12T11:10:00Z');
+insert into t_ctx values ('evt_11', pg_temp.triagem_mais_nova(pg_temp.c('b92')));
+select pg_temp.reivindicar();
+select is(pg_temp.iniciar(pg_temp.c('evt_11'), 4) ->> 'resultado', 'iniciada',
+          '44. a órfã não bloqueia a próxima triagem do caso (sem orçamento não conta)');
+create temp table t_depois_da_orfa on commit drop as
+    select public.ler_triagem_do_caso_sac('ec000000-0000-4000-8000-00000000000b', pg_temp.c('b92')) as j;
+select is((select (j -> 'execucao' ->> 'status') || ':' || (j ->> 'pendente') from t_depois_da_orfa), 'em_andamento:true',
+          '45. o cockpit mostra a triagem da versão nova, não a órfã');
+select is((select count(*)::int from public.ai_runs where evento_outbox_id = pg_temp.c('evt_9') and status = 'em_andamento'), 1,
+          '46. resíduo documentado: a linha da órfã continua em_andamento na tabela');
 
 select * from finish();
 rollback;

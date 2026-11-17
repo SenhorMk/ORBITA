@@ -20,6 +20,16 @@ import {
   type ModeloDeTriagem,
 } from './triagemDoCaso';
 
+/**
+ * Pior caso de um item dentro da lease: duas chamadas ao modelo, cada uma até o
+ * timeout, mais o início e a conclusão no banco (rede e espera de trava). A
+ * lease não é renovada no meio do lote, então o lote é o que cabe nela.
+ */
+export const PERSISTENCIA_POR_ITEM_MS = 5_000;
+/** Folga fixa da lease: a reivindicação e o atraso de relógio do processo. */
+export const MARGEM_DA_LEASE_MS = 15_000;
+export const tempoMaximoPorItemMs = (timeoutMs: number): number => 2 * timeoutMs + PERSISTENCIA_POR_ITEM_MS;
+
 export interface TriagemReivindicada {
   readonly eventoId: string;
   readonly organizacaoId: string;
@@ -100,11 +110,20 @@ export async function consumirTriagensUmaVez(
 ): Promise<ResumoDaPassada> {
   const relogio = opcoes.relogio ?? Date.now;
   const reaped = await porta.liberarLeasesVencidas();
+  // Medido antes do pedido: a lease começa no banco depois disso, então o prazo local é conservador.
+  const reivindicadoEm = relogio();
   const itens = await porta.reivindicar({ workerId: opcoes.workerId, limite: opcoes.limite, leaseSegundos: opcoes.leaseSegundos });
+  const prazo = reivindicadoEm + opcoes.leaseSegundos * 1000;
   const contagem = { concluidas: 0, handoffs: 0, falhas: 0, encerradas: 0 };
 
-  for (const item of itens) {
+  for (const [indice, item] of itens.entries()) {
     if (opcoes.deveParar?.()) break;
+    // Um banco lento atrasou o lote: o item que não cabe mais na lease nem começa. Começar
+    // gastaria a chamada ao modelo e terminaria em `posse_perdida`; parado, o reaper o devolve.
+    if (relogio() + tempoMaximoPorItemMs(opcoes.timeoutMs) > prazo) {
+      logger.warn('sac.triagem.lote_fora_do_prazo', { subsystem: 'queue', workerId: opcoes.workerId, restantes: itens.length - indice });
+      break;
+    }
     const base = { subsystem: 'queue' as const, correlationId: item.correlationId ?? undefined, organizacaoId: item.organizacaoId, casoId: item.casoId, eventoId: item.eventoId };
     const inicio = await porta.iniciar(item, {
       workerId: opcoes.workerId,
