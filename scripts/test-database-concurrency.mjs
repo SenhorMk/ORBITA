@@ -31,6 +31,8 @@ import { runIntegracaoConsumidorInbox } from './database-integracao-consumidor-i
 import { runEnvioChatwootRaceRehearsal } from './database-concurrency-envio-chatwoot.mjs';
 import { runControleChatwootRaceRehearsal } from './database-concurrency-controle-chatwoot.mjs';
 import { runVinculoClienteRaceRehearsal } from './database-concurrency-vinculo-cliente.mjs';
+import { runTriagemRaceRehearsal } from './database-concurrency-triagem.mjs';
+import { runAutorrespostaRaceRehearsal } from './database-concurrency-autorresposta.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -71,6 +73,8 @@ let outcomeIntegracaoConsumidor;
 let outcomeEnvioChatwoot;
 let outcomeControleChatwoot;
 let outcomeVinculoCliente;
+let outcomeTriagem;
+let outcomeAutorresposta;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -100,6 +104,8 @@ try {
     outcomeEnvioChatwoot = started;
     outcomeControleChatwoot = started;
     outcomeVinculoCliente = started;
+    outcomeTriagem = started;
+    outcomeAutorresposta = started;
   } else {
     const alinhado = await alinharStubDeAuthComProducao();
     const applied = alinhado._tag === 'err' ? alinhado : await applyCanonicalMigrations({});
@@ -130,6 +136,8 @@ try {
       outcomeEnvioChatwoot = applied;
       outcomeControleChatwoot = applied;
       outcomeVinculoCliente = applied;
+      outcomeTriagem = applied;
+      outcomeAutorresposta = applied;
     } else {
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
@@ -157,6 +165,8 @@ try {
       outcomeEnvioChatwoot = await runEnvioChatwootRaceRehearsal();
       outcomeControleChatwoot = await runControleChatwootRaceRehearsal();
       outcomeVinculoCliente = await runVinculoClienteRaceRehearsal();
+      outcomeTriagem = await runTriagemRaceRehearsal();
+      outcomeAutorresposta = await runAutorrespostaRaceRehearsal();
     }
   }
 } finally {
@@ -229,6 +239,8 @@ const relatos = [
   [outcomeEnvioChatwoot, (v) => v.relato],
   [outcomeControleChatwoot, (v) => v.relato],
   [outcomeVinculoCliente, (v) => v.relato],
+  [outcomeTriagem, (v) => v.relato],
+  [outcomeAutorresposta, (v) => v.relato],
 ];
 
 const falhou = relatos.map(([outcome, resumo]) => relatar(outcome, resumo)).includes(true);

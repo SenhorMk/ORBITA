@@ -480,6 +480,21 @@
       "order": 96,
       "path": "../database/93_retrato_do_pedido_sac.sql",
       "sha256": "a28493aa87891686085d467f5f58a71391cb60d6997ce0e150fa95a619fa5708"
+    },
+    {
+      "order": 97,
+      "path": "../database/94_triagem_ia_sac.sql",
+      "sha256": "1c97c8cab3fbb39bdd49899f3cee8215181f67375de9b327d6172ebfe7a0cbcb"
+    },
+    {
+      "order": 98,
+      "path": "../database/95_controle_autorresposta_sac.sql",
+      "sha256": "b2189c4a836ecee297d5f0a1dc4cb53c5b8fe64e314b00f4f85211e24142f7ec"
+    },
+    {
+      "order": 99,
+      "path": "../database/96_corrigir_permissoes_bling.sql",
+      "sha256": "e4394fb2b0b240630886763065dabd9c86acb61a8c34e2b4751aa476727171a6"
     }
   ],
   "references": [

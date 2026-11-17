@@ -161,7 +161,7 @@ async function vencerLease(id: string) {
 function contextoDe(organizacao: string, usuario: string): OrganizationContextResult {
   return {
     _tag: 'OrganizationContextResolved',
-    context: { userId: usuario, organizationId: organizacao, role: 'member', capabilities: new Set(['organization:access']) },
+    context: { actorId: usuario, organizationId: organizacao, role: 'member', capabilities: new Set(['organization:access']) },
   } as unknown as OrganizationContextResult;
 }
 
@@ -597,6 +597,7 @@ describe('processo worker real', () => {
     const { filho, saida } = iniciar(true);
     try {
       await ate(async () => (await evento('v2:message_created:msg:1600'))?.status === 'processed');
+      await ate(async () => saida().includes('chatwoot.inbox.termino'));
     } finally {
       filho.kill('SIGKILL');
       await fim(filho);
@@ -638,5 +639,114 @@ describe('processo worker real', () => {
     expect(await contar('sac_cases', 'evento_origem_id = $1', final.id)).toBe(1);
     expect(await auditoriasDoCaso(final.caso_id)).toBe(1);
     expect(await contar('chatwoot_messages', "organizacao_id = $1 and id_externo = '1700'", ORG_A)).toBe(1);
+  });
+});
+
+describe('MVP: mensagem → rascunho revisado → entrega simulada', () => {
+  it('processa duas mensagens rápidas e uma atrasada com retomada, revisão e um só recibo', async () => {
+    const { consumirTriagensUmaVez } = await import('@/services/sac/triagem/consumidorTriagem');
+    const { criarPortaDoConsumidorTriagem } = await import('@/services/sac/triagem/consumidorTriagemSupabase');
+    const { criarModeloFalso } = await import('@/services/sac/triagem/modelosDeTriagem');
+    const { lerContextoDaResposta } = await import('@/services/sac/contextoDaResposta');
+    const { gerarResposta } = await import('@/services/sac/gerarResposta');
+    const { modeloDaResposta } = await import('@/services/sac/modeloDaResposta');
+    const { listarEnviosDaConversa, registrarEnvio } = await import('./envioChatwoot');
+    const { consumirEnviosUmaVez } = await import('./consumidorEnvioChatwoot');
+    const { criarPortaDoConsumidorEnvio } = await import('./consumidorEnvioChatwootSupabase');
+    const { organizationContextToScope } = await import('@/lib/verifiedOrganizationScope');
+
+    await admin.query("update public.outbox_eventos set next_retry_at = 'infinity' where destination = 'interno' and status in ('pending', 'failed_transient')");
+    const conversaExterna = 1410;
+    const agora = Math.floor(Date.now() / 1000) - 30;
+    for (const id of [14101, 14102]) {
+      expect((await entregar(mensagem(id, conversaExterna, 141, {
+        content: 'Preciso acompanhar o meu pedido', created_at: agora,
+      }))).status).toBe(200);
+    }
+    expect(await consumir('mvp-inbox')).toMatchObject({ falhas: 0 });
+    const { rows: [{ id_local: conversa }] } = await admin.query(
+      'select id_local from public.chatwoot_conversations where conexao_id = $1 and id_externo = $2',
+      [CONEXAO_A, String(conversaExterna)]);
+    const escopo = (org: string, usuario: string) => {
+      const sessao = contextoDe(org, usuario);
+      if (sessao._tag !== 'OrganizationContextResolved') throw new Error('Sessão sintética inválida');
+      return organizationContextToScope(sessao.context);
+    };
+    const a = escopo(ORG_A, DONO_A);
+    const b = escopo(ORG_B, DONO_B);
+    const ler = () => lerContextoDaResposta(cliente, a, conversa);
+    const fake = modeloDaResposta({ SAC_RESPOSTA_PROVEDOR: 'fake' })!;
+    const triar = (workerId: string) => consumirTriagensUmaVez(criarPortaDoConsumidorTriagem(cliente), criarModeloFalso(),
+      { workerId, limite: 5, leaseSegundos: 60, limiteDiario: 50, timeoutMs: 5000 });
+
+    expect(await triar('mvp-triagem')).toMatchObject({ concluidas: 1 });
+    expect(await lerContextoDaResposta(cliente, b, conversa)).toBeNull();
+    expect(await gerarResposta(ler, { ...fake, gerar: async () => { throw new Error('falha sintética'); } }))
+      .toEqual({ estado: 'modelo_indisponivel' });
+    expect(await gerarResposta(ler, { ...fake, gerar: async () => ({ inesperado: true }) }))
+      .toEqual({ estado: 'resposta_invalida' });
+
+    const corrida = await gerarResposta(ler, {
+      ...fake,
+      async gerar() {
+        expect((await entregar(mensagem(14103, conversaExterna, 141, {
+          content: 'É sobre o meu pedido', created_at: agora - 20,
+        }))).status).toBe(200);
+        const { rows: [posse] } = await admin.query(
+          "select evento_id from public.reivindicar_eventos_inbox_chatwoot('mvp-antes-da-queda', 1, 30, 'epoch')");
+        await vencerLease(posse.evento_id);
+        expect(await consumir('mvp-reiniciado')).toMatchObject({ falhas: 0 });
+        return { texto: 'Rascunho da versão anterior' };
+      },
+    });
+    expect(corrida).toEqual({ estado: 'contexto_mudou' });
+    expect(await contar('sac_cases', 'conversa_id_local = $1', conversa)).toBe(1);
+    expect(await contar('chatwoot_messages', 'conversa_id_local = $1', conversa)).toBe(3);
+    expect(await triar('mvp-triagem-retomada')).toMatchObject({ concluidas: 1 });
+
+    const sessao = await import('@/lib/requestOrganizationContext');
+    const resolver = vi.spyOn(sessao, 'resolveActiveRequestOrganizationContext');
+    const { POST } = await import('@/app/api/sac/resposta/route');
+    const pedirRascunho = () => POST(new Request(`https://orbita.test/api/sac/resposta?conversaId=${conversa}`, { method: 'POST' }));
+    vi.stubEnv('SAC_RESPOSTA_PROVEDOR', 'fake');
+    const rascunho = await (async () => {
+      try {
+        resolver.mockResolvedValueOnce(contextoDe(ORG_B, DONO_B));
+        expect(await (await pedirRascunho()).json()).toEqual({ estado: 'aguardando_contexto' });
+        resolver.mockResolvedValueOnce(contextoDe(ORG_A, DONO_A));
+        const resposta = await pedirRascunho();
+        expect(resposta.status).toBe(200);
+        expect(resposta.headers.get('cache-control')).toBe('no-store');
+        return resposta.json();
+      } finally {
+        resolver.mockRestore();
+        vi.unstubAllEnvs();
+      }
+    })();
+    expect(rascunho).toMatchObject({ estado: 'rascunho', provedor: 'fake', texto: expect.stringContaining('pedido') });
+    if (rascunho.estado !== 'rascunho') throw new Error('Rascunho ausente');
+    expect(await listarEnviosDaConversa(cliente, a, conversa)).toEqual([]);
+
+    const comando = { conversaId: conversa, commandId: crypto.randomUUID(), conteudo: rascunho.texto };
+    expect(await registrarEnvio(cliente, a, comando)).toMatchObject({ _tag: 'Registrado', envio: { duplicado: false } });
+    expect(await registrarEnvio(cliente, a, comando)).toMatchObject({ _tag: 'Registrado', envio: { duplicado: true } });
+    const { rows: [controle] } = await admin.query(
+      'select ownership_mode from public.chatwoot_conversa_controle where conversa_id_local = $1', [conversa]);
+    expect(controle.ownership_mode).toBe('HUMAN');
+
+    const recibo = vi.fn(async () => ({
+      _tag: 'ChatwootSuccess' as const, data: { id: 14104, created_at: new Date().toISOString() },
+    }));
+    const executarEnvio = (workerId: string) => consumirEnviosUmaVez({
+      ...criarPortaDoConsumidorEnvio(cliente),
+      resolverCanal: async () => ({ _tag: 'Canal', canal: { sendMessage: recibo, sendPrivateNote: recibo } }),
+    }, { workerId, limite: 5, leaseSegundos: 60, criadosDesde: new Date((agora - 5) * 1000).toISOString() });
+    expect(await executarEnvio('mvp-envio')).toMatchObject({ enviados: 1 });
+    expect(await executarEnvio('mvp-envio-reiniciado')).toMatchObject({ reivindicados: 0 });
+    expect(recibo).toHaveBeenCalledTimes(1);
+    expect(await listarEnviosDaConversa(cliente, a, conversa)).toEqual([
+      expect.objectContaining({ commandId: comando.commandId, estado: 'enviado', conteudo: rascunho.texto }),
+    ]);
+    expect(await listarEnviosDaConversa(cliente, b, conversa)).toEqual([]);
   });
 });

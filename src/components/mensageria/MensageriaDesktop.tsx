@@ -13,6 +13,8 @@ import type { MensagemOtimista } from './estadoDaConversa';
 import { useMensageria, type Mensageria } from './useMensageria';
 import { Aviso } from './Aviso';
 import { BarraDoAtendimento } from './BarraDoAtendimento';
+import { PainelDaTriagem } from './PainelDaTriagem';
+import { PainelDaResposta } from './PainelDaResposta';
 import { PainelDoCliente } from './PainelDoCliente';
 
 type Filtro = 'open' | 'resolved' | 'all';
@@ -538,6 +540,14 @@ function Conversa({ mensageria, fetchWithAuth }: { readonly mensageria: Mensager
       <CabecalhoDaConversa mensageria={mensageria} selecionada={selecionada} />
       <Historico mensageria={mensageria} />
       <BarraDoAtendimento fetchWithAuth={fetchWithAuth} mensageria={mensageria} />
+      <PainelDaTriagem fetchWithAuth={fetchWithAuth} conversaId={selecionada.id_local} />
+      <PainelDaResposta
+        key={JSON.stringify([selecionada.id_local, mensageria.historico.map((m) => [m.id_local, m.updated_at])])}
+        fetchWithAuth={fetchWithAuth}
+        conversaId={selecionada.id_local}
+        compositorOcupado={mensageria.rascunho.trim() !== ''}
+        usar={mensageria.escreverRascunho}
+      />
       <PainelDoCliente fetchWithAuth={fetchWithAuth} conversaId={selecionada.id_local} />
       <Compositor mensageria={mensageria} />
     </section>

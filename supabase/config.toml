@@ -157,7 +157,10 @@ schema_paths = [
   "../database/90_envio_chatwoot_por_consumidor.sql",
   "../database/91_controle_atendimento_chatwoot.sql",
   "../database/92_vinculo_cliente_conversa.sql",
-  "../database/93_retrato_do_pedido_sac.sql"
+  "../database/93_retrato_do_pedido_sac.sql",
+  "../database/94_triagem_ia_sac.sql",
+  "../database/95_controle_autorresposta_sac.sql",
+  "../database/96_corrigir_permissoes_bling.sql"
 ]
 
 [db.seed]

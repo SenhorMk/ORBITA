@@ -120,6 +120,7 @@ const LinhaDoEnvioSchema = z.object({
     status: z.string(),
     motivo_bloqueio: z.string().nullable(),
     resolucao: z.string().nullable(),
+    last_error: z.string().nullable(),
   }),
 });
 
@@ -134,7 +135,7 @@ export async function listarEnviosDaConversa(
 ): Promise<readonly EnvioDaConversa[]> {
   const { data, error } = await supabase
     .from('chatwoot_envios')
-    .select('id, command_id, conteudo, mensagem_id_local, invalidado_em, created_at, outbox_eventos!fk_chatwoot_envios_evento(status, motivo_bloqueio, resolucao)')
+    .select('id, command_id, conteudo, mensagem_id_local, invalidado_em, created_at, outbox_eventos!fk_chatwoot_envios_evento(status, motivo_bloqueio, resolucao, last_error)')
     .eq('organizacao_id', scope.organizationId)
     .eq('conversa_id_local', conversaId)
     // Notas privadas não são respostas à cliente (MSG-009).
@@ -143,19 +144,26 @@ export async function listarEnviosDaConversa(
     .limit(50);
   const linhas = LinhaDoEnvioSchema.array().safeParse(data ?? []);
   if (error || !linhas.success) throw new RegistroDeEnvioIndisponivel();
-  return linhas.data.map((linha) => ({
-    id: linha.id,
-    commandId: linha.command_id,
-    conteudo: linha.conteudo,
-    estado: estadoDoEnvio(linha.outbox_eventos.status, Boolean(linha.invalidado_em)),
-    explicacao: linha.invalidado_em
-      ? 'Não enviada: o atendimento mudou de responsável antes do envio.'
-      : explicarEstado({
-      status: linha.outbox_eventos.status,
-      motivoBloqueio: linha.outbox_eventos.motivo_bloqueio,
-      resolucao: linha.outbox_eventos.resolucao,
-    }),
-    mensagemIdLocal: linha.mensagem_id_local,
-    criadoEm: linha.created_at,
-  }));
+  return linhas.data.map((linha) => {
+    const outbox = linha.outbox_eventos;
+    const pausada = outbox.status === 'dead_letter' && outbox.last_error === 'autorresposta_invalidada';
+    const explicacao = explicarEstado({
+      status: outbox.status,
+      motivoBloqueio: outbox.motivo_bloqueio,
+      resolucao: outbox.resolucao,
+    });
+    return {
+      id: linha.id,
+      commandId: linha.command_id,
+      conteudo: linha.conteudo,
+      estado: estadoDoEnvio(outbox.status, pausada || Boolean(linha.invalidado_em)),
+      explicacao: pausada
+        ? 'Resposta automática invalidada pela política antes do envio.'
+        : linha.invalidado_em
+          ? 'Não enviada: o atendimento mudou de responsável antes do envio.'
+          : explicacao,
+      mensagemIdLocal: linha.mensagem_id_local,
+      criadoEm: linha.created_at,
+    };
+  });
 }
