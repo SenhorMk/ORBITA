@@ -44,11 +44,21 @@ describe('PainelDaTriagem', () => {
     ['handoff', 'sem_orcamento', /Limite diário/u],
     ['handoff', 'schema_invalido', /fora do formato/u],
     ['handoff', 'entrada_bloqueada', /não foi enviada à IA/u],
-    ['falha', 'limite_do_provedor', /volta a ser tentada/u],
+    ['falha', 'limite_do_provedor', /pediu para esperar/u],
   ])('%s por %s: o motivo aparece, sem resultado', async (status, motivo, texto) => {
     render(<PainelDaTriagem fetchWithAuth={vi.fn(async () => resposta(execucao({ status, motivo, triagem: null })))} conversaId={CONVERSA} />);
     expect(await screen.findByRole('status')).toHaveTextContent(texto);
     expect(screen.queryByLabelText('Intenção')).not.toBeInTheDocument();
+  });
+
+  it('falha sem tentativa na fila não promete repetição; com tentativa na fila, avisa', async () => {
+    const semFila = render(<PainelDaTriagem fetchWithAuth={vi.fn(async () => resposta(execucao({ status: 'falha', motivo: 'interrompida', triagem: null })))} conversaId={CONVERSA} />);
+    const aviso = await screen.findByRole('status');
+    expect(aviso).toHaveTextContent('A triagem foi interrompida.');
+    expect(aviso).not.toHaveTextContent(/fila|refeita|tentada/u);
+    semFila.unmount();
+    render(<PainelDaTriagem fetchWithAuth={vi.fn(async () => resposta(execucao({ status: 'falha', motivo: 'timeout', triagem: null }), true))} conversaId={CONVERSA} />);
+    expect(await screen.findByRole('status')).toHaveTextContent(/demorou demais\. Há outra triagem na fila\./u);
   });
 
   it('na fila, sem execução: diz que está na fila', async () => {

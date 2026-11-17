@@ -7,7 +7,7 @@
 
 begin;
 
-select plan(42);
+select plan(45);
 
 set local request.jwt.claim.role = 'service_role';
 
@@ -278,6 +278,34 @@ select is((select count(*)::int from public.outbox_eventos
             where destination = 'interno' and payload ->> 'caso_id' = pg_temp.c('caso_a')::text and status = 'pending'
               and (payload ->> 'mensagens_ate')::timestamptz > '2026-11-12T10:21:00Z'), 2,
           '39. mensagem atrasada também enfileira a próxima triagem');
+
+-- Queda do worker na última tentativa: o evento esgota as tentativas e vai a
+-- dead_letter com a execução ainda em andamento. Ninguém mais a fecha, então o
+-- cockpit não pode mostrá-la como em andamento (auditoria 17/11, R1).
+select pg_temp.inbox('ec000000-0000-4000-8000-00000000000b', 'ec000000-0000-4000-8000-0000000000d1', 'm13-b-9', 9509, 92,
+                     'incoming', 'contact', 'Quero trocar o tamanho', '2026-11-12T11:00:00Z');
+insert into t_ctx values ('b92', pg_temp.conversa('ec000000-0000-4000-8000-0000000000d1', 92));
+insert into t_ctx select 'evt_9', o.id from public.outbox_eventos o join public.sac_cases s on s.id::text = o.payload ->> 'caso_id'
+ where s.conversa_id_local = pg_temp.c('b92') and o.destination = 'interno';
+create function pg_temp.queda_do_worker() returns void language plpgsql as $q$
+begin
+    perform pg_temp.reivindicar();
+    perform pg_temp.iniciar(pg_temp.c('evt_9'), 10);
+    update public.outbox_eventos set lease_expires_at = now() - interval '1 second' where id = pg_temp.c('evt_9');
+    perform public.liberar_leases_expirados_outbox();
+end;
+$q$;
+select pg_temp.queda_do_worker();
+select pg_temp.queda_do_worker();
+select pg_temp.queda_do_worker();
+select is((select status from public.outbox_eventos where id = pg_temp.c('evt_9')), 'dead_letter',
+          '40. três quedas esgotam as tentativas da triagem');
+create temp table t_orfa on commit drop as
+    select public.ler_triagem_do_caso_sac('ec000000-0000-4000-8000-00000000000b', pg_temp.c('b92')) as j;
+select is((select (j -> 'execucao' ->> 'status') || ':' || (j -> 'execucao' ->> 'motivo') || ':' || (j ->> 'pendente') from t_orfa),
+          'falha:interrompida:false', '41. o cockpit mostra a execução órfã como interrompida, sem triagem na fila');
+select is((select count(*)::int from public.ai_runs where evento_outbox_id = pg_temp.c('evt_9') and status = 'em_andamento'), 1,
+          '42. a execução órfã continua contando no orçamento do dia (pode ter chamado o modelo)');
 
 select * from finish();
 rollback;

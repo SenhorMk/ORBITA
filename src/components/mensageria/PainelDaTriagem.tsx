@@ -35,11 +35,13 @@ const SEM_TRIAGEM: Record<MotivoSemTriagem, string> = {
   recusa: 'A IA se recusou a classificar esta conversa. Leia a conversa.',
   entrada_bloqueada: 'A mensagem tinha dado sensível (como senha ou chave) ou não tinha texto; não foi enviada à IA.',
   sem_orcamento: 'Limite diário de triagens da organização atingido. Leia a conversa.',
-  limite_do_provedor: 'O provedor de IA pediu para esperar. A triagem volta a ser tentada sozinha.',
-  timeout: 'A IA demorou demais. A triagem volta a ser tentada sozinha.',
-  erro_do_provedor: 'O provedor de IA falhou. A triagem volta a ser tentada sozinha.',
+  // Repetir só acontece enquanto há tentativa na fila; quem diz isso é o
+  // "Há outra triagem na fila", não o motivo (esgotadas, não há nova tentativa).
+  limite_do_provedor: 'O provedor de IA pediu para esperar.',
+  timeout: 'A IA demorou demais.',
+  erro_do_provedor: 'O provedor de IA falhou.',
   caso_mudou: 'Chegou mensagem nova durante a triagem; uma nova triagem foi pedida.',
-  interrompida: 'A triagem foi interrompida e será refeita.',
+  interrompida: 'A triagem foi interrompida.',
 };
 
 type Estado = { readonly caso: RespostaDaTriagem['caso'] } | { readonly erro: string };

@@ -535,17 +535,26 @@ declare
     v_status  text := p_status;
     v_motivo  text := p_motivo;
     v_evento  text;
+    v_evento_id uuid;
 begin
     if p_status is null or p_status not in ('concluida', 'handoff', 'falha') then
         raise exception 'MSG-013: desfecho de triagem invalido.' using errcode = '22023';
     end if;
 
-    select * into v_run from public.ai_runs r where r.id = p_run_id for update;
-    if v_run.id is null or v_run.status <> 'em_andamento' or v_run.fencing_token <> p_fencing_token then
+    -- Travas na mesma ordem do início e do reaper: evento, depois execução. Na
+    -- ordem inversa, um worker cuja lease venceu concluindo enquanto outro
+    -- retoma o evento travava em ciclo (40P01). O evento da execução é imutável,
+    -- então lê-lo sem trava é seguro.
+    select r.evento_outbox_id into v_evento_id from public.ai_runs r where r.id = p_run_id;
+    if v_evento_id is null then
         return 'posse_perdida';
     end if;
-    v_evt := public.sac_triagem_evento_em_posse(v_run.evento_outbox_id, p_worker_id, p_fencing_token);
+    v_evt := public.sac_triagem_evento_em_posse(v_evento_id, p_worker_id, p_fencing_token);
     if v_evt.id is null then
+        return 'posse_perdida';
+    end if;
+    select * into v_run from public.ai_runs r where r.id = p_run_id for update;
+    if v_run.status <> 'em_andamento' or v_run.fencing_token <> p_fencing_token then
         return 'posse_perdida';
     end if;
 
@@ -634,6 +643,17 @@ begin
                       and o.event_type = 'sac.triagem' and o.payload ->> 'caso_id' = v_caso.id::text
                       and o.status in ('pending', 'processing', 'failed_transient'))
       into v_pendente;
+
+    -- Em andamento só enquanto o evento está em posse do worker desta execução.
+    -- Queda na última tentativa leva o evento a `dead_letter` e ninguém mais
+    -- fecha a execução: o cockpit mostraria "em andamento" para sempre.
+    if v_run.status = 'em_andamento' and not exists (
+        select 1 from public.outbox_eventos o
+         where o.organizacao_id = p_organizacao_id and o.id = v_run.evento_outbox_id
+           and o.status = 'processing' and o.fencing_token = v_run.fencing_token) then
+        v_run.status := 'falha';
+        v_run.motivo := 'interrompida';
+    end if;
 
     return jsonb_build_object(
         'resultado', 'caso',

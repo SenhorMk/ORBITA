@@ -21,6 +21,13 @@ import { aceitar, aplicar, comandoDaMensagem, novaOrganizacao, reivindicar } fro
  *    mensagem nova enfileira a próxima triagem. Contraprova: a leitura sem
  *    trava (como antes da correção) via a versão antiga com a mensagem nova
  *    pronta para confirmar.
+ * 5. worker com a lease vencida concluindo × outro worker retomando o mesmo
+ *    evento: a retomada trava o evento (primeiro passo do início) e segura a
+ *    transação; a conclusão do primeiro espera no evento sem segurar a
+ *    execução, a retomada fecha a execução antiga como interrompida, e a
+ *    conclusão tardia recebe `posse_perdida`. Com a conclusão travando a
+ *    execução antes do evento (ordem anterior), o Postgres derrubava a
+ *    retomada com deadlock (40P01).
  */
 
 const INICIAR = "select public.iniciar_triagem_sac($1, $2, $3, $4, 'fake', 'falso-v1', 'triagem-v1', 1) as r";
@@ -172,6 +179,48 @@ async function conclusaoContraInbox({ admin, pool }) {
   return ok({ resumo: 'conclusão × mensagem nova: com a inbox segurando o caso, a conclusão esperou (wait_event=transactionid) e gravou obsoleta; com a conclusão segurando, a inbox esperou (wait_event=transactionid), a conclusão gravou concluida para a versão antiga e a próxima triagem ficou na fila (cockpit: concluida, pendente); contraprova: a leitura sem trava via a versão antiga' });
 }
 
+async function zumbiContraRetomada({ admin, pool }) {
+  const [x, y, z] = pool;
+  const { rows: [{ pid: pidX }] } = await x.query('select pg_backend_pid() as pid');
+  const alvo = await casosNovos(admin, z, 'zumbi', 1, 9980);
+  const [triagem] = await triagensDe(z, [alvo.org]);
+  const inicio = (await z.query(INICIAR, [triagem.evento_id, WORKER, triagem.fencing_token, 5])).rows[0].r;
+
+  // A lease do primeiro worker vence; o reaper devolve o evento e outro worker o reivindica.
+  await admin.query("update public.outbox_eventos set lease_expires_at = now() - interval '1 second' where id = $1", [triagem.evento_id]);
+  await admin.query('select public.liberar_leases_expirados_outbox()');
+  await admin.query('update public.outbox_eventos set next_retry_at = now() where id = $1', [triagem.evento_id]);
+  const { rows: retomadas } = await z.query("select * from public.reivindicar_triagens_sac('w-retomada', 20, 120)");
+  const retomada = retomadas.find((linha) => linha.evento_id === triagem.evento_id);
+
+  await y.query('begin');
+  await y.query('select id from public.outbox_eventos where id = $1 for update', [triagem.evento_id]);
+  const concluindo = x.query(CONCLUIR, [inicio.run_id, WORKER, triagem.fencing_token])
+    .then((r) => r.rows[0].r, (erro) => `erro:${erro.code}`);
+  const zumbiEsperou = await esperarAdvisory(admin, pidX, 'transactionid');
+  let retomou;
+  try {
+    retomou = (await y.query(INICIAR, [triagem.evento_id, 'w-retomada', retomada?.fencing_token, 5])).rows[0].r.resultado;
+    await y.query('commit');
+  } catch (erro) {
+    retomou = `erro:${erro.code}`;
+    await y.query('rollback');
+  }
+  const concluiu = await concluindo;
+  const { rows: [antiga] } = await admin.query('select status, motivo from public.ai_runs where id = $1', [inicio.run_id]);
+
+  const certo = inicio.resultado === 'iniciada' && retomada !== undefined && zumbiEsperou
+    && retomou === 'iniciada' && concluiu === 'posse_perdida' && antiga.status === 'falha' && antiga.motivo === 'interrompida';
+  if (!certo) {
+    const fatos = `início ${inicio.resultado}; retomada reivindicada: ${retomada !== undefined}; conclusão esperou: ${zumbiEsperou}; `
+      + `retomada ${retomou}; conclusão ${concluiu}; execução antiga ${antiga.status}/${antiga.motivo}`;
+    return err('ConclusaoContraRetomada', `conclusão tardia e retomada não seguiram a mesma ordem de travas: ${fatos}`, {
+      inicio: inicio.resultado, zumbiEsperou, retomou, concluiu, antiga,
+    });
+  }
+  return ok({ resumo: 'conclusão com lease vencida × retomada: a conclusão esperou no evento (wait_event=transactionid) sem segurar a execução, a retomada iniciou e fechou a execução antiga como interrompida, e a conclusão tardia recebeu posse_perdida (sem 40P01)' });
+}
+
 /**
  * @returns {Promise<object>} Resultado tagueado do rehearsal.
  */
@@ -195,7 +244,7 @@ export async function runTriagemRaceRehearsal() {
     const pool = await Promise.all(Array.from({ length: 8 }, novoCliente));
     const ctx = { admin, pool };
     const resumos = [];
-    for (const etapa of [travaSerializa, corridaPorOrganizacao, conclusaoContraInbox]) {
+    for (const etapa of [travaSerializa, corridaPorOrganizacao, conclusaoContraInbox, zumbiContraRetomada]) {
       const resultado = await etapa(ctx);
       if (resultado._tag === 'err') return resultado;
       resumos.push(resultado.value.resumo);

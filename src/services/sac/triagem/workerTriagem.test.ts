@@ -40,6 +40,21 @@ describe('lerConfiguracaoDoWorkerTriagem', () => {
     expect(c.leaseSegundos).toBeGreaterThanOrEqual(135);
   });
 
+  it('o lote cabe na lease: os itens são processados um após o outro, cada um com até duas chamadas', () => {
+    // Padrão: lote 5, timeout 20 s, lease 120 s. Cinco itens de 2 × 20 s precisam de 200 s; o
+    // quarto começaria com a lease vencida e o terceiro concluiria depois dela (auditoria 17/11, R2).
+    for (const ambiente of [
+      {},
+      { SAC_TRIAGEM_BATCH: '20', SAC_TRIAGEM_TIMEOUT_MS: '60000', SAC_TRIAGEM_LEASE_SECONDS: '600' },
+      { SAC_TRIAGEM_BATCH: '1', SAC_TRIAGEM_TIMEOUT_MS: '60000', SAC_TRIAGEM_LEASE_SECONDS: '30' },
+    ]) {
+      const c = lerConfiguracaoDoWorkerTriagem(ambiente);
+      expect(c.lote).toBeGreaterThanOrEqual(1);
+      expect(c.lote * Math.ceil((2 * c.timeoutMs) / 1000) + 15).toBeLessThanOrEqual(c.leaseSegundos);
+    }
+    expect(lerConfiguracaoDoWorkerTriagem({}).lote).toBe(2);
+  });
+
   it('falso: declarado como fake', () => {
     expect(lerConfiguracaoDoWorkerTriagem({ SAC_TRIAGEM_WORKER_ENABLED: 'true', SAC_TRIAGEM_PROVEDOR: 'fake' }).modelo?.provedor).toBe('fake');
   });
