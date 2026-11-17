@@ -145,9 +145,8 @@ Ordem. Cada passo remoto exige autorização explícita, separada:
    - feito: `supabase/config.toml` com a 93 e depois a 94; teste de drift com
      98 arquivos e 97 migrations; ledger regravado (`db:drift:check` verde);
      linhas 28f e 28g do inventário presentes;
-   - falta: `npm run db:catalog:rebuild` (usa o laboratório Docker; o
-     fingerprint fica `PENDENTE-...` até lá, e o `test:db` reprova de propósito)
-     e `npm run test:db` com a cadeia 93 → 94;
+   - feito também: `npm run db:catalog:rebuild` (fingerprint `173ee942…`) e
+     `npm run test:db` com a cadeia 93 → 94, dois ciclos limpos;
    - depois: `git push` comum (autorização separada) e CI verde no novo HEAD.
 3. **Conferir o alvo**, só leitura, a partir do #149 integrado e com a 93 já
    aplicada: `npm run db:remoto:status` tem de planejar só
