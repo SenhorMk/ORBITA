@@ -219,6 +219,26 @@ describe('Chatwoot per-connection webhook: security and idempotent inbox', () =>
     expect(res.status).toBe(404);
   });
 
+  it.each(['conversation_created', 'conversation_updated'])('aceita %s assinado apenas como evidência da inbox', async (event) => {
+    mockInboxRegisterResult = { evento_id: 'evt-a1', status: 'received', is_duplicate: false, cached_response: null };
+    mockRpc.mockClear();
+    const body = JSON.stringify({ event, account: { id: 1 }, id: 17, inbox_id: 7, status: 'open',
+      created_at: 1793605011, meta: { assignee: event === 'conversation_created' ? null : { id: 13 } } });
+    const signed = signBody(SECRET_A, body);
+    expect((await postWebhook(CONEXAO_A, body.replace('"open"', '"pending"'), signed)).status).toBe(401);
+    expect((await postWebhook(CONEXAO_A, body, signed)).status).toBe(200);
+    expect(mockRpc.mock.calls.map(([fn]) => fn)).not.toContain('iniciar_ai_first_chatwoot');
+    expect(mockRpc).toHaveBeenCalledWith('aceitar_entrega_inbox_chatwoot', expect.objectContaining({
+      p_event_type: event,
+      p_organizacao_id: ORG_A,
+      p_conexao_id: CONEXAO_A,
+      p_inbox_id: 7,
+      p_payload: expect.objectContaining({
+        conversation: expect.objectContaining({ id: 17, assignee_id: event === 'conversation_created' ? null : 13 }),
+      }),
+    }));
+  });
+
   it('rejects a request without a signature header (fail-closed)', async () => {
     const body = JSON.stringify({ event: 'message_created', account: { id: 1 } });
     const res = await postWebhook(CONEXAO_A, body);
