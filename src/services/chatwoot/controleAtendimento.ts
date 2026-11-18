@@ -38,6 +38,7 @@ export type ResultadoDoControle =
   | { readonly _tag: 'ConflitoDeComando' }
   | { readonly _tag: 'ConversaNaoEncontrada' }
   | { readonly _tag: 'SemVinculo' }
+  | { readonly _tag: 'AutomacaoInativa' }
   | { readonly _tag: 'SemCapacidade' };
 
 export class ControleIndisponivel extends Error {
@@ -52,7 +53,7 @@ const versao = z.coerce.number().int().nonnegative();
 const LinhaDoControleSchema = z.object({
   resultado: z.enum([
     'aplicado', 'existente', 'conflito_versao', 'conflito_comando', 'transicao_invalida',
-    'sem_vinculo', 'sem_capacidade', 'conversa_inexistente',
+    'sem_vinculo', 'sem_capacidade', 'conversa_inexistente', 'automacao_inativa',
   ]),
   ownership_mode: z.enum(MODOS_DE_ATENDIMENTO).nullable(),
   responsavel_id: z.string().uuid().nullable(),
@@ -113,6 +114,7 @@ export async function alterarControle(
     case 'conversa_inexistente': return { _tag: 'ConversaNaoEncontrada' };
     case 'sem_vinculo': return { _tag: 'SemVinculo' };
     case 'sem_capacidade': return { _tag: 'SemCapacidade' };
+    case 'automacao_inativa': return { _tag: 'AutomacaoInativa' };
   }
 }
 

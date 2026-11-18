@@ -62,10 +62,11 @@ async function escopoDaSessao(request: Request) {
 }
 
 /** O controle e o que a tela pode oferecer a partir dele. */
-function comPermissoes(scope: VerifiedOrganizationScope, controle: ControleDaConversa) {
+async function comPermissoes(scope: VerifiedOrganizationScope, controle: ControleDaConversa, conversaId: string) {
+  const ativa = await automacaoDoAtendimentoAtiva(supabaseServer, scope, conversaId);
   return {
     controle,
-    permissoes: permissoesDoControle(controle, escopoTemCapacidade(scope, CAPACIDADE_DE_DEVOLVER), automacaoDoAtendimentoAtiva()),
+    permissoes: permissoesDoControle(controle, escopoTemCapacidade(scope, CAPACIDADE_DE_DEVOLVER), ativa),
   };
 }
 
@@ -85,7 +86,7 @@ export async function POST(request: Request) {
   if (corpo.acao === 'devolver' && !escopoTemCapacidade(sessao.scope, CAPACIDADE_DE_DEVOLVER)) {
     return recusar('Sem permissão para devolver o atendimento à automação.', 403);
   }
-  if (corpo.acao === 'devolver' && !automacaoDoAtendimentoAtiva()) {
+  if (corpo.acao === 'devolver' && !await automacaoDoAtendimentoAtiva(supabaseServer, sessao.scope, corpo.conversaId)) {
     return recusar('A automação ainda não responde conversas: devolver deixaria a conversa sem atendente.', 409,
       { motivo: 'automacao_inativa' });
   }
@@ -103,15 +104,17 @@ export async function POST(request: Request) {
         return NextResponse.json({
           success: true,
           duplicado: resultado.duplicado,
-          ...comPermissoes(sessao.scope, resultado.controle),
+          ...await comPermissoes(sessao.scope, resultado.controle, corpo.conversaId),
           invalidados: resultado.invalidados,
           emVoo: resultado.emVoo,
           notaRegistrada: resultado.notaRegistrada,
         });
       case 'ConflitoDeVersao':
-        return recusar('O atendimento mudou desde que você abriu a conversa.', 409, { motivo: 'conflito_versao', ...comPermissoes(sessao.scope, resultado.controle) });
+        return recusar('O atendimento mudou desde que você abriu a conversa.', 409, { motivo: 'conflito_versao', ...await comPermissoes(sessao.scope, resultado.controle, corpo.conversaId) });
       case 'TransicaoInvalida':
-        return recusar('Esta ação não vale para o estado atual do atendimento.', 409, { motivo: 'transicao_invalida', ...comPermissoes(sessao.scope, resultado.controle) });
+        return recusar('Esta ação não vale para o estado atual do atendimento.', 409, { motivo: 'transicao_invalida', ...await comPermissoes(sessao.scope, resultado.controle, corpo.conversaId) });
+      case 'AutomacaoInativa':
+        return recusar('Conclua os envios pendentes e confirme a automação antes de devolver.', 409, { motivo: 'automacao_inativa' });
       case 'ConflitoDeComando':
         return recusar('Este comando já foi usado com outros dados.', 409, { motivo: 'conflito_comando' });
       case 'ConversaNaoEncontrada':
@@ -137,7 +140,7 @@ export async function GET(request: Request) {
   try {
     const leitura = await lerControle(supabaseServer, sessao.scope, parsed.data.conversaId);
     if (leitura._tag === 'ConversaNaoEncontrada') return recusar('Conversa não encontrada', 404);
-    return NextResponse.json({ success: true, ...comPermissoes(sessao.scope, leitura.controle) });
+    return NextResponse.json({ success: true, ...await comPermissoes(sessao.scope, leitura.controle, parsed.data.conversaId) });
   } catch (error: unknown) {
     if (error instanceof ControleIndisponivel) return indisponivel();
     throw error;

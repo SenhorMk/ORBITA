@@ -1,13 +1,13 @@
-/**
- * Se a automação responde conversas (MSG-009 → MSG-013/MSG-014).
- *
- * Ainda não existe resposta automática no ORBITA: não há configuração,
- * worker nem modelo ligado para nenhuma organização. Enquanto isso, o estado
- * `AI` do controle quer dizer "ninguém responde", e devolver uma conversa à
- * automação a deixaria abandonada. Esta é a única fonte que a rota e a tela
- * consultam antes de oferecer ou aceitar a devolução; quando a automação
- * existir, a verificação por organização entra aqui, no servidor.
- */
-export function automacaoDoAtendimentoAtiva(): boolean {
-  return false;
+import type { SupabaseClient } from '@supabase/supabase-js';
+import type { VerifiedOrganizationScope } from '../../lib/verifiedOrganizationScope';
+
+/** Availability is scoped to the conversation's configured connection. */
+export async function automacaoDoAtendimentoAtiva(
+  banco: SupabaseClient, escopo: VerifiedOrganizationScope, conversaId: string,
+): Promise<boolean> {
+  if (process.env.CHATWOOT_AI_FIRST_ENABLED !== 'true') return false;
+  const { data, error } = await banco.rpc('ai_first_disponivel', {
+    p_org: escopo.organizationId, p_conversa: conversaId,
+  });
+  return !error && data === true;
 }
