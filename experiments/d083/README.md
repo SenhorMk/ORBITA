@@ -29,7 +29,7 @@ Os gates desta rodada passaram com Node 22.23.2. Foram 85 testes Vitest em seis 
 
 ## Reproduzir a prova PostgreSQL
 
-Use PostgreSQL descartável em loopback na porta 55482, como na preparação D08.2. Crie um banco novo `orbita_d083` a partir da cadeia canônica com a 97 aplicada, sem fixtures de teste. Execute `psql -X -h 127.0.0.1 -p 55482 -U postgres -d orbita_d083 -v ON_ERROR_STOP=1 -1 -f experiments/d083/98_ai_first_worker.sql`. Com as dependências já disponíveis, defina `ORBITA_D083_DISPOSABLE=yes` e rode `node --test experiments/d083/postgres.test.mjs`. Use banco novo a cada execução. A prova ajusta timestamps das leases para acelerar o ensaio de reinício. Não há gateway PostgREST neste laboratório.
+Use PostgreSQL descartável em loopback na porta 55482, como na preparação D08.2. Crie um banco novo `orbita_d083` a partir da cadeia canônica com a 97 aplicada, sem fixtures de teste. Execute `psql -X -h 127.0.0.1 -p 55482 -U postgres -d orbita_d083 -v ON_ERROR_STOP=1 -1 -f database/98_ai_first_worker.sql`. Com as dependências já disponíveis, defina `ORBITA_D083_DISPOSABLE=yes` e rode `node --test experiments/d083/postgres.test.mjs`. Use banco novo a cada execução. A prova ajusta timestamps das leases para acelerar o ensaio de reinício. Não há gateway PostgREST neste laboratório.
 
 ## Depois da liberação do ambiente de Claude
 

@@ -495,6 +495,16 @@
       "order": 99,
       "path": "../database/96_corrigir_permissoes_bling.sql",
       "sha256": "e4394fb2b0b240630886763065dabd9c86acb61a8c34e2b4751aa476727171a6"
+    },
+    {
+      "order": 100,
+      "path": "../database/97_bootstrap_ai_first.sql",
+      "sha256": "855799dc961b09495165cd948835a674f62a6547410688db9d05c7e8cd8df8d5"
+    },
+    {
+      "order": 101,
+      "path": "../database/98_ai_first_worker.sql",
+      "sha256": "66aa00e6cff7967313af9316f1efc6264b849513e325ad57c958bd119044e7ff"
     }
   ],
   "references": [

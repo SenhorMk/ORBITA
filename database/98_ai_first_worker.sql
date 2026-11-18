@@ -3,6 +3,7 @@ create table public.chatwoot_ai_runtime (
     conexao_id uuid primary key references public.conexoes_integracao(id) on delete cascade,
     organizacao_id uuid not null references public.organizacoes(id),
     executor_id uuid not null references auth.users(id),
+    inbox_id integer not null check (inbox_id>0),
     corte timestamptz not null,
     ativo boolean not null default false,
     pronto_ate timestamptz not null default '-infinity'
@@ -113,7 +114,7 @@ returns text language plpgsql security definer set search_path = '' as $$
 declare
     v record;
 begin
-    select e.*, c.id_externo into v from public.chatwoot_envios e
+    select e.*, c.id_externo, c.inbox_id as inbox_escopo into v from public.chatwoot_envios e
       join public.chatwoot_conversations c on c.organizacao_id=e.organizacao_id and c.id_local=e.conversa_id_local
      where e.outbox_evento_id=p_evento_id;
     if v.autorresposta_run_id is null then
@@ -124,6 +125,8 @@ begin
           and fencing_token=p_fencing_token and lease_expires_at>clock_timestamp()) then return 'posse_perdida'; end if;
     perform public.travar_ingresso_ai(v.conexao_id);
     if not public.ai_runtime_valido(v.organizacao_id,v.conexao_id,v.ator_id)
+       or not exists (select 1 from public.chatwoot_ai_runtime r where r.conexao_id=v.conexao_id
+           and r.organizacao_id=v.organizacao_id and r.inbox_id=v.inbox_escopo)
        or public.ai_inbox_pendente(v.organizacao_id,v.conexao_id,v.id_externo)
        or not exists (select 1 from public.chatwoot_ai_projecao p
            where p.organizacao_id=v.organizacao_id and p.conversa_id=v.conversa_id_local
@@ -152,6 +155,8 @@ language sql stable set search_path = '' as $$
     select s.id,c.id_local,s.ultima_mensagem_em,r.id,k.control_version,
            flags.versao_global,flags.versao_org,r.resultado->>'intencao'
     from public.chatwoot_conversations c
+    join public.chatwoot_ai_runtime t on t.organizacao_id=c.organizacao_id and t.conexao_id=c.conexao_id
+      and t.inbox_id=c.inbox_id
     join public.chatwoot_conversa_controle k on k.organizacao_id=c.organizacao_id and k.conversa_id_local=c.id_local
     join public.chatwoot_ai_projecao p on p.organizacao_id=c.organizacao_id and p.conversa_id=c.id_local
     join public.sac_cases s on s.organizacao_id=c.organizacao_id and s.conversa_id_local=c.id_local
@@ -274,6 +279,7 @@ begin
       from public.chatwoot_conversations c
       join public.chatwoot_inboxes i on i.organizacao_id=c.organizacao_id and i.conexao_id=c.conexao_id and i.inbox_id=c.inbox_id
       join public.chatwoot_ai_runtime t on t.organizacao_id=c.organizacao_id and t.conexao_id=c.conexao_id
+        and t.inbox_id=c.inbox_id
       left join public.chatwoot_conversa_controle k on k.organizacao_id=c.organizacao_id and k.conversa_id_local=c.id_local
       left join public.chatwoot_ai_projecao p on p.organizacao_id=c.organizacao_id and p.conversa_id=c.id_local
       left join lateral (
@@ -401,7 +407,7 @@ create function public.ai_first_disponivel(p_org uuid,p_conversa uuid)
 returns boolean language sql stable security definer set search_path = '' as $$
     select exists (
         select 1 from public.chatwoot_conversations c join public.chatwoot_ai_runtime r
-         on r.conexao_id=c.conexao_id and r.organizacao_id=c.organizacao_id
+         on r.conexao_id=c.conexao_id and r.organizacao_id=c.organizacao_id and r.inbox_id=c.inbox_id
         join public.conexoes_integracao x on x.id=c.conexao_id and x.organizacao_id=c.organizacao_id
         cross join public.estado_autorresposta(p_org) f
         where c.organizacao_id=p_org and c.id_local=p_conversa and x.status='conectado'
@@ -431,6 +437,7 @@ begin
         where h.organizacao_id=p_organizacao_id and h.command_id=p_command_id) then
         select c.conexao_id,r.executor_id into v from public.chatwoot_conversations c
           left join public.chatwoot_ai_runtime r on r.organizacao_id=c.organizacao_id and r.conexao_id=c.conexao_id
+            and r.inbox_id=c.inbox_id
          where c.organizacao_id=p_organizacao_id and c.id_local=p_conversa_id_local;
         perform public.travar_ingresso_ai(v.conexao_id);
         if not coalesce(public.ai_runtime_valido(p_organizacao_id,v.conexao_id,v.executor_id),false) then
@@ -470,6 +477,8 @@ begin
        or not public.executor_autorresposta_ativo(p_org,p_executor) then return null; end if;
     select c.id_local,k.control_version,a.id,s.id as caso,s.ultima_mensagem_em into v
       from public.chatwoot_conversations c
+      join public.chatwoot_ai_runtime t on t.organizacao_id=c.organizacao_id and t.conexao_id=c.conexao_id
+        and t.inbox_id=c.inbox_id
       join public.chatwoot_conversa_controle k on k.organizacao_id=c.organizacao_id and k.conversa_id_local=c.id_local
       join public.sac_cases s on s.organizacao_id=c.organizacao_id and s.conversa_id_local=c.id_local
       cross join lateral (select t.id,t.status,t.resultado from public.ai_runs t

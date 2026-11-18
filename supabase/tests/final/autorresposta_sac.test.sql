@@ -103,6 +103,12 @@ select organizacao_id, id_local, 'AI' from public.chatwoot_conversations
  where id_local in (pg_temp.conversa(221), pg_temp.conversa(222));
 insert into public.sac_executores_autorresposta values
     (pg_temp.id('a'),pg_temp.id('a1')), (pg_temp.id('b'),pg_temp.id('b1'));
+insert into public.chatwoot_ai_runtime (conexao_id,organizacao_id,executor_id,inbox_id,corte,ativo,pronto_ate) values
+    (pg_temp.id('c1'),pg_temp.id('a'),pg_temp.id('a1'),1,now(),true,now()+interval '10 minutes'),
+    (pg_temp.id('d1'),pg_temp.id('b'),pg_temp.id('b1'),1,now(),true,now()+interval '10 minutes');
+insert into public.chatwoot_ai_projecao (organizacao_id,conversa_id,versao,desejado,fase)
+select organizacao_id,id_local,0,'pending','ok' from public.chatwoot_conversations
+ where id_local in (pg_temp.conversa(221),pg_temp.conversa(222));
 do $$ begin perform pg_temp.criar_run(221); perform pg_temp.criar_run(222); end $$;
 select is(pg_temp.enviar(pg_temp.id('a'), pg_temp.id('a1'), 221, '101', 0, 0), 'desligada', 'default fechado');
 select is(pg_temp.mudar(null, pg_temp.id('a1'), true, 0), 'sem_permissao', 'owner não é operador global');
@@ -176,6 +182,9 @@ select is(pg_temp.inbox(pg_temp.id('a'), pg_temp.id('c1'), 2205, 225), 'caso_abe
 insert into public.chatwoot_conversa_controle (organizacao_id, conversa_id_local, ownership_mode)
 select organizacao_id, id_local, 'AI' from public.chatwoot_conversations
  where id_local in (pg_temp.conversa(224), pg_temp.conversa(225));
+insert into public.chatwoot_ai_projecao (organizacao_id,conversa_id,versao,desejado,fase)
+select organizacao_id,id_local,0,'pending','ok' from public.chatwoot_conversations
+ where id_local in (pg_temp.conversa(224),pg_temp.conversa(225));
 
 select is(pg_temp.enviar(pg_temp.id('a'), pg_temp.id('a1'), 224, '201', 3, 3, pg_temp.id('999')),
     'run_inelegivel', 'run inexistente não gera intenção');

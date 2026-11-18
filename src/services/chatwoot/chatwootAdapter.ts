@@ -1,4 +1,5 @@
 import type { VerifiedOrganizationScope } from '../../lib/verifiedOrganizationScope';
+import { z } from 'zod';
 import { conexaoDesligada } from '../../lib/integrations/conexaoDesligada';
 import {
   ChatwootCredentialsPayloadSchema,
@@ -16,6 +17,15 @@ export const CHATWOOT_TIMEOUT_MS = 10_000;
  * (self-hosted deployments always provide their own). Overridable via env for
  * environments that need a different default without touching every connection. */
 const DEFAULT_CHATWOOT_API_URL = process.env.CHATWOOT_DEFAULT_API_URL || 'https://app.chatwoot.com';
+const PerfilDeProjecao = z.object({ id: z.number().int().positive(), accounts: z.array(
+  z.object({ id: z.number().int().positive(), role: z.string() }),
+) });
+const InboxDeProjecao = z.object({ id: z.number().int().positive(), enable_auto_assignment: z.literal(false) });
+const DetalheDeProjecao = z.object({
+  id: z.number().int().positive(), account_id: z.number().int().positive(), inbox_id: z.number().int().positive(),
+  status: z.enum(['open', 'pending', 'resolved', 'snoozed']),
+  meta: z.object({ assignee: z.object({ id: z.number().int().positive() }).nullish(), assignee_type: z.literal('User').nullish() }),
+}).refine(({ meta }) => meta.assignee ? meta.assignee_type === 'User' : meta.assignee_type == null);
 
 /** Connection-scoped configuration resolved from the credentials vault. Never
  * constructed directly from request/env primitives outside this module. */
@@ -111,6 +121,11 @@ export class ChatwootAdapter implements ChatwootPort {
     return this.connection.conexaoId;
   }
 
+  correspondeAOrigemDaProjecao(origem: string): boolean {
+    const url = new URL(this.connection.apiUrl);
+    return url.origin === origem && url.pathname === '/' && !url.username && !url.password && !url.search && !url.hash;
+  }
+
   private headers(): Record<string, string> {
     return {
       'Content-Type': 'application/json',
@@ -122,13 +137,16 @@ export class ChatwootAdapter implements ChatwootPort {
     path: string,
     init: RequestInit,
     fetchImpl: typeof fetch,
+    contaScoped = true,
   ): Promise<{ ok: true; response: Response } | { ok: false; failure: ChatwootApiResult<never> }> {
     let response: Response;
     try {
-      response = await fetchImpl(`${this.connection.apiUrl}/api/v1/accounts/${this.connection.accountId}${path}`, {
+      const base = this.connection.apiUrl.replace(/\/+$/u, '');
+      const prefixo = contaScoped ? `/api/v1/accounts/${this.connection.accountId}` : '/api/v1';
+      response = await fetchImpl(`${base}${prefixo}${path}`, {
         ...init,
         headers: this.headers(),
-        signal: AbortSignal.timeout(CHATWOOT_TIMEOUT_MS),
+        signal: init.signal ?? AbortSignal.timeout(CHATWOOT_TIMEOUT_MS),
       });
     } catch (error: unknown) {
       const timeout = isTimeoutError(error);
@@ -166,6 +184,53 @@ export class ChatwootAdapter implements ChatwootPort {
     }
 
     return { ok: true, response };
+  }
+
+  private async lerProjecaoJson(path: string, fetchImpl: typeof fetch, contaScoped = true): Promise<unknown> {
+    const r = await this.request(path, { method: 'GET', cache: 'no-store', redirect: 'error',
+      signal: AbortSignal.timeout(3000) }, fetchImpl, contaScoped);
+    if (!r.ok) throw new Error('Chatwoot indisponível para projeção.');
+    return r.response.json();
+  }
+
+  async validarAdministradorDaProjecao(inbox: number, tecnico: number, fetchImpl: typeof fetch = fetch) {
+    if (!/^[1-9]\d{0,9}$/u.test(this.connection.accountId) || !Number.isSafeInteger(inbox) || inbox < 1) return false;
+    const perfil = PerfilDeProjecao.parse(await this.lerProjecaoJson('/profile', fetchImpl, false));
+    const contas = perfil.accounts.filter(c => String(c.id) === this.connection.accountId);
+    if (perfil.id !== tecnico || contas.length !== 1 || contas[0]?.role !== 'administrator') return false;
+    const caixa = InboxDeProjecao.safeParse(await this.lerProjecaoJson(`/inboxes/${inbox}`, fetchImpl));
+    return caixa.success && caixa.data.id === inbox;
+  }
+
+  async lerEstadoDaProjecao(id: string, inbox: number, conta: string, tecnico: number, fetchImpl: typeof fetch = fetch) {
+    if (!/^[1-9]\d{0,9}$/u.test(id) || conta !== this.connection.accountId || !/^[1-9]\d{0,9}$/u.test(conta)) {
+      throw new Error('Projeção fora da conta configurada.');
+    }
+    const detalhe = DetalheDeProjecao.parse(await this.lerProjecaoJson(`/conversations/${id}`, fetchImpl));
+    if (String(detalhe.id) !== id || String(detalhe.account_id) !== conta || detalhe.inbox_id !== inbox ||
+        detalhe.meta.assignee?.id === tecnico) throw new Error('Projeção fora do vínculo ou com responsável técnico.');
+    return { conta, inbox, conversa: id, status: detalhe.status, responsavel: detalhe.meta.assignee?.id ?? null };
+  }
+
+  async projetarStatusComoAdministrador(
+    id: string, inbox: number, conta: string, tecnico: number, alvo: 'open' | 'pending', fetchImpl: typeof fetch = fetch,
+  ) {
+    const antes = await this.lerEstadoDaProjecao(id, inbox, conta, tecnico, fetchImpl);
+    if (!['open', 'pending'].includes(antes.status) || (alvo === 'pending' && antes.responsavel !== null)) {
+      throw new Error('A conversa não pode mudar de estado automaticamente.');
+    }
+    if (antes.status === alvo) return;
+    if (!await this.validarAdministradorDaProjecao(inbox, tecnico, fetchImpl)) {
+      throw new Error('Administrador técnico e inbox sem autoatribuição não comprovados.');
+    }
+    const r = await this.request(`/conversations/${id}/toggle_status`, {
+      method: 'POST', body: JSON.stringify({ status: alvo }), redirect: 'error', signal: AbortSignal.timeout(3000),
+    }, fetchImpl);
+    if (!r.ok) throw new Error('Escrita de status sem recibo.');
+    const depois = await this.lerEstadoDaProjecao(id, inbox, conta, tecnico, fetchImpl);
+    if (depois.status !== alvo || depois.responsavel !== antes.responsavel) {
+      throw new Error('Status ou responsável divergiu após a escrita.');
+    }
   }
 
   async getConversations(fetchImpl: typeof fetch = fetch): Promise<ChatwootApiResult<ChatwootConversation[]>> {

@@ -39,10 +39,10 @@ foreach ($line in Get-Content (Join-Path $supabase 'config.toml')) {
     if ($line -match '^schema_paths =') { $inPaths = $true; continue }
     if ($inPaths -and $line -match '^\]') { break }
     if ($inPaths -and $line -match '"([^"]+\.sql)"') {
-        $file = (Resolve-Path (Join-Path $supabase $Matches[1])).Path
+        $relativo = $Matches[1]
+        if ($relativo -like '*98_ai_first_worker.sql') { break }
+        $file = (Resolve-Path (Join-Path $supabase $relativo)).Path
         & $psql @lab -1 -f $file
         if ($LASTEXITCODE -ne 0) { throw "SQL path failed: $file" }
     }
 }
-& $psql @lab -1 -f (Join-Path $PSScriptRoot '97_bootstrap_ai_first.sql')
-if ($LASTEXITCODE -ne 0) { throw 'D08.2 candidate SQL failed.' }

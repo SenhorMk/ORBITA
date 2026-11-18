@@ -4,12 +4,15 @@ import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { chatwootFixture } from '../d084/chatwoot-fixture.mjs';
 
 const require = createRequire(import.meta.url);
 const { Client } = require('pg');
 process.env.TS_NODE_PROJECT = fileURLToPath(new URL('../../scripts/tsconfig.worker.json', import.meta.url));
 require('ts-node/register/transpile-only');
 const { consumirAiFirstUmaVez } = require('../../src/services/chatwoot/workerAiFirst.ts');
+const { ChatwootAdapter } = require('../../src/services/chatwoot/chatwootAdapter.ts');
+const { criarCanalAiFirst } = require('../../src/services/chatwoot/canalAiFirst.ts');
 
 const id = suffix => 'e2200000-0000-4000-8000-' + suffix.padStart(12, '0');
 const db = { host: '127.0.0.1', port: 55482, user: 'postgres', database: 'orbita_d083', ssl: false };
@@ -37,7 +40,7 @@ test('producer, durable projection, inbox barrier and MSG-022 on PostgreSQL', { 
     for (const c of [a,b,o]) await c.query("set request.jwt.claim.role='service_role'; set statement_timeout='6s'");
     const { p_org: org, p_conexao: conexao, p_executor: executor } = escopo;
     await a.query('insert into public.sac_executores_autorresposta values ($1,$2)', [org,executor]);
-    await a.query("insert into public.chatwoot_ai_runtime values ($1,$2,$3,now()-interval '2 minutes',true)",
+    await a.query("insert into public.chatwoot_ai_runtime values ($1,$2,$3,1,now()-interval '2 minutes',true)",
       [conexao,org,executor]);
     const banco = {
       async rpc(nome,args) {
@@ -64,17 +67,13 @@ test('producer, durable projection, inbox barrier and MSG-022 on PostgreSQL', { 
         $1,$2,$3,jsonb_build_object('evento', (select event_type from public.inbox_eventos_chatwoot where id=$1),'acao','ignorar'))`,
         [event,worker,token]);
     }
-    let status='open';
-    const writes=[];
+    const { state, fetchImpl } = chatwootFixture();
+    const writes=state.writes;
     let modelos=0;
     const entradas=[];
-    let falharRecibo=false;
-    let leituras=0;
-    const canal={
-      async pronto(){return true;},
-      async ler(_,item){leituras++;return {conta:item.account_id,inbox:item.inbox_id,conversa:item.id_externo,status,responsavel:null};},
-      async alterarSemAtribuir(_,item,alvo){writes.push([item.id_externo,alvo]);status=alvo;if(falharRecibo)throw Error('timeout');},
-    };
+    const canal=criarCanalAiFirst({escopo,inbox:1,tecnico:17,fetchImpl,async resolver(){
+      return ChatwootAdapter.forTesting({apiUrl:'https://chatwoot.test',apiToken:'synthetic',accountId:'1',conexaoId:conexao});
+    }});
     const modelo={provedor:'fake',async gerar(_,entrada){modelos++;entradas.push(entrada);return {texto:'Resposta sintética para seu atendimento.'};}};
     const pass = (m=modelo) => consumirAiFirstUmaVez({escopo,banco,canal,modelo:m,habilitado:true});
     assert.equal((await pass(null)).estado,'desligado');
@@ -87,10 +86,10 @@ test('producer, durable projection, inbox barrier and MSG-022 on PostgreSQL', { 
     assert.equal(modelos,0);
     assert.equal(await scalar(a,'select pg_temp.mudar(null,$1,true,0)',[id('f1')]),'aplicado');
     assert.equal(await scalar(a,'select pg_temp.mudar($1,$2,true,0)',[org,executor]),'aplicado');
-    falharRecibo=true;
+    state.failReceipt=true;
     assert.equal((await pass()).projecao,'incerto');
     await a.query("update public.chatwoot_ai_projecao set ate=now()-interval '1 second'");
-    falharRecibo=false;
+    state.failReceipt=false;
     assert.equal((await pass()).geracao,'registrada');
     assert.deepEqual(writes,[['221','pending']]);
     assert.equal((await pass()).estado,'sem_geracao');
@@ -120,9 +119,9 @@ test('producer, durable projection, inbox barrier and MSG-022 on PostgreSQL', { 
     await a.query("update public.inbox_eventos_chatwoot set lease_expires_at=now()-interval '1 second' where id=$1",[atualizacao]);
     await applyAsObservation(atualizacao,'inbox-2');
     assert.equal(await iniciar(a,envio,'envio-1'),'aguardando_ai_first');
-    const antes=leituras;
+    const antes=state.reads;
     assert.equal((await pass()).projecao,'ok');
-    assert.ok(leituras>antes);
+    assert.ok(state.reads>antes);
     assert.equal(writes.length,1);
     assert.equal((await pass(null)).estado,'desligado');
     assert.equal(await iniciar(a,envio,'envio-1'),'aguardando_ai_first');
@@ -181,13 +180,14 @@ test('producer, durable projection, inbox barrier and MSG-022 on PostgreSQL', { 
     assert.equal((await pass()).projecao,'ok');
     const divergencia=await delivery(a,'conversation_updated','d083-divergente');
     await applyAsObservation(divergencia,'inbox-3');
-    status='open';
+    state.status='open';
     const leitura=await scalar(a,'select public.reivindicar_projecao_ai_first($1,$2,$3)',[org,conexao,executor]);
     assert.equal(leitura.somente_leitura,true);
     await a.query("update public.chatwoot_ai_projecao set ate=now()-interval '1 second'");
     const antesDivergencia=writes.length;
     assert.equal((await pass()).projecao,'contido');
     assert.equal(writes.length,antesDivergencia);
+    assert.equal(state.assignee,null);
     assert.equal(await scalar(a,'select ownership_mode from public.chatwoot_conversa_controle where conversa_id_local=$1',[conv]),'HUMAN_REQUIRED');
     console.log('Observed two PostgreSQL lock waits: inbox admission vs send, and simultaneous dispatch.');
   } finally { await Promise.all([a.end(),b.end(),o.end()]); }
