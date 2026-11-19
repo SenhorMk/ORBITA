@@ -39,3 +39,12 @@ export async function registrarSaudeDoBlingPeloSync(
     registrarFalhaInterna('sync.saude_do_bling', err, { organizacaoId: scope.organizationId });
   }
 }
+
+/** O desfecho `JobFinished` do sync, depois de registrar a saúde que ele provou. */
+export async function jobConcluidoComSaude(
+  scope: VerifiedOrganizationScope,
+  desfecho: 'healthy' | 'error',
+): Promise<{ readonly _tag: 'JobFinished' }> {
+  await registrarSaudeDoBlingPeloSync(scope, desfecho);
+  return { _tag: 'JobFinished' };
+}

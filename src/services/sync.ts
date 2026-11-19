@@ -1,7 +1,7 @@
 import { bling } from './bling';
 import type { BlingPort } from './blingPort';
 import { espelhoDaPagina } from './espelhoDaImagemDoBling';
-import { registrarSaudeDoBlingPeloSync } from './saudeDoBlingPeloSync';
+import { jobConcluidoComSaude } from './saudeDoBlingPeloSync';
 import { clienteRepository } from '../repositories/clienteRepository';
 import { produtoRepository } from '../repositories/produtoRepository';
 import { situacaoLocalDaSituacaoBling } from '../lib/config/produtoContract';
@@ -115,9 +115,7 @@ export class SyncService {
       return { _tag: 'PreparationFailed' };
     }
 
-    if (!leaseAcquired) {
-      return { _tag: 'LeaseHeldElsewhere' };
-    }
+    if (!leaseAcquired) return { _tag: 'LeaseHeldElsewhere' };
 
     const progress: SyncJobProgress = {
       clientes_processados: 0,
@@ -181,8 +179,7 @@ export class SyncService {
         // ler esse `running` como "alguém está tocando" e anunciar sucesso.
         return { _tag: 'FinalizationFailed' };
       }
-      await registrarSaudeDoBlingPeloSync(scope, 'error');
-      return { _tag: 'JobFinished' };
+      return jobConcluidoComSaude(scope, 'error');
     }
 
     // A conclusão como `completed` fica **fora** do bloco das etapas. Dentro
@@ -201,8 +198,7 @@ export class SyncService {
       return { _tag: 'FinalizationFailed' };
     }
 
-    await registrarSaudeDoBlingPeloSync(scope, 'healthy');
-    return { _tag: 'JobFinished' };
+    return jobConcluidoComSaude(scope, 'healthy');
   }
 
   async getJobStatus(jobId: string, scope: VerifiedOrganizationScope): Promise<SyncJob | null> {
