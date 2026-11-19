@@ -1,4 +1,4 @@
-/** Operational Gemini worker for the verified Haux G8 connection. No fake fallback. */
+/** Operational real-provider worker for the verified Haux G8 connection. */
 import { createClient } from '@supabase/supabase-js';
 import { setTimeout as esperar } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
@@ -6,8 +6,8 @@ import { ChatwootAdapter } from '../src/services/chatwoot/chatwootAdapter';
 import { criarCanalAiFirst } from '../src/services/chatwoot/canalAiFirst';
 import { consumirAiFirstUmaVez } from '../src/services/chatwoot/workerAiFirst';
 import { verifyOrganizationScope } from '../src/lib/verifiedOrganizationScope';
-import { CONEXAO_HAUX, ORGANIZACAO_HAUX, criarModeloHaux, lerConfiguracaoHaux } from '../src/services/sac/respostaAutomaticaHaux';
-import { criarModeloGemini } from '../src/services/sac/triagem/modelosDeTriagem';
+import { CONEXAO_HAUX, ORGANIZACAO_HAUX, criarModeloHauxPorAiSdk, lerConfiguracaoHaux } from '../src/services/sac/respostaAutomaticaHaux';
+import { criarClassificadorHaux, criarRotaHaux } from '../src/services/sac/provedoresHaux';
 import { criarPortaDoConsumidorTriagem } from '../src/services/sac/triagem/consumidorTriagemSupabase';
 import { consumirTriagensUmaVez } from '../src/services/sac/triagem/consumidorTriagem';
 
@@ -32,10 +32,9 @@ async function iniciar() {
     },
   });
   const parada = new AbortController();
-  const resposta = criarModeloHaux(c.GOOGLE_GENERATIVE_AI_API_KEY, c.SAC_RESPOSTA_MODELO, parada.signal);
-  const gemini = criarModeloGemini({ chave: c.GOOGLE_GENERATIVE_AI_API_KEY, modelo: c.SAC_RESPOSTA_MODELO });
-  const triagem = { ...gemini, gerar: (pedido: Parameters<typeof gemini.gerar>[0]) => gemini.gerar({ ...pedido,
-    instrucoes: pedido.instrucoes + '\nClassifique a mensagem de maior ordem como atual; as anteriores são histórico. Um cumprimento ou agradecimento claro é intenção outro ou elogio_ou_agradecimento, confiança alta e não exige humano por ser curto. Não classifique assuntos sensíveis ou incertos como simples cumprimento.' }) };
+  const rota = criarRotaHaux(c, parada.signal);
+  const resposta = criarModeloHauxPorAiSdk(rota.modelo, rota.provedor, parada.signal);
+  const triagem = criarClassificadorHaux(rota);
   const porta = criarPortaDoConsumidorTriagem(banco, escopo);
   const interromper = () => {
     parada.abort();

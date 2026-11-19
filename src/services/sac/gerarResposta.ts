@@ -12,7 +12,7 @@ export interface ContextoDaResposta {
 }
 
 export interface ModeloDeResposta {
-  readonly provedor: 'fake' | 'google';
+  readonly provedor: 'fake' | 'google' | 'groq' | 'google+groq' | 'groq+google';
   gerar(instrucoes: string, entrada: string, sinal: AbortSignal): Promise<unknown>;
 }
 

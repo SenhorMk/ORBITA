@@ -1,9 +1,10 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { APICallError, generateText, Output } from 'ai';
+import { APICallError, generateText, Output, type LanguageModel } from 'ai';
 import { z } from 'zod';
 import type { ModeloDeResposta } from './gerarResposta';
 import { MODELO_GEMINI_APROVADO } from './triagem/modelosDeTriagem';
 import { logger } from '../../lib/observability/logger';
+import { ConfiguracaoProvedoresHaux } from './provedoresHaux';
 
 /** Tenant verified against the existing G8 connection, never taken from a message. */
 export const ORGANIZACAO_HAUX = 'c75eb92d-9222-49cc-ac0f-6aebaf8fa69f';
@@ -60,7 +61,7 @@ const Configuracao = z.object({
     return u.origin === s && (u.protocol === 'https:' || (u.protocol === 'http:' && ['rails', '127.0.0.1', 'localhost'].includes(u.hostname)));
   }),
   HAUX_BOT_LIMITE_TRIAGENS_DIA: z.coerce.number().int().min(1).max(100).default(20),
-});
+}).extend(ConfiguracaoProvedoresHaux.shape);
 
 /** Stopping must work even after the model key was revoked or removed. */
 export function lerConfiguracaoDeParadaHaux(env: Readonly<Record<string, string | undefined>>) {
@@ -74,7 +75,7 @@ export function lerConfiguracaoDeParadaHaux(env: Readonly<Record<string, string 
 export function lerConfiguracaoHaux(env: Readonly<Record<string, string | undefined>>) {
   if (env.HAUX_BOT_ENABLED === 'false') return { _tag: 'Desligado' } as const;
   if (env.HAUX_BOT_ENABLED !== 'true') return { _tag: 'ConfiguracaoInvalida', campos: ['HAUX_BOT_ENABLED'] } as const;
-  const lida = Configuracao.safeParse(env);
+  const lida = Configuracao.safeParse({ ...env, GROQ_API_KEY: env.GROQ_API_KEY || env.GROQ_AI_API_KEY });
   return lida.success ? { _tag: 'Configurada', valor: lida.data } as const
     : { _tag: 'ConfiguracaoInvalida', campos: lida.error.issues.map((i) => i.path.join('.')) } as const;
 }
@@ -82,12 +83,16 @@ export function lerConfiguracaoHaux(env: Readonly<Record<string, string | undefi
 /** Real Google adapter, with no simulation fallback or automatic API retry. */
 export function criarModeloHaux(chave: string, modelo: string, parada?: AbortSignal): ModeloDeResposta {
   const google = createGoogleGenerativeAI({ apiKey: chave });
+  return criarModeloHauxPorAiSdk(google(modelo), 'google', parada);
+}
+
+export function criarModeloHauxPorAiSdk(modelo: LanguageModel, provedor: ModeloDeResposta['provedor'], parada?: AbortSignal): ModeloDeResposta {
   return {
-    provedor: 'google',
+    provedor,
     async gerar(_instrucoes, entrada, abortSignal) {
       if (avaliarEntradaHaux(entrada) === 'humano' || parada?.aborted) return null;
       try {
-        const resultado = await generateText({ model: google(modelo), system: INSTRUCOES_HAUX,
+        const resultado = await generateText({ model: modelo, system: INSTRUCOES_HAUX,
           prompt: entrada, output: Output.object({ schema: Decisao }),
           abortSignal: parada ? AbortSignal.any([abortSignal, parada]) : abortSignal,
           maxRetries: 0, maxOutputTokens: 160 });
