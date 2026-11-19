@@ -12,6 +12,9 @@
     "worker-ai-first-chatwoot.ts",
     "worker-triagem-sac.ts",
     "smoke-triagem-gemini.ts",
-    "worker-supervisionado.ts"
+    "worker-supervisionado.ts",
+    "worker-haux-bot.ts",
+    "parar-haux-bot.ts",
+    "smoke-haux-gemini.ts"
   ]
 }

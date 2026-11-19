@@ -68,6 +68,7 @@ export function criarModeloPorAiSdk(modelo: LanguageModel, identificacao: { read
           output: Output.object({ schema: TriagemV1Schema }),
           temperature: 0,
           maxRetries: 0,
+          maxOutputTokens: 640,
           abortSignal: sinal,
         });
         if (resultado.finishReason === 'content-filter') return { _tag: 'Recusa', uso: usoDe(resultado.usage) };

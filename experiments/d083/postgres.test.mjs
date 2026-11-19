@@ -15,7 +15,9 @@ const { ChatwootAdapter } = require('../../src/services/chatwoot/chatwootAdapter
 const { criarCanalAiFirst } = require('../../src/services/chatwoot/canalAiFirst.ts');
 
 const id = suffix => 'e2200000-0000-4000-8000-' + suffix.padStart(12, '0');
-const db = { host: '127.0.0.1', port: 55482, user: 'postgres', database: 'orbita_d083', ssl: false };
+const db = { host: '127.0.0.1', port: Number(process.env.ORBITA_AI_FIRST_TEST_PORT ?? 55482),
+  user: 'postgres', password: process.env.ORBITA_AI_FIRST_TEST_PASSWORD,
+  database: process.env.ORBITA_AI_FIRST_TEST_DATABASE ?? 'orbita_d083', ssl: false };
 const escopo = { p_org: id('a'), p_conexao: id('c1'), p_executor: id('a1') };
 async function scalar(c, sql, values) {
   const { rows } = await c.query(sql, values);
@@ -42,6 +44,7 @@ test('producer, durable projection, inbox barrier and MSG-022 on PostgreSQL', { 
     await a.query('insert into public.sac_executores_autorresposta values ($1,$2)', [org,executor]);
     await a.query("insert into public.chatwoot_ai_runtime values ($1,$2,$3,1,now()-interval '2 minutes',true)",
       [conexao,org,executor]);
+    await a.query('update public.chatwoot_ai_runtime set limite_geracoes_dia=20 where conexao_id=$1',[conexao]);
     const banco = {
       async rpc(nome,args) {
         assert.match(nome,/^(renovar_worker|escalonar_triagem|reivindicar_(projecao|geracao)|iniciar_projecao|concluir_(projecao|geracao))_ai_first$/);
@@ -189,6 +192,21 @@ test('producer, durable projection, inbox barrier and MSG-022 on PostgreSQL', { 
     assert.equal(writes.length,antesDivergencia);
     assert.equal(state.assignee,null);
     assert.equal(await scalar(a,'select ownership_mode from public.chatwoot_conversa_controle where conversa_id_local=$1',[conv]),'HUMAN_REQUIRED');
+    assert.equal(await scalar(a,'select count(*)::int from public.chatwoot_ai_consumo where organizacao_id=$1',[org]),2);
+    // Exhaustion reserves no additional paid call and hands back to the team.
+    await a.query('update public.chatwoot_ai_runtime set limite_geracoes_dia=2 where conexao_id=$1',[conexao]);
+    let versao=Number(await scalar(a,'select control_version from public.chatwoot_conversa_controle where conversa_id_local=$1',[conv]));
+    assert.equal(await control('assumir',versao,'819',null),'aplicado');
+    assert.equal(await control('devolver',versao+1,'820','Resumo revisado pela equipe.'),'aplicado');
+    await pass();
+    assert.equal(await inbox(2204),'mensagem_no_caso');
+    await scalar(a,'select pg_temp.criar_run(221)');
+    await pass();
+    assert.equal(modelos,2);
+    assert.equal(await scalar(a,'select ownership_mode from public.chatwoot_conversa_controle where conversa_id_local=$1',[conv]),'HUMAN_REQUIRED');
+    assert.equal(await scalar(a,'select public.desligar_runtime_ai_first($1,$2,$3)',[id('b'),conexao,executor]),false);
+    assert.equal(await scalar(a,'select public.desligar_runtime_ai_first($1,$2,$3)',[org,conexao,executor]),true);
+    assert.equal((await pass()).estado,'desligado');
     console.log('Observed two PostgreSQL lock waits: inbox admission vs send, and simultaneous dispatch.');
   } finally { await Promise.all([a.end(),b.end(),o.end()]); }
 });

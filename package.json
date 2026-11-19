@@ -40,7 +40,10 @@
     "worker:inbox": "ts-node --transpile-only --project scripts/tsconfig.worker.json scripts/worker-inbox-chatwoot.ts",
     "worker:envio": "ts-node --transpile-only --project scripts/tsconfig.worker.json scripts/worker-envio-chatwoot.ts",
     "worker:triagem": "ts-node --transpile-only --project scripts/tsconfig.worker.json scripts/worker-triagem-sac.ts",
-    "smoke:triagem": "ts-node --transpile-only --project scripts/tsconfig.worker.json scripts/smoke-triagem-gemini.ts"
+    "smoke:triagem": "ts-node --transpile-only --project scripts/tsconfig.worker.json scripts/smoke-triagem-gemini.ts",
+    "worker:haux": "ts-node --transpile-only --project scripts/tsconfig.worker.json scripts/worker-haux-bot.ts",
+    "bot:haux:parar": "ts-node --transpile-only --project scripts/tsconfig.worker.json scripts/parar-haux-bot.ts",
+    "bot:haux:smoke": "ts-node --transpile-only --project scripts/tsconfig.worker.json scripts/smoke-haux-gemini.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "4.0.107",

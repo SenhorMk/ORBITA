@@ -505,6 +505,11 @@
       "order": 101,
       "path": "../database/98_ai_first_worker.sql",
       "sha256": "66aa00e6cff7967313af9316f1efc6264b849513e325ad57c958bd119044e7ff"
+    },
+    {
+      "order": 102,
+      "path": "../database/99_haux_bot_limits.sql",
+      "sha256": "ceb7588801d22c5646c7a06fe296431d0468ce06464123d481fa22b2c85d4615"
     }
   ],
   "references": [

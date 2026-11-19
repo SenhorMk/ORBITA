@@ -11,7 +11,9 @@ export default defineConfig({
     // depend on lives under `src/lib/e2e/` instead, and stays covered by
     // Vitest as normal.
     // `*.integracao.test.ts` needs the disposable lab and runs from `npm run test:db`.
-    exclude: [...configDefaults.exclude, 'e2e/**', '**/*.integracao.test.ts'],
+    // D08 experiments use node:test and explicitly provisioned local databases.
+    // Their runner is separate; importing them as Vitest files starts a second harness.
+    exclude: [...configDefaults.exclude, 'e2e/**', 'experiments/**', '**/*.integracao.test.ts'],
     // Component tests (RTL) opt into `jsdom` per-file via the
     // `@vitest-environment jsdom` pragma; API/service/domain tests keep the
     // default `node` environment untouched.

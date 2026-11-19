@@ -162,7 +162,8 @@ schema_paths = [
   "../database/95_controle_autorresposta_sac.sql",
   "../database/96_corrigir_permissoes_bling.sql",
   "../database/97_bootstrap_ai_first.sql",
-  "../database/98_ai_first_worker.sql"
+  "../database/98_ai_first_worker.sql",
+  "../database/99_haux_bot_limits.sql"
 ]
 
 [db.seed]
