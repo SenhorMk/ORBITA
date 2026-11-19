@@ -5,7 +5,6 @@ import type { VerifiedOrganizationScope } from '../../lib/verifiedOrganizationSc
 export async function automacaoDoAtendimentoAtiva(
   banco: SupabaseClient, escopo: VerifiedOrganizationScope, conversaId: string,
 ): Promise<boolean> {
-  if (process.env.CHATWOOT_AI_FIRST_ENABLED !== 'true') return false;
   const { data, error } = await banco.rpc('ai_first_disponivel', {
     p_org: escopo.organizationId, p_conversa: conversaId,
   });
