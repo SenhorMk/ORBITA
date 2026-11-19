@@ -2,6 +2,8 @@ import { createClient } from '@supabase/supabase-js';
 import { readSupabaseBrowserConfiguration } from './runtime-config';
 
 const configuration = readSupabaseBrowserConfiguration({
+  NODE_ENV: process.env.NODE_ENV,
+  NEXT_PUBLIC_ORBITA_DEMO_LOCAL: process.env.NEXT_PUBLIC_ORBITA_DEMO_LOCAL,
   NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
 });

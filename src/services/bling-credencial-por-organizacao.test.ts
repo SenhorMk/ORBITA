@@ -39,9 +39,7 @@ describe('credencial do Bling vem sempre da organização verificada', () => {
     expect(ler('services/bling.ts')).not.toContain(".from('integracoes_bling')");
   });
 
-  it('nenhuma rota nem serviço resolve credencial do Bling por usuário', () => {
-    // O callback do OAuth ainda **escreve** o espelho legado enquanto a coluna
-    // existir; o que não pode voltar é alguém **ler** dali para autenticar.
+  it('callback, sincronização e cliente Bling usam apenas o cofre da organização', () => {
     const arquivos = [
       'services/bling.ts',
       'services/sync.ts',
@@ -49,8 +47,7 @@ describe('credencial do Bling vem sempre da organização verificada', () => {
     ];
     for (const arquivo of arquivos) {
       const conteudo = ler(arquivo);
-      expect(conteudo, `${arquivo} não pode selecionar de integracoes_bling`)
-        .not.toContain("integracoes_bling')\n    .select");
+      expect(conteudo, arquivo).not.toMatch(/\.from\(['"]integracoes_bling['"]\)/);
     }
   });
 

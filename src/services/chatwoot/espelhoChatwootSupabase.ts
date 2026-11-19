@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
+import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import {
   TABELA_DO_RECURSO,
   type CandidatoDeIdentidade,
@@ -20,6 +21,26 @@ const CandidatoSchema = z.object({ id_local: z.string().uuid(), conexao_id: z.st
 const IdLocalSchema = z.object({ id_local: z.string().uuid() });
 const IdExternoSchema = z.object({ id_externo: z.string().regex(/^\d+$/u) });
 const ConexaoSchema = z.object({ conexao_id: z.string().uuid().nullable() });
+const MensagensDoContatoSchema = z.array(z.object({
+  id_local: z.string().uuid(), content: z.string().nullable(), created_at: z.string(),
+  conteudo_revisao_em: z.string().nullable(),
+}));
+
+export async function lerMensagensRecentesDoContato(
+  supabase: SupabaseClient, escopo: VerifiedOrganizationScope, conversaId: string,
+) {
+  const conexao = await criarEspelhoChatwootSupabase(supabase)
+    .buscarConexaoPorIdLocal('conversa', escopo.organizationId, conversaId);
+  if (conexao._tag === 'StoreFalhou') throw new Error('Conversa indisponível.');
+  if (!conexao.valor?.conexaoId) return [];
+  const { data, error } = await supabase.from(TABELA_DO_RECURSO.mensagem)
+    .select('id_local,content,created_at,conteudo_revisao_em')
+    .eq('organizacao_id', escopo.organizationId).eq('conexao_id', conexao.valor.conexaoId)
+    .eq('conversa_id_local', conversaId).eq('message_type', 'incoming').eq('sender_type', 'contact')
+    .order('created_at', { ascending: false }).order('id_local', { ascending: false }).limit(5);
+  if (error) throw new Error('Histórico indisponível.');
+  return MensagensDoContatoSchema.parse(data).reverse();
+}
 
 function falhou<T>(codigo: string | undefined): ResultadoDoStore<T> {
   return { _tag: 'StoreFalhou', codigo };

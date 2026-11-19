@@ -20,7 +20,6 @@ const ENTRADA: PersistBlingTokensInput = {
   clientId: 'client-abc',
   clientSecret: 'secret-sintetico',
   organizationConnectionId: null,
-  legacyRecordId: null,
   accessToken: 'access-sintetico',
   refreshToken: 'refresh-sintetico',
   expiresAt: '2026-09-10T13:00:00Z',

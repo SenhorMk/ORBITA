@@ -27,11 +27,13 @@ export type SupabaseServerConfigurationResult =
       readonly url: string;
     };
 
-function isValidSupabaseUrl(value: string | undefined): value is string {
+function isValidSupabaseUrl(value: string | undefined, environment: RuntimeEnvironment): value is string {
   if (!value || /placeholder|seu-projeto/iu.test(value)) return false;
 
   try {
     const url = new URL(value);
+    if (environment.NODE_ENV === 'development' && environment.NEXT_PUBLIC_ORBITA_DEMO_LOCAL === 'true'
+      && value === 'http://127.0.0.1:55821') return true;
     return url.protocol === 'https:' && url.hostname.endsWith('.supabase.co');
   } catch {
     return false;
@@ -51,7 +53,7 @@ export function readSupabaseBrowserConfiguration(
   environment: RuntimeEnvironment = process.env,
 ): SupabaseBrowserConfigurationResult {
   const url = environment.NEXT_PUBLIC_SUPABASE_URL;
-  if (!isValidSupabaseUrl(url)) {
+  if (!isValidSupabaseUrl(url, environment)) {
     return {
       _tag: 'InvalidRuntimeConfiguration',
       variable: 'NEXT_PUBLIC_SUPABASE_URL',
@@ -74,7 +76,7 @@ export function readSupabaseServerConfiguration(
   environment: RuntimeEnvironment = process.env,
 ): SupabaseServerConfigurationResult {
   const url = environment.NEXT_PUBLIC_SUPABASE_URL;
-  if (!isValidSupabaseUrl(url)) {
+  if (!isValidSupabaseUrl(url, environment)) {
     return {
       _tag: 'InvalidRuntimeConfiguration',
       variable: 'NEXT_PUBLIC_SUPABASE_URL',

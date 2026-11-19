@@ -41,7 +41,6 @@ const CREDENTIALS: ResolvedBlingCredentials = {
   clientId: 'client-1',
   clientSecret: 'secret-1',
   organizationConnectionId: null,
-  legacyRecordId: 'legacy-1',
 };
 
 function baseDeps(overrides: Partial<BlingCallbackDependencies> = {}): BlingCallbackDependencies {
@@ -61,7 +60,7 @@ function baseDeps(overrides: Partial<BlingCallbackDependencies> = {}): BlingCall
 }
 
 async function createValidTransaction(store: OAuthTransactionStorePort) {
-  const transaction = await createOAuthTransaction('user-tenant-1', undefined, 'bling', store);
+  const transaction = await createOAuthTransaction('user-tenant-1', '33333333-3333-4333-8333-333333333339', 'bling', store);
   if (transaction._tag !== 'OAuthTransactionCreated') throw new Error('Transaction creation failed');
   return transaction;
 }
@@ -100,6 +99,26 @@ describe('GET /api/bling/callback', () => {
     expect(response.status).toBe(400);
     const html = await response.text();
     expect(html).toContain('Transação OAuth expirada ou inválida');
+  });
+
+  it('recusa transação sem organização antes de consultar credenciais ou trocar o código', async () => {
+    const store = inMemoryOAuthTransactionStore();
+    const transaction = await createOAuthTransaction('user-tenant-1', undefined, 'bling', store);
+    if (transaction._tag !== 'OAuthTransactionCreated') throw new Error('Transaction creation failed');
+
+    const handler = createBlingCallbackHandler(baseDeps({
+      oauthTransactionStore: store,
+      resolveCredentials: async () => { throw new Error('Consulta indevida'); },
+      exchangeAuthorizationCode: async () => { throw new Error('Troca indevida'); },
+      persistTokens: async () => { throw new Error('Persistência indevida'); },
+    }));
+    const request = new Request(`https://orbita.test/api/bling/callback?code=test-code&state=${transaction.state}`, {
+      headers: { cookie: `orbita_oauth_transaction=${transaction.cookieValue}` },
+    });
+
+    const response = await handler(request);
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain('Transação sem organização');
   });
 
   it('rejects a replayed callback (same cookie/state used twice) with no second token exchange', async () => {

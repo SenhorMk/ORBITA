@@ -29,9 +29,8 @@ const NOMEIA_TABELA = /\b(conexoes_integracao|chatwoot_inboxes|credenciais_integ
  * capacidade e (para reativar conexão) auditoria decididos.
  */
 const GRAVADORES_DO_SERVIDOR: Record<string, readonly string[]> = {
-  // OAuth: `pendente` → cofre → `conectado`, organização da transação OAuth;
-  // e o espelho legado, que o `service_role` nem pode gravar (best-effort).
-  'src/app/api/bling/callback/route.ts': ['conexoes_integracao', 'integracoes_bling'],
+  // OAuth: pendente → cofre → auditoria → conectado, na organização da transação.
+  'src/app/api/bling/callback/route.ts': ['conexoes_integracao'],
   // `POST /api/bling/connect` e `POST /api/chatwoot/connect` (organization:manage).
   'src/app/api/bling/connect/route.ts': ['conexoes_integracao'],
   'src/app/api/chatwoot/connect/route.ts': ['conexoes_integracao'],

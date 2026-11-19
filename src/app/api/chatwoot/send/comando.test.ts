@@ -56,7 +56,7 @@ vi.mock('../../../../lib/supabaseServer', () => ({
             .filter(([chave, i]) => chave.startsWith(String(filtros.organizacao_id)) && i.conversa === filtros.conversa_id_local)
             .map(([chave, i]) => ({
               id: i.envioId, command_id: chave.split(':')[1], conteudo: i.conteudo, mensagem_id_local: null, created_at: '2026-11-05T12:00:00Z',
-              outbox_eventos: { status: 'unknown', motivo_bloqueio: 'timeout', resolucao: null },
+              outbox_eventos: { status: 'unknown', motivo_bloqueio: 'timeout', resolucao: null, last_error: null },
             }));
           return { data: linhas, error: null };
         },

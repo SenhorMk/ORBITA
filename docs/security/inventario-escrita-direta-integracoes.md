@@ -54,7 +54,7 @@ Em `chatwoot_inboxes` o navegador só tinha SELECT; `credenciais_integracao` e
 |---|---|---|---|---|
 | `POST /api/bling/connect` | lê, insere, atualiza `conexoes_integracao` (`pendente`, `client_id` só depois do cofre); grava o cofre | sessão verificada | `organization:manage` | `blingCredentialsPayloadSchema` |
 | `GET /api/bling/authorize` | lê `metadata.client_id` | sessão verificada | `organization:manage` | `organizacao_esperada` da query só recusa |
-| `GET /api/bling/callback` | upsert `pendente` → cofre → `conectado`; espelho legado best-effort | transação OAuth consumida (state + cookie) | a do authorize | tokens pelo contrato do OAuth |
+| `GET /api/bling/callback` | upsert `pendente` → cofre → auditoria → `conectado` | transação OAuth consumida (state + cookie) | a do authorize | tokens pelo contrato do OAuth |
 | `POST /api/bling/webhook` | lê as conexões Bling e o `client_secret` do cofre para o HMAC | a conexão cujo segredo confere | assinatura | contrato do evento |
 | `POST /api/chatwoot/connect` | lê, insere, atualiza (`pendente`); desfaz a linha nova se o cofre recusar | sessão verificada | `organization:manage` | **`ChatwootConnectBodySchema`** (fatia de código) |
 | `POST /api/chatwoot/webhook/[conexaoId]` | lê `id, organizacao_id, status`; o mapping de inbox passou para `aplicar_evento_inbox_chatwoot`, no worker (MSG-006) | a conexão do path, provada pelo HMAC com o segredo dela | assinatura + `account_id` conferido com o cofre | `ChatwootWebhookEventSchema` |
@@ -65,7 +65,7 @@ Em `chatwoot_inboxes` o navegador só tinha SELECT; `credenciais_integracao` e
 | `entitlementLifecycleRepository` | conta conexões | org do ciclo de vida | — | — |
 
 Gravadores diretos, todos com `supabaseServer` (o detector os fixa):
-`bling/callback/route.ts` (`conexoes_integracao`, `integracoes_bling`),
+`bling/callback/route.ts` (`conexoes_integracao`),
 `bling/connect/route.ts`, `chatwoot/connect/route.ts`,
 `lib/integrations/credentialsVault.ts` (`credenciais_integracao`) e
 `services/chatwoot/chatwootInboxRegistration.ts` (`chatwoot_inboxes`, recebe o
@@ -151,9 +151,8 @@ sem grant, ela não é alcançável.
      com conexão falha inteiro. Medido no laboratório em S86, numa transação
      desfeita: `23514 conexoes_integracao_status_check`. A 84 não muda isso.
    - **`integracoes_bling`**: o `service_role` não tem SELECT/INSERT/UPDATE, então
-     o espelho legado do callback falha sempre (best-effort, já documentado no
-     PRE-007A). A tabela guarda tokens de antes do cofre; removê-la é ticket
-     próprio.
+     o callback usa o cofre da organização. A tabela guarda tokens de antes do
+     cofre; removê-la é ticket próprio.
 
 ## Matriz de efeitos externos (17 casos)
 

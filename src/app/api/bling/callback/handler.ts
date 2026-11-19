@@ -33,17 +33,15 @@ export interface ResolvedBlingCredentials {
   readonly clientId: string;
   readonly clientSecret: string;
   readonly organizationConnectionId: string | null;
-  readonly legacyRecordId: string | null;
 }
 
 /** Input required to persist tokens after a successful exchange. */
 export interface PersistBlingTokensInput {
   readonly userId: string;
-  readonly organizacaoId: string | undefined;
+  readonly organizacaoId: string;
   readonly clientId: string;
   readonly clientSecret: string;
   readonly organizationConnectionId: string | null;
-  readonly legacyRecordId: string | null;
   readonly accessToken: string;
   readonly refreshToken: string;
   readonly expiresAt: string;
@@ -61,8 +59,7 @@ export interface BlingCallbackDependencies {
     readonly code: string;
   }) => Promise<BlingOAuthTokenExchangeResult>;
   readonly resolveCredentials: (
-    userId: string,
-    organizacaoId: string | undefined,
+    organizacaoId: string,
   ) => Promise<ResolvedBlingCredentials | null>;
   readonly persistTokens: (input: PersistBlingTokensInput) => Promise<void>;
 }
@@ -160,7 +157,7 @@ async function exchangeAndPersistTokens(
   dependencies: BlingCallbackDependencies,
   code: string,
   userId: string,
-  organizacaoId: string | undefined,
+  organizacaoId: string,
   credentials: ResolvedBlingCredentials,
   correlationId: string,
 ): Promise<NextResponse> {
@@ -196,7 +193,6 @@ async function exchangeAndPersistTokens(
       clientId: credentials.clientId,
       clientSecret: credentials.clientSecret,
       organizationConnectionId: credentials.organizationConnectionId,
-      legacyRecordId: credentials.legacyRecordId,
       accessToken: tokenData.access_token,
       refreshToken: tokenData.refresh_token,
       expiresAt,
@@ -260,7 +256,11 @@ export function createBlingCallbackHandler(dependencies: BlingCallbackDependenci
       );
     }
 
-    const credentials = await dependencies.resolveCredentials(userId, organizacaoId);
+    if (!organizacaoId) {
+      return clearOAuthTransaction(htmlPage('error', 'Transação sem organização. Conecte o Bling novamente.', 400));
+    }
+
+    const credentials = await dependencies.resolveCredentials(organizacaoId);
     if (!credentials) {
       return clearOAuthTransaction(
         htmlPage('error', 'Credenciais não encontradas. Salve as configurações primeiro.'),

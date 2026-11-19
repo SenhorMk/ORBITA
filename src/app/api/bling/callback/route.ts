@@ -12,8 +12,6 @@ export type { BlingCallbackDependencies, PersistBlingTokensInput, ResolvedBlingC
 type ProductionSupabaseClient = import('@supabase/supabase-js').SupabaseClient;
 type ProductionCredentialsVault = typeof import('../../../../lib/integrations/credentialsVault').credentialsVault;
 type ProductionLogger = typeof import('../../../../lib/observability/logger').logger;
-type ProductionDecrypt = typeof import('../../../../lib/crypto').decrypt;
-type ProductionEncrypt = typeof import('../../../../lib/crypto').encrypt;
 
 /**
  * Lê do cofre o Client ID e o Client Secret do aplicativo Bling da organização.
@@ -25,10 +23,7 @@ type ProductionEncrypt = typeof import('../../../../lib/crypto').encrypt;
 async function resolveProductionCredentials(
   supabaseServer: ProductionSupabaseClient,
   credentialsVault: ProductionCredentialsVault,
-  decrypt: ProductionDecrypt,
-  productionLogger: ProductionLogger,
-  userId: string,
-  organizacaoId: string | undefined,
+  organizacaoId: string,
 ): Promise<ResolvedBlingCredentials | null> {
   if (organizacaoId) {
     const { data: conn } = await supabaseServer
@@ -49,7 +44,6 @@ async function resolveProductionCredentials(
           clientId: parsedCreds.data.client_id,
           clientSecret: parsedCreds.data.client_secret,
           organizationConnectionId: String(conn.id),
-          legacyRecordId: null,
         };
       }
     }
@@ -145,45 +139,9 @@ export async function persistOrganizationTokens(
   }
 }
 
-/**
- * Espelho legado em `integracoes_bling`, mantido apenas enquanto a tabela
- * existir. Nenhum caminho de runtime lê essa tabela; a escrita é best-effort e
- * o seu resultado nunca decide o sucesso da conexão.
- */
-async function persistLegacyTokens(
-  supabaseServer: ProductionSupabaseClient,
-  encrypt: ProductionEncrypt,
-  input: PersistBlingTokensInput,
-): Promise<void> {
-  if (input.legacyRecordId) {
-    await supabaseServer
-      .from('integracoes_bling')
-      .update({
-        access_token: encrypt(input.accessToken),
-        refresh_token: encrypt(input.refreshToken),
-        token_expires_at: input.expiresAt,
-      })
-      .eq('id', input.legacyRecordId);
-    return;
-  }
-
-  await supabaseServer.from('integracoes_bling').upsert(
-    {
-      user_id: input.userId,
-      client_id: input.clientId,
-      client_secret: encrypt(input.clientSecret),
-      access_token: encrypt(input.accessToken),
-      refresh_token: encrypt(input.refreshToken),
-      token_expires_at: input.expiresAt,
-    },
-    { onConflict: 'user_id' },
-  );
-}
-
 /** Production Bling OAuth callback route. */
 export async function GET(request: Request): Promise<NextResponse> {
   const { supabaseServer } = await import('../../../../lib/supabaseServer');
-  const { encrypt, decrypt } = await import('../../../../lib/crypto');
   const { createSupabaseOAuthTransactionStore } = await import('../../../../lib/oauthTransactionStore');
   const { createSupabaseRateLimitStore } = await import('../../../../lib/rateLimitStore');
   const { exchangeBlingAuthorizationCode } = await import('../../../../services/blingOAuth');
@@ -195,34 +153,15 @@ export async function GET(request: Request): Promise<NextResponse> {
     oauthTransactionStore: createSupabaseOAuthTransactionStore(supabaseServer),
     rateLimitStore: createSupabaseRateLimitStore(supabaseServer),
     exchangeAuthorizationCode: exchangeBlingAuthorizationCode,
-    resolveCredentials: (userId, organizacaoId) => resolveProductionCredentials(
-      supabaseServer, credentialsVault, decrypt, productionLogger, userId, organizacaoId,
+    resolveCredentials: (organizacaoId) => resolveProductionCredentials(supabaseServer, credentialsVault, organizacaoId),
+    persistTokens: (input) => persistOrganizationTokens(
+      supabaseServer, credentialsVault, productionLogger, input.organizacaoId, input,
+      (conexaoId) => auditarAutorizacaoOAuth(
+        supabaseServer,
+        { organizationId: input.organizacaoId, actorId: input.userId },
+        { provedor: 'bling', conexaoId, status: 'conectado', correlationId: input.correlationId },
+      ),
     ),
-    persistTokens: async (input) => {
-      if (input.organizacaoId) {
-        const organizacaoId = input.organizacaoId;
-        await persistOrganizationTokens(
-          supabaseServer, credentialsVault, productionLogger, organizacaoId, input,
-          (conexaoId) => auditarAutorizacaoOAuth(
-            supabaseServer,
-            { organizationId: organizacaoId, actorId: input.userId },
-            { provedor: 'bling', conexaoId, status: 'conectado', correlationId: input.correlationId },
-          ),
-        );
-      }
-      // O espelho legado é best-effort, então a sua falha não pode derrubar
-      // uma conexão já gravada no cofre da organização — que é o que decide
-      // o sucesso.
-      try {
-        await persistLegacyTokens(supabaseServer, encrypt, input);
-      } catch (causa) {
-        productionLogger.warn('bling_callback.legacy_mirror_failed', {
-          subsystem: 'app',
-          provider: 'bling',
-          reason: causa instanceof Error ? causa.name : 'unknown',
-        });
-      }
-    },
   });
 
   return handler(request);
