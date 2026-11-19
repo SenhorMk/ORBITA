@@ -57,6 +57,7 @@ begin
     join public.chatwoot_ai_runtime r on r.organizacao_id=c.organizacao_id and r.conexao_id=c.conexao_id and r.inbox_id=c.inbox_id
     join public.chatwoot_conversa_controle k on k.organizacao_id=c.organizacao_id and k.conversa_id_local=c.id_local
     where o.organizacao_id=p_org and c.conexao_id=p_conexao and k.ownership_mode='AI'
+      and (r.conversa_teste_externa is null or r.conversa_teste_externa=c.id_externo)
       and s.ultima_mensagem_em>=r.corte and o.destination='interno' and o.event_type='sac.triagem'
       and o.status in ('pending','failed_transient') and o.next_retry_at<=clock_timestamp()
     order by o.next_retry_at,o.id limit p_limite for update of o skip locked

@@ -42,7 +42,7 @@ test('producer, durable projection, inbox barrier and MSG-022 on PostgreSQL', { 
     for (const c of [a,b,o]) await c.query("set request.jwt.claim.role='service_role'; set statement_timeout='6s'");
     const { p_org: org, p_conexao: conexao, p_executor: executor } = escopo;
     await a.query('insert into public.sac_executores_autorresposta values ($1,$2)', [org,executor]);
-    await a.query("insert into public.chatwoot_ai_runtime values ($1,$2,$3,1,now()-interval '2 minutes',true)",
+    await a.query("insert into public.chatwoot_ai_runtime (conexao_id,organizacao_id,executor_id,inbox_id,corte,ativo,conversa_teste_externa) values ($1,$2,$3,1,now()-interval '2 minutes',true,'221')",
       [conexao,org,executor]);
     await a.query('update public.chatwoot_ai_runtime set limite_geracoes_dia=20 where conexao_id=$1',[conexao]);
     const banco = {
@@ -89,6 +89,11 @@ test('producer, durable projection, inbox barrier and MSG-022 on PostgreSQL', { 
     assert.equal(modelos,0);
     assert.equal(await scalar(a,'select pg_temp.mudar(null,$1,true,0)',[id('f1')]),'aplicado');
     assert.equal(await scalar(a,'select pg_temp.mudar($1,$2,true,0)',[org,executor]),'aplicado');
+    await a.query("update public.chatwoot_ai_runtime set conversa_teste_externa='222' where conexao_id=$1",[conexao]);
+    assert.equal((await pass()).estado,'sem_geracao');
+    assert.equal(writes.length,0);
+    assert.equal(modelos,0);
+    await a.query("update public.chatwoot_ai_runtime set conversa_teste_externa='221' where conexao_id=$1",[conexao]);
     state.failReceipt=true;
     assert.equal((await pass()).projecao,'incerto');
     await a.query("update public.chatwoot_ai_projecao set ate=now()-interval '1 second'");
@@ -105,6 +110,10 @@ test('producer, durable projection, inbox barrier and MSG-022 on PostgreSQL', { 
     const envio=await claimant('envio-1');
     assert.ok(envio);
     const iniciar=(c,e,nome)=>scalar(c,'select public.iniciar_envio_chatwoot($1,$2,$3)',[e.evento_id,nome,e.fencing_token]);
+    await a.query("update public.chatwoot_ai_runtime set conversa_teste_externa='222' where conexao_id=$1",[conexao]);
+    assert.equal(await iniciar(a,envio,'envio-1'),'aguardando_ai_first');
+    await assert.rejects(a.query('update public.chatwoot_ai_runtime set conversa_teste_externa=null where conexao_id=$1',[conexao]),{code:'23514'});
+    await a.query("update public.chatwoot_ai_runtime set conversa_teste_externa='221' where conexao_id=$1",[conexao]);
     await b.query('begin');
     const atualizacao=await delivery(b,'conversation_updated','d083-status');
     const resultado=iniciar(a,envio,'envio-1');

@@ -6,7 +6,10 @@ create table public.chatwoot_ai_runtime (
     inbox_id integer not null check (inbox_id>0),
     corte timestamptz not null,
     ativo boolean not null default false,
-    pronto_ate timestamptz not null default '-infinity'
+    pronto_ate timestamptz not null default '-infinity',
+    conversa_teste_externa text check (conversa_teste_externa ~ '^[1-9][0-9]{0,9}$'),
+    clientes_liberados boolean not null default false,
+    constraint ck_ai_runtime_ativacao check (not ativo or clientes_liberados or conversa_teste_externa is not null)
 );
 create table public.chatwoot_ai_projecao (
     organizacao_id uuid not null,
@@ -126,7 +129,8 @@ begin
     perform public.travar_ingresso_ai(v.conexao_id);
     if not public.ai_runtime_valido(v.organizacao_id,v.conexao_id,v.ator_id)
        or not exists (select 1 from public.chatwoot_ai_runtime r where r.conexao_id=v.conexao_id
-           and r.organizacao_id=v.organizacao_id and r.inbox_id=v.inbox_escopo)
+           and r.organizacao_id=v.organizacao_id and r.inbox_id=v.inbox_escopo
+           and (r.conversa_teste_externa is null or r.conversa_teste_externa=v.id_externo))
        or public.ai_inbox_pendente(v.organizacao_id,v.conexao_id,v.id_externo)
        or not exists (select 1 from public.chatwoot_ai_projecao p
            where p.organizacao_id=v.organizacao_id and p.conversa_id=v.conversa_id_local
@@ -166,6 +170,7 @@ language sql stable set search_path = '' as $$
           and a.tarefa='sac.triagem'
         order by a.sequencia desc limit 1) r
     where c.organizacao_id=p_org and c.conexao_id=p_conexao
+      and (t.conversa_teste_externa is null or t.conversa_teste_externa=c.id_externo)
       and k.ownership_mode='AI' and s.phase in ('TRIAGE','COLLECTING_INFORMATION')
       and flags.ativa_global and flags.ativa_org
       and p.versao=k.control_version and p.desejado='pending' and p.fase='ok'
@@ -297,6 +302,7 @@ begin
       ) prova on coalesce(k.control_version,0)=0 and v_flags.ativa_global and v_flags.ativa_org
         and not coalesce(p.versao=0 and p.fase='contido',false)
       where c.organizacao_id=p_org and c.conexao_id=p_conexao
+        and (t.conversa_teste_externa is null or t.conversa_teste_externa=c.id_externo)
         and (p.conversa_id is not null or k.ownership_mode='AI' or (prova.id is not null and exists (
             select 1 from public.sac_cases s where s.organizacao_id=p_org and s.conversa_id_local=c.id_local)))
         and (p.ate is null or p.ate<=clock_timestamp())
@@ -338,6 +344,8 @@ begin
       from public.chatwoot_conversations c
      where p.organizacao_id=p_org and p.conversa_id=p_conversa and p.token=p_token and p.fase='lendo' and not p.somente_leitura
        and p.ate>clock_timestamp() and c.organizacao_id=p_org and c.id_local=p_conversa and c.conexao_id=p_conexao
+       and exists (select 1 from public.chatwoot_ai_runtime t where t.organizacao_id=p_org and t.conexao_id=p_conexao
+           and (t.conversa_teste_externa is null or t.conversa_teste_externa=c.id_externo))
        and p.versao=coalesce((select k.control_version from public.chatwoot_conversa_controle k
            where k.organizacao_id=p_org and k.conversa_id_local=p_conversa),0)
        and not public.ai_inbox_pendente(p_org,p_conexao,c.id_externo)
@@ -361,7 +369,8 @@ begin
     if not public.ai_runtime_valido(p_org,p_conexao,p_executor) then return 'indisponivel'; end if;
     select c.id_externo,t.corte into v from public.chatwoot_conversations c
       join public.chatwoot_ai_runtime t on t.organizacao_id=c.organizacao_id and t.conexao_id=c.conexao_id
-     where c.organizacao_id=p_org and c.id_local=p_conversa and c.conexao_id=p_conexao;
+     where c.organizacao_id=p_org and c.id_local=p_conversa and c.conexao_id=p_conexao
+       and (t.conversa_teste_externa is null or t.conversa_teste_externa=c.id_externo);
     if not found then return 'obsoleta'; end if;
     select * into r from public.chatwoot_ai_projecao where organizacao_id=p_org and conversa_id=p_conversa and token=p_token;
     if not found or r.ate<=clock_timestamp() then return 'obsoleta'; end if;
@@ -411,6 +420,7 @@ returns boolean language sql stable security definer set search_path = '' as $$
         join public.conexoes_integracao x on x.id=c.conexao_id and x.organizacao_id=c.organizacao_id
         cross join public.estado_autorresposta(p_org) f
         where c.organizacao_id=p_org and c.id_local=p_conversa and x.status='conectado'
+          and (r.conversa_teste_externa is null or r.conversa_teste_externa=c.id_externo)
           and x.provedor='chatwoot' and r.ativo and r.pronto_ate>now() and f.ativa_global and f.ativa_org
           and not exists (select 1 from public.chatwoot_conversa_controle k
               where k.organizacao_id=p_org and k.conversa_id_local=p_conversa and k.ownership_mode='AI'
@@ -486,6 +496,7 @@ begin
             and t.tarefa='sac.triagem'
           order by t.sequencia desc limit 1) a
      where c.organizacao_id=p_org and c.conexao_id=p_conexao and k.ownership_mode='AI'
+       and (t.conversa_teste_externa is null or t.conversa_teste_externa=c.id_externo)
        and s.phase in ('TRIAGE','COLLECTING_INFORMATION')
        and not public.ai_inbox_pendente(p_org,p_conexao,c.id_externo)
        and (a.status='handoff' or (a.status='concluida' and a.resultado->'precisaDeHumano'='true'::jsonb))

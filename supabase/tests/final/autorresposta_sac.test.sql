@@ -103,9 +103,10 @@ select organizacao_id, id_local, 'AI' from public.chatwoot_conversations
  where id_local in (pg_temp.conversa(221), pg_temp.conversa(222));
 insert into public.sac_executores_autorresposta values
     (pg_temp.id('a'),pg_temp.id('a1')), (pg_temp.id('b'),pg_temp.id('b1'));
-insert into public.chatwoot_ai_runtime (conexao_id,organizacao_id,executor_id,inbox_id,corte,ativo,pronto_ate) values
-    (pg_temp.id('c1'),pg_temp.id('a'),pg_temp.id('a1'),1,now(),true,now()+interval '10 minutes'),
-    (pg_temp.id('d1'),pg_temp.id('b'),pg_temp.id('b1'),1,now(),true,now()+interval '10 minutes');
+-- Explicitly released fixtures; the initial real rehearsal remains conversation-restricted.
+insert into public.chatwoot_ai_runtime (conexao_id,organizacao_id,executor_id,inbox_id,corte,ativo,pronto_ate,clientes_liberados) values
+    (pg_temp.id('c1'),pg_temp.id('a'),pg_temp.id('a1'),1,now(),true,now()+interval '10 minutes',true),
+    (pg_temp.id('d1'),pg_temp.id('b'),pg_temp.id('b1'),1,now(),true,now()+interval '10 minutes',true);
 insert into public.chatwoot_ai_projecao (organizacao_id,conversa_id,versao,desejado,fase)
 select organizacao_id,id_local,0,'pending','ok' from public.chatwoot_conversations
  where id_local in (pg_temp.conversa(221),pg_temp.conversa(222));
