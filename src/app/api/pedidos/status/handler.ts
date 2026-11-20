@@ -263,6 +263,17 @@ export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
         }, 500);
       }
 
+      // Cancelar pela API não devolve o estoque lançado pela venda: o estorno é explícito.
+      // Recusa (pedido sem estoque lançado) ou falha não derruba a resposta: o alinhamento
+      // abaixo lê o saldo real e a pendência vira aviso.
+      if (novoStatusCanonico === 'Cancelado') {
+        const estorno = await semExcecao(() => bling.estornarEstoque(pedidoLocal.bling_id));
+        await evento('order.stock_reversal', {
+          resultado: estorno._tag === 'BlingOk' ? 'estornado' : 'nao_estornado',
+          status_http: estorno._tag === 'BlingFailed' ? estorno.failure.status : null,
+        });
+      }
+
       // O Bling roda as rotinas de estoque de forma assíncrona depois de aceitar
       // a mudança; ler o saldo imediatamente traria o valor antigo.
       await aguardarProcessamentoBling();

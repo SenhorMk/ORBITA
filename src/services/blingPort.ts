@@ -61,6 +61,8 @@ export interface BlingPort {
   criarPedidoVenda(payload: PedidoVendaPayload): Promise<BlingCallResult<{ id: string; alertas: readonly string[] }>>;
   /** Baixa de estoque vinculada ao pedido. */
   lancarEstoquePedidoVenda(idPedido: string): Promise<BlingCallResult<void>>;
+  /** Estorna a baixa de estoque vinculada ao pedido (par de `lancarEstoquePedidoVenda`). */
+  estornarEstoquePedidoVenda(idPedido: string): Promise<BlingCallResult<void>>;
   /**
    * Procura um pedido de venda pela referência local enviada em `numeroLoja`.
    *

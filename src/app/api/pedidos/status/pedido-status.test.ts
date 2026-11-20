@@ -76,6 +76,7 @@ function montarDeps(sobrescritas: {
     updateSituacaoPedido,
     getSaldos: vi.fn().mockResolvedValue(new Map<string, number>()),
     situacoes: vi.fn().mockResolvedValue({ _tag: 'BlingOk', value: SITUACOES_DA_CONTA }),
+    estornarEstoque: vi.fn<PedidoStatusBlingPort['estornarEstoque']>().mockResolvedValue({ _tag: 'BlingOk', value: undefined }),
     ...sobrescritas.bling,
   };
 
@@ -685,5 +686,94 @@ describe('POST /api/pedidos/status — saldo não comprovado não altera estoque
     await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
 
     expect(alinharEstoque).toHaveBeenCalledWith(escopo, 'p1', 5, 0);
+  });
+});
+
+// Staging, 20/11/2026: o pedido de teste 27462764185 foi cancelado pelo ORBITA e o saldo continuou
+// baixado no Bling e no ORBITA. Mudar a situação não estorna o estoque lançado por `lancar-estoque`.
+describe('POST /api/pedidos/status — cancelamento devolve o estoque lançado', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const CANCELAR = { pedidoId: PEDIDO_ID, novaSituacaoId: 12, novaSituacaoNome: 'Cancelado' };
+
+  it('estorna o estoque no Bling depois da situação e antes de reler o saldo', async () => {
+    const ordem: string[] = [];
+    const { deps, bling, eventos } = montarDeps({
+      bling: {
+        updateSituacaoPedido: vi.fn().mockImplementation(async () => { ordem.push('situacao'); return { _tag: 'BlingOk', value: undefined }; }),
+        estornarEstoque: vi.fn().mockImplementation(async () => { ordem.push('estorno'); return { _tag: 'BlingOk', value: undefined }; }),
+        getSaldos: vi.fn().mockImplementation(async () => { ordem.push('saldo'); return new Map(); }),
+      },
+      store: { findProdutoIdsDoPedido: vi.fn().mockResolvedValue(['p1']), findProdutosByIds: vi.fn().mockResolvedValue([{ id: 'p1', blingId: '100', estoque: 7 }]) },
+    });
+
+    const resposta = await createPedidoStatusHandler(deps)(corpo(CANCELAR));
+
+    expect(resposta.status).toBe(200);
+    expect(bling.estornarEstoque).toHaveBeenCalledWith('26735988980');
+    expect(ordem).toEqual(['situacao', 'estorno', 'saldo']);
+    expect(eventos.map((e) => e.acao)).toContain('order.stock_reversal');
+    expect(eventos.find((e) => e.acao === 'order.stock_reversal')?.metadata).toMatchObject({ resultado: 'estornado', status_http: null });
+  });
+
+  it('o saldo devolvido pelo Bling é alinhado localmente', async () => {
+    const { deps, alinharEstoque } = montarDeps({
+      bling: { getSaldos: vi.fn().mockResolvedValue(new Map([['100', 8]])) },
+      store: { findProdutoIdsDoPedido: vi.fn().mockResolvedValue(['p1']), findProdutosByIds: vi.fn().mockResolvedValue([{ id: 'p1', blingId: '100', estoque: 7 }]) },
+    });
+
+    await createPedidoStatusHandler(deps)(corpo(CANCELAR));
+
+    expect(alinharEstoque).toHaveBeenCalledWith(escopo, 'p1', 7, 8);
+  });
+
+  it('recusa do estorno (pedido sem estoque lançado) não derruba o cancelamento', async () => {
+    const { deps, savePedidoStatus, eventos } = montarDeps({
+      bling: {
+        estornarEstoque: vi.fn().mockResolvedValue({
+          _tag: 'BlingFailed',
+          failure: { _tag: 'BlingProviderFailure', type: 'VALIDATION_ERROR', status: 400, message: 'x', duplicateSale: false },
+        }),
+      },
+    });
+
+    const resposta = await createPedidoStatusHandler(deps)(corpo(CANCELAR));
+
+    expect(resposta.status).toBe(200);
+    expect(savePedidoStatus).toHaveBeenCalledWith(escopo, PEDIDO, 'Cancelado');
+    expect(eventos.find((e) => e.acao === 'order.stock_reversal')?.metadata).toMatchObject({ resultado: 'nao_estornado', status_http: 400 });
+  });
+
+  it('exceção de rede no estorno também não derruba o cancelamento', async () => {
+    const { deps } = montarDeps({ bling: { estornarEstoque: vi.fn().mockRejectedValue(new Error('ECONNRESET')) } });
+
+    const resposta = await createPedidoStatusHandler(deps)(corpo(CANCELAR));
+
+    expect(resposta.status).toBe(200);
+  });
+
+  it('mudar para outra situação não estorna nada', async () => {
+    const { deps, bling } = montarDeps();
+
+    await createPedidoStatusHandler(deps)(corpo(CORPO_VALIDO));
+
+    expect(bling.estornarEstoque).not.toHaveBeenCalled();
+  });
+
+  it('o Bling recusou a situação: nenhum estorno', async () => {
+    const { deps, bling } = montarDeps({
+      bling: {
+        updateSituacaoPedido: vi.fn().mockResolvedValue({
+          _tag: 'BlingFailed',
+          failure: { _tag: 'BlingProviderFailure', type: 'VALIDATION_ERROR', status: 400, message: 'x', duplicateSale: false },
+        }),
+      },
+    });
+
+    await createPedidoStatusHandler(deps)(corpo(CANCELAR));
+
+    expect(bling.estornarEstoque).not.toHaveBeenCalled();
   });
 });

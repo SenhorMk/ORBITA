@@ -82,6 +82,11 @@ export interface PedidoStatusBlingPort {
    */
   updateSituacaoPedido(blingPedidoId: string, situacaoId: number): Promise<BlingCallResult<void>>;
   /**
+   * `POST /pedidos/vendas/{idPedido}/estornar-estoque`: devolve o estoque que a venda lançou.
+   * Chamado só no cancelamento; pedido sem estoque lançado é recusado pelo Bling, e isso não é erro.
+   */
+  estornarEstoque(blingPedidoId: string): Promise<BlingCallResult<void>>;
+  /**
    * `GET /estoques/saldos?idsProdutos[]=…` — saldo físico **comprovado** por
    * produto. Produto sem saldo explícito e inteiro não está no mapa.
    */

@@ -1229,6 +1229,23 @@ export class BlingClient implements BlingPort {
   }
 
   /**
+   * Estorna o estoque lançado do pedido (`POST .../estornar-estoque`), o par documentado de
+   * `lancar-estoque`. Mudar a situação para "Cancelado" pela API não devolve esse estoque:
+   * provado no staging em 20/11/2026 (pedido 27462764185, saldo continuou baixado).
+   */
+  async estornarEstoquePedidoVenda(idPedido: string): Promise<BlingCallResult<void>> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/pedidos/vendas/${encodeURIComponent(idPedido)}/estornar-estoque`, {
+      method: 'POST',
+    });
+
+    if (!response.ok) {
+      return { _tag: 'BlingFailed', failure: parseBlingFailure(response.status, await response.text()) };
+    }
+
+    return { _tag: 'BlingOk', value: undefined };
+  }
+
+  /**
    * Id da forma de pagamento marcada como padrão (`padrao = 1`) e ativa
    * (`situacao = 1`) na conta. Os ids são por conta, então fixá-los no código
    * inventaria um valor.

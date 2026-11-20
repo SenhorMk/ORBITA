@@ -109,6 +109,10 @@ function blingPedidoStatusAdapter(client: BlingPort): PedidoStatusBlingPort {
       return client.obterSituacoesDePedidoDeVenda();
     },
 
+    estornarEstoque(blingPedidoId: string) {
+      return client.estornarEstoquePedidoVenda(blingPedidoId);
+    },
+
     async getSaldos(blingIds: readonly string[]): Promise<ReadonlyMap<string, number>> {
       return saldosComprovados(await client.getEstoquesSaldos([...blingIds]));
     },
