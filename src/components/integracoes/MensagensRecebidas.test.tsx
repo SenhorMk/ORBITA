@@ -55,12 +55,15 @@ describe('MensagensRecebidas', () => {
     expect(screen.getByText('Tipo de evento que o ORBITA não trata.')).toBeInTheDocument();
   });
 
-  it('só leitura: o único botão é o de atualizar, e o único pedido é GET', async () => {
+  it('só leitura: ajuda e atualização não oferecem escrita, e o único pedido é GET', async () => {
     const fetchWithAuth = vi.fn(async () => resposta([evento()], [CASO]));
     render(<MensagensRecebidas fetchWithAuth={fetchWithAuth} selecao={ORG} />);
     await screen.findByText('Caso aberto em triagem.');
 
-    expect(screen.getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Atualizar mensagens']);
+    const buttons = screen.getAllByRole('button');
+    expect(buttons).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Atualizar mensagens' })).toBeInTheDocument();
+    expect(buttons.filter((button) => button.getAttribute('data-help-id') === 'integracoes.inbox')).toHaveLength(1);
     for (const [, opcoes] of fetchWithAuth.mock.calls as unknown as Array<[string, RequestInit | undefined]>) {
       expect(opcoes?.method ?? 'GET').toBe('GET');
     }

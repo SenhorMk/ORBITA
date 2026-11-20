@@ -15,6 +15,7 @@ import { MensagensRecebidas } from './MensagensRecebidas';
 import { comPrazo } from './comPrazo';
 import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizationPanel';
 import { useIntegracoes, type LeituraDeIntegracoes } from './useIntegracoes';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Falha de uma acao do painel, com o status HTTP junto da mensagem.
@@ -273,6 +274,7 @@ function CartaoBling({
       titulo="Bling ERP"
       estado={estado}
     >
+      <HelpInfo ajudaId="integracoes.bling" />
       <form onSubmit={salvar} className="flex flex-col" style={{ gap: 10 }}>
         <Passo numero={1} titulo="credenciais do seu aplicativo no Bling">
           {credenciaisGravadas && (
@@ -408,6 +410,8 @@ function CartaoChatwoot({ fetchWithAuth, leitura, organizacaoId, podeGerir, reca
       titulo="Chatwoot"
       estado={estado}
     >
+      <HelpInfo ajudaId="integracoes.chatwoot" />
+      <HelpInfo ajudaId="integracoes.formato-url" />
       <form onSubmit={salvar} className="flex flex-col" style={{ gap: 10 }}>
         <Campo
           id="chatwoot-url"
@@ -556,6 +560,7 @@ export function IntegrationsPanel({
           >
             Integrações
           </h1>
+      <HelpInfo ajudaId="integracoes.visao" />
           <span style={{ font: '400 11px/1.4 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
             o que o ORBITA conversa por fora, e o que já foi provado
           </span>

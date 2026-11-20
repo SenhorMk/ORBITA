@@ -51,6 +51,7 @@ import { useLeituraDoPainel } from '@/components/painel/useLeituraDoPainel';
 import { VisaoGeral } from '@/components/painel/VisaoGeral';
 import { descreverErro } from '@/lib/erroLegivel';
 import { mensagemDeFalhaDeLogin } from '@/lib/auth/mensagemDeFalhaDeLogin';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Identidade do usuário logado — **e nada além disso**.
@@ -621,6 +622,7 @@ export default function Home() {
             trocandoParaId={listaDeOrganizacoes.switchingOrgId}
             onTrocar={listaDeOrganizacoes.handleSwitchOrganization}
           />
+      <HelpInfo ajudaId="shell.org" />
 
           <SeletorDeFundo fundo={fundo} onEscolher={escolherFundo} />
 
@@ -659,6 +661,7 @@ export default function Home() {
               />
             </button>
           )}
+      <HelpInfo ajudaId="integracoes.estado-job" />
 
           {activeTab === 'sales' && (
             <button

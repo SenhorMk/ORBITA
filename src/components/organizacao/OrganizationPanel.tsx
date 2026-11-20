@@ -13,6 +13,7 @@ import { AceitarConviteModal } from './AceitarConviteModal';
 import { NovaOrganizacaoModal } from './NovaOrganizacaoModal';
 import type { SelecaoDeOrganizacao } from './usePapelNaOrganizacaoAtiva';
 import { useOrganizationPanel, type AuthenticatedFetch, type ListaDeOrganizacoes } from './useOrganizationPanel';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /** Como cada papel se chama na tela, e a cor que o acompanha. */
 const PAPEL: Record<'owner' | 'admin' | 'member', { readonly rotulo: string; readonly cor: string }> = {
@@ -102,6 +103,7 @@ function Cabecalho({
         >
           Organização &amp;<br />Membros
         </h1>
+      <HelpInfo ajudaId="org.visao" />
         <span style={{ font: '400 11px/1.4 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
           quem participa, e com qual autoridade
         </span>

@@ -18,6 +18,7 @@ import {
   type CampoPreenchido,
   type ValoresDoFormulario,
 } from './clientes/consultaDeEmpresa';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * O cadastro e a edição de um contato, agora no `Modal` do Design System.
@@ -458,6 +459,7 @@ export function ClienteEditModal({
           />
         }
       >
+      <HelpInfo ajudaId="clientes.editar" />
         <div className="flex flex-col gap-6">
           {savedSuccess && (
             <output
@@ -531,6 +533,7 @@ export function ClienteEditModal({
           </Secao>
 
           <Secao titulo="Documento & tributação">
+      <HelpInfo ajudaId="clientes.tipo-documento" />
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="cliente-edit-cpf-cnpj">CPF / CNPJ</Rotulo>
@@ -593,6 +596,7 @@ export function ClienteEditModal({
           </Secao>
 
           <Secao titulo="Endereço">
+      <HelpInfo ajudaId="clientes.endereco" />
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="cliente-edit-cep">CEP</Rotulo>

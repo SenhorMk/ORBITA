@@ -1,0 +1,1769 @@
+[
+  {
+    "id": "painel.visao",
+    "area": "Visão Geral",
+    "component": "src/components/painel/VisaoGeral.tsx",
+    "surface": "Indicadores e seleção de métrica",
+    "purpose": "Ler o resumo da organização ativa",
+    "what": "Os números resumem os dados disponíveis da organização ativa.",
+    "how": "Selecione uma métrica para mudar a análise exibida abaixo.",
+    "after": "A seleção muda apenas a visualização; não altera pedidos ou valores.",
+    "risk": "Um erro de leitura não significa zero. Confira o período e a organização antes de comparar.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 78,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/painel/VisaoGeral.tsx",
+        "line": 78
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "painel.analise",
+    "area": "Visão Geral",
+    "component": "src/components/painel/AreaAnalitica.tsx",
+    "surface": "Gráfico, distribuição e fila",
+    "purpose": "Interpretar a análise selecionada",
+    "what": "A área analítica mostra a série, distribuição ou fila disponível para a métrica escolhida.",
+    "how": "Leia o título, o período e a legenda; troque a métrica nos cartões superiores.",
+    "after": "O gráfico acompanha a seleção sem criar dados novos.",
+    "risk": "Ausência de dados não é tendência nem previsão. Totais diferentes podem usar recortes diferentes.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 205,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/painel/AreaAnalitica.tsx",
+        "line": 205
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "vendas.lista",
+    "area": "Vendas & Pedidos",
+    "component": "src/components/vendas/VendasEPedidos.tsx",
+    "surface": "Busca, status, resumo e tabela",
+    "purpose": "Encontrar pedidos pelo recorte exibido",
+    "what": "Esta lista reúne pedidos da organização ativa e os indicadores do recorte apresentado.",
+    "how": "Use busca e filtros de situação; abra uma linha para conferir os detalhes.",
+    "after": "Os filtros mudam a lista exibida, sem atualizar o pedido no Bling.",
+    "risk": "Confira filtros e sincronização antes de concluir que um pedido não existe.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 143,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/vendas/VendasEPedidos.tsx",
+        "line": 143
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "vendas.detalhe",
+    "area": "Vendas & Pedidos",
+    "component": "src/components/vendas/DrawerDoPedido.tsx",
+    "surface": "Drawer, dados comerciais e acesso ao chat",
+    "purpose": "Consultar os detalhes sem sair da lista",
+    "what": "O detalhe reúne os dados disponíveis do pedido selecionado e suas ações permitidas.",
+    "how": "Confira cliente, itens, valores e situação antes de editar, cancelar ou abrir a conversa.",
+    "after": "Abrir o detalhe é uma consulta. As ações seguintes podem exigir confirmação.",
+    "risk": "Dados locais podem estar desatualizados. Abrir o chat não confirma identidade ou entrega.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 376,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/vendas/DrawerDoPedido.tsx",
+        "line": 376
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "vendas.manual",
+    "area": "Vendas & Pedidos",
+    "component": "src/components/ManualOrderModal.tsx",
+    "surface": "Formulário, itens, pagamento e frete",
+    "purpose": "Registrar pedido manual com segurança",
+    "what": "O pedido manual registra uma venda com cliente, itens, quantidades e condições informadas.",
+    "how": "Selecione os itens e revise cliente, estoque, valores, pagamento e frete antes de confirmar.",
+    "after": "O sistema tenta registrar o pedido e informa o resultado ou uma pendência.",
+    "risk": "Se o resultado ficar pendente ou incerto, confira a pendência antes de criar outro pedido.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 500,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/ManualOrderModal.tsx",
+        "line": 500
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "vendas.editar",
+    "area": "Vendas & Pedidos",
+    "component": "src/components/EditOrderModal.tsx",
+    "surface": "Edição, itens e observações",
+    "purpose": "Revisar alterações do pedido",
+    "what": "A edição permite alterar os campos habilitados do pedido existente.",
+    "how": "Revise os dados e confirme somente as alterações pretendidas.",
+    "after": "O sistema tenta salvar e apresenta sucesso, recusa ou erro.",
+    "risk": "Falha de comunicação não comprova que nada mudou. Releia o pedido antes de repetir.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 540,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/EditOrderModal.tsx",
+        "line": 540
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "vendas.cancelar",
+    "area": "Vendas & Pedidos",
+    "component": "src/components/vendas/CancelamentoDePedido.tsx",
+    "surface": "Confirmação de cancelamento",
+    "purpose": "Entender os efeitos do cancelamento",
+    "what": "O cancelamento muda a situação do pedido; não é apenas fechar esta janela.",
+    "how": "Confira o número, o cliente e as consequências exibidas antes de confirmar.",
+    "after": "O sistema registra a operação ou informa uma pendência para acompanhamento.",
+    "risk": "Não repita uma operação com resultado incerto. Cancelar não equivale automaticamente a devolver pagamento ou emitir documento fiscal.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 144,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/vendas/CancelamentoDePedido.tsx",
+        "line": 144
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "vendas.pendencias",
+    "area": "Vendas & Pedidos",
+    "component": "src/components/PendenciasDeVendaManual.tsx",
+    "surface": "Operações manuais pendentes",
+    "purpose": "Acompanhar resultado comercial incerto",
+    "what": "Uma pendência indica que o resultado de uma operação manual precisa ser confirmado.",
+    "how": "Leia o estado e use somente a ação de acompanhamento oferecida.",
+    "after": "A lista será atualizada conforme a confirmação disponível.",
+    "risk": "Uma pendência não autoriza duplicar a venda. Preserve o registro para conciliação.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 145,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/PendenciasDeVendaManual.tsx",
+        "line": 145
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "estoque.lista",
+    "area": "Estoque & Produtos",
+    "component": "src/components/estoque/EstoqueEProdutos.tsx",
+    "surface": "Busca, filtros, tabela e resumo",
+    "purpose": "Localizar produtos e interpretar disponibilidade",
+    "what": "Esta área mostra os produtos e o estoque conhecido da organização ativa.",
+    "how": "Busque por nome ou código, confira filtros e abra o produto para detalhes.",
+    "after": "Consultar ou filtrar não reserva nem movimenta estoque.",
+    "risk": "Saldo sincronizado pode não refletir uma alteração recente do Bling; confira a atualização antes de prometer disponibilidade.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 156,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/estoque/EstoqueEProdutos.tsx",
+        "line": 156
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "estoque.produto",
+    "area": "Estoque & Produtos",
+    "component": "src/components/ProductDetailModal.tsx",
+    "surface": "Cadastro, edição, códigos, preços e imagens",
+    "purpose": "Conferir dados do produto antes de gravar",
+    "what": "O cadastro reúne identificação, situação, preço, estoque conhecido e imagem do produto.",
+    "how": "Revise os campos habilitados e obrigatórios antes de salvar. Confira o código para evitar duplicidade.",
+    "after": "A gravação retorna o resultado ou avisos das etapas que não puderam ser concluídas.",
+    "risk": "Imagem e dados podem ter resultados distintos. Arquivar, excluir e desativar têm efeitos diferentes; leia a confirmação específica.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 470,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/ProductDetailModal.tsx",
+        "line": 470
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "estoque.arquivar",
+    "area": "Estoque & Produtos",
+    "component": "src/components/produtos/arquivamentoDoProduto.tsx",
+    "surface": "Confirmação de arquivamento",
+    "purpose": "Entender produto fora de linha",
+    "what": "Arquivar identifica um produto fora de linha sem apagar seu histórico.",
+    "how": "Confira o produto e o aviso da ação antes de confirmar.",
+    "after": "O produto deixa de ser tratado como disponível para novas operações conforme sua situação.",
+    "risk": "Arquivamento não comprova exclusão no Bling nem elimina referências de pedidos antigos.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 67,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/produtos/arquivamentoDoProduto.tsx",
+        "line": 67
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "clientes.lista",
+    "area": "Clientes & Contatos",
+    "component": "src/components/clientes/ClientesEContatos.tsx",
+    "surface": "Busca, filtros e tabela",
+    "purpose": "Encontrar contatos da organização",
+    "what": "A lista mostra os contatos disponíveis na organização ativa.",
+    "how": "Use a busca e abra o contato para consultar ou editar seus dados.",
+    "after": "A consulta não altera o cadastro nem confirma vínculo com uma conversa SAC.",
+    "risk": "Homônimos existem. Confira o contato antes de editar ou excluir; evite expor documentos.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 70,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/clientes/ClientesEContatos.tsx",
+        "line": 70
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "clientes.detalhe",
+    "area": "Clientes & Contatos",
+    "component": "src/components/ClienteDetailModal.tsx",
+    "surface": "Detalhe e exclusão de contato",
+    "purpose": "Consultar identidade e consequências da exclusão",
+    "what": "O detalhe reúne os dados do contato selecionado e as ações permitidas.",
+    "how": "Confira nome e dados necessários; leia a confirmação antes de excluir.",
+    "after": "A ação tenta atualizar ou excluir conforme as regras do sistema e informa o resultado.",
+    "risk": "Excluir um contato não apaga automaticamente todo o histórico de atendimento. Não repita uma exclusão com resultado incerto.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 236,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/ClienteDetailModal.tsx",
+        "line": 236
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "clientes.editar",
+    "area": "Clientes & Contatos",
+    "component": "src/components/ClienteEditModal.tsx",
+    "surface": "Cadastro, endereço e consulta de CNPJ",
+    "purpose": "Revisar dados de contato",
+    "what": "Este formulário cadastra ou altera o contato e seu endereço.",
+    "how": "Revise os campos e a organização ativa. Se consultar CNPJ, confira os dados sugeridos antes de gravar.",
+    "after": "Só a confirmação de salvar solicita a gravação do cadastro.",
+    "risk": "Consulta externa pode falhar ou estar desatualizada. Não substitua dados corretos sem conferir e não duplique um cadastro por timeout.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 462,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/ClienteEditModal.tsx",
+        "line": 462
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "clientes.cnpj",
+    "area": "Clientes & Contatos",
+    "component": "src/components/clientes/ConsultaDeCnpj.tsx",
+    "surface": "Consulta externa de empresa",
+    "purpose": "Usar dados públicos como apoio ao cadastro",
+    "what": "A consulta de CNPJ busca dados de uma empresa para apoiar o preenchimento.",
+    "how": "Informe o CNPJ e confira o retorno antes de usar os dados no formulário.",
+    "after": "O preenchimento sugerido ainda precisa de revisão e salvamento.",
+    "risk": "A consulta não comprova representação da empresa nem vínculo do contato. Indisponibilidade não impede preenchimento manual.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 127,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/clientes/ConsultaDeCnpj.tsx",
+        "line": 127
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "financeiro.visao",
+    "area": "Controle Financeiro",
+    "component": "src/components/financeiro/ComposicaoDoFinanceiro.tsx",
+    "surface": "Período, totais e extrato",
+    "purpose": "Interpretar os números financeiros",
+    "what": "O financeiro mostra títulos e o resumo retornado pelo servidor para o tipo consultado. O período visual recorta a tabela e os gráficos por vencimento.",
+    "how": "Confira período e organização; abra uma movimentação para verificar sua origem e situação.",
+    "after": "Filtros e consultas mudam a visualização, sem efetuar pagamentos.",
+    "risk": "Saldo exibido não é saldo bancário confirmado. Um erro ou leitura antiga não equivale a valor zero.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 60,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/financeiro/ComposicaoDoFinanceiro.tsx",
+        "line": 60
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "financeiro.resumo",
+    "area": "Controle Financeiro",
+    "component": "src/components/financeiro/ResumoFinanceiro.tsx",
+    "surface": "Entradas, saídas e saldo",
+    "purpose": "Entender o resumo financeiro",
+    "what": "Entradas, saídas e saldo vêm do resumo retornado pelo servidor para o tipo consultado.",
+    "how": "Confira o tipo consultado. O filtro visual de período recorta tabela e gráficos, mas não recalcula estes cartões.",
+    "after": "Consultar os cartões não liquida títulos nem movimenta dinheiro.",
+    "risk": "Não compare os cartões com um período da tabela supondo que ambos foram recalculados juntos. O resumo não é conciliação bancária.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 54,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/financeiro/ResumoFinanceiro.tsx",
+        "line": 54
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "financeiro.graficos",
+    "area": "Controle Financeiro",
+    "component": "src/components/financeiro/Graficos.tsx",
+    "surface": "Entradas/saídas e fluxo de caixa",
+    "purpose": "Interpretar séries do financeiro",
+    "what": "Os gráficos organizam os registros financeiros por data para mostrar entradas, saídas e fluxo.",
+    "how": "Leia o período e os rótulos antes de comparar barras ou pontos.",
+    "after": "A visualização acompanha o filtro atual.",
+    "risk": "Valores projetados ou registrados não provam recebimento ou pagamento no banco.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 104,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/financeiro/Graficos.tsx",
+        "line": 104
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "financeiro.detalhe",
+    "area": "Controle Financeiro",
+    "component": "src/components/financeiro/DetalheDaMovimentacao.tsx",
+    "surface": "Detalhe, edição, baixa, cancelamento e confirmação",
+    "purpose": "Conferir um título antes de agir",
+    "what": "O detalhe mostra a origem, o valor e a situação da movimentação selecionada.",
+    "how": "Confira os dados e as consequências da ação oferecida antes de confirmar.",
+    "after": "A operação informa seu resultado; estados pendentes precisam de acompanhamento.",
+    "risk": "Baixa e cancelamento alteram registros financeiros. Falha de comunicação exige conferir o estado antes de repetir.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 185,
+        "kind": "HelpInfo contextual"
+      },
+      {
+        "line": 230,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/financeiro/DetalheDaMovimentacao.tsx",
+        "line": 185
+      },
+      {
+        "file": "src/components/financeiro/DetalheDaMovimentacao.tsx",
+        "line": 230
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "financeiro.despesa",
+    "area": "Controle Financeiro",
+    "component": "src/components/financeiro/NovaDespesaModal.tsx",
+    "surface": "Fornecedor, valor, competência e vencimento",
+    "purpose": "Registrar saída com dados revisados",
+    "what": "O formulário registra uma saída com os dados e o fornecedor informados.",
+    "how": "Revise valor, datas, categoria e fornecedor antes de confirmar.",
+    "after": "A solicitação tenta criar o registro e apresenta o resultado ou pendência.",
+    "risk": "Registrar uma saída não executa uma transferência bancária. Evite duplicar após resposta incerta.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 216,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/financeiro/NovaDespesaModal.tsx",
+        "line": 216
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "financeiro.fornecedor",
+    "area": "Controle Financeiro",
+    "component": "src/components/financeiro/NovoFornecedorModal.tsx",
+    "surface": "Cadastro de fornecedor",
+    "purpose": "Identificar o favorecido corretamente",
+    "what": "O fornecedor identifica a pessoa ou empresa vinculada a despesas.",
+    "how": "Confira nome e documentos necessários antes de salvar.",
+    "after": "O cadastro passa a poder ser selecionado nos fluxos permitidos.",
+    "risk": "Cadastrar não realiza pagamento nem verifica dados bancários. Evite duplicidades e exposição desnecessária de documentos.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 113,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/financeiro/NovoFornecedorModal.tsx",
+        "line": 113
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "financeiro.pendencias",
+    "area": "Controle Financeiro",
+    "component": "src/components/financeiro/OperacoesPendentes.tsx",
+    "surface": "Operações pendentes e conciliação",
+    "purpose": "Acompanhar alterações de resultado incerto",
+    "what": "As pendências preservam operações cujo resultado ainda precisa ser confirmado.",
+    "how": "Leia a origem e o estado; use a ação de acompanhamento disponível.",
+    "after": "Uma confirmação pode atualizar a situação sem criar outra operação.",
+    "risk": "Não refaça baixa, cancelamento ou despesa enquanto o efeito anterior for incerto.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 203,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/financeiro/OperacoesPendentes.tsx",
+        "line": 203
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "org.visao",
+    "area": "Organização & Membros",
+    "component": "src/components/organizacao/OrganizationPanel.tsx",
+    "surface": "Contexto, indicadores, membros e convites",
+    "purpose": "Entender o escopo da organização",
+    "what": "A organização ativa define quais dados e permissões você utiliza.",
+    "how": "Confira o nome no topo antes de consultar dados, convidar pessoas ou alterar membros.",
+    "after": "Trocar a organização muda o contexto; não transfere dados entre organizações.",
+    "risk": "Seu papel é conferido pelo servidor. Um nome ou botão visível não concede acesso.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 106,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/organizacao/OrganizationPanel.tsx",
+        "line": 106
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "org.troca",
+    "area": "Organização & Membros",
+    "component": "src/components/organizacao/OrganizationList.tsx",
+    "surface": "Troca de organização",
+    "purpose": "Mudar o contexto de trabalho",
+    "what": "Cada organização possui seus próprios dados e vínculos de participação.",
+    "how": "Escolha a organização desejada e aguarde a confirmação da troca.",
+    "after": "Os painéis passam a carregar o contexto confirmado pelo servidor.",
+    "risk": "Se houver conflito ou falha, confirme a organização ativa antes de continuar uma edição.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 71,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/organizacao/OrganizationList.tsx",
+        "line": 71
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "org.criar",
+    "area": "Organização & Membros",
+    "component": "src/components/organizacao/NovaOrganizacaoModal.tsx",
+    "surface": "Criação de organização",
+    "purpose": "Criar um novo espaço de dados",
+    "what": "Uma organização separa dados, integrações e participantes.",
+    "how": "Informe o nome e revise antes de confirmar a criação.",
+    "after": "O sistema cria a organização e informa seu vínculo conforme a operação.",
+    "risk": "Criar outra organização não copia estoque, contatos, integrações ou permissões existentes.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 103,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/organizacao/NovaOrganizacaoModal.tsx",
+        "line": 103
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "org.membros",
+    "area": "Organização & Membros",
+    "component": "src/components/organizacao/MembersList.tsx",
+    "surface": "Papéis e remoção de membros",
+    "purpose": "Gerenciar participação com autoridade adequada",
+    "what": "Os papéis determinam quais ações cada participante pode solicitar.",
+    "how": "Confira pessoa e papel antes de usar uma remoção disponível. A lista não permite editar papéis.",
+    "after": "O servidor valida a permissão e atualiza a participação quando permitido.",
+    "risk": "Uma alteração pode retirar acesso. Regras de proteção do proprietário e da organização continuam valendo.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 80,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/organizacao/MembersList.tsx",
+        "line": 80
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "org.convites",
+    "area": "Organização & Membros",
+    "component": "src/components/organizacao/ListaDeConvites.tsx",
+    "surface": "Convites pendentes e revogação",
+    "purpose": "Acompanhar convites emitidos",
+    "what": "A lista apresenta os convites e seus estados na organização ativa.",
+    "how": "Confira destino, papel e validade; revogue somente o convite pretendido.",
+    "after": "Convites revogados ou expirados deixam de permitir adesão conforme as regras.",
+    "risk": "O código é sensível: compartilhe apenas com a pessoa convidada, por canal apropriado.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 72,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/organizacao/ListaDeConvites.tsx",
+        "line": 72
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "org.convidar",
+    "area": "Organização & Membros",
+    "component": "src/components/organizacao/CriarConviteModal.tsx",
+    "surface": "Emissão e entrega de código",
+    "purpose": "Convidar com o papel correto",
+    "what": "O convite permite que uma pessoa entre na organização com o papel definido.",
+    "how": "Revise papel e destinatário; entregue o código somente à pessoa pretendida.",
+    "after": "A emissão não significa que o convite foi aceito; acompanhe o estado na lista.",
+    "risk": "Não publique o código em capturas ou chats abertos. Convites não devem conceder autoridade além da necessária.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 233,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/organizacao/CriarConviteModal.tsx",
+        "line": 233
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "org.aceitar",
+    "area": "Organização & Membros",
+    "component": "src/components/organizacao/AceitarConviteModal.tsx",
+    "surface": "Aceite e atualização de contexto",
+    "purpose": "Confirmar a organização antes de entrar",
+    "what": "Aceitar um convite cria seu vínculo com a organização indicada.",
+    "how": "Confira a organização e o papel antes de confirmar.",
+    "after": "O sistema informa o aceite e se é necessário recarregar para atualizar o contexto.",
+    "risk": "Entrar não copia dados de outra organização. Em caso de aviso, confirme o contexto antes de operar.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 127,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/organizacao/AceitarConviteModal.tsx",
+        "line": 127
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "sac.lista",
+    "area": "SAC / Atendimento",
+    "component": "src/components/mensageria/MensageriaDesktop.tsx",
+    "surface": "Conversas, histórico e compositor",
+    "purpose": "Atender uma conversa com histórico",
+    "what": "O SAC organiza conversas, mensagens e estados de atendimento da organização ativa.",
+    "how": "Selecione a conversa, leia o histórico e confira quem atende antes de responder.",
+    "after": "O envio entra na fila e seu estado será atualizado conforme a confirmação disponível.",
+    "risk": "Mensagem recebida, rascunho e entrega confirmada são estados diferentes. Não reenvie por conta própria quando o resultado for desconhecido.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 155,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/mensageria/MensageriaDesktop.tsx",
+        "line": 155
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "sac.envio",
+    "area": "SAC / Atendimento",
+    "component": "src/components/mensageria/MensageriaDesktop.tsx",
+    "target": "Compositor",
+    "surface": "Texto, fila humana, entrega e ambiguidade",
+    "purpose": "Fila e confirmação da resposta humana",
+    "what": "O compositor prepara o texto que você solicita enviar nesta conversa.",
+    "how": "Confira o destinatário, revise o texto e envie uma única vez. Acompanhe o estado no histórico.",
+    "after": "A solicitação passa pela fila de envio; confirmação de entrega é distinta da aceitação da solicitação.",
+    "risk": "Em estado desconhecido, a mensagem pode já ter chegado. Não duplique o envio; use a conciliação. Atendimento humano continua sujeito à organização e às permissões.",
+    "existingHelp": "avisos e rótulos locais; sem HelpInfo padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 482,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/mensageria/MensageriaDesktop.tsx",
+        "line": 482
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "sac.controle",
+    "area": "SAC / Atendimento",
+    "component": "src/components/mensageria/BarraDoAtendimento.tsx",
+    "surface": "Assumir, transferir, exigir humano e devolver",
+    "purpose": "Controlar quem pode responder",
+    "what": "Automação responde indica que a IA está disponível. Com você indica atendimento humano sob sua responsabilidade.",
+    "how": "Assuma para interromper a IA e responder. Para devolver, confira a disponibilidade e informe um resumo; a IA só retoma após uma mensagem nova.",
+    "after": "Assumir bloqueia respostas automáticas e invalida envios pendentes. A confirmação no canal pode levar alguns segundos para aparecer.",
+    "risk": "Um envio já em voo pode precisar de conciliação. Devolver não liga um bot desligado. Produtos, pedidos, decisões comerciais e casos sensíveis ou incertos precisam de humano.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 80,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/mensageria/BarraDoAtendimento.tsx",
+        "line": 80
+      }
+    ],
+    "nominalReview": "Revisado para IA-first, takeover, devolução com resumo, nova mensagem e disponibilidade assíncrona do PR152."
+  },
+  {
+    "id": "sac.cliente",
+    "area": "SAC / Atendimento",
+    "component": "src/components/mensageria/PainelDoCliente.tsx",
+    "surface": "Verificação, vínculo e pedidos candidatos",
+    "purpose": "Identidade do cliente e vínculo com a conversa",
+    "what": "O painel apoia a identificação do cliente da conversa e apresenta o vínculo disponível.",
+    "how": "Confira as evidências e use a verificação oferecida antes de selecionar um pedido.",
+    "after": "Somente o vínculo vigente permite consultar o retrato autorizado do pedido.",
+    "risk": "Nome, telefone ou número citado pela IA não bastam para comprovar identidade; não exponha dados de outro cliente.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 67,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/mensageria/PainelDoCliente.tsx",
+        "line": 67
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "sac.triagem",
+    "area": "SAC / Atendimento",
+    "component": "src/components/mensageria/PainelDaTriagem.tsx",
+    "surface": "Hipótese, confiança, falha e execução obsoleta",
+    "purpose": "Interpretar a análise da IA",
+    "what": "A triagem classifica o contexto e aponta dúvidas; ela é uma hipótese.",
+    "how": "Confira o histórico, a intenção, os dados faltantes e a necessidade de atendente.",
+    "after": "Mostrar triagem não envia resposta nem confirma o pedido citado.",
+    "risk": "Mensagem nova pode tornar uma execução obsoleta. Modelo falso é demonstração; confiança não substitui verificação.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 111,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/mensageria/PainelDaTriagem.tsx",
+        "line": 111
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "sac.rascunho",
+    "area": "SAC / Atendimento",
+    "component": "src/components/mensageria/PainelDaResposta.tsx",
+    "surface": "Gerar, revisar e usar no compositor",
+    "purpose": "Preparar uma resposta sem enviar automaticamente",
+    "what": "O rascunho sugere uma resposta baseada no contexto vigente permitido.",
+    "how": "Gere, leia e revise. Use no compositor e confirme o texto antes de enviar.",
+    "after": "Usar no compositor apenas preenche a mensagem; o envio exige uma ação própria.",
+    "risk": "Se o contexto mudar ou a IA falhar, solicite novo rascunho ou responda manualmente. Não trate o modelo de demonstração como IA real.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 57,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/mensageria/PainelDaResposta.tsx",
+        "line": 57
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "sac.pedido",
+    "area": "SAC / Atendimento",
+    "component": "src/components/mensageria/RetratoDoPedido.tsx",
+    "surface": "Estoque, pagamento, rastreio e frescor",
+    "purpose": "Ler somente dados comprovados do pedido",
+    "what": "O retrato reúne os dados autorizados do pedido ligado ao cliente verificado.",
+    "how": "Leia as situações de estoque, pagamento, rastreio e os avisos de atualização.",
+    "after": "É uma consulta; não sincroniza o Bling nem executa ações no pedido.",
+    "risk": "Desconhecido não significa pago, disponível ou entregue. Dados antigos precisam de conferência antes de prometer algo.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 111,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/mensageria/RetratoDoPedido.tsx",
+        "line": 111
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "integracoes.visao",
+    "area": "Integrações",
+    "component": "src/components/integracoes/IntegrationsPanel.tsx",
+    "surface": "Conexões, OAuth e estados",
+    "purpose": "Distinguir conexão de funcionamento",
+    "what": "As integrações conectam Bling e Chatwoot à organização ativa.",
+    "how": "Confira o provedor, o estado e os detalhes antes de conectar, sincronizar ou desligar.",
+    "after": "Autorizar OAuth registra uma conexão; sincronização e recebimento têm estados próprios.",
+    "risk": "Conectado não comprova worker ativo ou sincronização concluída. Não exponha tokens; desligar não apaga o histórico.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 563,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/integracoes/IntegrationsPanel.tsx",
+        "line": 563
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "integracoes.bling",
+    "area": "Integrações",
+    "component": "src/components/integracoes/IntegrationsPanel.tsx",
+    "target": "CartaoBling",
+    "surface": "Credenciais, callback estável e OAuth Bling",
+    "purpose": "Autorizar o Bling na organização certa",
+    "what": "Salvar as credenciais do aplicativo e autorizar a conta no Bling são etapas diferentes.",
+    "how": "Confira a organização e a URL de retorno estável exibida. Salve as credenciais e só então inicie a autorização.",
+    "after": "O retorno OAuth registra os tokens no cofre. A sincronização deve ser acompanhada separadamente.",
+    "risk": "Não use URL de preview como callback nem copie segredos em relatórios. Conectado não significa que o último job terminou com sucesso.",
+    "existingHelp": "avisos e rótulos locais; sem HelpInfo padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 277,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/integracoes/IntegrationsPanel.tsx",
+        "line": 277
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "integracoes.chatwoot",
+    "area": "Integrações",
+    "component": "src/components/integracoes/IntegrationsPanel.tsx",
+    "target": "CartaoChatwoot",
+    "surface": "Instância, conta, token e webhook Chatwoot",
+    "purpose": "Conectar a instância e configurar a entrada",
+    "what": "A conexão identifica a instância Chatwoot, sua conta e a entrega de webhooks para esta organização.",
+    "how": "Confira URL e ID da conta; use as credenciais autorizadas e a URL de webhook exibida.",
+    "after": "Mensagens aceitas ainda precisam ser processadas pelo worker para aparecer no atendimento.",
+    "risk": "Salvar não comprova conectividade. Não compartilhe o token ou segredo do webhook, nem desative a verificação da assinatura para testar.",
+    "existingHelp": "avisos e rótulos locais; sem HelpInfo padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 413,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/integracoes/IntegrationsPanel.tsx",
+        "line": 413
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "integracoes.inbox",
+    "area": "Integrações",
+    "component": "src/components/integracoes/MensagensRecebidas.tsx",
+    "surface": "Inbox, falhas e recuperação",
+    "purpose": "Acompanhar processamento de mensagens recebidas",
+    "what": "A inbox preserva entregas recebidas e seu estado de processamento.",
+    "how": "Confira a conexão e o estado do evento antes de usar a recuperação permitida.",
+    "after": "Um evento aceito pode aguardar worker antes de aparecer na conversa.",
+    "risk": "Webhook acessível não prova processamento. Recuperação não autoriza enviar uma resposta duplicada.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 59,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/integracoes/MensagensRecebidas.tsx",
+        "line": 59
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "integracoes.envios",
+    "area": "Integrações",
+    "component": "src/components/integracoes/EnviosComAtencao.tsx",
+    "surface": "Outbox, unknown e conciliação",
+    "purpose": "Resolver envio com resultado ambíguo",
+    "what": "Esta lista separa envios que exigem atenção ou confirmação do efeito externo.",
+    "how": "Confira conversa, tentativa e estado; use somente a ação de conciliação oferecida.",
+    "after": "A confirmação registra o resultado conhecido sem pressupor uma nova entrega.",
+    "risk": "Unknown pode significar que o destinatário já recebeu. Nunca reenvie automaticamente para tentar descobrir.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 121,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/integracoes/EnviosComAtencao.tsx",
+        "line": 121
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "billing.plano",
+    "area": "Plano & Faturamento (oculto)",
+    "component": "src/components/billing/BillingPanel.tsx",
+    "surface": "Plano, checkout e portal",
+    "purpose": "Entender as ações de assinatura",
+    "what": "Este painel consulta a assinatura e oferece as ações de faturamento permitidas.",
+    "how": "Confira organização, plano e consequências antes de abrir o checkout ou portal.",
+    "after": "As ações podem abrir um serviço externo de cobrança.",
+    "risk": "Esta superfície está oculta na navegação do MVP. Não use cobrança real durante a demonstração.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 112,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/billing/BillingPanel.tsx",
+        "line": 112
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "integracoes.sync",
+    "area": "Controle Financeiro",
+    "component": "src/components/financeiro/AcoesFinanceiras.tsx",
+    "target": "AcoesFinanceiras",
+    "surface": "Sincronizar e acompanhar falhas parciais",
+    "purpose": "Acompanhar uma sincronização do Bling",
+    "what": "Sincronizar solicita a atualização dos registros da organização a partir do Bling.",
+    "how": "Confirme a organização, inicie uma vez e acompanhe o progresso e o resultado apresentado.",
+    "after": "O processo pode terminar com sucesso, falha ou resultado parcial. Releia os dados após a confirmação.",
+    "risk": "OAuth conectado não garante permissão de sincronização. Falha parcial pode manter dados antigos; não use repetição como prova de correção.",
+    "existingHelp": "avisos e rótulos locais; sem HelpInfo padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 24,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/financeiro/AcoesFinanceiras.tsx",
+        "line": 24
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "shell.org",
+    "area": "Organização & Membros",
+    "component": "src/app/page.tsx",
+    "surface": "Organização ativa no topo",
+    "purpose": "Reconhecer o contexto antes de agir",
+    "what": "O indicador informa a organização que determina seus dados e permissões atuais.",
+    "how": "Confira o nome antes de abrir cadastros, conversar ou sincronizar.",
+    "after": "A troca, quando disponível, precisa ser confirmada pelo servidor.",
+    "risk": "Se o contexto ainda estiver carregando ou falhar, aguarde antes de operar sobre dados.",
+    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "afterComponent": "OrganizacaoAtiva",
+    "anchors": [
+      {
+        "line": 625,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/app/page.tsx",
+        "line": 625
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "estoque.foto",
+    "area": "Estoque & Produtos",
+    "component": "src/components/produtos/ImagemDoProduto.tsx",
+    "surface": "Adicionar, remover e sincronizar imagem",
+    "purpose": "Entender a gravação independente da foto",
+    "what": "A foto tem uma gravação própria, separada do botão de salvar os dados do produto.",
+    "how": "Escolha um arquivo permitido e acompanhe o retorno. Para remover ou sincronizar novamente, confira o estado exibido.",
+    "after": "A imagem pode ficar salva no ORBITA enquanto sua atualização ou remoção no Bling permanece pendente.",
+    "risk": "Fechar ou cancelar a edição do produto não desfaz uma foto já gravada. Não repita o upload se a pendência for apenas no Bling.",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 226,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/produtos/ImagemDoProduto.tsx",
+        "line": 226
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "auth.entrada",
+    "area": "Acesso ao MVP",
+    "component": "src/components/auth/TelaDeEntrada.tsx",
+    "surface": "Login e criação de conta",
+    "purpose": "Entrar com segurança na sua conta",
+    "what": "A entrada identifica sua conta; os dados disponíveis dependem dos seus vínculos com organizações.",
+    "how": "Informe e-mail e senha nos campos próprios. Use o cadastro se precisar criar uma conta e confira as instruções apresentadas.",
+    "after": "Após entrar, confirme a organização ativa antes de trabalhar com dados.",
+    "risk": "Não compartilhe senha ou sessão. Criar conta não concede acesso a organizações de outras pessoas.",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 119,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/auth/TelaDeEntrada.tsx",
+        "line": 119
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "diagnostico.erro",
+    "area": "Superfícies condicionais",
+    "component": "src/components/ErrorLogModal.tsx",
+    "surface": "Erro, detalhe técnico e tentativa posterior",
+    "purpose": "Detalhes de falha e resultado incerto",
+    "what": "O detalhe apresenta o resultado conhecido de uma operação que falhou ou ficou incompleta.",
+    "how": "Leia o resumo e use a ação de acompanhamento permitida. Antes de compartilhar o erro, confira e remova dados sensíveis.",
+    "after": "Fechar o aviso não comprova que a operação foi desfeita.",
+    "risk": "Logs podem conter informações sensíveis. Não repita ações comerciais ou financeiras se o resultado anterior ainda for incerto.",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "anchors": [
+      {
+        "line": 83,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "locations": [
+      {
+        "file": "src/components/ErrorLogModal.tsx",
+        "line": 83
+      }
+    ],
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
+  },
+  {
+    "id": "painel.metricas-detalhadas",
+    "area": "Visão Geral",
+    "component": "src/components/painel/VisaoGeral.tsx",
+    "surface": "Definições de cada indicador e janela de 30 dias",
+    "purpose": "Definições dos indicadores do painel",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Documentar inclusões, exclusões e comparações de cada métrica com base nas funções existentes.",
+    "what": "Pedidos conta todos os pedidos carregados; Pendentes reúne status com pend ou aberto, Atendidos reúne atend ou fatur, Cancelados reúne status com cancel e Outros é o restante. A emitir NF-e conta vendas não canceladas com status A Emitir ou sem nota registrada.",
+    "how": "Faturamento 30d soma vendas não canceladas pela data do pedido, dos 30 dias anteriores até antes do instante usado pela tela. O ticket divide esse valor pela quantidade dessas vendas; sem vendas, aparece um traço. Produtos e Clientes contam os cadastros carregados.",
+    "after": "A comparação usa os 30 dias anteriores à mesma janela; se o faturamento anterior for zero, aparece sem base. O anel reparte todos os pedidos entre os quatro grupos.",
+    "risk": "Os totais gerais não têm todos o recorte de 30 dias. A indicação de NF-e não valida documento fiscal, e faturamento de pedidos não comprova recebimento no banco.",
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
+    "locations": [
+      {
+        "file": "src/components/painel/VisaoGeral.tsx",
+        "line": 79
+      }
+    ],
+    "anchors": [
+      {
+        "line": 79,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "estoque.codigos",
+    "area": "Estoque & Produtos",
+    "component": "src/components/ProductDetailModal.tsx",
+    "surface": "SKU e cópia de código",
+    "purpose": "Código SKU e referência do produto",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar identificação, unicidade e diferença entre código local e vínculo Bling junto ao campo.",
+    "what": "SKU é o código de identificação exibido no cadastro. Ele é diferente do identificador interno e do ID de vínculo com o Bling.",
+    "how": "Confira o código antes de salvar. O botão de copiar leva apenas esse código para a área de transferência.",
+    "after": "Copiar não grava o produto nem cria vínculo com o ERP; salvar solicita a atualização do cadastro.",
+    "risk": "Não deduza que dois registros são o mesmo produto só por nome ou código parecido. Não altere um código apenas para contornar uma falha de gravação.",
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
+    "locations": [
+      {
+        "file": "src/components/ProductDetailModal.tsx",
+        "line": 513
+      }
+    ],
+    "anchors": [
+      {
+        "line": 513,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "estoque.precos",
+    "area": "Estoque & Produtos",
+    "component": "src/components/ProductDetailModal.tsx",
+    "surface": "Preço de venda; custo não é campo exposto",
+    "purpose": "Preço de venda do produto",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar finalidade dos dois valores e efeito da alteração nos dados do produto.",
+    "originalSurface": "Preço e custo",
+    "what": "Este campo informa o preço de venda em reais. Esta tela não oferece um campo de custo nem calcula margem.",
+    "how": "Revise o valor decimal no campo Preço de venda antes de salvar os dados do produto.",
+    "after": "A gravação solicita a atualização do cadastro; ela não confirma uma venda ou um pagamento.",
+    "risk": "Alterar o preço do cadastro não comprova alteração de pedidos antigos. Não use este valor como custo ou lucro.",
+    "nominalReview": "O formulário não possui custo; coberto preço de venda, sem inventar custo/margem.",
+    "locations": [
+      {
+        "file": "src/components/ProductDetailModal.tsx",
+        "line": 560
+      }
+    ],
+    "anchors": [
+      {
+        "line": 560,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "estoque.categoria",
+    "area": "Estoque & Produtos",
+    "component": "src/components/ProductDetailModal.tsx",
+    "surface": "Categoria do produto",
+    "purpose": "Categoria do catálogo",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar seleção, ausência de categoria e origem da lista.",
+    "what": "A categoria organiza o produto. A seleção usa o catálogo local; quando vazio, a abertura pode tentar buscar categorias no Bling uma vez, conforme a permissão.",
+    "how": "Escolha uma categoria disponível ou Sem categoria. Leia o aviso caso a lista não possa ser carregada.",
+    "after": "A seleção é enviada com os dados ao salvar. Categoria é opcional neste cadastro.",
+    "risk": "Lista vazia e falha de sincronização são situações diferentes. Não crie uma categoria improvisada para esconder um erro.",
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
+    "locations": [
+      {
+        "file": "src/components/ProductDetailModal.tsx",
+        "line": 539
+      }
+    ],
+    "anchors": [
+      {
+        "line": 539,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "estoque.obrigatorios",
+    "area": "Estoque & Produtos",
+    "component": "src/components/ProductDetailModal.tsx",
+    "surface": "Tipo, situação, formato e unidade exigidos pelo Bling",
+    "purpose": "Campos obrigatórios do cadastro Bling",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar cada opção sem inventar valores ausentes ou presumir estoque disponível.",
+    "what": "Tipo distingue as opções de produto e serviço exibidas; Situação oferece Ativo e Inativo; Formato oferece Simples, Variações e Composição. Unidade identifica a medida, como UN, CX ou KG.",
+    "how": "Confira os valores lidos do Bling ou selecione os corretos. A unidade aceita até seis caracteres. Um campo sem valor não deve ser tratado como um padrão confirmado.",
+    "after": "Salvar envia os campos exigidos pelo contrato; falhas de leitura ou validação continuam visíveis.",
+    "risk": "Ativo não significa estoque disponível. A ajuda descreve as opções do formulário e não escolhe uma classificação fiscal pela organização.",
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
+    "locations": [
+      {
+        "file": "src/components/ProductDetailModal.tsx",
+        "line": 585
+      }
+    ],
+    "anchors": [
+      {
+        "line": 585,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "vendas.pagamento",
+    "area": "Vendas & Pedidos",
+    "component": "src/components/ManualOrderModal.tsx",
+    "surface": "Forma de pagamento",
+    "purpose": "Forma de pagamento registrada",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar a seleção disponível e distinguir condição registrada de pagamento efetivo.",
+    "what": "A opção registra a forma de pagamento do pedido: Dinheiro, PIX, Cartão de Crédito ou Cartão de Débito.",
+    "how": "Escolha a forma acordada e confira os demais dados antes de finalizar.",
+    "after": "O rótulo segue na solicitação. Ele não é o ID da forma de pagamento no Bling; sem esse ID específico, o servidor usa a forma padrão da conta.",
+    "risk": "Selecionar PIX ou cartão não inicia uma cobrança, confirma recebimento ou liquida uma conta.",
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
+    "locations": [
+      {
+        "file": "src/components/ManualOrderModal.tsx",
+        "line": 224
+      }
+    ],
+    "anchors": [
+      {
+        "line": 224,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "vendas.desconto-frete",
+    "area": "Vendas & Pedidos",
+    "component": "src/components/ManualOrderModal.tsx",
+    "surface": "Desconto e frete em reais",
+    "purpose": "Desconto e frete no total do pedido",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar aplicação no total e validações existentes junto aos campos.",
+    "what": "Os campos são valores em reais, não percentuais. A prévia soma os itens, adiciona frete e subtrai desconto, com piso zero.",
+    "how": "Informe valores não negativos e confira o total líquido antes de confirmar o pedido.",
+    "after": "O servidor recalcula e valida o total; o número da tela é uma prévia, não autoridade final.",
+    "risk": "Desconto e frete alteram o valor solicitado. Não repita uma venda de resultado incerto para tentar corrigir o total.",
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
+    "locations": [
+      {
+        "file": "src/components/ManualOrderModal.tsx",
+        "line": 241
+      }
+    ],
+    "anchors": [
+      {
+        "line": 241,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "vendas.sincronizar-checkbox",
+    "area": "Vendas & Pedidos",
+    "component": "src/components/ManualOrderModal.tsx",
+    "surface": "Sincronizar pedido com o Bling v3",
+    "purpose": "Destino do pedido manual",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar os dois resultados possíveis da opção antes da confirmação.",
+    "what": "A opção define se o pedido será solicitado com sincronização ao Bling ou apenas como registro local no ORBITA.",
+    "how": "Confira a caixa Sincronizar pedido com o Bling v3 antes de finalizar; ela começa marcada.",
+    "after": "O pedido seguirá o caminho escolhido e o sistema informará confirmação, falha ou pendência.",
+    "risk": "Desmarcar não envia o pedido ao ERP. Se houver resultado incerto, não mude a opção e envie de novo: confira a tentativa anterior.",
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
+    "locations": [
+      {
+        "file": "src/components/ManualOrderModal.tsx",
+        "line": 501
+      }
+    ],
+    "anchors": [
+      {
+        "line": 501,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "clientes.tipo-documento",
+    "area": "Clientes & Contatos",
+    "component": "src/components/ClienteEditModal.tsx",
+    "surface": "Documento, tipo de pessoa e contribuinte",
+    "purpose": "Documento, pessoa e contribuinte",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar formatos e diferenças dos campos sem sugerir que documento identifica automaticamente a conversa.",
+    "originalSurface": "Tipo de pessoa, situação e documento",
+    "what": "CPF/CNPJ, tipo de pessoa e tipo de contribuinte são campos distintos. Pessoa oferece Física, Jurídica e Estrangeiro; contribuinte oferece as opções 1, 2 e 9 descritas no seletor.",
+    "how": "Revise documento e seleções; um documento válido pode sugerir o tipo de pessoa. Ao usar consulta de empresa, confira eventuais divergências antes de salvar.",
+    "after": "O salvamento aplica as validações do cadastro; uma consulta não confirmada não deve substituir dados corretos.",
+    "risk": "O enquadramento correto deve vir do cadastro validado pela organização, não de uma suposição da ajuda. Documento no cadastro não confirma sozinho o cliente de uma conversa.",
+    "nominalReview": "A tela possui tipo de contribuinte, não campo de situação. A ajuda descreve opções; não decide enquadramento.",
+    "locations": [
+      {
+        "file": "src/components/ClienteEditModal.tsx",
+        "line": 536
+      }
+    ],
+    "anchors": [
+      {
+        "line": 536,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "clientes.endereco",
+    "area": "Clientes & Contatos",
+    "component": "src/components/ClienteEditModal.tsx",
+    "surface": "CEP, endereço e estado",
+    "purpose": "Endereço do contato",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar preenchimento, origem e revisão dos dados de entrega.",
+    "what": "CEP, rua, número, bairro, cidade e UF compõem o endereço cadastrado do contato.",
+    "how": "Confira os campos, inclusive dados aproveitados da consulta de empresa, e revise a UF antes de salvar.",
+    "after": "O endereço é solicitado junto com o cadastro; consultar ou preencher os campos não despacha mercadoria.",
+    "risk": "Não presuma que informar o CEP verifica ou completa automaticamente todo o endereço. Confira com o contato quando a informação estiver incompleta.",
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
+    "locations": [
+      {
+        "file": "src/components/ClienteEditModal.tsx",
+        "line": 599
+      }
+    ],
+    "anchors": [
+      {
+        "line": 599,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "financeiro.filtros",
+    "area": "Controle Financeiro",
+    "component": "src/components/financeiro/FinanceiroTab.tsx",
+    "surface": "Período e tipo; sem busca textual",
+    "purpose": "Recortes do extrato e dos gráficos",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar o recorte exato de cada controle e sua relação com cartões e gráficos.",
+    "originalSurface": "Período, tipo e busca no extrato",
+    "what": "Todos, Entradas e Saídas mudam a leitura do servidor. O período recorta tabela e gráficos pela data de vencimento, não pela data de pagamento.",
+    "how": "Escolha o tipo e depois o período. Os períodos de 7 ou 30 dias incluem hoje e os dias anteriores; Todo o período também permite vencimentos futuros.",
+    "after": "Os dois gráficos usam a mesma lista elegível. Cancelados e estornados ficam no histórico da tabela, mas fora dos gráficos.",
+    "risk": "Os cartões de entradas, saídas e saldo vêm do resumo do servidor e não são recalculados pelo filtro visual de período. Esta tela não possui campo de busca textual.",
+    "nominalReview": "Sem busca textual. Período recorta por vencimento; cartões continuam com resumo do servidor. Conteúdo anterior corrigido.",
+    "locations": [
+      {
+        "file": "src/components/financeiro/FinanceiroTab.tsx",
+        "line": 121
+      }
+    ],
+    "anchors": [
+      {
+        "line": 121,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "financeiro.baixa",
+    "area": "Controle Financeiro",
+    "component": "src/components/financeiro/DetalheDaMovimentacao.tsx",
+    "surface": "Consulta de situação e pagamento; baixa não oferecida",
+    "purpose": "Situação e data de pagamento",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar quais campos/estados são alterados nesta ação, além da ajuda geral do detalhe.",
+    "originalSurface": "Baixa e sua confirmação específica",
+    "what": "O campo Pagamento mostra a data disponível do título ou um traço quando ela não existe. É uma consulta.",
+    "how": "Confira a situação e a origem junto com a data. Se houver dúvida sobre quitação, valide o registro na origem antes de concluir o atendimento.",
+    "after": "Abrir o detalhe ou consultar esta ajuda não dá baixa e não movimenta dinheiro.",
+    "risk": "Este detalhe não oferece ação de baixa manual. Ausência de data não autoriza registrar pagamento por outro botão nem pressupor que a conta está quitada.",
+    "nominalReview": "Não existe ação de baixa neste detalhe. Ajuda montada junto ao campo Pagamento explica consulta e ausência da ação. Nenhuma baixa implementada.",
+    "locations": [
+      {
+        "file": "src/components/financeiro/DetalheDaMovimentacao.tsx",
+        "line": 267
+      }
+    ],
+    "anchors": [
+      {
+        "line": 267,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "financeiro.correcao",
+    "area": "Controle Financeiro",
+    "component": "src/components/financeiro/DetalheDaMovimentacao.tsx",
+    "surface": "Correção e cancelamento de lançamento",
+    "purpose": "Correção de uma saída financeira",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar o contrato de cada confirmação e as diferenças entre recusa e efeito incerto.",
+    "what": "Excluir lançamento remove definitivamente uma saída interna. Cancelar despesa de origem Bling pede verificação da situação atual; se estiver aberta, remove a conta no ERP e mantém o histórico local como cancelado.",
+    "how": "Confira origem, título e valor e leia a confirmação. A interface não oferece estorno automático de saída já paga no Bling.",
+    "after": "Somente um desfecho confirmado encerra o detalhe e atualiza a leitura. Recusas ou resultados incertos mantêm um aviso para acompanhamento.",
+    "risk": "Entradas, títulos de pedido e registros terminais não oferecem essas ações aqui. Se o resultado for incerto, não repita nem escolha outra ação para contornar a pendência.",
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
+    "locations": [
+      {
+        "file": "src/components/financeiro/DetalheDaMovimentacao.tsx",
+        "line": 184
+      },
+      {
+        "file": "src/components/financeiro/DetalheDaMovimentacao.tsx",
+        "line": 229
+      }
+    ],
+    "anchors": [
+      {
+        "line": 184,
+        "kind": "HelpInfo contextual"
+      },
+      {
+        "line": 229,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "org.papeis-detalhados",
+    "area": "Organização & Membros",
+    "component": "src/components/organizacao/MembersList.tsx",
+    "surface": "Capacidades de dono, administrador e membro",
+    "purpose": "Papéis e autoridade na organização",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Detalhar somente as capacidades realmente autorizadas e as proteções do último proprietário.",
+    "what": "Dono e Administrador possuem as capacidades de acesso e gestão da organização; Membro possui acesso. Outras ações ainda podem exigir regras específicas no servidor.",
+    "how": "Confira o papel da pessoa e seu próprio contexto antes de usar os controles de participação.",
+    "after": "Esta lista permite solicitar remoção de participantes quando autorizado; ela não oferece um editor de papéis.",
+    "risk": "Nenhum Dono aparece removível nesta lista, não apenas o último. O servidor também valida a operação; ocultar ou mostrar um botão não é a autorização.",
+    "nominalReview": "A lista não edita papéis e não oferece remover nenhum owner. Não se afirmou que apenas o último é protegido na interface.",
+    "locations": [
+      {
+        "file": "src/components/organizacao/MembersList.tsx",
+        "line": 81
+      }
+    ],
+    "anchors": [
+      {
+        "line": 81,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "integracoes.formato-url",
+    "area": "Integrações",
+    "component": "src/components/integracoes/IntegrationsPanel.tsx",
+    "surface": "Formato de URL da instância e ID da conta",
+    "purpose": "Endereços e identificadores da conexão",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar validações e diferença entre endereço da instância, conta, inbox e callback.",
+    "what": "A URL da instância aponta para o servidor Chatwoot. O ID da conta identifica a conta nessa instância; não é o ID de inbox nem o identificador local da conexão.",
+    "how": "Use o endereço e a conta autorizados pela operação. Copie a URL de webhook exibida para receber eventos; no Bling, use a URL estável de retorno OAuth exibida no cartão dele.",
+    "after": "Salvar solicita a configuração da conexão. O campo de URL é validado como URL; o servidor ainda precisa conseguir acessar a instância.",
+    "risk": "Não coloque tokens na URL nem troque ID da conta por inbox. URL sintaticamente válida não comprova HTTPS público, conectividade ou webhook operacional.",
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
+    "locations": [
+      {
+        "file": "src/components/integracoes/IntegrationsPanel.tsx",
+        "line": 414
+      }
+    ],
+    "anchors": [
+      {
+        "line": 414,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "integracoes.estado-job",
+    "area": "Integrações",
+    "component": "src/app/page.tsx",
+    "surface": "Progresso do job, parcialidade e prazo de acompanhamento",
+    "purpose": "Progresso da sincronização",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar o progresso real e distinguir timeout de acompanhamento de encerramento do job.",
+    "what": "A sincronização Bling cria um job acompanhado pela tela. O progresso mostra fases e quantidades reportadas pelo servidor, não uma confirmação de que tudo já foi atualizado.",
+    "how": "Inicie uma vez com a organização correta e acompanhe o resultado. O acompanhamento consulta a cada dois segundos por até dez minutos.",
+    "after": "Concluído, falhou e cancelado são desfechos do job. Se acabar o acompanhamento ou falhar a leitura do estado, o processo pode continuar no servidor.",
+    "risk": "Não inicie outra sincronização só porque a tela parou de acompanhar. Releia o estado e confira dados e erros; Conectado no OAuth não prova conclusão do job.",
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
+    "locations": [
+      {
+        "file": "src/app/page.tsx",
+        "line": 664
+      }
+    ],
+    "anchors": [
+      {
+        "line": 664,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "billing.limites",
+    "area": "Plano & Faturamento (oculto)",
+    "component": "src/components/billing/BillingPanel.tsx",
+    "surface": "Limites de membros e conexões",
+    "purpose": "Limites e estado da assinatura",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar limites efetivos e efeitos de alteração de plano sem acionar cobrança.",
+    "what": "Os números mostram os limites de membros, conexões Bling e conexões Chatwoot devolvidos pelo servidor para a organização atual. O estado da assinatura vem dessa mesma leitura.",
+    "how": "Compare os limites exibidos com a necessidade da organização. Consulte plano e estado antes de abrir checkout ou portal.",
+    "after": "Uma solicitação de alteração pode abrir um serviço externo; somente a confirmação do servidor atualiza os direitos efetivos.",
+    "risk": "A ajuda não aciona cobrança nem promete que trocar o plano remove dados ou cria acesso imediatamente. Não faça cobranças reais no ensaio do MVP.",
+    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
+    "locations": [
+      {
+        "file": "src/components/billing/BillingPanel.tsx",
+        "line": 113
+      }
+    ],
+    "anchors": [
+      {
+        "line": 113,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "shell.fundo",
+    "area": "Preferências do shell",
+    "component": "src/components/shell/SeletorDeFundo.tsx",
+    "surface": "Preferência de fundo da sessão, sem persistência",
+    "purpose": "Preferência visual de fundo",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
+    "needed": "Explicar preferência visual e persistência local, sem confundir fundo e tema.",
+    "originalSurface": "Seletor de fundo",
+    "what": "Armazém, Lima, Lavanda e Grafite alteram o fundo atrás da janela do ORBITA; essa escolha não é a troca de tema claro ou escuro.",
+    "how": "Selecione uma amostra para mudar o fundo da sessão atual.",
+    "after": "A preferência é aplicada na tela. Neste código ela não é salva; uma nova montagem começa novamente com Armazém.",
+    "risk": "A escolha não muda dados, permissões ou organizações. Não há envio de foto pessoal por este seletor.",
+    "nominalReview": "A preferência é de sessão, sem armazenamento local. Conteúdo corrigido contra useFundo.",
+    "locations": [
+      {
+        "file": "src/components/shell/SeletorDeFundo.tsx",
+        "line": 65
+      }
+    ],
+    "anchors": [
+      {
+        "line": 65,
+        "kind": "HelpInfo contextual"
+      }
+    ]
+  },
+  {
+    "id": "legado.pedidos",
+    "area": "Legado não apresentado",
+    "component": "src/components/TransactionList.tsx",
+    "surface": "Tabela antiga, detalhe antigo e cancelamento legado",
+    "purpose": "Confirmar se ainda integra algum caminho do MVP; evitar adicionar ajuda a uma tela não apresentada.",
+    "existingHelp": "ajuda geral do painel e/ou rótulos; sem texto dedicado verificado para esta superfície",
+    "coverage": "excluída formalmente do MVP apresentado",
+    "needed": "Confirmar se ainda integra algum caminho do MVP; evitar adicionar ajuda a uma tela não apresentada.",
+    "nominalReview": "Não alcançada pelo grafo de imports locais a partir de src/app/page.tsx; não foi removida nem reativada. Não conta no denominador."
+  },
+  {
+    "id": "estoque.movimentacoes",
+    "area": "Estoque & Produtos",
+    "component": "src/components/ProductDetailModal.tsx",
+    "surface": "Histórico de movimentações do PR153",
+    "nominalReview": "Conteúdo e montagem conferidos na main2e0b98f após merge153; soma-se às65 superfícies originais.",
+    "purpose": "Entender as movimentações de estoque",
+    "what": "Este histórico consulta as entradas e saídas que o ORBITA registrou para o produto, com as mais recentes primeiro.",
+    "how": "Confira a data, a origem e a quantidade. O sinal − indica saída e o sinal + indica entrada.",
+    "after": "Consultar o histórico ou esta ajuda não muda o saldo, registra movimentações nem sincroniza o Bling.",
+    "risk": "Lista vazia indica ausência de registros no ORBITA; não comprova histórico vazio no Bling. Uma falha de leitura não significa zero movimentações.",
+    "locations": [
+      {
+        "file": "src/components/ProductDetailModal.tsx",
+        "line": 121
+      }
+    ],
+    "anchors": [
+      {
+        "line": 121,
+        "kind": "HelpInfo contextual"
+      }
+    ],
+    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados"
+  }
+]

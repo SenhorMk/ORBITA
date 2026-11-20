@@ -26,6 +26,7 @@ import type { OperacoesDeFoto } from '@/components/produtos/fotoDoProduto';
 import { useArquivamentoDoProduto } from '@/components/produtos/arquivamentoDoProduto';
 import { gravarProduto } from '@/components/produtos/gravacaoDoProduto';
 import { AvisosDaGravacao } from '@/components/produtos/AvisosDaGravacao';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * O detalhe e a edição de um produto, agora no `Modal` do Design System.
@@ -117,6 +118,7 @@ function Secao({ titulo, children }: { titulo: string; children: React.ReactNode
   return (
     <section className="flex flex-col gap-3">
       <h4 className="orbita-eyebrow">{titulo}</h4>
+      {titulo === 'Movimentações de estoque' && <HelpInfo ajudaId="estoque.movimentacoes" />}
       {children}
     </section>
   );
@@ -465,6 +467,7 @@ export function ProductDetailModal({
         }
         {...arquivamento.confirmacao?.modal}
       >
+      <HelpInfo ajudaId="estoque.produto" />
         {arquivamento.confirmacao ? arquivamento.confirmacao.corpo : (
         <div className="flex flex-col gap-6">
           <AvisosDaGravacao reconciliacao={aguardandoReconciliacao?.mensagem ?? null} avisos={avisosDaGravacao} />
@@ -507,6 +510,7 @@ export function ProductDetailModal({
 
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="product-detail-codigo">Código SKU / Ref. Bling</Rotulo>
+      <HelpInfo ajudaId="estoque.codigos" />
                 <div className="relative">
                   <input
                     id="product-detail-codigo"
@@ -532,6 +536,7 @@ export function ProductDetailModal({
 
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="product-detail-categoria">Categoria do produto</Rotulo>
+      <HelpInfo ajudaId="estoque.categoria" />
                 <select
                   id="product-detail-categoria"
                   value={categoriaId}
@@ -552,6 +557,7 @@ export function ProductDetailModal({
 
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="product-detail-preco">Preço de venda (R$)</Rotulo>
+      <HelpInfo ajudaId="estoque.precos" />
                 <input
                   id="product-detail-preco"
                   type="number"
@@ -576,6 +582,7 @@ export function ProductDetailModal({
           </Secao>
 
           <Secao titulo="Obrigatórios do Bling">
+      <HelpInfo ajudaId="estoque.obrigatorios" />
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="product-detail-tipo">Tipo *</Rotulo>

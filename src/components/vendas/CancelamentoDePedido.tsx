@@ -7,6 +7,7 @@ import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import { descreverErro } from '@/lib/erroLegivel';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * O cancelamento de um pedido.
@@ -140,6 +141,7 @@ export function CancelamentoDePedido({
         />
       }
     >
+      <HelpInfo ajudaId="vendas.cancelar" />
       <p className="text-sm leading-relaxed" style={{ color: 'var(--txt2)' }}>
         O cancelamento é propagado ao Bling e o estoque é realinhado de acordo com as regras do ERP.
         O pedido continua no histórico do Orbita, e deixa de contar como venda.

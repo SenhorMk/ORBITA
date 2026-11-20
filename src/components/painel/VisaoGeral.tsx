@@ -15,6 +15,7 @@ import {
   type MetricaLateral,
   type MetricaId,
 } from './metricasDoPainel';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Visão Geral.
@@ -74,6 +75,8 @@ function LinhaDeTitulo({
           >
             Visão<br />Geral
           </h1>
+      <HelpInfo ajudaId="painel.visao" />
+      <HelpInfo ajudaId="painel.metricas-detalhadas" />
         </div>
 
         <div

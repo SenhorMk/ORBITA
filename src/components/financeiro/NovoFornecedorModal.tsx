@@ -4,6 +4,7 @@ import React from 'react';
 import { Building2, CheckCircle, Loader2, XCircle } from 'lucide-react';
 
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 export interface DadosCNPJ {
   razao_social: string;
@@ -109,6 +110,7 @@ export function NovoFornecedorModal({
         />
       }
     >
+      <HelpInfo ajudaId="financeiro.fornecedor" />
       <div className="space-y-4">
         <div>
           <label htmlFor="fornecedor-cnpj" className={ROTULO} style={COR_DO_ROTULO}>CNPJ</label>

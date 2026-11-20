@@ -17,6 +17,7 @@ import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 import type { BarraDoDia, PontoDoFluxo } from './derivacoesDoFinanceiro';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Os dois gráficos do Financeiro, na mesma casca.
@@ -100,6 +101,7 @@ function PainelDeGrafico({ titulo, children }: { titulo: string; children: React
       >
         {titulo}
       </h3>
+      <HelpInfo ajudaId="financeiro.graficos" />
       <div className="flex-1 min-h-0" style={{ marginTop: 8 }}>
         <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 500, height: 160 }}>
           {children}

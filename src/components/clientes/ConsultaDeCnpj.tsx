@@ -7,6 +7,7 @@ import { formatarCnpj } from '@/lib/documento';
 import type { EmpresaCompleta } from '@/lib/empresas/empresaContract';
 
 import { consultarCnpj, intencaoDaConsulta, type BuscaAutenticada } from './consultaDeEmpresa';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * "Consultar CNPJ" no cadastro de contato. Só preenche: `onEmpresa` entrega a
@@ -123,6 +124,7 @@ export function ConsultaDeCnpj({
 
   return (
     <div className="flex flex-col gap-2">
+      <HelpInfo ajudaId="clientes.cnpj" />
       <label htmlFor="cliente-consulta-cnpj" className="orbita-eyebrow">Consultar CNPJ</label>
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: 'var(--txt3)' }} aria-hidden />

@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { Search, Plus, Trash2, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 import { useManualOrderSubmit, type ItemPedidoManual } from './useManualOrderSubmit';
 import { PendenciasDeVendaManual } from './PendenciasDeVendaManual';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 export type { ItemPedidoManual, UseManualOrderSubmitInput } from './useManualOrderSubmit';
 
@@ -220,6 +221,7 @@ function ManualOrderFormFields(props: ManualOrderFormFieldsProps) {
 
       <div>
         <label htmlFor="manual-order-forma-pagamento" className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Forma de Pagamento</label>
+      <HelpInfo ajudaId="vendas.pagamento" />
         <select
           id="manual-order-forma-pagamento"
           className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium text-white bg-transparent"
@@ -236,6 +238,7 @@ function ManualOrderFormFields(props: ManualOrderFormFieldsProps) {
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label htmlFor="manual-order-desconto" className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Desconto (R$)</label>
+      <HelpInfo ajudaId="vendas.desconto-frete" />
           <input
             id="manual-order-desconto"
             type="number"
@@ -494,6 +497,8 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess, organizacaoId 
         />
       }
     >
+      <HelpInfo ajudaId="vendas.manual" />
+      <HelpInfo ajudaId="vendas.sincronizar-checkbox" />
         <PendenciasDeVendaManual open={open} organizacaoId={organizacaoId} />
 
         {error && (

@@ -7,6 +7,7 @@ import type { PedidoDoCliente } from '@/lib/integrations/contratoDaVerificacao';
 import { Aviso } from './Aviso';
 import { RetratoDoPedido } from './RetratoDoPedido';
 import { useVerificacao } from './useVerificacao';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 const CHIP = { height: 28, fontSize: 11 } as const;
 const NOTA = { fontSize: 11, color: 'var(--txt3)' } as const;
@@ -63,6 +64,7 @@ export function PainelDoCliente({
 
   return (
     <div className="flex flex-col flex-none" style={{ gap: 8, padding: '10px 14px', borderTop: '1px solid var(--line)' }}>
+      <HelpInfo ajudaId="sac.cliente" />
       <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
         <span className="orbita-eyebrow" style={{ color: 'var(--txt3)' }}>Cliente</span>
         <output aria-label="Cliente da conversa" style={TEXTO}>

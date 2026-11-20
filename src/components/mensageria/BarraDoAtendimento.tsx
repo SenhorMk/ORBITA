@@ -6,6 +6,7 @@ import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizatio
 import { Aviso } from './Aviso';
 import { useControle, type AcaoDoAtendimento, type ControleVisto } from './useControle';
 import type { Mensageria } from './useMensageria';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 function rotuloDoControle(controle: ControleVisto): string {
   if (controle.modo === 'AI') return controle.automacaoAtiva ? 'Automação responde' : 'Sem atendente';
@@ -76,6 +77,7 @@ export function BarraDoAtendimento({
 
   return (
     <div className="flex flex-col flex-none" style={{ gap: 8, padding: '10px 14px', borderTop: '1px solid var(--line)' }}>
+      <HelpInfo ajudaId="sac.controle" />
       <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
         <span className="orbita-eyebrow" style={{ color: 'var(--txt3)' }}>Atendimento</span>
         <output aria-label="Quem atende" style={{ fontSize: 12, color: 'var(--txt)' }}>

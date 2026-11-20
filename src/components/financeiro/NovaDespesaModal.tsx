@@ -5,6 +5,7 @@ import { Building2, ChevronDown, FileSpreadsheet, Loader2, Search, ShieldCheck }
 
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import type { CategoriaFinanceira } from './useLeituraFinanceira';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 export interface Fornecedor {
   id: number;
@@ -212,6 +213,7 @@ export function NovaDespesaModal({
         />
       }
     >
+      <HelpInfo ajudaId="financeiro.despesa" />
       {naoConfirmado !== null && (
         <output className="block mb-4 text-sm" style={{ color: 'var(--warning)' }}>
           {naoConfirmado}

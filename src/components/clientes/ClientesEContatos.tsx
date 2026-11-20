@@ -10,6 +10,7 @@ import {
   EstadoVazio,
 } from '@/components/ui/estados';
 import { TabelaDeClientes } from './TabelaDeClientes';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Clientes & Contatos, na linguagem do produto novo.
@@ -66,6 +67,7 @@ export function ClientesEContatos({
           >
             Clientes &amp;<br />Contatos
           </h1>
+      <HelpInfo ajudaId="clientes.lista" />
           <span style={{ font: '400 11px/1.4 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
             {nuncaCarregou
               ? 'base de contatos da organização'

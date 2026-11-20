@@ -9,6 +9,7 @@ import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizatio
 import type { EventoDaOutbox } from '@/lib/integrations/contratoDaOutbox';
 import { comPrazo } from './comPrazo';
 import { useEnviosComAtencao } from './useEnviosComAtencao';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 const APARENCIA_DO_DESFECHO: Record<EventoDaOutbox['desfecho'], { readonly rotulo: string; readonly cor: string }> = {
   desconhecido: { rotulo: 'Desconhecido', cor: 'var(--warning)' },
@@ -117,6 +118,7 @@ export function EnviosComAtencao({
         <h2 className="m-0" style={{ font: '600 13px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}>
           Envios que exigem atenção
         </h2>
+      <HelpInfo ajudaId="integracoes.envios" />
         <button type="button" onClick={() => { void envios.recarregar(); }} className="orbita-chip cursor-pointer" aria-label="Atualizar envios">
           <RefreshCw className="w-3.5 h-3.5" />
         </button>

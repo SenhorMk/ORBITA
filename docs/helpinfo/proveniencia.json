@@ -1,0 +1,11 @@
+{
+  "package": "ORBITA-D07-HelpInfo-65.zip",
+  "sha256": "c56b7f2a0a40989263aa93b3f904288c9563cae0342e9d292607fefc2f633037",
+  "originalBase": "e025716ba70e1d8df5a97f99d14130199c4c6f27",
+  "integrationBase": "2e0b98fb8dda5dd9411887ff963c0ed435186d62",
+  "patch": "HelpInfo-completo-sobre-D05.patch",
+  "patchSha256": "25b51e0372d6ce8eaf69308c76e28b653eb7a6b9c1c7de42f7dbc2f49681be11",
+  "coverage": 66,
+  "scope": "Matriz nominal recuperada, não cobertura universal de todos os estados do produto",
+  "integratedPr153": "2e0b98fb8dda5dd9411887ff963c0ed435186d62"
+}

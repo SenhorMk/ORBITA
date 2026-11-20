@@ -16,6 +16,7 @@ import { BarraDoAtendimento } from './BarraDoAtendimento';
 import { PainelDaTriagem } from './PainelDaTriagem';
 import { PainelDaResposta } from './PainelDaResposta';
 import { PainelDoCliente } from './PainelDoCliente';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 type Filtro = 'open' | 'resolved' | 'all';
 
@@ -151,6 +152,7 @@ function CabecalhoDaLista({
           <MessageCircle className="w-4 h-4" aria-hidden />
           Atendimento
         </h2>
+      <HelpInfo ajudaId="sac.lista" />
         <button
           type="button"
           onClick={mensageria.sincronizar}
@@ -477,6 +479,7 @@ function Compositor({ mensageria }: { readonly mensageria: Mensageria }) {
   const bloqueado = mensageria.integracaoIndisponivel !== null;
   return (
     <div className="flex flex-col flex-none" style={{ gap: 8, padding: 14, borderTop: '1px solid var(--line)' }}>
+      <HelpInfo ajudaId="sac.envio" />
       {bloqueado && (
         <Aviso tom="atencao">
           Integração Chatwoot indisponível para esta organização — {mensageria.integracaoIndisponivel}. O histórico

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Os fundos de `Orbita Vendas.dc.html`.
@@ -61,6 +62,7 @@ export function SeletorDeFundo({ fundo, onEscolher }: { fundo: Fundo; onEscolher
         border: '1px solid var(--line)',
       }}
     >
+      <HelpInfo ajudaId="shell.fundo" />
       {FUNDOS.map((opcao) => (
         <button
           key={opcao.id}

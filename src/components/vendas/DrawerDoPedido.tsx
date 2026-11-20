@@ -13,6 +13,7 @@ import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import { descreverErro } from '@/lib/erroLegivel';
 import { pedidoContaComoVendaAtiva } from '@/lib/metricas/vendasAtivas';
 import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * O detalhe de um pedido, agora no drawer de 520px do Design System.
@@ -372,6 +373,7 @@ export function DrawerDoPedido({
           />
         )}
       >
+      <HelpInfo ajudaId="vendas.detalhe" />
         {carregando && <EstadoCarregando mensagem="Buscando dados no Bling ERP…" />}
 
         {erro && !carregando && (
