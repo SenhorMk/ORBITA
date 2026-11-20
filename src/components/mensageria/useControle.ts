@@ -112,6 +112,7 @@ export function useControle(fetchWithAuth: AuthenticatedFetch, conversaId: strin
     if (atual.current !== alvo) return;
     setGuardado((anterior) => {
       const base = daConversa(anterior, alvo);
+      if (base.agindo || (controle && base.controle && controle.versao < base.controle.versao)) return base;
       return { ...base, controle: controle ?? base.controle, erro: controle ? null : ERRO_DE_LEITURA };
     });
   }, [conversaId, fetchWithAuth]);
@@ -119,6 +120,19 @@ export function useControle(fetchWithAuth: AuthenticatedFetch, conversaId: strin
   useEffect(() => {
     void recarregar();
   }, [recarregar]);
+
+  // A projeção e o heartbeat mudam depois da resposta ao comando de devolução.
+  useEffect(() => {
+    if (conversaId === null || estado.agindo) return;
+    let encerrado = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const atualizar = async () => {
+      await recarregar();
+      if (!encerrado) timer = setTimeout(() => { void atualizar(); }, 5000);
+    };
+    timer = setTimeout(() => { void atualizar(); }, 5000);
+    return () => { encerrado = true; clearTimeout(timer); };
+  }, [conversaId, estado.agindo, recarregar]);
 
   const versaoVista = estado.controle?.versao;
   const agir = useCallback(async (acao: AcaoDoAtendimento, nota?: string): Promise<boolean> => {
