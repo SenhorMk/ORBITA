@@ -14,6 +14,7 @@ import { descreverErro } from '@/lib/erroLegivel';
 import { pedidoContaComoVendaAtiva } from '@/lib/metricas/vendasAtivas';
 import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { HelpInfo } from '@/components/help/HelpInfo';
+import { formatarDataDoPedido } from '@/lib/dataDoPedido';
 
 /**
  * O detalhe de um pedido, agora no drawer de 520px do Design System.
@@ -240,7 +241,7 @@ function RegistroHistoricoLocal({ pedidoLocal }: { pedidoLocal: PedidoEnriquecid
               {pedidoLocal.cliente?.cpf_cnpj && (
                 <Linha rotulo="Documento" valor={pedidoLocal.cliente.cpf_cnpj} />
               )}
-              <Linha rotulo="Entrada" valor={new Date(pedidoLocal.data).toLocaleString('pt-BR')} />
+              <Linha rotulo="Entrada" valor={formatarDataDoPedido(pedidoLocal.data, true)} />
               {pedidoLocal.frete !== undefined && <Linha rotulo="Frete" valor={reais(pedidoLocal.frete)} />}
               <Linha rotulo="Total" valor={reais(pedidoLocal.total)} />
             </div>

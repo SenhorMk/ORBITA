@@ -6,7 +6,7 @@ import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { pedidoContaComoVendaAtiva } from '@/lib/metricas/vendasAtivas';
 import { DropdownMenu } from '@/components/DropdownMenu';
-import { idadeDeIso } from '@/lib/tempoRelativo';
+import { formatarDataDoPedido, idadeDaDataDoPedido } from '@/lib/dataDoPedido';
 import { descreverOrigem } from './filtrosDeVendas';
 
 /**
@@ -42,16 +42,6 @@ function formatarReais(valor: number | string | null | undefined): string {
   });
 }
 
-function formatarEntrada(iso: string): string {
-  const quando = new Date(iso);
-  if (!Number.isFinite(quando.getTime())) return '—';
-  return quando.toLocaleString('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
 
 function iniciaisDe(nome: string): string {
   return nome
@@ -106,7 +96,7 @@ export function TabelaDePedidos({
             const nome = pedido.cliente?.nome || 'Cliente Consumidor';
             const documento = pedido.cliente?.cpf_cnpj;
             const telefone = pedido.cliente?.telefone;
-            const idade = idadeDeIso(pedido.data, agora);
+            const idade = idadeDaDataDoPedido(pedido.data, agora);
             // O cancelado é reconhecido pelo radical, e não por igualdade: o
             // status chega de duas fontes e já apareceu como `Cancelado` e
             // `cancelado`. É a mesma frouxidão deliberada das métricas.
@@ -172,7 +162,7 @@ export function TabelaDePedidos({
 
                 <span className="flex flex-col" style={{ gap: 3 }}>
                   <span style={{ font: '500 12px/1 var(--font-jetbrains-mono), monospace', color: 'var(--txt)' }}>
-                    {formatarEntrada(pedido.data)}
+                    {formatarDataDoPedido(pedido.data)}
                   </span>
                   {idade && (
                     <span style={{ font: '400 10.5px/1 var(--font-archivo), sans-serif', color: 'var(--txt3)' }}>
