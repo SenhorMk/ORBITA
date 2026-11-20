@@ -8,6 +8,7 @@ import { Aviso } from './Aviso';
 import { RetratoDoPedido } from './RetratoDoPedido';
 import { useVerificacao } from './useVerificacao';
 import { HelpInfo } from '@/components/help/HelpInfo';
+import { formatarDataDoPedido } from '@/lib/dataDoPedido';
 
 const CHIP = { height: 28, fontSize: 11 } as const;
 const NOTA = { fontSize: 11, color: 'var(--txt3)' } as const;
@@ -27,7 +28,7 @@ function Pedidos({ titulo, pedidos, onDetalhes }: {
         <li key={pedido.id} className="flex items-center flex-wrap" style={{ gap: 8, ...TEXTO }}>
           <span>{pedido.numero === null ? 'Pedido sem número' : `Pedido ${pedido.numero}`}</span>
           <span style={NOTA}>
-            {new Date(pedido.data).toLocaleDateString('pt-BR')} · {pedido.status} · {pedido.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+            {formatarDataDoPedido(pedido.data, true)} · {pedido.status} · {pedido.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
           </span>
           <button type="button" onClick={() => onDetalhes(pedido.id)} className="orbita-chip cursor-pointer" style={CHIP}
             aria-label={`Detalhes do pedido ${pedido.numero ?? 'sem número'}`}>
