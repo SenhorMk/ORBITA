@@ -2,19 +2,25 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { classificarFalhaDeCriacaoNoBling } from '@/lib/integrations/bling/classificacaoDeFalhaDeCriacao';
-import { blingFailure, type BlingCallResult, type BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaContract';
+import type { BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { Situacao } from '@/lib/integrations/bling/situacoesContract';
-import { logger, sanitizeErrorForLog } from '@/lib/observability/logger';
 import { mapBlingStatus } from '@/lib/utils';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
 import type {
   PedidoStatusBlingPort,
-  PedidoStatusPedido,
   PedidoStatusDependencies,
   PedidoStatusResponseBody,
   PedidoStatusStorePort,
 } from './ports';
+import {
+  avisoDoEstorno,
+  estornoNaoConfirmado,
+  prepararReleituraDoSaldo,
+  type Evento,
+  type ResultadoDoEstorno,
+} from './estornoDoCancelamento';
+import { registrarFalhaInterna, semExcecao } from './falhaDoStatus';
 
 export type {
   PedidoStatusAuthPort,
@@ -28,43 +34,6 @@ export type {
 
 function json(body: PedidoStatusResponseBody, status: number): NextResponse {
   return NextResponse.json(body, { status });
-}
-
-/**
- * SQLSTATE: exatamente cinco caracteres alfanuméricos maiúsculos (`42501`,
- * `23505`, `PGRST201`… — este último não passa, e é o ponto).
- *
- * O `code` do erro é texto que vem de fora. Sem validar, ele próprio seria um
- * canal para empurrar conteúdo arbitrário para dentro do log estruturado.
- */
-const CODIGO_SQLSTATE = /^[0-9A-Z]{5}$/u;
-
-/** Código técnico do erro, apenas se for um SQLSTATE reconhecível. */
-function codigoTecnicoValidado(erro: unknown): string | undefined {
-  const bruto = (erro as { code?: unknown } | null | undefined)?.code;
-  return typeof bruto === 'string' && CODIGO_SQLSTATE.test(bruto) ? bruto : undefined;
-}
-
-/**
- * Registra a falha no servidor sem carregar nada que não possa ser lido depois.
- *
- * Deliberadamente **não** registra `message`, `details` nem `hint`. Numa
- * violação de unicidade o Postgres coloca valores de linha dentro deles
- * (`Key (email)=(...) already exists`), ou seja, dado de cliente — e
- * `descreverErro` sozinho não resolve isso, porque o trabalho dele é tornar o
- * erro legível, não decidir o que pode sair daqui.
- *
- * O que fica: qual operação falhou, em qual organização, a classe do erro e o
- * SQLSTATE. É o suficiente para saber onde olhar.
- */
-function registrarFalhaInterna(erro: unknown, organizacaoId: string | undefined): void {
-  logger.error('Falha ao atualizar situação do pedido', {
-    subsystem: 'app',
-    operacao: 'pedidos.status.atualizar',
-    organizacaoId,
-    erro: sanitizeErrorForLog(erro).name,
-    codigo: codigoTecnicoValidado(erro),
-  });
 }
 
 /**
@@ -167,7 +136,6 @@ async function lerMudanca(request: Request): Promise<z.infer<typeof statusReques
   return json({ error: `Dados inválidos: ${detalhes}` }, 400);
 }
 
-type Evento = (acao: string, metadata: Readonly<Record<string, string | number | boolean | null>>) => Promise<void>;
 
 /** Recusa comprovada → 400; qualquer outra falha pode ter mudado a situação → 502 desconhecido. */
 async function respostaDaFalhaNaSituacao(failure: BlingProviderFailure, situacaoId: number, evento: Evento): Promise<NextResponse> {
@@ -209,148 +177,6 @@ async function confirmarSituacao(
 }
 
 /**
- * O que se sabe do estorno de estoque do cancelamento.
- * - `estornado`: o Bling aceitou E o saldo relido é, produto a produto, o saldo de antes + a quantidade vendida.
- * - `divergente`: o Bling aceitou, mas o saldo relido não é o esperado. Aceite não é prova de estorno.
- * - `sem_conferencia`: o Bling aceitou, mas não houve base para conferir (itens, produto sem id no Bling,
- *   saldo de antes ou de depois ilegível). Não se declara estorno feito.
- * - `recusado`: recusa comprovada (`classificarFalhaDeCriacaoNoBling` = Definitiva). NÃO se presume o motivo:
- *   um 400 não prova "pedido sem estoque lançado".
- * - `desconhecido`: timeout, rede, 429, 5xx, resposta ilegível: o estorno pode ter sido aplicado. Sem retry.
- * - `ja_cancelado`: o pedido já estava cancelado no ORBITA antes desta requisição; repetir o estorno o dobraria.
- *
- * Saldos locais e remotos coincidindo NUNCA promovem um desfecho a `estornado`: os dois podem estar
- * igualmente errados (Bling e ORBITA em 7 não provam que a unidade voltou).
- */
-type DesfechoDoEstorno =
-  | 'nao_aplicavel' | 'ja_cancelado' | 'estornado' | 'divergente' | 'sem_conferencia' | 'recusado' | 'desconhecido';
-
-/** Saldo esperado no Bling por id de produto do Bling, depois de um estorno integral. */
-type SaldoEsperado = ReadonlyMap<string, number>;
-
-/**
- * Lê, ANTES do estorno, o saldo do Bling dos produtos do pedido e soma a quantidade vendida.
- * `null` = sem base para conferir; qualquer falha aqui só tira a conferência, nunca o cancelamento.
- */
-async function lerSaldoEsperado(
-  scope: VerifiedOrganizationScope,
-  store: PedidoStatusStorePort,
-  bling: PedidoStatusBlingPort,
-  pedidoId: string,
-): Promise<SaldoEsperado | null> {
-  try {
-    const itens = await store.findItensDoPedido(scope, pedidoId);
-    if (itens.length === 0) return null;
-    const quantidadePorProduto = new Map<string, number>();
-    for (const item of itens) {
-      if (!Number.isSafeInteger(item.quantidade) || item.quantidade <= 0) return null;
-      quantidadePorProduto.set(item.produtoId, (quantidadePorProduto.get(item.produtoId) ?? 0) + item.quantidade);
-    }
-    const produtos = await store.findProdutosByIds(scope, [...quantidadePorProduto.keys()]);
-    const blingIdPorProduto = new Map<string, string>();
-    for (const produto of produtos) {
-      if (!produto.blingId) return null;
-      blingIdPorProduto.set(produto.id, produto.blingId);
-    }
-    if (blingIdPorProduto.size !== quantidadePorProduto.size) return null;
-    const antes = await bling.getSaldos([...blingIdPorProduto.values()]);
-    const esperado = new Map<string, number>();
-    for (const [produtoId, blingId] of blingIdPorProduto) {
-      const saldo = antes.get(blingId);
-      if (saldo === undefined) return null;
-      esperado.set(blingId, (esperado.get(blingId) ?? saldo) + (quantidadePorProduto.get(produtoId) ?? 0));
-    }
-    return esperado;
-  } catch (err: unknown) {
-    registrarFalhaInterna(err, scope.organizationId);
-    return null;
-  }
-}
-
-/** Confronta o saldo relido com o esperado. Devolve quantos produtos divergem, ou `null` sem leitura. */
-async function contarDivergencias(
-  scope: VerifiedOrganizationScope,
-  bling: PedidoStatusBlingPort,
-  esperado: SaldoEsperado,
-): Promise<number | null> {
-  try {
-    const depois = await bling.getSaldos([...esperado.keys()]);
-    let divergentes = 0;
-    for (const [blingId, saldoEsperado] of esperado) {
-      if (depois.get(blingId) !== saldoEsperado) divergentes += 1;
-    }
-    return divergentes;
-  } catch (err: unknown) {
-    registrarFalhaInterna(err, scope.organizationId);
-    return null;
-  }
-}
-
-interface ResultadoDoEstorno {
-  readonly desfecho: DesfechoDoEstorno;
-  readonly mensagemDoBling: string | null;
-  readonly divergentes: number;
-}
-
-/** Estorno do cancelamento (se couber), conferido contra o saldo esperado, antes de alinhar o ORBITA. */
-async function prepararReleituraDoSaldo(
-  deps: Pick<PedidoStatusDependencies, 'bling' | 'store' | 'aguardarProcessamentoBling'>,
-  scope: VerifiedOrganizationScope,
-  pedidoId: string,
-  novoStatusCanonico: string,
-  pedidoLocal: PedidoStatusPedido,
-  evento: Evento,
-): Promise<ResultadoDoEstorno> {
-  if (novoStatusCanonico !== 'Cancelado' || mapBlingStatus(pedidoLocal.status) === 'Cancelado') {
-    const desfecho: DesfechoDoEstorno = novoStatusCanonico === 'Cancelado' ? 'ja_cancelado' : 'nao_aplicavel';
-    if (desfecho === 'ja_cancelado') await evento('order.stock_reversal', { resultado: desfecho, status_http: null });
-    // O Bling roda as rotinas de estoque de forma assíncrona depois de aceitar
-    // a mudança; ler o saldo imediatamente traria o valor antigo.
-    await deps.aguardarProcessamentoBling();
-    return { desfecho, mensagemDoBling: null, divergentes: 0 };
-  }
-
-  // A base é lida ANTES do estorno: depois dele não há como saber o que o saldo era.
-  const esperado = await lerSaldoEsperado(scope, deps.store, deps.bling, pedidoId);
-  const estorno = await semExcecao(() => deps.bling.estornarEstoque(pedidoLocal.bling_id));
-  await deps.aguardarProcessamentoBling();
-
-  let desfecho: DesfechoDoEstorno;
-  let mensagemDoBling: string | null = null;
-  let divergentes = 0;
-  if (estorno._tag === 'BlingOk') {
-    const contagem = esperado === null ? null : await contarDivergencias(scope, deps.bling, esperado);
-    if (contagem === null) desfecho = 'sem_conferencia';
-    else if (contagem > 0) {
-      desfecho = 'divergente';
-      divergentes = contagem;
-    } else desfecho = 'estornado';
-  } else {
-    desfecho = classificarFalhaDeCriacaoNoBling(estorno.failure) === 'Definitiva' ? 'recusado' : 'desconhecido';
-    mensagemDoBling = desfecho === 'recusado' ? estorno.failure.message : null;
-  }
-  await evento('order.stock_reversal', {
-    resultado: desfecho,
-    status_http: estorno._tag === 'BlingFailed' ? estorno.failure.status : null,
-    produtos_divergentes: divergentes,
-  });
-  return { desfecho, mensagemDoBling, divergentes };
-}
-
-const AVISO_ESTORNO_RECUSADO = (mensagem: string | null) =>
-  `Pedido cancelado, mas o Bling recusou o estorno do estoque${mensagem ? ` (${mensagem})` : ''}. `
-  + 'Confira o saldo no Bling antes de qualquer ajuste; não repita o cancelamento.';
-const AVISO_ESTORNO_DESCONHECIDO = 'Pedido cancelado, mas o Bling não confirmou o estorno do estoque, e ele pode ter sido aplicado. '
-  + 'Confira o saldo no Bling antes de qualquer ajuste; não repita o cancelamento.';
-const AVISO_ESTORNO_DIVERGENTE = (n: number) =>
-  `Pedido cancelado e o Bling aceitou o estorno, mas o saldo de ${n} produto(s) não é o esperado `
-  + '(saldo de antes + quantidade do pedido). O estorno não está confirmado: confira o saldo no Bling antes de qualquer ajuste; '
-  + 'não repita o cancelamento.';
-const AVISO_ESTORNO_SEM_CONFERENCIA = 'Pedido cancelado e o Bling aceitou o estorno, mas não foi possível conferir o saldo esperado. '
-  + 'O estorno não está confirmado: confira o saldo no Bling antes de qualquer ajuste; não repita o cancelamento.';
-const AVISO_JA_CANCELADO = 'O pedido já estava cancelado: nenhum novo estorno de estoque foi feito, para não devolver o estoque duas vezes.';
-
-/**
  * A resposta depois da situação confirmada. O estorno não confirmado é pendência mesmo com os saldos
  * coincidindo: Bling e ORBITA em 7 não provam que a unidade voltou.
  */
@@ -361,8 +187,6 @@ async function respostaDoEstoque(
   estoque: { readonly conferido: boolean; readonly alinhados: number; readonly pendentes: number },
   evento: Evento,
 ): Promise<NextResponse> {
-  const estornoNaoConfirmado = estorno.desfecho !== 'nao_aplicavel' && estorno.desfecho !== 'estornado'
-    && estorno.desfecho !== 'ja_cancelado';
   await evento('order.status_changed', {
     situacao_id: novaSituacaoId,
     estoque: !estoque.conferido ? 'nao_conferido' : estoque.pendentes > 0 ? 'parcial' : 'alinhado',
@@ -371,14 +195,10 @@ async function respostaDoEstoque(
     ...(estorno.desfecho === 'nao_aplicavel' ? {} : { estorno: estorno.desfecho }),
   });
   const avisos = [
-    estorno.desfecho === 'recusado' ? AVISO_ESTORNO_RECUSADO(estorno.mensagemDoBling) : null,
-    estorno.desfecho === 'desconhecido' ? AVISO_ESTORNO_DESCONHECIDO : null,
-    estorno.desfecho === 'divergente' ? AVISO_ESTORNO_DIVERGENTE(estorno.divergentes) : null,
-    estorno.desfecho === 'sem_conferencia' ? AVISO_ESTORNO_SEM_CONFERENCIA : null,
-    estorno.desfecho === 'ja_cancelado' ? AVISO_JA_CANCELADO : null,
+    avisoDoEstorno(estorno),
     !estoque.conferido ? AVISO_ESTOQUE_NAO_CONFERIDO : estoque.pendentes > 0 ? avisoDePendencias(estoque.pendentes) : null,
   ].filter((aviso): aviso is string => aviso !== null);
-  const pendente = estornoNaoConfirmado || !estoque.conferido || estoque.pendentes > 0;
+  const pendente = estornoNaoConfirmado(estorno) || !estoque.conferido || estoque.pendentes > 0;
   return json({
     success: true,
     status: novoStatusCanonico,
@@ -455,13 +275,4 @@ export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
       return json({ error: 'Erro interno' }, 500);
     }
   };
-}
-
-/** Exceção ao falar com o Bling (rede, timeout) é desfecho desconhecido, nunca 500 genérico. */
-async function semExcecao<T>(chamada: () => Promise<BlingCallResult<T>>): Promise<BlingCallResult<T>> {
-  try {
-    return await chamada();
-  } catch (erro: unknown) {
-    return blingFailure('UNKNOWN_ERROR', 0, sanitizeErrorForLog(erro).name);
-  }
 }
