@@ -8,6 +8,7 @@ import { Pilula } from '@/components/ui/StatusPill';
 import { ErrorLogModal } from './ErrorLogModal';
 import { isProdutoSynced, validateProdutoForBling, sanitizeProductName } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
+import { MovimentacoesDoProduto } from '@/components/estoque/MovimentacoesDoProduto';
 import {
   buildProdutoRequest,
   saldoParaEnvio,
@@ -620,6 +621,12 @@ export function ProductDetailModal({
               </output>
             )}
           </Secao>
+
+          {produto?.id && (
+            <Secao titulo="Movimentações de estoque">
+              <MovimentacoesDoProduto produtoId={produto.id} />
+            </Secao>
+          )}
 
           <Secao titulo="Observações">
             <textarea
