@@ -10,6 +10,7 @@ import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope'
 
 import type {
   PedidoStatusBlingPort,
+  PedidoStatusPedido,
   PedidoStatusDependencies,
   PedidoStatusResponseBody,
   PedidoStatusStorePort,
@@ -208,26 +209,84 @@ async function confirmarSituacao(
 }
 
 /**
- * Cancelar pela API não devolve o estoque lançado pela venda (`lancar-estoque`): o estorno é explícito.
- * Recusa (pedido sem estoque lançado) ou falha não derruba o cancelamento: o alinhamento que vem
- * depois lê o saldo real, e a pendência vira aviso.
+ * O que se sabe do estorno de estoque do cancelamento.
+ * - `estornado`: o Bling confirmou.
+ * - `recusado`: recusa comprovada (`classificarFalhaDeCriacaoNoBling` = Definitiva). NÃO se presume o motivo:
+ *   um 400 não prova "pedido sem estoque lançado".
+ * - `desconhecido`: timeout, rede, 429, 5xx, resposta ilegível: o estorno pode ter sido aplicado. Sem retry.
+ * - `ja_cancelado`: o pedido já estava cancelado no ORBITA antes desta requisição; repetir o estorno o dobraria.
  */
+type DesfechoDoEstorno = 'nao_aplicavel' | 'ja_cancelado' | 'estornado' | 'recusado' | 'desconhecido';
+
+/** Estorno do cancelamento (se couber) e espera pelas rotinas de estoque do Bling, antes de reler o saldo. */
 async function prepararReleituraDoSaldo(
   deps: Pick<PedidoStatusDependencies, 'bling' | 'aguardarProcessamentoBling'>,
   novoStatusCanonico: string,
-  blingPedidoId: string,
+  pedidoLocal: PedidoStatusPedido,
   evento: Evento,
-): Promise<void> {
-  if (novoStatusCanonico === 'Cancelado') {
-    const estorno = await semExcecao(() => deps.bling.estornarEstoque(blingPedidoId));
+): Promise<{ readonly desfecho: DesfechoDoEstorno; readonly mensagemDoBling: string | null }> {
+  let desfecho: DesfechoDoEstorno = 'nao_aplicavel';
+  let mensagemDoBling: string | null = null;
+  if (novoStatusCanonico === 'Cancelado' && mapBlingStatus(pedidoLocal.status) === 'Cancelado') {
+    desfecho = 'ja_cancelado';
+    await evento('order.stock_reversal', { resultado: desfecho, status_http: null });
+  } else if (novoStatusCanonico === 'Cancelado') {
+    const estorno = await semExcecao(() => deps.bling.estornarEstoque(pedidoLocal.bling_id));
+    if (estorno._tag === 'BlingOk') desfecho = 'estornado';
+    else {
+      desfecho = classificarFalhaDeCriacaoNoBling(estorno.failure) === 'Definitiva' ? 'recusado' : 'desconhecido';
+      mensagemDoBling = desfecho === 'recusado' ? estorno.failure.message : null;
+    }
     await evento('order.stock_reversal', {
-      resultado: estorno._tag === 'BlingOk' ? 'estornado' : 'nao_estornado',
+      resultado: desfecho,
       status_http: estorno._tag === 'BlingFailed' ? estorno.failure.status : null,
     });
   }
   // O Bling roda as rotinas de estoque de forma assíncrona depois de aceitar
   // a mudança; ler o saldo imediatamente traria o valor antigo.
   await deps.aguardarProcessamentoBling();
+  return { desfecho, mensagemDoBling };
+}
+
+const AVISO_ESTORNO_RECUSADO = (mensagem: string | null) =>
+  `Pedido cancelado, mas o Bling recusou o estorno do estoque${mensagem ? ` (${mensagem})` : ''}. `
+  + 'Confira o saldo no Bling antes de qualquer ajuste; não repita o cancelamento.';
+const AVISO_ESTORNO_DESCONHECIDO = 'Pedido cancelado, mas o Bling não confirmou o estorno do estoque, e ele pode ter sido aplicado. '
+  + 'Confira o saldo no Bling antes de qualquer ajuste; não repita o cancelamento.';
+const AVISO_JA_CANCELADO = 'O pedido já estava cancelado: nenhum novo estorno de estoque foi feito, para não devolver o estoque duas vezes.';
+
+/**
+ * A resposta depois da situação confirmada. O estorno não confirmado é pendência mesmo com os saldos
+ * coincidindo: Bling e ORBITA em 7 não provam que a unidade voltou.
+ */
+async function respostaDoEstoque(
+  novoStatusCanonico: string,
+  novaSituacaoId: number,
+  estorno: { readonly desfecho: DesfechoDoEstorno; readonly mensagemDoBling: string | null },
+  estoque: { readonly conferido: boolean; readonly alinhados: number; readonly pendentes: number },
+  evento: Evento,
+): Promise<NextResponse> {
+  const estornoNaoConfirmado = estorno.desfecho === 'recusado' || estorno.desfecho === 'desconhecido';
+  await evento('order.status_changed', {
+    situacao_id: novaSituacaoId,
+    estoque: !estoque.conferido ? 'nao_conferido' : estoque.pendentes > 0 ? 'parcial' : 'alinhado',
+    produtos_alinhados: estoque.alinhados,
+    produtos_pendentes: estoque.pendentes,
+    ...(estorno.desfecho === 'nao_aplicavel' ? {} : { estorno: estorno.desfecho }),
+  });
+  const avisos = [
+    estorno.desfecho === 'recusado' ? AVISO_ESTORNO_RECUSADO(estorno.mensagemDoBling) : null,
+    estorno.desfecho === 'desconhecido' ? AVISO_ESTORNO_DESCONHECIDO : null,
+    estorno.desfecho === 'ja_cancelado' ? AVISO_JA_CANCELADO : null,
+    !estoque.conferido ? AVISO_ESTOQUE_NAO_CONFERIDO : estoque.pendentes > 0 ? avisoDePendencias(estoque.pendentes) : null,
+  ].filter((aviso): aviso is string => aviso !== null);
+  const pendente = estornoNaoConfirmado || !estoque.conferido || estoque.pendentes > 0;
+  return json({
+    success: true,
+    status: novoStatusCanonico,
+    estoque: pendente ? 'requer_reconciliacao' : 'alinhado',
+    ...(avisos.length > 0 ? { warning: avisos.join(' ') } : {}),
+  }, 200);
 }
 
 export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
@@ -286,25 +345,9 @@ export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
         }, 500);
       }
 
-      await prepararReleituraDoSaldo(deps, novoStatusCanonico, pedidoLocal.bling_id, evento);
-
+      const estorno = await prepararReleituraDoSaldo(deps, novoStatusCanonico, pedidoLocal, evento);
       const estoque = await alinharEstoqueComBling(scope, store, bling, pedidoId);
-      const pendente = !estoque.conferido || estoque.pendentes > 0;
-      await evento('order.status_changed', {
-        situacao_id: novaSituacaoId,
-        estoque: !estoque.conferido ? 'nao_conferido' : estoque.pendentes > 0 ? 'parcial' : 'alinhado',
-        produtos_alinhados: estoque.alinhados,
-        produtos_pendentes: estoque.pendentes,
-      });
-      if (pendente) {
-        return json({
-          success: true,
-          status: novoStatusCanonico,
-          estoque: 'requer_reconciliacao',
-          warning: estoque.conferido ? avisoDePendencias(estoque.pendentes) : AVISO_ESTOQUE_NAO_CONFERIDO,
-        }, 200);
-      }
-      return json({ success: true, status: novoStatusCanonico, estoque: 'alinhado' }, 200);
+      return respostaDoEstoque(novoStatusCanonico, novaSituacaoId, estorno, estoque, evento);
     } catch (error: unknown) {
       // CWE-209: o diagnóstico do Postgres fica no servidor. O cliente recebe
       // sempre a mesma frase — `message` inclusive, que pode carregar valor de
