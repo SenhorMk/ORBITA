@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { CreditCard, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 interface OrganizationEntitlements {
   plano_nome: string;
@@ -108,6 +109,8 @@ export function BillingPanel({ fetchWithAuth, organizacaoId, onRedirect }: Billi
       <div className="flex items-center gap-2">
         <CreditCard className="w-5 h-5 text-[#0A84FF]" />
         <h2 className="text-lg font-semibold text-white">Plano e faturamento</h2>
+      <HelpInfo ajudaId="billing.plano" />
+      <HelpInfo ajudaId="billing.limites" />
       </div>
 
       {error && (

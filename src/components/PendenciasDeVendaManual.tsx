@@ -11,6 +11,7 @@ import {
   lerTentativasPendentes,
   type TentativaPendente,
 } from './tentativaPendente';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * O caminho de saída, na tela, de uma venda manual que ficou sem desfecho.
@@ -141,6 +142,7 @@ export function PendenciasDeVendaManual({
       className="p-4 rounded-2xl space-y-3"
       style={{ background: 'var(--chip)', border: '1px solid var(--warning)', color: 'var(--txt)' }}
     >
+      <HelpInfo ajudaId="vendas.pendencias" />
       {pendentes.length > 0 && (
         <>
           <div className="flex items-start gap-2 text-[13px]" style={{ color: 'var(--txt2)' }}>

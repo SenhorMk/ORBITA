@@ -1,0 +1,190 @@
+{
+  "base": "51e4cb907bcc51b3c13803fd1e74c5faa0907c96",
+  "method": "Comparação AST dos componentes existentes, removendo apenas import e JSX HelpInfo e espaços JSX vazios; handlers, campos e estrutura restante preservados.",
+  "files": [
+    {
+      "file": "src/app/page.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/ClienteDetailModal.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/ClienteEditModal.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/EditOrderModal.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/ErrorLogModal.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/ManualOrderModal.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/PendenciasDeVendaManual.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/ProductDetailModal.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/auth/TelaDeEntrada.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/billing/BillingPanel.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/clientes/ClientesEContatos.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/clientes/ConsultaDeCnpj.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/estoque/EstoqueEProdutos.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/financeiro/AcoesFinanceiras.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/financeiro/ComposicaoDoFinanceiro.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/financeiro/DetalheDaMovimentacao.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/financeiro/FinanceiroTab.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/financeiro/Graficos.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/financeiro/NovaDespesaModal.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/financeiro/NovoFornecedorModal.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/financeiro/OperacoesPendentes.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/financeiro/ResumoFinanceiro.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/integracoes/EnviosComAtencao.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/integracoes/IntegrationsPanel.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/integracoes/MensagensRecebidas.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/mensageria/BarraDoAtendimento.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/mensageria/MensageriaDesktop.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/mensageria/PainelDaResposta.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/mensageria/PainelDaTriagem.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/mensageria/PainelDoCliente.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/mensageria/RetratoDoPedido.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/organizacao/AceitarConviteModal.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/organizacao/CriarConviteModal.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/organizacao/ListaDeConvites.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/organizacao/MembersList.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/organizacao/NovaOrganizacaoModal.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/organizacao/OrganizationList.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/organizacao/OrganizationPanel.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/painel/AreaAnalitica.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/painel/VisaoGeral.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/produtos/ImagemDoProduto.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/produtos/arquivamentoDoProduto.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/shell/SeletorDeFundo.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/vendas/CancelamentoDePedido.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/vendas/DrawerDoPedido.tsx",
+      "helpOnly": true
+    },
+    {
+      "file": "src/components/vendas/VendasEPedidos.tsx",
+      "helpOnly": true
+    }
+  ]
+}

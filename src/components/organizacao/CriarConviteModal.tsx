@@ -5,6 +5,7 @@ import { Check, Copy, Info } from 'lucide-react';
 
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import type { ConviteCriado } from './types';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 const ID_DO_FORMULARIO = 'form-criar-convite';
 
@@ -229,6 +230,7 @@ export function CriarConviteModal({
         )
       }
     >
+      <HelpInfo ajudaId="org.convidar" />
       {criado ? (
         <CodigoEntregavel
           criado={criado}

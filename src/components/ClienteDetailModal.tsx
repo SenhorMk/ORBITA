@@ -6,6 +6,7 @@ import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import { Pilula } from '@/components/ui/StatusPill';
 import { mensagemDaCorrecao, type DesfechoDaCorrecao } from '@/lib/config/correcaoOperacionalContract';
 import type { Cliente } from '@/types';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * O detalhe de um cliente, no `Modal` do Design System.
@@ -232,6 +233,7 @@ export function ClienteDetailModal({
         />
       )}
     >
+      <HelpInfo ajudaId="clientes.detalhe" />
       {confirmando ? (
         <ConfirmacaoDeExclusao nome={cliente.nome} noBling={contatoNoBling(cliente)} aviso={aviso} />
       ) : (

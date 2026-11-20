@@ -4,6 +4,7 @@ import { AlertTriangle, Loader2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { RegisterForm } from './RegisterForm';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * A primeira tela do ORBITA, nos tokens do Design System.
@@ -115,6 +116,7 @@ export function TelaDeEntrada({
             >
               {entrando ? 'Entrar no ORBITA' : 'Criar conta no ORBITA'}
             </h1>
+      <HelpInfo ajudaId="auth.entrada" />
             <p className="m-0" style={{ fontSize: 12.5, color: 'var(--txt2)' }}>
               {entrando
                 ? 'Use o e-mail e a senha da sua conta.'

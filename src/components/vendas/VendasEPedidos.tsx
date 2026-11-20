@@ -13,6 +13,7 @@ import { DrawerDoPedido } from './DrawerDoPedido';
 import { CancelamentoDePedido } from './CancelamentoDePedido';
 import { ORDENS, PERIODOS, buscar, ordenar, recortarPorPeriodo, type Ordem, type Periodo } from './filtrosDeVendas';
 import { calcularChips, ehChipDePedido, pedidosDoChip } from './resumoDeVendas';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Vendas & Pedidos — a tela da jornada operacional.
@@ -139,6 +140,7 @@ export function VendasEPedidos({
           >
             Vendas &amp;<br />Pedidos
           </h1>
+      <HelpInfo ajudaId="vendas.lista" />
           <div className="flex items-center gap-2.5 flex-wrap">
             <span
               className="inline-flex items-center"

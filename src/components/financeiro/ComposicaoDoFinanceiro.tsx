@@ -12,6 +12,7 @@ import { EntradasESaidas, FluxoDeCaixa } from './Graficos';
 import { TabelaDeMovimentacoes } from './Movimentacoes';
 import { ResumoFinanceiro } from './ResumoFinanceiro';
 import type { ResumoFinanceiro as Resumo, TituloFinanceiro } from './useLeituraFinanceira';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * As duas metades visuais do Financeiro: o cabeçalho com os totais e o corpo,
@@ -56,6 +57,7 @@ export function CabecalhoDoFinanceiro({
       >
         Controle<br />Financeiro
       </h1>
+      <HelpInfo ajudaId="financeiro.visao" />
 
       {/*
         Os três totais só existem quando existe uma leitura para resumir. Sem

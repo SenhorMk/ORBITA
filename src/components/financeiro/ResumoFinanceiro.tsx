@@ -1,6 +1,7 @@
 'use client';
 
 import type { ResumoFinanceiro as Resumo } from './useLeituraFinanceira';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Os três números do resumo — os mesmos de antes, com os mesmos rótulos.
@@ -50,6 +51,7 @@ export function ResumoFinanceiro({
       className="flex-1 min-w-0 grid"
       style={{ gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--resumo-gap)' }}
     >
+      <HelpInfo ajudaId="financeiro.resumo" />
       <Cartao rotulo="Total Entradas" valor={formatarDinheiro(resumo.receitas)} cor="var(--accent)" />
       <Cartao rotulo="Total Saídas" valor={formatarDinheiro(resumo.despesas)} cor="var(--danger)" />
       <Cartao

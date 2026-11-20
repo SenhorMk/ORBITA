@@ -191,7 +191,10 @@ describe('operações pendentes', () => {
     render(<OperacoesPendentes fetchWithAuth={servidor(confirmada, [inconsistente], inconsistente).busca} ativo versao={0} onConfirmada={vi.fn()} />);
 
     expect(await screen.findByText(/requer correção administrativa/u)).toBeInTheDocument();
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    // Consultar ajuda não oferece uma operação financeira para este estado.
+    const buttons = screen.getAllByRole('button');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toHaveAttribute('data-help-id', 'financeiro.pendencias');
   });
 
   it('mais de uma página: diz quantas há e alcança as demais pelo cursor', async () => {

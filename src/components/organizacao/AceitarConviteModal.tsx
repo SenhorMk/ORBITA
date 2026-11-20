@@ -5,6 +5,7 @@ import { AlertTriangle, Info } from 'lucide-react';
 
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import type { ResultadoDoAceite } from './types';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 const ID_DO_FORMULARIO = 'form-aceitar-convite';
 
@@ -123,6 +124,7 @@ export function AceitarConviteModal({ aberto, onAbertoChange, onAceitar, erro }:
         )
       }
     >
+      <HelpInfo ajudaId="org.aceitar" />
       {avisoDeContexto ? (
         <div
           className="flex items-start px-4 py-3 rounded-xl text-xs"

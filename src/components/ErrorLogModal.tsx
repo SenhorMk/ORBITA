@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { AlertTriangle, X, Copy, Check, Terminal, ShieldAlert, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 interface ErrorLogModalProps {
   isOpen: boolean;
@@ -79,6 +80,7 @@ export function ErrorLogModal({
                       </div>
                       <div>
                         <DialogPrimitive.Title className="text-base font-bold text-rose-200 m-0">{title}</DialogPrimitive.Title>
+      <HelpInfo ajudaId="diagnostico.erro" />
                         <p className="text-xs text-rose-400/80">Log de Diagnóstico do Node.js / Supabase / Bling</p>
                       </div>
                     </div>

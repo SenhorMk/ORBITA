@@ -5,6 +5,7 @@ import { Check } from 'lucide-react';
 import { Pilula } from '@/components/ui/StatusPill';
 import { AvisoDeAtualizacaoFalhada, EstadoCarregando, EstadoDeErro, EstadoVazio } from '@/components/ui/estados';
 import type { Organizacao } from './types';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 export interface OrganizationListProps {
   /** As organizações da leitura que vale na sessão atual; vazia enquanto não houver uma. */
@@ -67,6 +68,7 @@ export function OrganizationList({
 
   return (
     <div className="flex flex-col min-h-0" style={{ gap: 8 }}>
+      <HelpInfo ajudaId="org.troca" />
       {erroDeLeitura !== null && (
         <AvisoDeAtualizacaoFalhada detalhe={erroDeLeitura} recurso="as suas organizações" />
       )}

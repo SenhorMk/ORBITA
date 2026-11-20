@@ -3,6 +3,7 @@
 import { Pilula } from '@/components/ui/StatusPill';
 import { AvisoDeAtualizacaoFalhada, EstadoCarregando, EstadoDeErro, EstadoVazio } from '@/components/ui/estados';
 import type { Convite } from './types';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * A aparência de cada status de convite.
@@ -68,6 +69,7 @@ export function ListaDeConvites({ convites, carregando, erroDeLeitura, onRecarre
 
   return (
     <div className="flex flex-col min-h-0" style={{ gap: 8 }}>
+      <HelpInfo ajudaId="org.convites" />
       {erroDeLeitura !== null && <AvisoDeAtualizacaoFalhada detalhe={erroDeLeitura} recurso="os convites" />}
       <ul className="flex flex-col overflow-y-auto min-h-0" style={{ gap: 8 }}>
         {convites.map((convite) => {

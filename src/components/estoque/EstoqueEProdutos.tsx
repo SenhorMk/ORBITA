@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/estados';
 import { isProdutoSynced } from '@/lib/utils';
 import { TabelaDeProdutos } from './TabelaDeProdutos';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Estoque & Produtos, na linguagem do produto novo.
@@ -152,6 +153,7 @@ export function EstoqueEProdutos({
           >
             Estoque &amp;<br />Produtos
           </h1>
+      <HelpInfo ajudaId="estoque.lista" />
           <span style={{ font: '400 11px/1.4 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
             espelho do catálogo do Bling
           </span>

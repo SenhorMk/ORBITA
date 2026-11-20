@@ -1,6 +1,7 @@
 'use client';
 
 import type { Analise } from './metricasDoPainel';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * A área analítica — o card claro que manda na tela.
@@ -201,6 +202,7 @@ export function AreaAnalitica({ analise }: { analise: Analise }) {
         gap: 14,
       }}
     >
+      <HelpInfo ajudaId="painel.analise" />
       {analise.tipo === 'serie' && <Serie analise={analise} />}
       {analise.tipo === 'distribuicao' && <Distribuicao analise={analise} />}
       {analise.tipo === 'fila' && <Fila analise={analise} />}

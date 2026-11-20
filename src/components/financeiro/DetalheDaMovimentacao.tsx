@@ -10,6 +10,7 @@ import type { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { Pilula } from '@/components/ui/StatusPill';
 import { APARENCIA_DA_SITUACAO, ehTerminal, formatarVencimento, tituloVisivel } from './Movimentacoes';
 import type { TituloFinanceiro } from './useLeituraFinanceira';
+import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * O detalhe de uma movimentação que **não** é um pedido.
@@ -180,6 +181,8 @@ function DetalheDeMovimentacaoAvulsa({
           />
         }
       >
+      <HelpInfo ajudaId="financeiro.correcao" />
+      <HelpInfo ajudaId="financeiro.detalhe" />
         <div className="flex flex-col" style={{ gap: 12 }}>
           <p className="m-0 text-sm leading-relaxed" style={{ color: 'var(--txt2)' }}>{texto.corpo}</p>
           <p className="m-0 text-sm" style={{ color: 'var(--txt)' }}>
@@ -223,6 +226,8 @@ function DetalheDeMovimentacaoAvulsa({
         />
       ) : undefined}
     >
+      <HelpInfo ajudaId="financeiro.correcao" />
+      <HelpInfo ajudaId="financeiro.detalhe" />
       <div className="flex flex-col" style={{ gap: 18 }}>
         <div className="flex items-center" style={{ gap: 12 }}>
           <span
@@ -259,6 +264,7 @@ function DetalheDeMovimentacaoAvulsa({
           <Campo rotulo="Pagamento">
             {titulo.data_pagamento ? formatarVencimento(titulo.data_pagamento) : '—'}
           </Campo>
+      <HelpInfo ajudaId="financeiro.baixa" />
           <Campo rotulo="Categoria">{titulo.categoria?.descricao || 'Sem categoria'}</Campo>
           <Campo rotulo="Origem">{noBling ? `Bling · ${titulo.bling_id}` : 'Interno (Orbita)'}</Campo>
         </div>
