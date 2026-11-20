@@ -4,13 +4,13 @@ O pacote `ORBITA-D07-HelpInfo-65.zip` foi recuperado e seu SHA256 conferido. A i
 
 ## Cobertura
 
-`matriz.json` e `matriz.csv` mantêm os identificadores originais: 65 superfícies com conteúdo e montagem, além de uma exclusão formal do legado `TransactionList`. Essa contagem não equivale a todos os estados possíveis do produto. As localizações foram recalculadas sobre a main com #152. A ajuda do controle de atendimento foi revisada para IA-first, takeover e devolução com resumo e mensagem nova. Foram esclarecidos o resumo financeiro e a impossibilidade de editar papéis pela lista de membros.
+`matriz.json` e `matriz.csv` mantêm as 65 superfícies originais e acrescentam a ajuda de movimentações de estoque do #153: 66 superfícies com conteúdo e montagem, além de uma exclusão formal do legado `TransactionList`. Essa contagem não equivale a todos os estados possíveis do produto. As localizações foram recalculadas sobre a main `2e0b98f`, com #152 e #153. A ajuda do controle de atendimento foi revisada para IA-first, takeover e devolução com resumo e mensagem nova. Foram esclarecidos o resumo financeiro e a impossibilidade de editar papéis pela lista de membros.
 
-O #153 ainda estava aberto na integração. Seu histórico de movimentações de estoque não foi copiado para esta branch. Uma 66ª ajuda está preparada e só é montada quando existir a seção “Movimentações de estoque”, título verificado no HEAD220c522 do #153. O catálogo e a matriz distinguem essa preparação das 65 superfícies atuais. A composição dos dois PRs deve continuar sem conflito; se o título mudar no #153, atualizar a montagem. Não declarar essa interface futura como já publicada.
+O #153 foi mesclado na main em `2e0b98f` e incorporado por merge normal à branch do HelpInfo. A 66ª ajuda agora é montada na seção existente “Movimentações de estoque” do detalhe do produto. A implementação ERP continua vindo da main, sem alterações neste PR de ajuda.
 
 ## Preservação
 
-`preservacao.json` compara os 46 componentes existentes com a base, por AST, retirando apenas import/JSX de HelpInfo, sua condição de montagem da seção futura e espaços JSX vazios. O restante permanece igual: campos, handlers, regras, compositor, limite dos painéis do cockpit e preferências. Não há alteração de API, banco, credenciais ou dependências.
+`preservacao.json` compara os 46 componentes existentes com a main pós-#153, por AST, retirando apenas import/JSX de HelpInfo, sua condição de montagem na seção de estoque e espaços JSX vazios. O restante permanece igual: campos, handlers, regras, compositor, limite dos painéis do cockpit e preferências. Não há alteração de API, banco, credenciais ou dependências no delta do HelpInfo.
 
 O ícone tem aparência discreta, foco visível e alvo de 44px em dispositivos de toque. O diálogo cabe em telas pequenas e rola internamente. Botões são `type="button"`; a ajuda isola a ativação do mouse/teclado das ações do contêiner. Escape fecha apenas a ajuda e devolve o foco ao acionador. O conteúdo é estático, sem dados de clientes.
 

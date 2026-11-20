@@ -1,5 +1,5 @@
 {
-  "base": "51e4cb907bcc51b3c13803fd1e74c5faa0907c96",
+  "base": "2e0b98fb8dda5dd9411887ff963c0ed435186d62",
   "method": "Comparação AST dos componentes existentes, removendo apenas import e JSX HelpInfo e espaços JSX vazios; handlers, campos e estrutura restante preservados.",
   "files": [
     {

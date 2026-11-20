@@ -12,11 +12,12 @@ interface Superficie {
 const matriz: readonly Superficie[] = JSON.parse(readFileSync(resolve('docs/helpinfo/matriz.json'), 'utf8'));
 
 describe('rastreabilidade da matriz HelpInfo recuperada', () => {
-  it('mantém as 65 superfícies nominais e a exclusão explícita do legado', () => {
+  it('mantém as 65 superfícies originais e a movimentação de estoque do PR153', () => {
     const cobertas = matriz.filter((s) => !s.id.startsWith('legado.'));
     expect(cobertas.map((s) => s.id).sort()).toEqual(Object.keys(catalogoDeAjuda).sort());
-    expect(cobertas.filter((s) => !s.availability)).toHaveLength(65);
-    expect(cobertas.filter((s) => s.availability).map((s) => s.id)).toEqual(['estoque.movimentacoes']);
+    expect(cobertas).toHaveLength(66);
+    expect(cobertas.filter((s) => s.availability)).toHaveLength(0);
+    expect(cobertas.some((s) => s.id === 'estoque.movimentacoes')).toBe(true);
     expect(matriz.filter((s) => s.id.startsWith('legado.')).map((s) => s.id)).toEqual(['legado.pedidos']);
   });
 
