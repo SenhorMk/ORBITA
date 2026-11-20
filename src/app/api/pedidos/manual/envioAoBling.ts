@@ -23,7 +23,6 @@ import type {
 } from './ports';
 import { posseAindaVigente, type PosseDaVenda } from './posseDaVenda';
 import { falhaDaVendaManual as fail } from './resposta';
-import { diaEmSaoPaulo } from '@/lib/dataDoPedido';
 
 /** Os campos da venda que o payload do Bling consome. */
 export interface EntradaDoEnvio {
@@ -40,10 +39,6 @@ export type BlingPayloadResult =
   | { readonly _tag: 'PayloadSemPosse' };
 
 /** `format: date` do Bling — AAAA-MM-DD, sem componente de hora. */
-/** O dia da venda em Brasília (`AAAA-MM-DD`). Em UTC, uma venda depois das 21h saía com o dia seguinte. */
-export function toBlingDate(date: Date): string {
-  return diaEmSaoPaulo(date);
-}
 
 function parseNumericBlingId(value: string | null): number | null {
   if (value === null) return null;

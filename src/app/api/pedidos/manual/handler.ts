@@ -55,7 +55,8 @@ import {
 } from './compensacao';
 import { classificarFalhaDeCriacaoNoBling } from '@/lib/integrations/bling/classificacaoDeFalhaDeCriacao';
 import { decidirSobreTentativa } from './decisaoDeTentativa';
-import { prepararEnvioAoBling, toBlingDate, type EntradaDoEnvio } from './envioAoBling';
+import { prepararEnvioAoBling, type EntradaDoEnvio } from './envioAoBling';
+import { diaEmSaoPaulo } from '@/lib/dataDoPedido';
 import { prepararPedido } from './preparacao';
 import {
   posseAindaVigente,
@@ -370,7 +371,8 @@ export function createManualOrderHandler(deps: ManualOrderDependencies) {
     if (preparado._tag === 'Rejeitado') return preparado.response;
     const { scope, body, cliente, itens, total } = preparado;
 
-    const dataStr = toBlingDate(deps.now());
+    // O dia da venda em Brasília: em UTC, uma venda depois das 21h saía com o dia seguinte.
+    const dataStr = diaEmSaoPaulo(deps.now());
     const referenciaLocal = deps.newLocalReference(body.referenciaLocal);
     const avisos: string[] = [];
 

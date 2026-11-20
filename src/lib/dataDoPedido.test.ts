@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { toBlingDate } from '@/app/api/pedidos/manual/envioAoBling';
 import { diaEmSaoPaulo, formatarDataDoPedido, idadeDaDataDoPedido } from './dataDoPedido';
 
 // Caso real do staging (20/11/2026): venda manual às 23:23 de 19/11 em Brasília, pedido #28.
@@ -8,17 +7,16 @@ const VENDA_AS_23H_DE_19_11 = new Date('2026-11-20T02:23:19.187Z');
 
 describe('data da venda manual', () => {
   it('é o dia em Brasília, não o dia UTC (venda depois das 21h)', () => {
-    expect(toBlingDate(VENDA_AS_23H_DE_19_11)).toBe('2026-11-19');
     expect(diaEmSaoPaulo(VENDA_AS_23H_DE_19_11)).toBe('2026-11-19');
   });
 
   it('não muda o dia de uma venda à tarde', () => {
-    expect(toBlingDate(new Date('2026-08-29T15:30:00.000Z'))).toBe('2026-08-29');
+    expect(diaEmSaoPaulo(new Date('2026-08-29T15:30:00.000Z'))).toBe('2026-08-29');
   });
 
   it('vira o dia à meia-noite de Brasília', () => {
-    expect(toBlingDate(new Date('2026-11-20T02:59:59.000Z'))).toBe('2026-11-19');
-    expect(toBlingDate(new Date('2026-11-20T03:00:00.000Z'))).toBe('2026-11-20');
+    expect(diaEmSaoPaulo(new Date('2026-11-20T02:59:59.000Z'))).toBe('2026-11-19');
+    expect(diaEmSaoPaulo(new Date('2026-11-20T03:00:00.000Z'))).toBe('2026-11-20');
   });
 });
 
