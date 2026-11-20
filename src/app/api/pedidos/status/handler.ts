@@ -207,8 +207,31 @@ async function confirmarSituacao(
   return situacao;
 }
 
+/**
+ * Cancelar pela API não devolve o estoque lançado pela venda (`lancar-estoque`): o estorno é explícito.
+ * Recusa (pedido sem estoque lançado) ou falha não derruba o cancelamento: o alinhamento que vem
+ * depois lê o saldo real, e a pendência vira aviso.
+ */
+async function prepararReleituraDoSaldo(
+  deps: Pick<PedidoStatusDependencies, 'bling' | 'aguardarProcessamentoBling'>,
+  novoStatusCanonico: string,
+  blingPedidoId: string,
+  evento: Evento,
+): Promise<void> {
+  if (novoStatusCanonico === 'Cancelado') {
+    const estorno = await semExcecao(() => deps.bling.estornarEstoque(blingPedidoId));
+    await evento('order.stock_reversal', {
+      resultado: estorno._tag === 'BlingOk' ? 'estornado' : 'nao_estornado',
+      status_http: estorno._tag === 'BlingFailed' ? estorno.failure.status : null,
+    });
+  }
+  // O Bling roda as rotinas de estoque de forma assíncrona depois de aceitar
+  // a mudança; ler o saldo imediatamente traria o valor antigo.
+  await deps.aguardarProcessamentoBling();
+}
+
 export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
-  const { auth, store, bling, aguardarProcessamentoBling, auditar } = deps;
+  const { auth, store, bling, auditar } = deps;
 
   return async function handlePedidoStatus(request: Request): Promise<NextResponse> {
     // Fora do `try` para que o log da falha saiba a organização mesmo quando o
@@ -263,20 +286,7 @@ export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
         }, 500);
       }
 
-      // Cancelar pela API não devolve o estoque lançado pela venda: o estorno é explícito.
-      // Recusa (pedido sem estoque lançado) ou falha não derruba a resposta: o alinhamento
-      // abaixo lê o saldo real e a pendência vira aviso.
-      if (novoStatusCanonico === 'Cancelado') {
-        const estorno = await semExcecao(() => bling.estornarEstoque(pedidoLocal.bling_id));
-        await evento('order.stock_reversal', {
-          resultado: estorno._tag === 'BlingOk' ? 'estornado' : 'nao_estornado',
-          status_http: estorno._tag === 'BlingFailed' ? estorno.failure.status : null,
-        });
-      }
-
-      // O Bling roda as rotinas de estoque de forma assíncrona depois de aceitar
-      // a mudança; ler o saldo imediatamente traria o valor antigo.
-      await aguardarProcessamentoBling();
+      await prepararReleituraDoSaldo(deps, novoStatusCanonico, pedidoLocal.bling_id, evento);
 
       const estoque = await alinharEstoqueComBling(scope, store, bling, pedidoId);
       const pendente = !estoque.conferido || estoque.pendentes > 0;
