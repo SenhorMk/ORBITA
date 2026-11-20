@@ -2,9 +2,8 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { classificarFalhaDeCriacaoNoBling } from '@/lib/integrations/bling/classificacaoDeFalhaDeCriacao';
-import { blingFailure, type BlingCallResult, type BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaContract';
+import type { BlingProviderFailure } from '@/lib/integrations/bling/pedidoVendaContract';
 import type { Situacao } from '@/lib/integrations/bling/situacoesContract';
-import { logger, sanitizeErrorForLog } from '@/lib/observability/logger';
 import { mapBlingStatus } from '@/lib/utils';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 
@@ -14,6 +13,14 @@ import type {
   PedidoStatusResponseBody,
   PedidoStatusStorePort,
 } from './ports';
+import {
+  avisoDoEstorno,
+  estornoNaoConfirmado,
+  prepararReleituraDoSaldo,
+  type Evento,
+  type ResultadoDoEstorno,
+} from './estornoDoCancelamento';
+import { registrarFalhaInterna, semExcecao } from './falhaDoStatus';
 
 export type {
   PedidoStatusAuthPort,
@@ -27,43 +34,6 @@ export type {
 
 function json(body: PedidoStatusResponseBody, status: number): NextResponse {
   return NextResponse.json(body, { status });
-}
-
-/**
- * SQLSTATE: exatamente cinco caracteres alfanuméricos maiúsculos (`42501`,
- * `23505`, `PGRST201`… — este último não passa, e é o ponto).
- *
- * O `code` do erro é texto que vem de fora. Sem validar, ele próprio seria um
- * canal para empurrar conteúdo arbitrário para dentro do log estruturado.
- */
-const CODIGO_SQLSTATE = /^[0-9A-Z]{5}$/u;
-
-/** Código técnico do erro, apenas se for um SQLSTATE reconhecível. */
-function codigoTecnicoValidado(erro: unknown): string | undefined {
-  const bruto = (erro as { code?: unknown } | null | undefined)?.code;
-  return typeof bruto === 'string' && CODIGO_SQLSTATE.test(bruto) ? bruto : undefined;
-}
-
-/**
- * Registra a falha no servidor sem carregar nada que não possa ser lido depois.
- *
- * Deliberadamente **não** registra `message`, `details` nem `hint`. Numa
- * violação de unicidade o Postgres coloca valores de linha dentro deles
- * (`Key (email)=(...) already exists`), ou seja, dado de cliente — e
- * `descreverErro` sozinho não resolve isso, porque o trabalho dele é tornar o
- * erro legível, não decidir o que pode sair daqui.
- *
- * O que fica: qual operação falhou, em qual organização, a classe do erro e o
- * SQLSTATE. É o suficiente para saber onde olhar.
- */
-function registrarFalhaInterna(erro: unknown, organizacaoId: string | undefined): void {
-  logger.error('Falha ao atualizar situação do pedido', {
-    subsystem: 'app',
-    operacao: 'pedidos.status.atualizar',
-    organizacaoId,
-    erro: sanitizeErrorForLog(erro).name,
-    codigo: codigoTecnicoValidado(erro),
-  });
 }
 
 /**
@@ -166,7 +136,6 @@ async function lerMudanca(request: Request): Promise<z.infer<typeof statusReques
   return json({ error: `Dados inválidos: ${detalhes}` }, 400);
 }
 
-type Evento = (acao: string, metadata: Readonly<Record<string, string | number | boolean | null>>) => Promise<void>;
 
 /** Recusa comprovada → 400; qualquer outra falha pode ter mudado a situação → 502 desconhecido. */
 async function respostaDaFalhaNaSituacao(failure: BlingProviderFailure, situacaoId: number, evento: Evento): Promise<NextResponse> {
@@ -207,8 +176,39 @@ async function confirmarSituacao(
   return situacao;
 }
 
+/**
+ * A resposta depois da situação confirmada. O estorno não confirmado é pendência mesmo com os saldos
+ * coincidindo: Bling e ORBITA em 7 não provam que a unidade voltou.
+ */
+async function respostaDoEstoque(
+  novoStatusCanonico: string,
+  novaSituacaoId: number,
+  estorno: ResultadoDoEstorno,
+  estoque: { readonly conferido: boolean; readonly alinhados: number; readonly pendentes: number },
+  evento: Evento,
+): Promise<NextResponse> {
+  await evento('order.status_changed', {
+    situacao_id: novaSituacaoId,
+    estoque: !estoque.conferido ? 'nao_conferido' : estoque.pendentes > 0 ? 'parcial' : 'alinhado',
+    produtos_alinhados: estoque.alinhados,
+    produtos_pendentes: estoque.pendentes,
+    ...(estorno.desfecho === 'nao_aplicavel' ? {} : { estorno: estorno.desfecho }),
+  });
+  const avisos = [
+    avisoDoEstorno(estorno),
+    !estoque.conferido ? AVISO_ESTOQUE_NAO_CONFERIDO : estoque.pendentes > 0 ? avisoDePendencias(estoque.pendentes) : null,
+  ].filter((aviso): aviso is string => aviso !== null);
+  const pendente = estornoNaoConfirmado(estorno) || !estoque.conferido || estoque.pendentes > 0;
+  return json({
+    success: true,
+    status: novoStatusCanonico,
+    estoque: pendente ? 'requer_reconciliacao' : 'alinhado',
+    ...(avisos.length > 0 ? { warning: avisos.join(' ') } : {}),
+  }, 200);
+}
+
 export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
-  const { auth, store, bling, aguardarProcessamentoBling, auditar } = deps;
+  const { auth, store, bling, auditar } = deps;
 
   return async function handlePedidoStatus(request: Request): Promise<NextResponse> {
     // Fora do `try` para que o log da falha saiba a organização mesmo quando o
@@ -263,27 +263,9 @@ export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
         }, 500);
       }
 
-      // O Bling roda as rotinas de estoque de forma assíncrona depois de aceitar
-      // a mudança; ler o saldo imediatamente traria o valor antigo.
-      await aguardarProcessamentoBling();
-
+      const estorno = await prepararReleituraDoSaldo(deps, scope, pedidoId, novoStatusCanonico, pedidoLocal, evento);
       const estoque = await alinharEstoqueComBling(scope, store, bling, pedidoId);
-      const pendente = !estoque.conferido || estoque.pendentes > 0;
-      await evento('order.status_changed', {
-        situacao_id: novaSituacaoId,
-        estoque: !estoque.conferido ? 'nao_conferido' : estoque.pendentes > 0 ? 'parcial' : 'alinhado',
-        produtos_alinhados: estoque.alinhados,
-        produtos_pendentes: estoque.pendentes,
-      });
-      if (pendente) {
-        return json({
-          success: true,
-          status: novoStatusCanonico,
-          estoque: 'requer_reconciliacao',
-          warning: estoque.conferido ? avisoDePendencias(estoque.pendentes) : AVISO_ESTOQUE_NAO_CONFERIDO,
-        }, 200);
-      }
-      return json({ success: true, status: novoStatusCanonico, estoque: 'alinhado' }, 200);
+      return respostaDoEstoque(novoStatusCanonico, novaSituacaoId, estorno, estoque, evento);
     } catch (error: unknown) {
       // CWE-209: o diagnóstico do Postgres fica no servidor. O cliente recebe
       // sempre a mesma frase — `message` inclusive, que pode carregar valor de
@@ -293,13 +275,4 @@ export function createPedidoStatusHandler(deps: PedidoStatusDependencies) {
       return json({ error: 'Erro interno' }, 500);
     }
   };
-}
-
-/** Exceção ao falar com o Bling (rede, timeout) é desfecho desconhecido, nunca 500 genérico. */
-async function semExcecao<T>(chamada: () => Promise<BlingCallResult<T>>): Promise<BlingCallResult<T>> {
-  try {
-    return await chamada();
-  } catch (erro: unknown) {
-    return blingFailure('UNKNOWN_ERROR', 0, sanitizeErrorForLog(erro).name);
-  }
 }
