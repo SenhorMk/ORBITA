@@ -14,6 +14,7 @@
  * queda antes de gravar o desfecho deixa `in_flight`, que o reaper leva a
  * `unknown`. Nada aqui repete um POST de desfecho desconhecido.
  */
+import { logger } from '../../lib/observability/logger';
 import type { ChatwootApiResult, ChatwootMessage } from './chatwootPort';
 import {
   desfechoDeFalhaAposDespacho,
@@ -61,7 +62,7 @@ export interface CanalDeEnvio {
 }
 
 /** `invalidado`: o controle mudou depois do registro; o banco já gravou o desfecho. */
-export type InicioDoDespacho = 'iniciado' | 'invalidado' | 'posse_perdida';
+export type InicioDoDespacho = 'iniciado' | 'invalidado' | 'posse_perdida' | 'aguardando_ai_first';
 
 export type ResolucaoDoCanal =
   | { readonly _tag: 'Canal'; readonly canal: CanalDeEnvio }
@@ -149,6 +150,11 @@ async function despachar(
   }
 
   const inicio = await porta.iniciarDespacho(posse);
+  if (inicio === 'aguardando_ai_first') {
+    logger.info('chatwoot.envio.aguardando_ai_first', { subsystem: 'queue', eventoId: posse.eventoId });
+    contagem.semPosse++;
+    return;
+  }
   if (inicio === 'invalidado') {
     contagem.invalidados++;
     return;

@@ -88,6 +88,31 @@ function daConversa(anterior: EstadoCarimbado, conversa: string): EstadoCarimbad
   return anterior.conversa === conversa ? anterior : vazio(conversa);
 }
 
+async function consultarControle(fetchWithAuth: AuthenticatedFetch, conversaId: string): Promise<ControleVisto | null> {
+  try {
+    const resposta = await fetchWithAuth(`/api/chatwoot/controle?conversaId=${conversaId}`);
+    const corpo = await resposta.json().catch(() => null);
+    return resposta.ok ? controleValido(corpo) : null;
+  } catch {
+    return null;
+  }
+}
+
+function useAtualizacaoDoControle(recarregar: () => Promise<void>, conversaId: string | null, agindo: boolean) {
+  // A projeção e o heartbeat mudam depois da resposta ao comando de devolução.
+  useEffect(() => {
+    if (conversaId === null || agindo) return;
+    let encerrado = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const atualizar = async () => {
+      await recarregar();
+      if (!encerrado) timer = setTimeout(() => { void atualizar(); }, 5000);
+    };
+    timer = setTimeout(() => { void atualizar(); }, 5000);
+    return () => { encerrado = true; clearTimeout(timer); };
+  }, [conversaId, agindo, recarregar]);
+}
+
 export function useControle(fetchWithAuth: AuthenticatedFetch, conversaId: string | null) {
   const [guardado, setGuardado] = useState<EstadoCarimbado>(() => vazio(conversaId));
   // Uma resposta de outra conversa não pode cair nesta.
@@ -101,17 +126,11 @@ export function useControle(fetchWithAuth: AuthenticatedFetch, conversaId: strin
   const recarregar = useCallback(async () => {
     const alvo = conversaId;
     if (alvo === null) return;
-    let controle: ControleVisto | null = null;
-    try {
-      const resposta = await fetchWithAuth(`/api/chatwoot/controle?conversaId=${alvo}`);
-      const corpo = await resposta.json().catch(() => null);
-      controle = resposta.ok ? controleValido(corpo) : null;
-    } catch {
-      controle = null;
-    }
+    const controle = await consultarControle(fetchWithAuth, alvo);
     if (atual.current !== alvo) return;
     setGuardado((anterior) => {
       const base = daConversa(anterior, alvo);
+      if (base.agindo || (controle && base.controle && controle.versao < base.controle.versao)) return base;
       return { ...base, controle: controle ?? base.controle, erro: controle ? null : ERRO_DE_LEITURA };
     });
   }, [conversaId, fetchWithAuth]);
@@ -119,6 +138,8 @@ export function useControle(fetchWithAuth: AuthenticatedFetch, conversaId: strin
   useEffect(() => {
     void recarregar();
   }, [recarregar]);
+
+  useAtualizacaoDoControle(recarregar, conversaId, estado.agindo);
 
   const versaoVista = estado.controle?.versao;
   const agir = useCallback(async (acao: AcaoDoAtendimento, nota?: string): Promise<boolean> => {

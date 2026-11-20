@@ -495,6 +495,21 @@
       "order": 99,
       "path": "../database/96_corrigir_permissoes_bling.sql",
       "sha256": "e4394fb2b0b240630886763065dabd9c86acb61a8c34e2b4751aa476727171a6"
+    },
+    {
+      "order": 100,
+      "path": "../database/97_bootstrap_ai_first.sql",
+      "sha256": "855799dc961b09495165cd948835a674f62a6547410688db9d05c7e8cd8df8d5"
+    },
+    {
+      "order": 101,
+      "path": "../database/98_ai_first_worker.sql",
+      "sha256": "cc46b969ddbfeaf8801351455241f660341488038e3538a13b6155b6f4ef1f4f"
+    },
+    {
+      "order": 102,
+      "path": "../database/99_haux_bot_limits.sql",
+      "sha256": "a74752d8fd9defbe448c06260f64dcfee307d834970b4ddfa8cc0f1379db29fc"
     }
   ],
   "references": [

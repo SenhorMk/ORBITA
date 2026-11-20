@@ -1,0 +1,23 @@
+services:
+  bot:
+    image: orbita-haux-bot:${HAUX_BOT_IMAGE_TAG:?Use o SHA validado da branch do bot}
+    build:
+      context: ../..
+      dockerfile: infra/worker/Dockerfile
+    entrypoint: ["node", "dist-worker/scripts/worker-haux-bot.js"]
+    env_file:
+      - ${HAUX_BOT_ENV_FILE:?Informe o caminho absoluto do arquivo protegido}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    mem_limit: 384m
+    cpus: 0.5
+    stop_grace_period: 20s
+    networks:
+      - chatwoot
+networks:
+  chatwoot:
+    external: true
+    name: orbita-chatwoot_default

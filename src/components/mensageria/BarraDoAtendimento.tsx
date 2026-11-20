@@ -104,6 +104,10 @@ export function BarraDoAtendimento({
         )}
       </div>
 
+      <p style={{ margin: 0, fontSize: 11, color: 'var(--txt3)' }}>
+        Assuma, responda e devolva a conversa pelo ORBITA. Mudanças feitas no Chatwoot chegam por eventos e podem levar tempo.
+      </p>
+
       {atual?.modo === 'AI' && !atual.automacaoAtiva && (
         <Aviso tom="atencao">
           A automação ainda não responde conversas: ninguém está atendendo esta. Assuma para responder.

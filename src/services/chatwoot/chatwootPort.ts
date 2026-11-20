@@ -75,7 +75,10 @@ const ChatwootWebhookContactFragmentSchema = ChatwootContactSchema.partial();
 
 const IdDoChatwootSchema = z.union([z.number(), z.string()]);
 const ContatoDaConversaSchema = z.object({
-  meta: z.object({ sender: ChatwootWebhookContactFragmentSchema.optional() }).optional(),
+  meta: z.object({
+    sender: ChatwootWebhookContactFragmentSchema.optional(),
+    assignee: z.object({ id: IdDoChatwootSchema }).nullable().optional(),
+  }).optional(),
   contact_inbox: z.object({ contact_id: IdDoChatwootSchema.optional() }).optional(),
 });
 
@@ -104,6 +107,8 @@ const EventoDoChatwootBrutoSchema = z.object({
     contact_id: IdDoChatwootSchema.optional(),
     status: z.string().optional(),
     updated_at: z.union([z.string(), z.number()]).optional(),
+    created_at: z.union([z.string(), z.number()]).optional(),
+    assignee_id: IdDoChatwootSchema.nullable().optional(),
     inbox_id: IdDoChatwootSchema.optional(),
     channel: z.string().optional(),
     contact: ChatwootWebhookContactFragmentSchema.optional(),
@@ -119,6 +124,7 @@ const EventoDoChatwootBrutoSchema = z.object({
     .object({
       sender: ChatwootWebhookContactFragmentSchema.optional(),
       channel: z.string().optional(),
+      assignee: z.object({ id: IdDoChatwootSchema }).nullable().optional(),
     })
     .optional(),
 });
@@ -136,7 +142,10 @@ function normalizarEventoDoChatwoot(bruto: z.infer<typeof EventoDoChatwootBrutoS
   const { status, inbox_id, channel, contact_inbox, conversation, content, ...evento } = bruto;
   const noTopo = !conversation && bruto.event.startsWith('conversation_');
   const { meta: metaDaConversa, contact_inbox: inboxDoContato, ...conversa } = conversation
-    ?? (noTopo ? { id: bruto.id, status, inbox_id, channel, updated_at: bruto.updated_at, contact_inbox } : {});
+    ?? (noTopo ? { id: bruto.id, status, inbox_id, channel, updated_at: bruto.updated_at, created_at: bruto.created_at, contact_inbox } : {});
+  const atribuido = metaDaConversa?.assignee ?? (noTopo ? bruto.meta?.assignee : undefined);
+  const assigneeId = 'assignee_id' in conversa ? conversa.assignee_id : undefined;
+  const semResponsavel = metaDaConversa?.assignee === null || (noTopo && bruto.meta?.assignee === null);
   const remetenteDaConversa = bruto.meta?.sender ?? metaDaConversa?.sender;
   const contatoId = conversa.contact_id ?? inboxDoContato?.contact_id ?? remetenteDaConversa?.id;
   const remetenteEhOContato = bruto.sender?.id !== undefined && contatoId !== undefined
@@ -145,7 +154,12 @@ function normalizarEventoDoChatwoot(bruto: z.infer<typeof EventoDoChatwootBrutoS
   return {
     ...evento,
     ...(content === null || content === undefined ? {} : { content }),
-    ...(conversation || noTopo ? { conversation: { ...conversa, ...(contatoId === undefined ? {} : { contact_id: contatoId }) } } : {}),
+    ...(conversation || noTopo ? { conversation: {
+      ...conversa,
+      ...(contatoId === undefined ? {} : { contact_id: contatoId }),
+      ...(atribuido ? { assignee_id: atribuido.id } : semResponsavel ? { assignee_id: null } :
+        assigneeId !== undefined ? { assignee_id: assigneeId } : {}),
+    } } : {}),
     ...(remetenteDaConversa ? { meta: { ...bruto.meta, sender: remetenteDaConversa } } : {}),
     ...(bruto.sender ? { sender: { ...bruto.sender, type: bruto.sender.type ?? (deEntrada && remetenteEhOContato ? 'contact' : undefined) } } : {}),
   };

@@ -27,6 +27,18 @@ function traduzido(nome: keyof typeof capturas) {
 }
 
 describe('contrato real do Chatwoot 4.19.1', () => {
+  it('preserva a criação e distingue ausência de responsável de informação ausente', () => {
+    const original = lido('conversa_criada');
+    expect(original.conversation).toMatchObject({ id: 1, inbox_id: 3, created_at: 1793605011, assignee_id: null });
+    expect(ChatwootWebhookEventSchema.parse(original).conversation).toEqual(original.conversation);
+    const atualizado = ChatwootWebhookEventSchema.parse({
+      ...capturas.conversa_criada, event: 'conversation_updated', meta: { assignee: { id: 31, name: 'Operador' } },
+    });
+    expect(atualizado.conversation?.assignee_id).toBe(31);
+    const incompleto = ChatwootWebhookEventSchema.parse({ ...capturas.conversa_criada, meta: {} });
+    expect(incompleto.conversation?.assignee_id).toBeUndefined();
+  });
+
   const adapter = ChatwootAdapter.forTesting({ apiUrl: 'https://chatwoot.test', apiToken: 'token-de-teste', accountId: '1', conexaoId: 'conexao' });
   const respondendo = (corpo: unknown) => (async () => new Response(JSON.stringify(corpo), { status: 200 })) as typeof fetch;
 

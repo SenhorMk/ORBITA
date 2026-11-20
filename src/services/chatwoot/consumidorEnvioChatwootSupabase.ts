@@ -23,7 +23,7 @@ const ReivindicadoSchema = z.object({
 /** Versão do contrato do claim: um worker anterior ao MSG-009 não a envia e falha. */
 const PROTOCOLO_DO_CLAIM = 2;
 
-const InicioSchema = z.enum(['iniciado', 'invalidado', 'posse_perdida']);
+const InicioSchema = z.enum(['iniciado', 'invalidado', 'posse_perdida', 'aguardando_ai_first']);
 
 const ConclusaoSchema = z.array(z.object({ status: z.string().nullable() }));
 
