@@ -83,7 +83,12 @@ function Resultado({ triagem, execucao }: { readonly triagem: TriagemV1; readonl
  * A triagem por IA do caso desta conversa (MSG-013). Só mostra: é hipótese,
  * nunca é enviada à cliente nem muda o caso. Falhas aparecem com o motivo.
  */
-export function PainelDaTriagem({ fetchWithAuth, conversaId }: { readonly fetchWithAuth: AuthenticatedFetch; readonly conversaId: string | null }) {
+export function PainelDaTriagem({ fetchWithAuth, conversaId, semCaso = null }: {
+  readonly fetchWithAuth: AuthenticatedFetch;
+  readonly conversaId: string | null;
+  /** O que mostrar quando a conversa não tem caso (por padrão, nada). */
+  readonly semCaso?: React.ReactNode;
+}) {
   const [guardado, setGuardado] = useState<{ readonly conversa: string; readonly estado: Estado } | null>(null);
   const [geracao, setGeracao] = useState(0);
 
@@ -101,7 +106,7 @@ export function PainelDaTriagem({ fetchWithAuth, conversaId }: { readonly fetchW
   const recarregar = useCallback(() => setGeracao((g) => g + 1), []);
   if (conversaId === null) return null;
   const estado = guardado?.conversa === conversaId ? guardado.estado : null;
-  if (estado !== null && 'caso' in estado && estado.caso === null) return null;
+  if (estado !== null && 'caso' in estado && estado.caso === null) return <>{semCaso}</>;
   const execucao = estado !== null && 'caso' in estado ? estado.caso?.execucao ?? null : null;
   const pendente = estado !== null && 'caso' in estado ? estado.caso?.pendente ?? false : false;
 

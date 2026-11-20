@@ -1,0 +1,866 @@
+/*
+ * A central de mensagens. Só tokens de `tokens.css`: nenhuma cor solta, para os
+ * dois temas lerem igual. O modo do layout (amplo, médio, compacto) vem da
+ * largura **da própria central**, e não da janela, porque a janela do ORBITA
+ * tem rail e margens que mudam por faixa.
+ */
+
+/* ---------- Estrutura ---------- */
+
+.raiz {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  gap: 14px;
+}
+
+.coluna {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--r-panel);
+  background: var(--glass2);
+  border: 1px solid var(--line);
+}
+
+.lista {
+  composes: coluna;
+  width: 320px;
+  flex: none;
+}
+
+.raiz[data-modo='medio'] .lista {
+  width: 290px;
+}
+
+.raiz[data-modo='compacto'] .lista,
+.raiz[data-modo='compacto'] .conversa {
+  width: 100%;
+  flex: 1;
+}
+
+.conversa {
+  composes: coluna;
+  flex: 1;
+  container: mensageria / inline-size;
+}
+
+.painel {
+  composes: coluna;
+  width: 360px;
+  flex: none;
+}
+
+.oculto {
+  display: none !important;
+}
+
+/* ---------- Lista de conversas ---------- */
+
+.cabecalhoDaLista {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: none;
+  padding: 14px 14px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tituloDaLista {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font: 600 14px/1.2 var(--font-archivo), sans-serif;
+  color: var(--txt);
+  flex: 1;
+  min-width: 0;
+}
+
+.botaoIcone {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-chip);
+  border: 1px solid var(--line);
+  background: var(--chip);
+  color: var(--txt2);
+  cursor: pointer;
+}
+
+.botaoIcone:hover {
+  color: var(--txt);
+  border-color: var(--bar);
+}
+
+.botaoIcone:focus-visible,
+.linha:focus-visible,
+.filtro:focus-visible,
+.aba:focus-visible,
+.irParaRecentes:focus-visible,
+.enviar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.botaoIcone:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.filtros {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-chip);
+  background: var(--chip);
+}
+
+.filtro {
+  flex: 1;
+  height: 28px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--txt3);
+  font: 500 11.5px/1 var(--font-archivo), sans-serif;
+  cursor: pointer;
+}
+
+.filtro[aria-pressed='true'] {
+  background: var(--glass2);
+  color: var(--txt);
+  box-shadow: inset 0 0 0 1px var(--bar);
+}
+
+.rolagem {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.linha {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid transparent;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.linha:hover {
+  background: var(--chip);
+}
+
+.linha[aria-current='true'] {
+  background: var(--chip);
+  border-left-color: var(--accent);
+}
+
+.linhaTopo,
+.linhaBase {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.linhaNome {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 13px/1.25 var(--font-archivo), sans-serif;
+  color: var(--txt);
+}
+
+.linhaHora {
+  flex: none;
+  font: 400 10.5px/1 var(--font-jetbrains-mono), monospace;
+  color: var(--txt3);
+}
+
+.linhaDetalhe {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--txt3);
+}
+
+.marca {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  font: 500 10px/1.3 var(--font-archivo), sans-serif;
+  color: var(--txt3);
+}
+
+.avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  background: var(--chip);
+  border: 1px solid var(--line);
+  color: var(--txt2);
+}
+
+/* ---------- Cabeçalho da conversa ---------- */
+
+.cabecalho {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  min-height: 60px;
+  padding: 10px 12px 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.contato {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.contatoTexto {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.contatoNome {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 14.5px/1.2 var(--font-archivo), sans-serif;
+  color: var(--txt);
+}
+
+.contatoMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--txt3);
+}
+
+.contatoMeta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.separadorMeta::before {
+  content: '·';
+  color: var(--txt3);
+}
+
+.acoesDoCabecalho {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.estadoDoAtendimento {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.estadoChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: var(--r-pill);
+  border: 1px solid currentColor;
+  background: var(--chip);
+  white-space: nowrap;
+}
+
+.estadoTexto {
+  font: 600 11.5px/1 var(--font-archivo), sans-serif;
+  color: var(--txt);
+}
+
+.ponto {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.assumir {
+  flex: none;
+  min-width: 34px;
+  height: 32px;
+  padding: 0 12px;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.aoVivo {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.avisos {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: none;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* No cabeçalho estreito, o assumir vira só ícone e a ajuda do controle cede espaço. */
+@container mensageria (max-width: 560px) {
+  .assumirTexto {
+    display: none;
+  }
+
+  .assumir {
+    width: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .estadoChip {
+    padding: 0 9px;
+  }
+}
+
+/* Estreito: o estado do atendimento ganha a linha de baixo inteira (ele é o que
+   não pode ser cortado); assumir e o ⋯ ficam ao lado do contato. */
+@container mensageria (max-width: 640px) {
+  .cabecalho {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .acoesDoCabecalho {
+    display: contents;
+  }
+
+  .estadoDoAtendimento {
+    order: 10;
+    width: 100%;
+  }
+
+  .contatoMeta {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+}
+
+@container mensageria (max-width: 400px) {
+  .contato .avatar {
+    display: none;
+  }
+}
+
+/* ---------- Menu ⋯ ---------- */
+
+.menu {
+  z-index: 60;
+  min-width: 248px;
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 6px;
+  border-radius: var(--r-card);
+  border: 1px solid var(--line);
+  background: var(--popup);
+  color: var(--popup-txt);
+  box-shadow: var(--shadow-modal);
+}
+
+.menuGrupo {
+  padding: 8px 10px 4px;
+  font: 500 10px/1 var(--font-jetbrains-mono), monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--popup-txt2);
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font: 500 13px/1.2 var(--font-archivo), sans-serif;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+}
+
+.menuItem[data-highlighted] {
+  background: var(--chip);
+}
+
+.menuItem[data-disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.menuItem svg {
+  flex: none;
+  color: var(--popup-txt2);
+}
+
+.menuSeparador {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--line);
+}
+
+/* ---------- Histórico ---------- */
+
+.historicoMoldura {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.historico {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 18px 18px;
+}
+
+.dia {
+  align-self: center;
+  margin: 12px 0 8px;
+  padding: 4px 11px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--head);
+  font: 500 10.5px/1.2 var(--font-archivo), sans-serif;
+  color: var(--txt2);
+}
+
+.mensagem {
+  display: flex;
+  flex-direction: column;
+  max-width: min(640px, 80%);
+  margin-top: 12px;
+}
+
+.mensagem[data-continuacao='true'] {
+  margin-top: 3px;
+}
+
+.mensagem[data-lado='esquerda'] {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.mensagem[data-lado='direita'] {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.autor {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  margin: 0 4px 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  font: 600 11px/1.2 var(--font-archivo), sans-serif;
+  color: var(--txt2);
+}
+
+.autorDetalhe {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 400;
+  color: var(--txt3);
+}
+
+.bolha {
+  padding: 8px 12px 6px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  max-width: 100%;
+}
+
+.bolha[data-autor='cliente'] {
+  background: var(--glass2);
+  border-top-left-radius: 6px;
+}
+
+.bolha[data-autor='atendimento'] {
+  background: color-mix(in srgb, var(--accent-2) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent-2) 38%, transparent);
+  border-top-right-radius: 6px;
+}
+
+.mensagem[data-continuacao='true'] .bolha[data-autor='cliente'] {
+  border-top-left-radius: 16px;
+}
+
+.mensagem[data-continuacao='true'] .bolha[data-autor='atendimento'] {
+  border-top-right-radius: 16px;
+}
+
+.texto {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 400 13.5px/1.5 var(--font-archivo), sans-serif;
+  color: var(--txt);
+}
+
+.rodapeDaBolha {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 3px;
+  font: 400 10px/1.2 var(--font-jetbrains-mono), monospace;
+  color: var(--txt3);
+}
+
+.sistema {
+  align-self: center;
+  max-width: min(520px, 90%);
+  margin: 12px 0 2px;
+  padding: 5px 12px;
+  border-radius: var(--r-pill);
+  border: 1px dashed var(--line);
+  text-align: center;
+  font: 400 11.5px/1.45 var(--font-archivo), sans-serif;
+  color: var(--txt3);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* Uma mensagem que ainda não é histórico — e que não pode parecer que é. */
+.envio {
+  composes: mensagem;
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.bolhaDoEnvio {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 12px;
+  border-radius: 16px;
+  border-top-right-radius: 6px;
+  border: 1px dashed var(--line);
+  background: transparent;
+  max-width: 100%;
+}
+
+.estadoDoEnvio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 600 10.5px/1.2 var(--font-jetbrains-mono), monospace;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.notaDoEnvio {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--txt3);
+}
+
+.irParaRecentes {
+  position: absolute;
+  right: 18px;
+  bottom: 12px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--bar);
+  background: var(--popup);
+  color: var(--popup-txt);
+  font: 500 12px/1 var(--font-archivo), sans-serif;
+  box-shadow: var(--shadow-modal);
+  cursor: pointer;
+}
+
+/* ---------- Compositor ---------- */
+
+.compositor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: none;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.caixa {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--r-card);
+  border: 1px solid var(--line);
+  background: var(--chip);
+}
+
+.caixa:focus-within {
+  border-color: var(--bar);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.campo {
+  flex: 1;
+  min-width: 0;
+  min-height: 24px;
+  max-height: 168px;
+  margin: 0;
+  padding: 7px 0;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font: 400 13.5px/1.45 var(--font-archivo), sans-serif;
+  color: var(--txt);
+  scrollbar-width: thin;
+}
+
+.campo::placeholder {
+  color: var(--txt3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.campo:disabled {
+  cursor: not-allowed;
+}
+
+.enviar {
+  height: 36px;
+  padding: 0 14px;
+  gap: 6px;
+  flex: none;
+  cursor: pointer;
+}
+
+.dica {
+  margin: 0 2px;
+  font-size: 10.5px;
+  color: var(--txt3);
+}
+
+/* Muito estreito: o enviar vira só ícone, mas o nome continua para leitores de tela. */
+@container mensageria (max-width: 400px) {
+  .enviar {
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .enviarTexto {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .caixa {
+    padding-left: 10px;
+    gap: 4px;
+  }
+}
+
+@container mensageria (max-width: 560px) {
+  .dica {
+    display: none;
+  }
+
+  .historico {
+    padding: 10px 10px 14px;
+  }
+
+  .mensagem {
+    max-width: 88%;
+  }
+}
+
+/* ---------- Painel lateral ---------- */
+
+.painelCabecalho {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 10px 10px 0 14px;
+}
+
+.painelTitulo {
+  flex: 1;
+  margin: 0;
+  font: 600 13.5px/1.2 var(--font-archivo), sans-serif;
+  color: var(--txt);
+}
+
+.abas {
+  display: flex;
+  gap: 2px;
+  flex: none;
+  padding: 8px 10px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.aba {
+  flex: 1;
+  height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--txt3);
+  font: 500 12px/1 var(--font-archivo), sans-serif;
+  cursor: pointer;
+}
+
+.aba[aria-selected='true'] {
+  color: var(--txt);
+  border-bottom-color: var(--accent);
+}
+
+.painelCorpo {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px;
+}
+
+/* Os painéis reaproveitados traziam borda e recuo de quando eram empilhados. */
+.painelCorpo > * {
+  border-top: 0 !important;
+  padding-top: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+.folha {
+  position: fixed;
+  z-index: 55;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 88dvh;
+  min-height: 45dvh;
+  border-radius: var(--r-modal) var(--r-modal) 0 0;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  background: var(--modal);
+  box-shadow: var(--shadow-modal);
+}
+
+.alca {
+  align-self: center;
+  width: 40px;
+  height: 4px;
+  margin-top: 8px;
+  border-radius: var(--r-pill);
+  background: var(--bar);
+}
+
+/* ---------- Diálogos ---------- */
+
+.veu {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.confirmacao {
+  position: fixed;
+  z-index: 55;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(440px, calc(100vw - 32px));
+  padding: 20px;
+  border-radius: var(--r-modal);
+  border: 1px solid var(--line);
+  background: var(--modal);
+  box-shadow: var(--shadow-modal);
+}
+
+.confirmacaoTitulo {
+  margin: 0 0 8px;
+  font: 600 16px/1.25 var(--font-archivo), sans-serif;
+  color: var(--txt);
+}
+
+.confirmacaoTexto {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--txt2);
+}
+
+.confirmacaoAcoes {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.areaDoResumo {
+  height: auto;
+  min-height: 76px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  resize: vertical;
+  line-height: 1.45;
+}

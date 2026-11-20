@@ -782,7 +782,7 @@
     "locations": [
       {
         "file": "src/components/mensageria/MensageriaDesktop.tsx",
-        "line": 155
+        "line": 109
       }
     ],
     "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
@@ -808,8 +808,8 @@
     ],
     "locations": [
       {
-        "file": "src/components/mensageria/MensageriaDesktop.tsx",
-        "line": 482
+        "file": "src/components/mensageria/Compositor.tsx",
+        "line": 68
       }
     ],
     "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
@@ -835,7 +835,7 @@
     "locations": [
       {
         "file": "src/components/mensageria/BarraDoAtendimento.tsx",
-        "line": 80
+        "line": 124
       }
     ],
     "nominalReview": "Revisado para IA-first, takeover, devolução com resumo, nova mensagem e disponibilidade assíncrona do PR152."
@@ -887,7 +887,7 @@
     "locations": [
       {
         "file": "src/components/mensageria/PainelDaTriagem.tsx",
-        "line": 111
+        "line": 116
       }
     ],
     "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra."
