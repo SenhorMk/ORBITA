@@ -38,11 +38,6 @@ export type BlingPayloadResult =
   /** A posse mudou durante a preparação: nenhum efeito foi iniciado. */
   | { readonly _tag: 'PayloadSemPosse' };
 
-/** `format: date` do Bling — AAAA-MM-DD, sem componente de hora. */
-export function toBlingDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
 function parseNumericBlingId(value: string | null): number | null {
   if (value === null) return null;
   const trimmed = value.trim();

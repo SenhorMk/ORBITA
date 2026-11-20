@@ -238,3 +238,21 @@ describe('PainelDoCliente — detalhes do pedido (MSG-011)', () => {
     await waitFor(() => expect(screen.queryByText('Item Sintético')).not.toBeInTheDocument());
   });
 });
+
+describe('PainelDoCliente — data do pedido', () => {
+  it('mostra o dia da venda, sem deslocar para o dia anterior no fuso de Brasília', async () => {
+    const fusoAnterior = process.env.TZ;
+    process.env.TZ = 'America/Sao_Paulo';
+    try {
+      const doDia = { success: true, versao: 1, pedidos: [{ id: PEDIDO, numero: '1002', data: '2026-11-08', status: 'Pendente', total: 10 }] };
+      const fetchWithAuth = servidor({ verificacao: () => verificada, pedidos: () => respostaJson(doDia) });
+      render(<PainelDoCliente fetchWithAuth={fetchWithAuth} conversaId={CONVERSA_A} />);
+
+      expect(await screen.findByText(/08\/11\/2026/u)).toBeInTheDocument();
+      expect(screen.queryByText(/07\/11\/2026/u)).not.toBeInTheDocument();
+    } finally {
+      if (fusoAnterior === undefined) delete process.env.TZ;
+      else process.env.TZ = fusoAnterior;
+    }
+  });
+});
