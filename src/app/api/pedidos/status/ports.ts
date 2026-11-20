@@ -45,6 +45,14 @@ export interface PedidoStatusStorePort {
    * acreditar que nada aconteceu.
    */
   findProdutoIdsDoPedido(scope: VerifiedOrganizationScope, pedidoId: string): Promise<readonly string[]>;
+  /**
+   * Itens do pedido com a quantidade vendida: a base do saldo esperado depois
+   * do estorno (saldo antes + quantidade). Lançar aqui deixa o estorno sem conferência.
+   */
+  findItensDoPedido(
+    scope: VerifiedOrganizationScope,
+    pedidoId: string,
+  ): Promise<readonly { readonly produtoId: string; readonly quantidade: number }[]>;
   /** Produtos por id, com o saldo local que pode divergir do Bling. */
   findProdutosByIds(scope: VerifiedOrganizationScope, produtoIds: readonly string[]): Promise<readonly PedidoStatusProduto[]>;
   /**

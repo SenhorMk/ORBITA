@@ -57,6 +57,17 @@ function supabasePedidoStatusStore(): PedidoStatusStorePort {
       return (data || []).map((item) => String(item.produto_id));
     },
 
+    async findItensDoPedido(scope: VerifiedOrganizationScope, pedidoId: string) {
+      const { data, error } = await supabaseServer
+        .from('itens_pedido')
+        .select('produto_id, quantidade')
+        .eq('pedido_id', pedidoId)
+        .eq('organizacao_id', scope.organizationId);
+
+      if (error) throw error;
+      return (data || []).map((item) => ({ produtoId: String(item.produto_id), quantidade: Number(item.quantidade) }));
+    },
+
     async findProdutosByIds(
       scope: VerifiedOrganizationScope,
       produtoIds: readonly string[],

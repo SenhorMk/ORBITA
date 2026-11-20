@@ -67,6 +67,7 @@ function montarDeps(sobrescritas: {
     findPedidoById: vi.fn().mockResolvedValue(PEDIDO),
     savePedidoStatus,
     findProdutoIdsDoPedido: vi.fn().mockResolvedValue([]),
+    findItensDoPedido: vi.fn().mockResolvedValue([]),
     findProdutosByIds: vi.fn().mockResolvedValue([] as readonly PedidoStatusProduto[]),
     alinharEstoque,
     ...sobrescritas.store,
@@ -697,8 +698,10 @@ describe('POST /api/pedidos/status — cancelamento devolve o estoque lançado',
   });
 
   const CANCELAR = { pedidoId: PEDIDO_ID, novaSituacaoId: 12, novaSituacaoNome: 'Cancelado' };
+  /** Um item: produto p1 (Bling 100), 1 unidade vendida, ORBITA com 7. */
   const umProduto = () => ({
     findProdutoIdsDoPedido: vi.fn().mockResolvedValue(['p1']),
+    findItensDoPedido: vi.fn().mockResolvedValue([{ produtoId: 'p1', quantidade: 1 }]),
     findProdutosByIds: vi.fn().mockResolvedValue([{ id: 'p1', blingId: '100', estoque: 7 }]),
   });
   /** Bling e ORBITA com o mesmo saldo: o alinhamento sozinho diria "alinhado". */
@@ -710,15 +713,23 @@ describe('POST /api/pedidos/status — cancelamento devolve o estoque lançado',
   const corpoDe = async (r: Response) => (await r.json()) as { estoque?: string; warning?: string; success?: boolean };
   const metadataDo = (eventos: EventoComercial[], acao: string) => eventos.find((e) => e.acao === acao)?.metadata;
 
-  it('estorna no Bling depois da situação e antes de reler o saldo; confirmado + alinhado = alinhado', async () => {
+  /** Saldos do Bling em sequência: antes do estorno, na conferência, no alinhamento. */
+  const saldosEmSequencia = (...valores: number[]) => {
+    const getSaldos = vi.fn();
+    for (const v of valores) getSaldos.mockResolvedValueOnce(new Map([['100', v]]));
+    return getSaldos.mockResolvedValue(new Map([['100', valores[valores.length - 1]]]));
+  };
+
+  it('lê a base antes do estorno; Bling aceitou e o saldo voltou ao esperado = estornado e alinhado', async () => {
     const ordem: string[] = [];
+    const getSaldos = saldosEmSequencia(7, 8, 8);
     const { deps, bling, eventos } = montarDeps({
       bling: {
         updateSituacaoPedido: vi.fn().mockImplementation(async () => { ordem.push('situacao'); return { _tag: 'BlingOk', value: undefined }; }),
         estornarEstoque: vi.fn().mockImplementation(async () => { ordem.push('estorno'); return { _tag: 'BlingOk', value: undefined }; }),
-        getSaldos: vi.fn().mockImplementation(async () => { ordem.push('saldo'); return new Map([['100', 7]]); }),
+        getSaldos: vi.fn().mockImplementation(async (ids: readonly string[]) => { ordem.push('saldo'); return getSaldos(ids); }),
       },
-      store: umProduto(),
+      store: { ...umProduto(), findProdutosByIds: vi.fn().mockResolvedValue([{ id: 'p1', blingId: '100', estoque: 8 }]) },
     });
 
     const resposta = await createPedidoStatusHandler(deps)(corpo(CANCELAR));
@@ -726,9 +737,87 @@ describe('POST /api/pedidos/status — cancelamento devolve o estoque lançado',
     expect(resposta.status).toBe(200);
     expect(await corpoDe(resposta)).toEqual({ success: true, status: 'Cancelado', estoque: 'alinhado' });
     expect(bling.estornarEstoque).toHaveBeenCalledWith('26735988980');
-    expect(ordem).toEqual(['situacao', 'estorno', 'saldo']);
-    expect(metadataDo(eventos, 'order.stock_reversal')).toMatchObject({ resultado: 'estornado', status_http: null });
+    // base (antes) → estorno → conferência → alinhamento
+    expect(ordem).toEqual(['situacao', 'saldo', 'estorno', 'saldo', 'saldo']);
+    expect(metadataDo(eventos, 'order.stock_reversal')).toMatchObject({ resultado: 'estornado', status_http: null, produtos_divergentes: 0 });
     expect(metadataDo(eventos, 'order.status_changed')).toMatchObject({ estorno: 'estornado' });
+  });
+
+  it('Bling aceitou, mas o saldo não voltou: divergente e explícito, mesmo com ORBITA e Bling coincidindo', async () => {
+    const { deps, eventos } = montarDeps({ bling: saldosCoincidem(), store: umProduto() });
+
+    const resposta = await createPedidoStatusHandler(deps)(corpo(CANCELAR));
+    const body = await corpoDe(resposta);
+
+    expect(resposta.status).toBe(200);
+    expect(body.estoque).toBe('requer_reconciliacao');
+    expect(body.warning).toContain('o saldo de 1 produto(s) não é o esperado');
+    expect(body.warning).toContain('não repita o cancelamento');
+    expect(metadataDo(eventos, 'order.stock_reversal')).toMatchObject({ resultado: 'divergente', produtos_divergentes: 1 });
+    expect(metadataDo(eventos, 'order.status_changed')).toMatchObject({ estorno: 'divergente', estoque: 'alinhado' });
+  });
+
+  it('estorno parcial (voltou menos que o vendido) é divergente', async () => {
+    const { deps } = montarDeps({
+      bling: { getSaldos: saldosEmSequencia(7, 8, 8) },
+      store: { ...umProduto(), findItensDoPedido: vi.fn().mockResolvedValue([{ produtoId: 'p1', quantidade: 2 }]) },
+    });
+
+    const body = await corpoDe(await createPedidoStatusHandler(deps)(corpo(CANCELAR)));
+
+    expect(body.estoque).toBe('requer_reconciliacao');
+    expect(body.warning).toContain('não é o esperado');
+  });
+
+  it('itens repetidos do mesmo produto somam na quantidade esperada', async () => {
+    const { deps, eventos } = montarDeps({
+      bling: { getSaldos: saldosEmSequencia(7, 10, 10) },
+      store: {
+        ...umProduto(),
+        findItensDoPedido: vi.fn().mockResolvedValue([{ produtoId: 'p1', quantidade: 1 }, { produtoId: 'p1', quantidade: 2 }]),
+      },
+    });
+
+    await createPedidoStatusHandler(deps)(corpo(CANCELAR));
+
+    expect(metadataDo(eventos, 'order.stock_reversal')).toMatchObject({ resultado: 'estornado' });
+  });
+
+  it('sem base para conferir (saldo de antes ilegível): sem_conferencia, nunca estornado', async () => {
+    const getSaldos = vi.fn().mockRejectedValueOnce(new Error('timeout')).mockResolvedValue(new Map([['100', 8]]));
+    const { deps, bling, eventos } = montarDeps({ bling: { getSaldos }, store: umProduto() });
+
+    const body = await corpoDe(await createPedidoStatusHandler(deps)(corpo(CANCELAR)));
+
+    // A falha da base não impede o estorno: o cancelamento comercial já foi confirmado.
+    expect(bling.estornarEstoque).toHaveBeenCalledTimes(1);
+    expect(body.estoque).toBe('requer_reconciliacao');
+    expect(body.warning).toContain('não foi possível conferir o saldo esperado');
+    expect(metadataDo(eventos, 'order.stock_reversal')).toMatchObject({ resultado: 'sem_conferencia' });
+  });
+
+  it('produto do pedido sem id no Bling: sem_conferencia', async () => {
+    const { deps, eventos } = montarDeps({
+      bling: { getSaldos: saldosEmSequencia(7, 8, 8) },
+      store: { ...umProduto(), findProdutosByIds: vi.fn().mockResolvedValue([{ id: 'p1', blingId: null, estoque: 7 }]) },
+    });
+
+    await createPedidoStatusHandler(deps)(corpo(CANCELAR));
+
+    expect(metadataDo(eventos, 'order.stock_reversal')).toMatchObject({ resultado: 'sem_conferencia' });
+  });
+
+  it('releitura de conferência ilegível: sem_conferencia', async () => {
+    const getSaldos = vi.fn()
+      .mockResolvedValueOnce(new Map([['100', 7]]))
+      .mockRejectedValueOnce(new Error('503'))
+      .mockResolvedValue(new Map([['100', 8]]));
+    const { deps, eventos } = montarDeps({ bling: { getSaldos }, store: umProduto() });
+
+    const body = await corpoDe(await createPedidoStatusHandler(deps)(corpo(CANCELAR)));
+
+    expect(body.estoque).toBe('requer_reconciliacao');
+    expect(metadataDo(eventos, 'order.stock_reversal')).toMatchObject({ resultado: 'sem_conferencia' });
   });
 
   it('o saldo devolvido pelo Bling é alinhado localmente', async () => {
