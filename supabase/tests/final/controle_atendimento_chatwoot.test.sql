@@ -214,6 +214,16 @@ select is(pg_temp.alterar('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000
 -- ---------------------------------------------------------------------------
 -- Devolver e exigir humano.
 -- ---------------------------------------------------------------------------
+insert into public.sac_operadores_autorresposta (ator_id) values ('e9000000-0000-4000-8000-0000000000a0');
+insert into public.sac_executores_autorresposta values
+    ('e9000000-0000-4000-8000-00000000000a','e9000000-0000-4000-8000-0000000000a0');
+select public.alterar_politica_autorresposta(null,'e9000000-0000-4000-8000-0000000000a0',true,0,'Fixture MSG-009');
+select public.alterar_politica_autorresposta('e9000000-0000-4000-8000-00000000000a',
+    'e9000000-0000-4000-8000-0000000000a0',true,0,'Fixture MSG-009');
+-- This fixture models an explicitly released runtime; initial rehearsal uses a conversation restriction.
+insert into public.chatwoot_ai_runtime (conexao_id,organizacao_id,executor_id,inbox_id,corte,ativo,pronto_ate,clientes_liberados) values
+    ('e9000000-0000-4000-8000-0000000000c1','e9000000-0000-4000-8000-00000000000a',
+        'e9000000-0000-4000-8000-0000000000a0',1,now(),true,now()+interval '10 minutes',true);
 select is(pg_temp.alterar('e9000000-0000-4000-8000-00000000000a', 'e9000000-0000-4000-8000-0000000000a2',
                           (select valor::uuid from t_ctx where nome = 'a'), 'd9000000-0000-4000-8000-000000000004', 'devolver', 2,
                           'Resolvido.'),

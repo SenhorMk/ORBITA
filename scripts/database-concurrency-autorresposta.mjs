@@ -7,7 +7,9 @@ import { err, ok } from './script-result.mjs';
 import { createLocalDatabaseClient } from './local-database-client.mjs';
 
 const mudar = 'select public.alterar_politica_autorresposta($1,$2,$3,$4,$5) as resultado';
-const iniciar = 'select public.iniciar_envio_chatwoot($1,$2,$3) as resultado';
+// These six races exercise the frozen MSG-022 internals as schema owner.
+// D08.3 tests the additional ingress fence and public service_role wrapper.
+const iniciar = 'select public.iniciar_envio_chatwoot_msg022($1,$2,$3) as resultado';
 const registrar = 'select public.registrar_autorresposta_chatwoot($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) as resultado';
 
 async function ator(admin) {
@@ -132,11 +134,11 @@ async function ensaiar(clientes) {
 
 }
 
-export async function runAutorrespostaRaceRehearsal() {
+export async function runAutorrespostaRaceRehearsal({ criarCliente = createLocalDatabaseClient } = {}) {
   const clientes = [];
   try {
     for (const nome of ['admin', 'a', 'b']) {
-      const client = createLocalDatabaseClient('orbita-autorresposta-' + nome);
+      const client = criarCliente('orbita-autorresposta-' + nome);
       clientes.push(client);
       await client.connect();
     }
@@ -145,7 +147,6 @@ export async function runAutorrespostaRaceRehearsal() {
     await admin.query("update public.inbox_eventos_chatwoot set available_at = 'infinity' where status in ('received', 'failed')");
     await admin.query("update public.outbox_eventos set next_retry_at = 'infinity' where status in ('pending', 'failed_transient')");
     for (const client of [clientA, clientB]) {
-      await client.query("set role service_role");
       await client.query("set request.jwt.claim.role = 'service_role'");
       await client.query("set statement_timeout = '15s'");
     }

@@ -539,16 +539,18 @@ function Conversa({ mensageria, fetchWithAuth }: { readonly mensageria: Mensager
     >
       <CabecalhoDaConversa mensageria={mensageria} selecionada={selecionada} />
       <Historico mensageria={mensageria} />
-      <BarraDoAtendimento fetchWithAuth={fetchWithAuth} mensageria={mensageria} />
-      <PainelDaTriagem fetchWithAuth={fetchWithAuth} conversaId={selecionada.id_local} />
-      <PainelDaResposta
-        key={JSON.stringify([selecionada.id_local, mensageria.historico.map((m) => [m.id_local, m.updated_at])])}
-        fetchWithAuth={fetchWithAuth}
-        conversaId={selecionada.id_local}
-        compositorOcupado={mensageria.rascunho.trim() !== ''}
-        usar={mensageria.escreverRascunho}
-      />
-      <PainelDoCliente fetchWithAuth={fetchWithAuth} conversaId={selecionada.id_local} />
+      <div className="flex-none min-h-0 overflow-y-auto" style={{ maxHeight: '45%' }}>
+        <BarraDoAtendimento fetchWithAuth={fetchWithAuth} mensageria={mensageria} />
+        <PainelDaTriagem fetchWithAuth={fetchWithAuth} conversaId={selecionada.id_local} />
+        <PainelDaResposta
+          key={JSON.stringify([selecionada.id_local, mensageria.historico.map((m) => [m.id_local, m.updated_at])])}
+          fetchWithAuth={fetchWithAuth}
+          conversaId={selecionada.id_local}
+          compositorOcupado={mensageria.rascunho.trim() !== ''}
+          usar={mensageria.escreverRascunho}
+        />
+        <PainelDoCliente fetchWithAuth={fetchWithAuth} conversaId={selecionada.id_local} />
+      </div>
       <Compositor mensageria={mensageria} />
     </section>
   );

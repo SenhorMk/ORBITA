@@ -41,7 +41,9 @@ export class FilaDeTriagemIndisponivel extends Error {
   }
 }
 
-export function criarPortaDoConsumidorTriagem(supabase: SupabaseClient): PortaDoConsumidorTriagem {
+export function criarPortaDoConsumidorTriagem(supabase: SupabaseClient, escopoAiFirst?: {
+  readonly p_org: string; readonly p_conexao: string; readonly p_executor: string;
+}): PortaDoConsumidorTriagem {
   return {
     async liberarLeasesVencidas() {
       const { data, error } = await supabase.rpc('liberar_leases_expirados_outbox');
@@ -50,7 +52,8 @@ export function criarPortaDoConsumidorTriagem(supabase: SupabaseClient): PortaDo
     },
 
     async reivindicar({ workerId, limite, leaseSegundos }): Promise<readonly TriagemReivindicada[]> {
-      const { data, error } = await supabase.rpc('reivindicar_triagens_sac', {
+      const { data, error } = await supabase.rpc(escopoAiFirst ? 'reivindicar_triagens_ai_first' : 'reivindicar_triagens_sac', {
+        ...escopoAiFirst,
         p_worker_id: workerId, p_limite: limite, p_lease_ttl_sec: leaseSegundos,
       });
       if (error) throw new FilaDeTriagemIndisponivel('reivindicar');
