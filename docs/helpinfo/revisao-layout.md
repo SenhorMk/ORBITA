@@ -18,6 +18,8 @@ Correção visual sobre main `f333ae6`, em branch isolada. Não altera catálogo
 
 A reprodução anterior foi feita em staging autenticado, sem salvar operações. Antes de alterar, a ajuda de Nova despesa já passava por Escape, retorno do foco e preservação do título digitado. Portanto, a suspeita de falha intrínseca do Radix não se confirmou e seu mecanismo foi preservado.
 
+A execução ampliada revelou depois uma falha intermitente em produto, contato e venda manual: Escape logo após abrir a ajuda podia alcançar o listener ainda ativo do modal de origem e fechar ambos. A dependência registra/remove esse listener em efeito passivo. HelpInfo agora controla somente seu estado de abertura e intercepta Escape em captura no `window` enquanto está aberta, antes dos listeners do `document`. O listener é instalado em efeito de layout e removido ao fechar; Radix continua responsável pelo portal, bloqueio modal, Tab, clique fora e restauração de foco. O teste unitário mantém propositalmente um listener de origem ativo para comprovar o isolamento e sua liberação posterior.
+
 As capturas posteriores usam os componentes reais e o CSS global da aplicação em uma página local de inspeção, com dados sintéticos e portas de escrita bloqueadas. Não equivalem a teste de gravação, consulta à Receita, sincronização ou integração comercial. A prévia Next autenticada depende do login normal do usuário; não houve extração de sessão do staging.
 
 Antes (registro real cancelado) e depois (registro sintético aberto) demonstram a diferença estrutural; são registros distintos, e não uma alteração da mesma despesa:

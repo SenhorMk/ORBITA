@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as Dialog from '@radix-ui/react-dialog';
 import { HelpInfo } from './HelpInfo';
@@ -94,5 +94,24 @@ describe('HelpInfo', () => {
     expect(screen.getByRole('dialog').id).not.toBe(firstId);
     await user.keyboard('{Escape}');
     expect(triggers[1]).toHaveFocus();
+  });
+
+  it('isola Escape de um listener de origem ainda registrado e o libera ao fechar', async () => {
+    const user = userEvent.setup();
+    const origem = vi.fn();
+    document.addEventListener('keydown', origem, true);
+    try {
+      render(<HelpInfo ajudaId="financeiro.despesa" />);
+      const trigger = screen.getByRole('button', { name: /^Ajuda:/ });
+      await user.click(trigger);
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Fechar ajuda' }), { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(origem).not.toHaveBeenCalled();
+      await waitFor(() => expect(trigger).toHaveFocus());
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      expect(origem).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener('keydown', origem, true);
+    }
   });
 });
