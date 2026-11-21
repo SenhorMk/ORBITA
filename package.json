@@ -32,6 +32,7 @@
     "test:db": "node scripts/test-database-lab.mjs && node scripts/test-database-concurrency.mjs",
     "test:watch": "vitest",
     "e2e": "playwright test",
+    "test:helpinfo:visual": "playwright test --config e2e/helpinfo/playwright.config.ts",
     "e2e:report": "playwright show-report playwright-report",
     "e2e:list": "playwright test --list",
     "e2e:seed": "ts-node --transpile-only --project e2e/tsconfig.seed.json e2e/seed/run-seed.ts",
@@ -89,6 +90,7 @@
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
     "typescript": "^5",
+    "vite": "8.3.5",
     "vitest": "^4.1.10"
   },
   "overrides": {

@@ -1,5 +1,8 @@
 'use client';
 
+import { HelpContext } from '@/components/help/HelpContext';
+import { SecaoDoProduto as Secao } from '@/components/produtos/SecaoDoProduto';
+
 import { useState, useEffect } from 'react';
 import { CheckCircle2, Copy, Save } from "lucide-react";
 import type { Produto, Cliente, Categoria } from '@/types';
@@ -111,16 +114,6 @@ function Rotulo({ para, children }: { para: string; children: React.ReactNode })
     <label htmlFor={para} className="orbita-eyebrow">
       {children}
     </label>
-  );
-}
-
-function Secao({ titulo, children }: { titulo: string; children: React.ReactNode }) {
-  return (
-    <section className="flex flex-col gap-3">
-      <h4 className="orbita-eyebrow">{titulo}</h4>
-      {titulo === 'Movimentações de estoque' && <HelpInfo ajudaId="estoque.movimentacoes" />}
-      {children}
-    </section>
   );
 }
 
@@ -466,8 +459,8 @@ export function ProductDetailModal({
           />
         }
         {...arquivamento.confirmacao?.modal}
-      >
-      <HelpInfo ajudaId="estoque.produto" />
+     ajuda={arquivamento.confirmacao ? <HelpInfo ajudaId="estoque.arquivar" /> : <HelpInfo ajudaId="estoque.produto" />}>
+
         {arquivamento.confirmacao ? arquivamento.confirmacao.corpo : (
         <div className="flex flex-col gap-6">
           <AvisosDaGravacao reconciliacao={aguardandoReconciliacao?.mensagem ?? null} avisos={avisosDaGravacao} />
@@ -509,8 +502,9 @@ export function ProductDetailModal({
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <Rotulo para="product-detail-codigo">Código SKU / Ref. Bling</Rotulo>
-      <HelpInfo ajudaId="estoque.codigos" />
+                <HelpContext ajudaId="estoque.codigos">
+                  <Rotulo para="product-detail-codigo">Código SKU / Ref. Bling</Rotulo>
+                </HelpContext>
                 <div className="relative">
                   <input
                     id="product-detail-codigo"
@@ -535,8 +529,9 @@ export function ProductDetailModal({
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <Rotulo para="product-detail-categoria">Categoria do produto</Rotulo>
-      <HelpInfo ajudaId="estoque.categoria" />
+                <HelpContext ajudaId="estoque.categoria">
+                  <Rotulo para="product-detail-categoria">Categoria do produto</Rotulo>
+                </HelpContext>
                 <select
                   id="product-detail-categoria"
                   value={categoriaId}
@@ -556,8 +551,9 @@ export function ProductDetailModal({
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <Rotulo para="product-detail-preco">Preço de venda (R$)</Rotulo>
-      <HelpInfo ajudaId="estoque.precos" />
+                <HelpContext ajudaId="estoque.precos">
+                  <Rotulo para="product-detail-preco">Preço de venda (R$)</Rotulo>
+                </HelpContext>
                 <input
                   id="product-detail-preco"
                   type="number"
@@ -581,8 +577,8 @@ export function ProductDetailModal({
             </div>
           </Secao>
 
-          <Secao titulo="Obrigatórios do Bling">
-      <HelpInfo ajudaId="estoque.obrigatorios" />
+          <Secao titulo="Obrigatórios do Bling" ajuda={<HelpInfo ajudaId="estoque.obrigatorios" />}>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="product-detail-tipo">Tipo *</Rotulo>
@@ -623,7 +619,7 @@ export function ProductDetailModal({
           </Secao>
 
           {produto?.id && (
-            <Secao titulo="Movimentações de estoque">
+            <Secao titulo="Movimentações de estoque" ajuda={<HelpInfo ajudaId="estoque.movimentacoes" />}>
               <MovimentacoesDoProduto produtoId={produto.id} />
             </Secao>
           )}

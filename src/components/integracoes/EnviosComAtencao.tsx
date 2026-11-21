@@ -1,5 +1,7 @@
 'use client';
 
+import { HelpContext } from '@/components/help/HelpContext';
+
 import { useState } from 'react';
 import { RefreshCw, Send } from 'lucide-react';
 
@@ -9,7 +11,6 @@ import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizatio
 import type { EventoDaOutbox } from '@/lib/integrations/contratoDaOutbox';
 import { comPrazo } from './comPrazo';
 import { useEnviosComAtencao } from './useEnviosComAtencao';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 const APARENCIA_DO_DESFECHO: Record<EventoDaOutbox['desfecho'], { readonly rotulo: string; readonly cor: string }> = {
   desconhecido: { rotulo: 'Desconhecido', cor: 'var(--warning)' },
@@ -115,10 +116,11 @@ export function EnviosComAtencao({
       style={{ gap: 12, padding: 16, borderRadius: 20, background: 'var(--glass2)', border: '1px solid var(--line)' }}
     >
       <header className="flex items-center justify-between" style={{ gap: 12 }}>
-        <h2 className="m-0" style={{ font: '600 13px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}>
-          Envios que exigem atenção
-        </h2>
-      <HelpInfo ajudaId="integracoes.envios" />
+        <HelpContext ajudaId="integracoes.envios">
+          <h2 className="m-0" style={{ font: '600 13px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}>
+            Envios que exigem atenção
+          </h2>
+        </HelpContext>
         <button type="button" onClick={() => { void envios.recarregar(); }} className="orbita-chip cursor-pointer" aria-label="Atualizar envios">
           <RefreshCw className="w-3.5 h-3.5" />
         </button>

@@ -1,7 +1,7 @@
 'use client';
 
 import { AlertTriangle, Plus, RefreshCw } from 'lucide-react';
-import { HelpInfo } from '@/components/help/HelpInfo';
+import { HelpContext } from '@/components/help/HelpContext';
 
 /**
  * As duas ações do Financeiro: sincronizar e lançar uma saída.
@@ -21,11 +21,10 @@ export function AcoesFinanceiras({
 }) {
   return (
     <div className="flex items-center flex-none" style={{ gap: 8 }}>
-      <HelpInfo ajudaId="integracoes.sync" />
-      <button type="button" onClick={onSync} disabled={syncing} className="orbita-chip cursor-pointer">
+      <HelpContext ajudaId="integracoes.sync"><button type="button" onClick={onSync} disabled={syncing} className="orbita-chip cursor-pointer">
         <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
         {syncing ? 'Sincronizando...' : 'Sincronizar'}
-      </button>
+      </button></HelpContext>
       <button
         type="button"
         onClick={onNovaDespesa}

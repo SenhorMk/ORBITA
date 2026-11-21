@@ -123,8 +123,8 @@ export function AceitarConviteModal({ aberto, onAbertoChange, onAceitar, erro }:
           />
         )
       }
-    >
-      <HelpInfo ajudaId="org.aceitar" />
+     ajuda={<HelpInfo ajudaId="org.aceitar" />}>
+
       {avisoDeContexto ? (
         <div
           className="flex items-start px-4 py-3 rounded-xl text-xs"

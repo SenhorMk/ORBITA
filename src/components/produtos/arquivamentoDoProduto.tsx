@@ -8,7 +8,6 @@ import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import { isProdutoSynced } from '@/lib/utils';
 import type { Produto } from '@/types';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * O arquivamento de produto pela tela (PRE-003): só expõe
@@ -64,7 +63,6 @@ function ConfirmacaoDoArquivamento({ produto, aviso }: { produto: Produto; aviso
   const noBling = isProdutoSynced(produto.bling_id);
   return (
     <div className="flex flex-col gap-4 text-sm leading-relaxed" style={{ color: 'var(--txt2)' }}>
-      <HelpInfo ajudaId="estoque.arquivar" />
       <p className="m-0">
         {noBling
           ? 'O produto sai da venda: no Bling ele fica inativo (não é excluído) e, só depois da confirmação lá, é arquivado no ORBITA. Pedidos antigos continuam com o produto, o nome e o valor.'

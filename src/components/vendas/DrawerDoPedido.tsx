@@ -373,8 +373,8 @@ export function DrawerDoPedido({
             }
           />
         )}
-      >
-      <HelpInfo ajudaId="vendas.detalhe" />
+       ajuda={<HelpInfo ajudaId="vendas.detalhe" />}>
+
         {carregando && <EstadoCarregando mensagem="Buscando dados no Bling ERP…" />}
 
         {erro && !carregando && (

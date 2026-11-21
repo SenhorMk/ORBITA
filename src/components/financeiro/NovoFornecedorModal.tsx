@@ -109,8 +109,8 @@ export function NovoFornecedorModal({
           }
         />
       }
-    >
-      <HelpInfo ajudaId="financeiro.fornecedor" />
+     ajuda={<HelpInfo ajudaId="financeiro.fornecedor" />}>
+
       <div className="space-y-4">
         <div>
           <label htmlFor="fornecedor-cnpj" className={ROTULO} style={COR_DO_ROTULO}>CNPJ</label>

@@ -1,5 +1,7 @@
 'use client';
 
+import { HelpContext } from '@/components/help/HelpContext';
+
 import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -9,7 +11,6 @@ import { Search, Plus, Trash2, CheckCircle2, Loader2, AlertCircle } from 'lucide
 import { BlingPedido } from '@/types';
 import { fetchWithAuth } from '@/lib/fetchWithAuth';
 import { descreverErro } from '@/lib/erroLegivel';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 interface EditOrderModalProps {
   open: boolean;
@@ -536,8 +537,9 @@ export function EditOrderModal({ open, onOpenChange, onSuccess, pedido }: EditOr
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Editar Pedido</DialogTitle>
-      <HelpInfo ajudaId="vendas.editar" />
+          <HelpContext ajudaId="vendas.editar">
+            <DialogTitle>Editar Pedido</DialogTitle>
+          </HelpContext>
           <DialogDescription>Edite as informações do pedido. As alterações serão salvas diretamente no ERP.</DialogDescription>
         </DialogHeader>
 
