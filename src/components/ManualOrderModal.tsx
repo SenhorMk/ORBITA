@@ -1,5 +1,7 @@
 'use client';
 
+import { HelpContext } from '@/components/help/HelpContext';
+
 import { useState, useEffect, useDeferredValue } from "react";
 import { Modal, RodapeDeModal } from '@/components/ui/modal';
 import { supabase } from '@/lib/supabaseClient';
@@ -220,8 +222,9 @@ function ManualOrderFormFields(props: ManualOrderFormFieldsProps) {
       </div>
 
       <div>
-        <label htmlFor="manual-order-forma-pagamento" className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Forma de Pagamento</label>
-      <HelpInfo ajudaId="vendas.pagamento" />
+        <HelpContext ajudaId="vendas.pagamento">
+          <label htmlFor="manual-order-forma-pagamento" className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Forma de Pagamento</label>
+        </HelpContext>
         <select
           id="manual-order-forma-pagamento"
           className="w-full px-4 py-2.5 rounded-2xl glass-input text-sm outline-none font-medium text-white bg-transparent"
@@ -237,8 +240,9 @@ function ManualOrderFormFields(props: ManualOrderFormFieldsProps) {
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label htmlFor="manual-order-desconto" className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Desconto (R$)</label>
-      <HelpInfo ajudaId="vendas.desconto-frete" />
+          <HelpContext ajudaId="vendas.desconto-frete">
+            <label htmlFor="manual-order-desconto" className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">Desconto (R$)</label>
+          </HelpContext>
           <input
             id="manual-order-desconto"
             type="number"
@@ -462,15 +466,16 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess, organizacaoId 
       tamanho="lg"
       eyebrow="Loja física"
       titulo="Novo pedido manual"
+      ajuda={<HelpInfo ajudaId="vendas.manual" />}
       descricao="Cria um pedido para debitar estoque local e registrar o financeiro."
       rodape={
         <RodapeDeModal
           esquerda={
-            <SincronizarComOBling
+            <HelpContext ajudaId="vendas.sincronizar-checkbox"><SincronizarComOBling
               syncBling={syncBling}
               setSyncBling={setSyncBling}
               desabilitado={loading}
-            />
+            /></HelpContext>
           }
           secundaria={
             <button
@@ -497,8 +502,6 @@ export function ManualOrderModal({ open, onOpenChange, onSuccess, organizacaoId 
         />
       }
     >
-      <HelpInfo ajudaId="vendas.manual" />
-      <HelpInfo ajudaId="vendas.sincronizar-checkbox" />
         <PendenciasDeVendaManual open={open} organizacaoId={organizacaoId} />
 
         {error && (

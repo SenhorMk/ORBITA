@@ -1,5 +1,7 @@
 'use client';
 
+import { HelpContext } from '@/components/help/HelpContext';
+
 import { RefreshCw } from 'lucide-react';
 
 import { Pilula } from '@/components/ui/StatusPill';
@@ -7,7 +9,6 @@ import type { SelecaoDeOrganizacao } from '@/components/organizacao/usePapelNaOr
 import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizationPanel';
 import type { EventoRecebido } from '@/lib/integrations/contratoDaMensageria';
 import { useMensagensRecebidas } from './useMensagensRecebidas';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 const APARENCIA_DO_ESTADO: Record<EventoRecebido['estado'], { readonly rotulo: string; readonly cor: string }> = {
   recebida: { rotulo: 'Recebida', cor: 'var(--info)' },
@@ -53,10 +54,11 @@ export function MensagensRecebidas({
       style={{ gap: 12, padding: 16, borderRadius: 20, background: 'var(--glass2)', border: '1px solid var(--line)' }}
     >
       <header className="flex items-center justify-between" style={{ gap: 12 }}>
-        <h2 className="m-0" style={{ font: '600 13px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}>
-          Mensagens recebidas
-        </h2>
-      <HelpInfo ajudaId="integracoes.inbox" />
+        <HelpContext ajudaId="integracoes.inbox">
+          <h2 className="m-0" style={{ font: '600 13px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}>
+            Mensagens recebidas
+          </h2>
+        </HelpContext>
         <button type="button" onClick={() => { void leitura.recarregar(); }} className="orbita-chip cursor-pointer" aria-label="Atualizar mensagens">
           <RefreshCw className="w-3.5 h-3.5" />
         </button>

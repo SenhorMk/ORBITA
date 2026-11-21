@@ -3,6 +3,7 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import type { ReactNode } from 'react';
+import styles from './Modal.module.css';
 
 /**
  * Os quatro tamanhos do Design System. Não há um quinto: se um diálogo não
@@ -30,6 +31,8 @@ export interface ModalProps {
   /** A linha mono acima do título. Vermelha quando `destrutivo`. */
   eyebrow?: ReactNode;
   titulo: ReactNode;
+  /** Ajuda contextual ao lado do título, fora da grade e dos campos do corpo. */
+  ajuda?: ReactNode;
   /** Lida por leitores de tela; exigida pelo Radix mesmo quando não aparece. */
   descricao?: string;
   /** Esconde a descrição visualmente, mantendo-a acessível. */
@@ -67,6 +70,7 @@ export function Modal({
   tamanho = 'md',
   eyebrow,
   titulo,
+  ajuda,
   descricao,
   descricaoOculta = true,
   destrutivo = false,
@@ -90,7 +94,7 @@ export function Modal({
           }}
         />
         <DialogPrimitive.Content
-          className={ehDrawer ? 'orbita-modal orbita-modal--drawer' : 'orbita-modal'}
+          className={`orbita-modal ${styles.content} ${ehDrawer ? `orbita-modal--drawer ${styles.drawer}` : ''}`}
           style={{
             width: LARGURA[tamanho],
             backdropFilter: 'blur(var(--blur-modal)) saturate(1.4)',
@@ -100,19 +104,22 @@ export function Modal({
           onPointerDownOutside={naoDispensar}
           onInteractOutside={naoDispensar}
         >
-          <header className="flex items-start justify-between gap-4 px-6 pt-5 pb-4" style={{ borderBottom: '1px solid var(--line)' }}>
+          <header className={`flex shrink-0 items-start justify-between gap-4 px-6 pt-5 pb-4 ${styles.header}`} style={{ borderBottom: '1px solid var(--line)' }}>
             <div className="flex flex-col gap-1.5 min-w-0">
               {eyebrow && (
                 <span className="orbita-eyebrow" style={destrutivo ? { color: 'var(--danger)' } : undefined}>
                   {eyebrow}
                 </span>
               )}
-              <DialogPrimitive.Title
-                className="text-[23px] leading-tight font-semibold tracking-tight truncate"
-                style={{ fontFamily: 'var(--font-space-grotesk), sans-serif', color: 'var(--txt)' }}
-              >
-                {titulo}
-              </DialogPrimitive.Title>
+              <div className="flex items-center gap-2 min-w-0">
+                <DialogPrimitive.Title
+                  className="text-[23px] leading-tight font-semibold tracking-tight min-w-0 break-words"
+                  style={{ fontFamily: 'var(--font-space-grotesk), sans-serif', color: 'var(--txt)' }}
+                >
+                  {titulo}
+                </DialogPrimitive.Title>
+                {ajuda}
+              </div>
               {descricao && !descricaoOculta && (
                 <DialogPrimitive.Description className="text-xs" style={{ color: 'var(--txt2)' }}>
                   {descricao}
@@ -131,11 +138,11 @@ export function Modal({
             </DialogPrimitive.Close>
           </header>
 
-          <div className="px-6 py-5 overflow-y-auto flex-1">{children}</div>
+          <div className={`px-6 py-5 overflow-y-auto flex-1 min-h-0 ${styles.body}`}>{children}</div>
 
           {rodape && (
             <footer
-              className="flex items-center justify-between gap-3 px-6 py-4"
+              className={`flex shrink-0 items-center justify-between gap-3 px-6 py-4 ${styles.footer}`}
               style={{ borderTop: '1px solid var(--line)' }}
             >
               {rodape}

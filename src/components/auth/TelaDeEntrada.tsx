@@ -1,10 +1,11 @@
 'use client';
 
+import { HelpContext } from '@/components/help/HelpContext';
+
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { RegisterForm } from './RegisterForm';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * A primeira tela do ORBITA, nos tokens do Design System.
@@ -103,20 +104,21 @@ export function TelaDeEntrada({
         >
           <div className="flex flex-col" style={{ gap: 6 }}>
             <span className="orbita-eyebrow">{entrando ? 'Entrar' : 'Criar conta'}</span>
-            <h1
-              className="m-0"
-              style={{
-                fontFamily: 'var(--font-space-grotesk), sans-serif',
-                fontWeight: 500,
-                fontSize: 23,
-                lineHeight: 1.1,
-                letterSpacing: '-0.02em',
-                color: 'var(--txt)',
-              }}
-            >
-              {entrando ? 'Entrar no ORBITA' : 'Criar conta no ORBITA'}
-            </h1>
-      <HelpInfo ajudaId="auth.entrada" />
+            <HelpContext ajudaId="auth.entrada">
+              <h1
+                className="m-0"
+                style={{
+                  fontFamily: 'var(--font-space-grotesk), sans-serif',
+                  fontWeight: 500,
+                  fontSize: 23,
+                  lineHeight: 1.1,
+                  letterSpacing: '-0.02em',
+                  color: 'var(--txt)',
+                }}
+              >
+                {entrando ? 'Entrar no ORBITA' : 'Criar conta no ORBITA'}
+              </h1>
+            </HelpContext>
             <p className="m-0" style={{ fontSize: 12.5, color: 'var(--txt2)' }}>
               {entrando
                 ? 'Use o e-mail e a senha da sua conta.'

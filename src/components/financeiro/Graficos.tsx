@@ -1,5 +1,7 @@
 'use client';
 
+import { HelpContext } from '@/components/help/HelpContext';
+
 import type { ReactElement } from 'react';
 import {
   Area,
@@ -17,7 +19,6 @@ import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 import type { BarraDoDia, PontoDoFluxo } from './derivacoesDoFinanceiro';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Os dois gráficos do Financeiro, na mesma casca.
@@ -91,17 +92,18 @@ function PainelDeGrafico({ titulo, children }: { titulo: string; children: React
         border: '1px solid var(--line)',
       }}
     >
-      <h3
-        className="m-0 flex-none"
-        style={{
-          font: '500 14px/1.2 var(--font-space-grotesk), sans-serif',
-          letterSpacing: '-0.02em',
-          color: 'var(--txt)',
-        }}
-      >
-        {titulo}
-      </h3>
-      <HelpInfo ajudaId="financeiro.graficos" />
+      <HelpContext ajudaId="financeiro.graficos">
+        <h3
+          className="m-0 flex-none"
+          style={{
+            font: '500 14px/1.2 var(--font-space-grotesk), sans-serif',
+            letterSpacing: '-0.02em',
+            color: 'var(--txt)',
+          }}
+        >
+          {titulo}
+        </h3>
+      </HelpContext>
       <div className="flex-1 min-h-0" style={{ marginTop: 8 }}>
         <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 500, height: 160 }}>
           {children}

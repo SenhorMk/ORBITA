@@ -1,5 +1,7 @@
 'use client';
 
+import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
+
 import { useMemo, useState } from 'react';
 import { Package, Search } from 'lucide-react';
 
@@ -12,7 +14,6 @@ import {
 } from '@/components/ui/estados';
 import { isProdutoSynced } from '@/lib/utils';
 import { TabelaDeProdutos } from './TabelaDeProdutos';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Estoque & Produtos, na linguagem do produto novo.
@@ -138,22 +139,23 @@ export function EstoqueEProdutos({
   return (
     <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
 
-      <div className="flex items-start gap-8 flex-none">
+      <div className={`flex items-start gap-8 flex-none ${helpPageHeader}`}>
         <div className="flex flex-col flex-none" style={{ width: 'var(--titulo-col)', gap: 13 }}>
-          <h1
-            className="m-0"
-            style={{
-              fontFamily: 'var(--font-space-grotesk), sans-serif',
-              fontWeight: 500,
-              fontSize: 'var(--titulo-fs)',
-              lineHeight: 1.04,
-              letterSpacing: '-0.03em',
-              color: 'var(--txt)',
-            }}
-          >
-            Estoque &amp;<br />Produtos
-          </h1>
-      <HelpInfo ajudaId="estoque.lista" />
+          <HelpContext ajudaId="estoque.lista">
+            <h1
+              className="m-0"
+              style={{
+                fontFamily: 'var(--font-space-grotesk), sans-serif',
+                fontWeight: 500,
+                fontSize: 'var(--titulo-fs)',
+                lineHeight: 1.04,
+                letterSpacing: '-0.03em',
+                color: 'var(--txt)',
+              }}
+            >
+              Estoque &amp;<br />Produtos
+            </h1>
+          </HelpContext>
           <span style={{ font: '400 11px/1.4 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
             espelho do catálogo do Bling
           </span>

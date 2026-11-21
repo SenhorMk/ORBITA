@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizationPanel';
 import { Aviso } from './Aviso';
-import { HelpInfo } from '@/components/help/HelpInfo';
+import { HelpContext } from '@/components/help/HelpContext';
 
 const RespostaSchema = z.object({
   estado: z.literal('rascunho'), texto: z.string(), provedor: z.enum(['fake', 'google']),
@@ -54,11 +54,12 @@ export function PainelDaResposta({ fetchWithAuth, conversaId, compositorOcupado,
 
   return (
     <section aria-label="Resposta sugerida" className="flex flex-col gap-2 p-3">
-      <HelpInfo ajudaId="sac.rascunho" />
+      <HelpContext ajudaId="sac.rascunho">
       <button type="button" className="orbita-chip self-start cursor-pointer" disabled={estado.tipo === 'gerando'}
         onClick={() => void gerar()}>
         {estado.tipo === 'gerando' ? 'Gerando rascunho…' : 'Gerar rascunho de resposta'}
       </button>
+      </HelpContext>
       {estado.tipo === 'erro' && <Aviso tom="atencao">{estado.texto}</Aviso>}
       {estado.tipo === 'rascunho' && (
         <>

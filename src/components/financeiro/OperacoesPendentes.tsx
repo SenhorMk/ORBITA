@@ -15,7 +15,7 @@ import {
 } from '@/lib/config/operacaoFinanceiraContract';
 
 import type { BuscaAutenticada } from './useLeituraFinanceira';
-import { HelpInfo } from '@/components/help/HelpInfo';
+import { HelpContext } from '@/components/help/HelpContext';
 
 const MOTIVOS: Record<MotivoDeRevisao, string> = {
   sem_referencia: 'lançada antes da referência automática; confira manualmente no Bling',
@@ -200,11 +200,10 @@ export function OperacoesPendentes({
       className="flex flex-col gap-2 px-4 py-3 rounded-xl text-xs flex-none"
       style={{ background: 'var(--chip)', border: '1px solid var(--line)' }}
     >
-      <HelpInfo ajudaId="financeiro.pendencias" />
-      <p className="flex items-center gap-2" style={{ color: 'var(--warning)' }}>
+      <HelpContext ajudaId="financeiro.pendencias"><p className="flex items-center gap-2" style={{ color: 'var(--warning)' }}>
         <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden />
         Operações com resultado ainda não concluído. Não lance de novo: confira primeiro.
-      </p>
+      </p></HelpContext>
       {falhaDaLista && (
         <output>Não foi possível carregar as pendências agora; a lista pode estar incompleta. Abra a aba de novo para tentar.</output>
       )}

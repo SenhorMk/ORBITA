@@ -21,7 +21,7 @@
   box-shadow: 0 0 0 8px var(--modal, #191923);
 }
 .trigger {
-  align-self: flex-start;
+  align-self: center;
   width: 28px;
   height: 28px;
   min-width: 28px;
@@ -32,7 +32,23 @@
   color: inherit;
 }
 .trigger:hover { background: var(--chip, #30303d); color: var(--txt, #f5f5fa); }
-@media (pointer: coarse) { .trigger { width: 44px; height: 44px; } }
+.context {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+.context > :first-child { min-width: 0; }
+span.context { display: inline-flex; vertical-align: middle; }
+@media (max-width: 640px) {
+  .pageHeader { flex-wrap: wrap; row-gap: 16px; }
+  .pageHeader > :last-child {
+    flex-basis: 100%;
+    /* Os cabeçalhos definem a contagem desktop inline; no celular, duas colunas. */
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
 .overlay { position: fixed; inset: 0; z-index: 1000; background: rgb(0 0 0 / 65%); }
 .content {
   box-sizing: border-box;

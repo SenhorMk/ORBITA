@@ -1,9 +1,10 @@
 'use client';
 
+import { HelpContext } from '@/components/help/HelpContext';
+
 import { useCallback, useEffect, useState } from 'react';
 import { CreditCard, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 interface OrganizationEntitlements {
   plano_nome: string;
@@ -108,9 +109,9 @@ export function BillingPanel({ fetchWithAuth, organizacaoId, onRedirect }: Billi
     <div className="space-y-6 text-slate-200">
       <div className="flex items-center gap-2">
         <CreditCard className="w-5 h-5 text-[#0A84FF]" />
-        <h2 className="text-lg font-semibold text-white">Plano e faturamento</h2>
-      <HelpInfo ajudaId="billing.plano" />
-      <HelpInfo ajudaId="billing.limites" />
+        <HelpContext ajudaId="billing.plano">
+          <h2 className="text-lg font-semibold text-white">Plano e faturamento</h2>
+        </HelpContext>
       </div>
 
       {error && (
@@ -125,7 +126,7 @@ export function BillingPanel({ fetchWithAuth, organizacaoId, onRedirect }: Billi
         <>
           <div className="rounded-xl border border-white/10 bg-white/5 p-3 space-y-1 text-sm">
             <div className="flex items-center justify-between">
-              <span className="text-white font-semibold">{entitlements.plano_nome}</span>
+              <HelpContext ajudaId="billing.limites"><span className="text-white font-semibold">{entitlements.plano_nome}</span></HelpContext>
               <span className="text-xs text-slate-400">{entitlements.status}</span>
             </div>
             <p className="text-xs text-slate-400">Membros: até {entitlements.limite_membros}</p>

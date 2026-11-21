@@ -11,6 +11,7 @@ import { Pilula } from '@/components/ui/StatusPill';
 import { APARENCIA_DA_SITUACAO, ehTerminal, formatarVencimento, tituloVisivel } from './Movimentacoes';
 import type { TituloFinanceiro } from './useLeituraFinanceira';
 import { HelpInfo } from '@/components/help/HelpInfo';
+import { HelpContext } from '@/components/help/HelpContext';
 
 /**
  * O detalhe de uma movimentação que **não** é um pedido.
@@ -90,10 +91,10 @@ function Aviso({ children, alerta = false }: { children: ReactNode; alerta?: boo
   );
 }
 
-function Campo({ rotulo, children }: { rotulo: string; children: ReactNode }) {
+function Campo({ rotulo, children, ajuda }: { rotulo: string; children: ReactNode; ajuda?: ReactNode }) {
   return (
     <div className="flex flex-col" style={{ gap: 4 }}>
-      <span className="orbita-eyebrow">{rotulo}</span>
+      <div className="flex items-center gap-1 min-h-8"><span className="orbita-eyebrow">{rotulo}</span>{ajuda}</div>
       <span style={{ font: '400 13px/1.45 var(--font-archivo), sans-serif', color: 'var(--txt)' }}>
         {children}
       </span>
@@ -157,6 +158,7 @@ function DetalheDeMovimentacaoAvulsa({
         dispensavel={!processando}
         eyebrow="Correção de lançamento"
         titulo={texto.titulo}
+        ajuda={<HelpInfo ajudaId="financeiro.correcao" />}
         descricao={texto.corpo}
         rodape={
           <RodapeDeModal
@@ -181,8 +183,6 @@ function DetalheDeMovimentacaoAvulsa({
           />
         }
       >
-      <HelpInfo ajudaId="financeiro.correcao" />
-      <HelpInfo ajudaId="financeiro.detalhe" />
         <div className="flex flex-col" style={{ gap: 12 }}>
           <p className="m-0 text-sm leading-relaxed" style={{ color: 'var(--txt2)' }}>{texto.corpo}</p>
           <p className="m-0 text-sm" style={{ color: 'var(--txt)' }}>
@@ -209,11 +209,12 @@ function DetalheDeMovimentacaoAvulsa({
       tamanho="drawer"
       eyebrow={entrada ? 'Entrada' : 'Saída'}
       titulo={nome}
+      ajuda={<HelpInfo ajudaId="financeiro.detalhe" />}
       descricao={`Detalhe da movimentação financeira de ${formatarDinheiro(titulo.valor)}`}
       rodape={acao === 'excluir' || acao === 'cancelar' ? (
         <RodapeDeModal
           destrutiva={
-            <button
+            <HelpContext ajudaId="financeiro.correcao"><button
               type="button"
               onClick={() => { setAviso(null); setConfirmando({ id: titulo.id, acao }); }}
               className="orbita-chip cursor-pointer"
@@ -221,13 +222,11 @@ function DetalheDeMovimentacaoAvulsa({
             >
               <Trash2 className="w-3.5 h-3.5" />
               {TEXTO_DA_CONFIRMACAO[acao].botao}
-            </button>
+            </button></HelpContext>
           }
         />
       ) : undefined}
     >
-      <HelpInfo ajudaId="financeiro.correcao" />
-      <HelpInfo ajudaId="financeiro.detalhe" />
       <div className="flex flex-col" style={{ gap: 18 }}>
         <div className="flex items-center" style={{ gap: 12 }}>
           <span
@@ -261,10 +260,9 @@ function DetalheDeMovimentacaoAvulsa({
 
         <div className="grid grid-cols-2" style={{ gap: 16 }}>
           <Campo rotulo="Vencimento">{formatarVencimento(titulo.data_vencimento)}</Campo>
-          <Campo rotulo="Pagamento">
+          <Campo rotulo="Pagamento" ajuda={<HelpInfo ajudaId="financeiro.baixa" />}>
             {titulo.data_pagamento ? formatarVencimento(titulo.data_pagamento) : '—'}
           </Campo>
-      <HelpInfo ajudaId="financeiro.baixa" />
           <Campo rotulo="Categoria">{titulo.categoria?.descricao || 'Sem categoria'}</Campo>
           <Campo rotulo="Origem">{noBling ? `Bling · ${titulo.bling_id}` : 'Interno (Orbita)'}</Campo>
         </div>

@@ -202,10 +202,10 @@ function Rotulo({ para, children }: { para: string; children: React.ReactNode })
   );
 }
 
-function Secao({ titulo, children }: { titulo: string; children: React.ReactNode }) {
+function Secao({ titulo, children, ajuda }: { titulo: string; children: React.ReactNode; ajuda?: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-3">
-      <h4 className="orbita-eyebrow">{titulo}</h4>
+      <div className="flex items-center gap-2"><h4 className="orbita-eyebrow">{titulo}</h4>{ajuda}</div>
       {children}
     </section>
   );
@@ -458,8 +458,8 @@ export function ClienteEditModal({
             }
           />
         }
-      >
-      <HelpInfo ajudaId="clientes.editar" />
+       ajuda={<HelpInfo ajudaId="clientes.editar" />}>
+
         <div className="flex flex-col gap-6">
           {savedSuccess && (
             <output
@@ -532,8 +532,8 @@ export function ClienteEditModal({
             </div>
           </Secao>
 
-          <Secao titulo="Documento & tributação">
-      <HelpInfo ajudaId="clientes.tipo-documento" />
+          <Secao titulo="Documento & tributação" ajuda={<HelpInfo ajudaId="clientes.tipo-documento" />}>
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="cliente-edit-cpf-cnpj">CPF / CNPJ</Rotulo>
@@ -595,8 +595,8 @@ export function ClienteEditModal({
             </div>
           </Secao>
 
-          <Secao titulo="Endereço">
-      <HelpInfo ajudaId="clientes.endereco" />
+          <Secao titulo="Endereço" ajuda={<HelpInfo ajudaId="clientes.endereco" />}>
+
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="flex flex-col gap-1.5">
                 <Rotulo para="cliente-edit-cep">CEP</Rotulo>

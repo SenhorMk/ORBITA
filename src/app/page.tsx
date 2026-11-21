@@ -51,7 +51,7 @@ import { useLeituraDoPainel } from '@/components/painel/useLeituraDoPainel';
 import { VisaoGeral } from '@/components/painel/VisaoGeral';
 import { descreverErro } from '@/lib/erroLegivel';
 import { mensagemDeFalhaDeLogin } from '@/lib/auth/mensagemDeFalhaDeLogin';
-import { HelpInfo } from '@/components/help/HelpInfo';
+import { HelpContext } from '@/components/help/HelpContext';
 
 /**
  * Identidade do usuário logado — **e nada além disso**.
@@ -615,6 +615,7 @@ export default function Home() {
           por exemplo, é papel do rail, não de um botão nesta barra.
         */}
         <div className="orbita-acoes">
+          <HelpContext ajudaId="shell.org">
           <OrganizacaoAtiva
             organizacoes={listaDeOrganizacoes.organizacoes}
             ativa={listaDeOrganizacoes.activeOrg}
@@ -622,7 +623,7 @@ export default function Home() {
             trocandoParaId={listaDeOrganizacoes.switchingOrgId}
             onTrocar={listaDeOrganizacoes.handleSwitchOrganization}
           />
-      <HelpInfo ajudaId="shell.org" />
+          </HelpContext>
 
           <SeletorDeFundo fundo={fundo} onEscolher={escolherFundo} />
 
@@ -645,6 +646,7 @@ export default function Home() {
             botão colado na ação do dia a dia.
           */}
           {isOwner && (
+            <HelpContext ajudaId="integracoes.estado-job">
             <button
               type="button"
               onClick={() => { void handleSync(false); }}
@@ -660,8 +662,8 @@ export default function Home() {
                 aria-hidden
               />
             </button>
+            </HelpContext>
           )}
-      <HelpInfo ajudaId="integracoes.estado-job" />
 
           {activeTab === 'sales' && (
             <button
