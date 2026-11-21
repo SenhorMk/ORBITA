@@ -3,4 +3,8 @@
   .content { max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); }
   .drawer { top: 16px; bottom: 16px; right: 16px; }
   .header, .body, .footer { padding-left: 16px; padding-right: 16px; }
+  .footer { flex-wrap: wrap; }
+  .footer > :first-child { flex-basis: 100%; }
+  .footer > :last-child { margin-left: auto; }
+  .footer > :empty { display: none; }
 }

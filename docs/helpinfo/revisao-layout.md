@@ -12,6 +12,7 @@ Correção visual sobre main `f333ae6`, em branch isolada. Não altera catálogo
 - O acionador passava de 28 para 44 px em dispositivos de toque. Agora conserva 28 × 28 px em ambos, com foco visível e sem mudança de geometria. O botão de fechar ajuda mantém 44 px.
 - Cabeçalhos de indicadores extrapolavam 390 px. A composição afetada permite duas linhas e duas colunas de indicadores nesse tamanho; o desktop conserva sua composição. A regra fica em CSS Module, aplicada apenas aos cabeçalhos revisados.
 - O corpo flex do Modal não declarava `min-height: 0`, e cabeçalho/rodapé podiam encolher. Agora o corpo rola e os extremos permanecem acessíveis. O ajuste de margens e padding móvel está restrito ao Modal, sem alterar tokens globais.
+- A inspeção manual da venda em 390 px revelou sobreposição entre destino e ações no rodapé. Os grupos agora ficam em duas linhas no celular; teste específico verifica que a caixa do destino termina antes dos botões.
 
 ## Financeiro e evidência visual
 
@@ -28,6 +29,10 @@ Nova despesa em 390 × 844, com cabeçalho e rodapé acessíveis:
 
 ![Tema claro](evidencias-layout/despesa-390-claro.png)
 ![Tema escuro](evidencias-layout/despesa-390-escuro.png)
+
+Rodapé da venda manual em 390 px, com destino e ações separados:
+
+![Destino, ajuda e botões sem sobreposição](evidencias-layout/venda-390-escuro.png)
 
 Validados em 390 × 844, 768 × 1024, 1366 × 768 e 1920 × 1080, nos temas claro e escuro: despesa interna e contábil, rolagem até fornecedor, cadastro de fornecedor, detalhe avulso, confirmação de exclusão local e confirmação de cancelamento Bling. Nenhuma confirmação destrutiva foi executada. O tema claro é selecionado somente pela página de inspeção: o produto ainda não oferece um seletor de tema claro.
 

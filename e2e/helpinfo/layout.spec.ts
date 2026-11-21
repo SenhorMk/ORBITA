@@ -60,6 +60,7 @@ for (const [width, height] of resolutions) for (const theme of ['claro', 'escuro
     await page.getByRole('button', { name: 'Cadastrar Novo', exact: true }).click();
     await capture(page, 'cadastro-fornecedor');
     await page.locator('[data-help-id="financeiro.fornecedor"]').click();
+    await expect(page.getByRole('button', { name: 'Fechar ajuda', exact: true })).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog')).toHaveCount(1);
     await page.getByRole('button', { name: 'Fechar', exact: true }).click();
@@ -72,6 +73,7 @@ for (const [width, height] of resolutions) for (const theme of ['claro', 'escuro
       await page.getByRole('button', { name: action, exact: true }).click();
       await capture(page, `${screen}-confirmacao`);
       await page.locator('[data-help-id="financeiro.correcao"]').click();
+      await expect(page.getByRole('button', { name: 'Fechar ajuda', exact: true })).toBeFocused();
       await page.keyboard.press('Escape');
       await expect(page.getByRole('dialog')).toHaveCount(1);
       await page.getByRole('button', { name: 'Fechar', exact: true }).click();
@@ -89,6 +91,7 @@ test('66 ajudas: teclado, Escape, foco e largura em tela pequena', async ({ page
   await expect(triggers).toHaveCount(66);
   for (const trigger of await triggers.all()) {
     await trigger.press('Space');
+    await expect(page.getByRole('button', { name: 'Fechar ajuda', exact: true })).toBeFocused();
     await expect(page.getByRole('dialog')).toHaveCount(1);
     await withinViewport(page);
     await page.keyboard.press('Escape');
@@ -111,6 +114,7 @@ for (const width of [390, 1366]) for (const theme of ['claro', 'escuro']) {
     expect(header.scrollWidth).toBeLessThanOrEqual(header.width + 1);
     await test.info().attach('painel', { body: await page.screenshot(), contentType: 'image/png' });
     await help.click();
+    await expect(page.getByRole('button', { name: 'Fechar ajuda', exact: true })).toBeFocused();
     await withinViewport(page);
     await page.keyboard.press('Escape');
     await expect(help).toBeFocused();
@@ -126,10 +130,18 @@ for (const width of [390, 1366]) for (const theme of ['claro', 'escuro']) {
       const help = page.locator(`[data-help-id="${id}"]`);
       expect(await help.evaluate(el => Boolean(el.closest('header')))).toBe(true);
       await help.click();
+      // Aguarda a abertura e o autofocus do diálogo antes de enviar Escape.
+      await expect(page.getByRole('button', { name: 'Fechar ajuda', exact: true })).toBeFocused();
       await withinViewport(page);
       await page.keyboard.press('Escape');
       await expect(help).toBeFocused();
       await expect(page.getByRole('dialog')).toHaveCount(1);
+      if (surface === 'pedido' && width === 390) {
+        const choice = await page.locator('[data-help-id="vendas.sincronizar-checkbox"]').evaluate(el => el.parentElement!.getBoundingClientRect().toJSON());
+        const cancel = await page.getByRole('button', { name: 'Cancelar', exact: true }).boundingBox();
+        expect(choice.bottom).toBeLessThanOrEqual(cancel!.y);
+        expect(choice.width).toBeGreaterThan(250);
+      }
     }
   });
 }
