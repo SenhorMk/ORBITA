@@ -452,6 +452,10 @@
 }
 
 .historico {
+  /* Bloco de contenção dos rótulos `sr-only` (absolutos) das bolhas: sem ele,
+     escapam da rolagem do histórico, alongam a coluna e um foco a rola,
+     escondendo o cabeçalho. */
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
