@@ -682,6 +682,23 @@ describe('MensageriaDesktop — envio', () => {
       expect(screen.getByLabelText('Mensagem')).toHaveValue('rascunho em andamento');
     });
 
+    it('fechar o painel (Escape ou X) devolve o foco ao ⋯ que abriu o menu, e não ao <body>', async () => {
+      const fetchWithAuth = servidor({});
+      await abrirComposer(fetchWithAuth);
+      const gatilho = screen.getByRole('button', { name: 'Mais ações da conversa' });
+
+      await escolherNoMenu('Triagem da IA');
+      const painel = screen.getByRole('complementary', { name: 'Ferramentas da conversa' });
+      within(painel).getByRole('tab', { name: 'Triagem' }).focus();
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByRole('complementary', { name: 'Ferramentas da conversa' })).not.toBeInTheDocument();
+      await waitFor(() => expect(gatilho).toHaveFocus());
+
+      await escolherNoMenu('Identidade do cliente');
+      await userEvent.click(screen.getByRole('button', { name: 'Fechar ferramentas' }));
+      await waitFor(() => expect(gatilho).toHaveFocus());
+    });
+
     it('quem lê mensagens antigas não é puxado para o fim: aparece "Ir para as recentes"', async () => {
       const fetchWithAuth = servidor({});
       const dublado = criarEspelho();

@@ -237,6 +237,16 @@ function Conversa({ mensageria, fetchWithAuth, modo, painel, setPainel, oculta, 
 }) {
   const { selecionada } = mensageria;
   const atendimento = useAtendimento(fetchWithAuth, mensageria);
+  const secao = useRef<HTMLElement | null>(null);
+
+  // O painel é aberto por um item do ⋯, que já saiu da tela quando ele fecha.
+  // Sem destino, o foco cairia no <body>: devolve-o ao ⋯ que abriu o menu.
+  const fecharPainel = () => {
+    setPainel(null);
+    requestAnimationFrame(() => {
+      secao.current?.querySelector<HTMLButtonElement>('button[aria-label="Mais ações da conversa"]')?.focus();
+    });
+  };
 
   if (selecionada === null) {
     return (
@@ -251,7 +261,7 @@ function Conversa({ mensageria, fetchWithAuth, modo, painel, setPainel, oculta, 
 
   return (
     <>
-      <section aria-label="Conversa aberta" className={`${estilos.conversa} ${oculta ? estilos.oculto : ''}`}>
+      <section ref={secao} aria-label="Conversa aberta" className={`${estilos.conversa} ${oculta ? estilos.oculto : ''}`}>
         <CabecalhoDaConversa
           mensageria={mensageria}
           selecionada={selecionada}
@@ -267,7 +277,7 @@ function Conversa({ mensageria, fetchWithAuth, modo, painel, setPainel, oculta, 
         <PainelLateral
           aba={painel}
           aoTrocar={setPainel}
-          aoFechar={() => setPainel(null)}
+          aoFechar={fecharPainel}
           comoFolha={modo === 'compacto'}
           fetchWithAuth={fetchWithAuth}
           mensageria={mensageria}
