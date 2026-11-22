@@ -885,4 +885,27 @@ describe('MensageriaDesktop — rascunho por conversa', () => {
 
     expect(screen.getByLabelText('Mensagem')).toHaveValue('');
   });
+
+  it('sair da sessão descarta os rascunhos, mesmo voltando à mesma organização', async () => {
+    const fetchWithAuth = servidorQualquer();
+    const { espelho, conversas, mensagens } = criarEspelho();
+    const { trocar } = montar(espelho, ORG_A, fetchWithAuth);
+    await responder(conversas, [conversa(1, 'Ana')]);
+    await abrirNaLista('Ana', mensagens);
+    await userEvent.type(screen.getByLabelText('Mensagem'), 'rascunho antes de sair');
+
+    await act(async () => {
+      trocar(null);
+    });
+    // Mesma organização e mesma versão: a chave volta igual, e mesmo assim nada sobrevive.
+    await act(async () => {
+      trocar(ORG_A);
+    });
+    await responder(conversas, [conversa(1, 'Ana')]);
+    // Com a mesma chave, a seleção carimbada volta e a Ana já está aberta.
+    await responder(mensagens, []);
+
+    expect(screen.getByRole('heading', { name: 'Ana' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Mensagem')).toHaveValue('');
+  });
 });
