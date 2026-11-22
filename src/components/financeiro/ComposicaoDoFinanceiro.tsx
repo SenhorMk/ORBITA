@@ -1,6 +1,7 @@
 'use client';
 
 import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
+import styles from './Financeiro.module.css';
 
 import {
   AvisoDeAtualizacaoFalhada,
@@ -44,12 +45,11 @@ export function CabecalhoDoFinanceiro({
 }) {
   return (
     <div className={`flex items-center gap-8 flex-none ${helpPageHeader}`}>
-      <div className="flex flex-col gap-2 shrink-0">
+      <div className="flex flex-col gap-2 shrink-0" style={{ width: 'var(--titulo-col)' }}>
         <HelpContext ajudaId="financeiro.visao">
           <h1
-            className="m-0 flex-none"
+            className="m-0"
             style={{
-              width: 'var(--titulo-col)',
               fontFamily: 'var(--font-space-grotesk), sans-serif',
               fontWeight: 500,
               fontSize: 'var(--titulo-fs)',
@@ -75,6 +75,7 @@ export function CabecalhoDoFinanceiro({
 }
 
 export function CorpoDoFinanceiro({
+  ativo = true,
   estado,
   titulos,
   serie,
@@ -83,6 +84,7 @@ export function CorpoDoFinanceiro({
   onRecarregar,
   onAbrirDetalhe,
 }: {
+  ativo?: boolean;
   estado: EstadoDaLeitura;
   titulos: readonly TituloFinanceiro[];
   serie: readonly PontoDoFluxo[];
@@ -111,13 +113,12 @@ export function CorpoDoFinanceiro({
         <AvisoDeAtualizacaoFalhada detalhe={erroDeLeitura} recurso="o financeiro" />
       )}
 
-      <div
-        className="grid flex-1 min-h-0"
-        style={{ gridTemplateColumns: 'var(--financeiro-cols)', gap: 'var(--conteudo-gap)' }}
-      >
-        <div className="flex flex-col min-h-0 min-w-0" style={{ gap: 'var(--conteudo-gap)' }}>
-          <EntradasESaidas barras={barras} formatarDinheiro={formatarDinheiro} />
-          <FluxoDeCaixa serie={serie} formatarDinheiro={formatarDinheiro} />
+      <div className={styles.body}>
+        <div className={styles.charts}>
+          {ativo && <>
+            <EntradasESaidas barras={barras} formatarDinheiro={formatarDinheiro} />
+            <FluxoDeCaixa serie={serie} formatarDinheiro={formatarDinheiro} />
+          </>}
         </div>
 
         <div className="flex flex-col min-h-0 min-w-0">

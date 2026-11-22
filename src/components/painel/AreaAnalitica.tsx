@@ -1,4 +1,5 @@
 'use client';
+import responsive from '@/components/ui/Responsive.module.css';
 
 import type { Analise } from './metricasDoPainel';
 import { HelpContext } from '@/components/help/HelpContext';
@@ -95,7 +96,7 @@ function Serie({ analise }: { analise: Extract<Analise, { tipo: 'serie' }> }) {
         })}
       </div>
 
-      <div className="flex items-center justify-between" style={{ gap: 12 }}>
+      <div className={`flex items-center justify-between ${responsive.seriesFooter}`} style={{ gap: 12 }}>
         <span style={{ font: '400 10px/1 var(--font-archivo), sans-serif', opacity: 0.55 }}>
           {analise.pontos[0]?.rotulo}
         </span>

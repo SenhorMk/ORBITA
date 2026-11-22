@@ -100,9 +100,9 @@ test('66 ajudas: teclado, Escape, foco e largura em tela pequena', async ({ page
   }
 });
 
-for (const width of [390, 1366]) for (const theme of ['claro', 'escuro']) {
+for (const width of [390, 768, 1366]) for (const theme of ['claro', 'escuro']) {
   test(`Cabeçalho com indicadores ${width} ${theme}`, async ({ page }) => {
-    await page.setViewportSize({ width, height: 844 });
+    await page.setViewportSize({ width, height: width === 768 ? 1024 : width === 1366 ? 768 : 844 });
     await page.goto('/');
     await page.getByRole('button', { name: `Tema ${theme}`, exact: true }).click();
     await page.getByRole('button', { name: 'Inspecionar painel', exact: true }).click();
@@ -121,11 +121,23 @@ for (const width of [390, 1366]) for (const theme of ['claro', 'escuro']) {
   });
 
   test(`Outros modais ${width} ${theme}: produto, contato e venda manual`, async ({ page }) => {
-    await page.setViewportSize({ width, height: 844 });
+    await page.setViewportSize({ width, height: width === 768 ? 1024 : width === 1366 ? 768 : 844 });
     for (const [surface, id] of [['produto', 'estoque.produto'], ['contato', 'clientes.editar'], ['pedido', 'vendas.manual']]) {
       await page.goto('/');
       await page.getByRole('button', { name: `Tema ${theme}`, exact: true }).click();
       await page.getByRole('button', { name: `Inspecionar ${surface}`, exact: true }).click();
+      const draft = page.locator(surface === 'produto' ? '#product-detail-nome' : surface === 'contato' ? '#cliente-edit-nome' : '#manual-order-observacoes');
+      await draft.fill('Rascunho da inspeção visual');
+      if (surface === 'pedido' && theme === 'claro') {
+        const colors = await draft.evaluate(el => {
+          const style = getComputedStyle(el);
+          return { text: style.color, background: style.backgroundColor };
+        });
+        // O tema claro precisa de texto escuro sobre campo claro, inclusive no legado.
+        const rgb = (value: string) => value.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+        expect(Math.max(...rgb(colors.text))).toBeLessThan(80);
+        expect(Math.min(...rgb(colors.background))).toBeGreaterThan(200);
+      }
       await capture(page, surface);
       const help = page.locator(`[data-help-id="${id}"]`);
       expect(await help.evaluate(el => Boolean(el.closest('header')))).toBe(true);
@@ -136,6 +148,12 @@ for (const width of [390, 1366]) for (const theme of ['claro', 'escuro']) {
       await page.keyboard.press('Escape');
       await expect(help).toBeFocused();
       await expect(page.getByRole('dialog')).toHaveCount(1);
+      await expect(draft).toHaveValue('Rascunho da inspeção visual');
+      const lastField = page.getByRole('dialog').locator('input:visible:not(footer input), textarea:visible, select:visible').last();
+      await lastField.scrollIntoViewIfNeeded();
+      const fieldBox = (await lastField.boundingBox())!;
+      const footerBox = (await page.locator('[role="dialog"] footer').boundingBox())!;
+      expect(fieldBox.y + fieldBox.height).toBeLessThanOrEqual(footerBox.y + 1);
       if (surface === 'pedido' && width === 390) {
         const choice = await page.locator('[data-help-id="vendas.sincronizar-checkbox"]').evaluate(el => el.parentElement!.getBoundingClientRect().toJSON());
         const cancel = await page.getByRole('button', { name: 'Cancelar', exact: true }).boundingBox();
