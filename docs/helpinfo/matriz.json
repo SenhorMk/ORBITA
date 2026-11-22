@@ -796,14 +796,14 @@
     "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
     "anchors": [
       {
-        "line": 155,
+        "line": 109,
         "kind": "Ajuda contextual associada ao contexto"
       }
     ],
     "locations": [
       {
         "file": "src/components/mensageria/MensageriaDesktop.tsx",
-        "line": 155
+        "line": 109
       }
     ],
     "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
@@ -812,7 +812,7 @@
   {
     "id": "sac.envio",
     "area": "SAC / Atendimento",
-    "component": "src/components/mensageria/MensageriaDesktop.tsx",
+    "component": "src/components/mensageria/Compositor.tsx",
     "target": "Compositor",
     "surface": "Texto, fila humana, entrega e ambiguidade",
     "purpose": "Fila e confirmação da resposta humana",
@@ -824,14 +824,14 @@
     "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
     "anchors": [
       {
-        "line": 482,
+        "line": 68,
         "kind": "Ajuda contextual associada ao contexto"
       }
     ],
     "locations": [
       {
-        "file": "src/components/mensageria/MensageriaDesktop.tsx",
-        "line": 482
+        "file": "src/components/mensageria/Compositor.tsx",
+        "line": 68
       }
     ],
     "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
@@ -851,14 +851,14 @@
     "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
     "anchors": [
       {
-        "line": 80,
+        "line": 124,
         "kind": "Ajuda contextual associada ao contexto"
       }
     ],
     "locations": [
       {
         "file": "src/components/mensageria/BarraDoAtendimento.tsx",
-        "line": 80
+        "line": 124
       }
     ],
     "nominalReview": "Revisado para IA-first, takeover, devolução com resumo, nova mensagem e disponibilidade assíncrona do PR152.",
@@ -905,14 +905,14 @@
     "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
     "anchors": [
       {
-        "line": 113,
+        "line": 118,
         "kind": "Ajuda contextual associada ao contexto"
       }
     ],
     "locations": [
       {
         "file": "src/components/mensageria/PainelDaTriagem.tsx",
-        "line": 113
+        "line": 118
       }
     ],
     "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",

@@ -105,7 +105,10 @@ body {
   flex-direction: column;
   gap: var(--conteudo-gap);
   padding: var(--conteudo-pad);
-  overflow: hidden;
+  /* `clip`, e não `hidden`: recorta igual, mas não vira contêiner rolável. Com
+     `hidden`, um foco perto da borda (a barra de ações transborda no celular)
+     rolava o conteúdo de lado e o escondia sob o rail. */
+  overflow: clip;
 }
 
 /* A barra de ações: à direita, compacta, controles de 38px. Não é uma faixa

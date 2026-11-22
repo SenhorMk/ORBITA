@@ -1,22 +1,25 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle, MessageCircle, RefreshCw, Search, Send } from 'lucide-react';
+import { MessageCircle, RefreshCw, Search } from 'lucide-react';
 
 import { Pilula } from '@/components/ui/StatusPill';
 import { EstadoCarregando, EstadoDeErro, EstadoVazio } from '@/components/ui/estados';
 import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizationPanel';
 import type { SelecaoDeOrganizacao } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
-import type { ChatwootConversation, ChatwootMessage } from '@/types';
+import type { ChatwootConversation } from '@/types';
 import type { EspelhoDaMensageria } from './espelhoDaMensageria';
-import type { MensagemOtimista } from './estadoDaConversa';
 import { useMensageria, type Mensageria } from './useMensageria';
 import { Aviso } from './Aviso';
-import { BarraDoAtendimento } from './BarraDoAtendimento';
-import { PainelDaTriagem } from './PainelDaTriagem';
-import { PainelDaResposta } from './PainelDaResposta';
-import { PainelDoCliente } from './PainelDoCliente';
+import { Avatar, horaCurta } from './Avatar';
+import { AvisosDoAtendimento, useAtendimento } from './BarraDoAtendimento';
+import { CabecalhoDaConversa } from './CabecalhoDaConversa';
+import { Compositor } from './Compositor';
+import { Historico } from './Historico';
+import { PainelLateral, type AbaDoPainel } from './PainelLateral';
+import { useModoDoLayout, type ModoDoLayout } from './useModoDoLayout';
 import { HelpInfo } from '@/components/help/HelpInfo';
+import estilos from './mensageria.module.css';
 
 type Filtro = 'open' | 'resolved' | 'all';
 
@@ -31,39 +34,19 @@ function finalDoTelefone(telefone: string | undefined): string {
   return (telefone ?? '').replace(/\D/g, '').slice(-8);
 }
 
-/** As iniciais de um contato, ou o marcador de atendimento quando não há nome. */
-function Avatar({ nome, tamanho }: { readonly nome: string | undefined; readonly tamanho: number }) {
-  return (
-    <span
-      className="flex items-center justify-center shrink-0"
-      aria-hidden
-      style={{
-        width: tamanho,
-        height: tamanho,
-        borderRadius: Math.round(tamanho / 3),
-        background: 'var(--chip)',
-        border: '1px solid var(--line)',
-        font: `600 ${Math.round(tamanho / 3)}px/1 var(--font-archivo), sans-serif`,
-        color: 'var(--txt2)',
-      }}
-    >
-      {nome && nome.trim() ? nome.trim().substring(0, 2).toUpperCase() : 'SA'}
-    </span>
-  );
-}
-
-function horaCurta(iso: string | undefined): string {
+/** Hora para hoje; dia e mês para os outros dias. */
+function quandoNaLista(iso: string | undefined): string {
   if (!iso) return '';
   const data = new Date(iso);
-  return Number.isNaN(data.getTime()) ? '' : data.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  if (Number.isNaN(data.getTime())) return '';
+  return data.toDateString() === new Date().toDateString()
+    ? horaCurta(iso)
+    : data.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
 }
 
 /**
  * O indicador de tempo real — que só diz "tempo real" quando **há** tempo real.
- *
- * O compositor anterior trazia o texto "Digite sua resposta em tempo real…"
- * escrito fixo no `placeholder`, independentemente de existir subscription. A
- * afirmação agora acompanha o estado confirmado do canal: `SUBSCRIBED` ou nada.
+ * A afirmação acompanha o estado confirmado do canal: `SUBSCRIBED` ou nada.
  */
 function Conexao({ ativo, rotulo }: { readonly ativo: boolean; readonly rotulo: string }) {
   return (
@@ -74,7 +57,7 @@ function Conexao({ ativo, rotulo }: { readonly ativo: boolean; readonly rotulo: 
   );
 }
 
-/** Uma conversa na lista: contato, telefone, hora e estado. */
+/** Uma conversa na lista: contato, telefone e hora; "Resolvida" só quando é. */
 function LinhaDeConversa({
   conversa,
   aberta,
@@ -85,42 +68,16 @@ function LinhaDeConversa({
   readonly aoAbrir: () => void;
 }) {
   return (
-    <button
-      type="button"
-    onClick={aoAbrir}
-      aria-current={aberta ? 'true' : undefined}
-      className="w-full flex items-center gap-3 text-left cursor-pointer"
-      style={{
-        padding: '12px 14px',
-        borderBottom: '1px solid var(--line)',
-        borderLeft: `3px solid ${aberta ? 'var(--accent)' : 'transparent'}`,
-        background: aberta ? 'var(--chip)' : 'transparent',
-      }}
-    >
-      <Avatar nome={conversa.contact?.name} tamanho={36} />
-      <span className="flex flex-col min-w-0 flex-1" style={{ gap: 3 }}>
-        <span className="flex items-center justify-between gap-2">
-          <span
-            className="truncate"
-            style={{ font: '600 12.5px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}
-          >
-            {conversa.contact?.name || 'Contato sem nome'}
-          </span>
-          <span
-            className="shrink-0"
-            style={{ fontFamily: 'var(--font-jetbrains-mono), monospace', fontSize: 10, color: 'var(--txt3)' }}
-          >
-            {horaCurta(conversa.updated_at)}
-          </span>
+    <button type="button" onClick={aoAbrir} aria-current={aberta ? 'true' : undefined} className={estilos.linha}>
+      <Avatar nome={conversa.contact?.name} tamanho={38} />
+      <span className="flex flex-col min-w-0 flex-1" style={{ gap: 4 }}>
+        <span className={estilos.linhaTopo}>
+          <span className={estilos.linhaNome}>{conversa.contact?.name || 'Contato sem nome'}</span>
+          <span className={estilos.linhaHora}>{quandoNaLista(conversa.updated_at)}</span>
         </span>
-        <span className="flex items-center justify-between gap-2">
-          <span className="truncate" style={{ fontSize: 11, color: 'var(--txt3)' }}>
-            {conversa.contact?.phone_number || 'Sem telefone'}
-          </span>
-          <Pilula
-            rotulo={conversa.status === 'open' ? 'Aberta' : 'Resolvida'}
-            cor={conversa.status === 'open' ? 'var(--info)' : 'var(--accent)'}
-          />
+        <span className={estilos.linhaBase}>
+          <span className={estilos.linhaDetalhe}>{conversa.contact?.phone_number || 'Sem telefone'}</span>
+          {conversa.status !== 'open' && <span className={estilos.marca}>Resolvida</span>}
         </span>
       </span>
     </button>
@@ -143,25 +100,22 @@ function CabecalhoDaLista({
 }) {
   const abertas = (mensageria.conversas ?? []).filter((c) => c.status === 'open').length;
   return (
-    <header className="flex flex-col flex-none gap-3" style={{ padding: 14, borderBottom: '1px solid var(--line)' }}>
-      <div className="flex items-center justify-between gap-2">
-        <h2
-          className="flex items-center m-0"
-          style={{ gap: 7, font: '600 13px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}
-        >
+    <header className={estilos.cabecalhoDaLista}>
+      <div className="flex items-center" style={{ gap: 6 }}>
+        <h2 className={estilos.tituloDaLista}>
           <MessageCircle className="w-4 h-4" aria-hidden />
           Atendimento
         </h2>
-      <HelpInfo ajudaId="sac.lista" />
+        <HelpInfo ajudaId="sac.lista" />
         <button
           type="button"
           onClick={mensageria.sincronizar}
           disabled={mensageria.sincronizando}
-          className="orbita-chip cursor-pointer"
-          style={{ height: 30 }}
+          className={estilos.botaoIcone}
+          aria-label={mensageria.sincronizando ? 'Sincronizando…' : 'Sincronizar'}
+          title="Sincronizar com o Chatwoot"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${mensageria.sincronizando ? 'animate-spin' : ''}`} aria-hidden />
-          {mensageria.sincronizando ? 'Sincronizando…' : 'Sincronizar'}
         </button>
       </div>
 
@@ -186,20 +140,14 @@ function CabecalhoDaLista({
         />
       </div>
 
-      <fieldset className="flex gap-1.5 m-0 p-0" style={{ border: 0 }} aria-label="Filtro de conversas">
+      <fieldset className={estilos.filtros} style={{ border: '1px solid var(--line)' }} aria-label="Filtro de conversas">
         {(Object.keys(ROTULO_DO_FILTRO) as Filtro[]).map((opcao) => (
           <button
             key={opcao}
             type="button"
             onClick={() => aoFiltrar(opcao)}
             aria-pressed={filtro === opcao}
-            className="orbita-chip cursor-pointer flex-1 justify-center"
-            style={{
-              height: 30,
-              fontSize: 11,
-              color: filtro === opcao ? 'var(--txt)' : 'var(--txt3)',
-              borderColor: filtro === opcao ? 'var(--bar)' : 'var(--line)',
-            }}
+            className={estilos.filtro}
           >
             {opcao === 'open' ? `${ROTULO_DO_FILTRO[opcao]} (${abertas})` : ROTULO_DO_FILTRO[opcao]}
           </button>
@@ -217,6 +165,8 @@ function ListaDeConversas({
   filtro,
   aoFiltrar,
   visiveis,
+  aoAbrir,
+  oculta,
 }: {
   readonly mensageria: Mensageria;
   readonly busca: string;
@@ -224,17 +174,16 @@ function ListaDeConversas({
   readonly filtro: Filtro;
   readonly aoFiltrar: (filtro: Filtro) => void;
   readonly visiveis: readonly ChatwootConversation[];
+  readonly aoAbrir: (conversa: ChatwootConversation) => void;
+  readonly oculta: boolean;
 }) {
   const { conversas, carregandoConversas, erroDeConversas, selecionada } = mensageria;
 
   return (
-    <section
-      className="flex flex-col min-h-0 overflow-hidden"
-      style={{ width: 340, flex: 'none', borderRadius: 22, background: 'var(--glass2)', border: '1px solid var(--line)' }}
-    >
+    <section aria-label="Conversas" className={`${estilos.lista} ${oculta ? estilos.oculto : ''}`}>
       <CabecalhoDaLista mensageria={mensageria} busca={busca} aoBuscar={aoBuscar} filtro={filtro} aoFiltrar={aoFiltrar} />
 
-      <div className="flex-1 min-h-0 overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
+      <div className={estilos.rolagem} style={{ scrollbarGutter: 'stable' }}>
         {carregandoConversas && <EstadoCarregando mensagem="Lendo as conversas desta organização…" />}
 
         {!carregandoConversas && erroDeConversas !== null && (
@@ -264,7 +213,7 @@ function ListaDeConversas({
             key={conversa.id_local}
             conversa={conversa}
             aberta={selecionada?.id_local === conversa.id_local}
-            aoAbrir={() => mensageria.selecionar(conversa)}
+            aoAbrir={() => aoAbrir(conversa)}
           />
         ))}
       </div>
@@ -272,301 +221,80 @@ function ListaDeConversas({
   );
 }
 
-/** O cabeçalho da conversa aberta: quem é, se há tempo real, e resolver/reabrir. */
-function CabecalhoDaConversa({
-  mensageria,
-  selecionada,
-}: {
-  readonly mensageria: Mensageria;
-  readonly selecionada: ChatwootConversation;
-}) {
-  return (
-    <header
-      className="flex items-center justify-between flex-none gap-3"
-      style={{ padding: 14, borderBottom: '1px solid var(--line)' }}
-    >
-      <div className="flex items-center min-w-0" style={{ gap: 10 }}>
-        <Avatar nome={selecionada.contact?.name} tamanho={38} />
-        <div className="flex flex-col min-w-0" style={{ gap: 3 }}>
-          <h2
-            className="m-0 truncate"
-            style={{ font: '600 14px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}
-          >
-            {selecionada.contact?.name || 'Contato sem nome'}
-          </h2>
-          <span className="truncate" style={{ fontSize: 11, color: 'var(--txt3)' }}>
-            {selecionada.contact?.phone_number || selecionada.contact?.email || 'Sem telefone'}
-          </span>
-        </div>
-      </div>
-
-      <div className="flex items-center flex-none" style={{ gap: 10 }}>
-        <Conexao ativo={mensageria.tempoRealDeMensagens} rotulo="Histórico" />
-        <button
-          type="button"
-          onClick={mensageria.alternarStatus}
-          disabled={mensageria.alterandoStatus}
-          className="orbita-chip cursor-pointer"
-        >
-          <CheckCircle className="w-3.5 h-3.5" aria-hidden />
-          {mensageria.alterandoStatus
-            ? 'Alterando…'
-            : selecionada.status === 'open'
-              ? 'Marcar resolvida'
-              : 'Reabrir conversa'}
-        </button>
-      </div>
-    </header>
-  );
-}
-
-/** Uma mensagem do espelho — histórico de verdade, já registrado. */
-function Bolha({ mensagem }: { readonly mensagem: ChatwootMessage }) {
-  const nossa = mensagem.message_type === 'outgoing' || mensagem.message_type === '1';
-  return (
-    <article
-      className="flex flex-col max-w-[min(560px,78%)]"
-      style={{
-        gap: 4,
-        alignSelf: nossa ? 'flex-end' : 'flex-start',
-        padding: '10px 13px',
-        borderRadius: 16,
-        background: nossa ? 'var(--chip)' : 'var(--glass2)',
-        border: `1px solid ${nossa ? 'var(--bar)' : 'var(--line)'}`,
-      }}
-    >
-      <span className="orbita-eyebrow">{nossa ? 'Você' : mensagem.sender_name || 'Contato'}</span>
-      <p className="m-0" style={{ font: '400 12.5px/1.5 var(--font-archivo), sans-serif', color: 'var(--txt)' }}>
-        {mensagem.content}
-      </p>
-      <span
-        className="self-end"
-        style={{ fontFamily: 'var(--font-jetbrains-mono), monospace', fontSize: 9.5, color: 'var(--txt3)' }}
-      >
-        {horaCurta(mensagem.created_at)}
-      </span>
-    </article>
-  );
-}
-
-/** O rótulo, a cor e a frase de cada estado de um envio que ainda não é histórico. */
-const APRESENTACAO_DO_ENVIO: Readonly<Record<MensagemOtimista['estado'], { readonly rotulo: string; readonly cor: string; readonly nota: string | null }>> = {
-  enviando: { rotulo: 'Enviando…', cor: 'var(--line)', nota: null },
-  pendente: { rotulo: 'Na fila de envio', cor: 'var(--line)', nota: 'Registrada. Aparece como enviada quando o Chatwoot confirmar.' },
-  sem_resposta: { rotulo: 'Sem resposta do servidor', cor: 'var(--warning)', nota: 'Tentar de novo repete o mesmo pedido: não cria uma segunda mensagem.' },
-  falhou: { rotulo: 'Não enviada', cor: 'var(--danger)', nota: 'O servidor recusou o pedido: nada foi registrado nem enviado.' },
-  incerta: { rotulo: 'Entrega não confirmada', cor: 'var(--warning)', nota: null },
-  recusada: { rotulo: 'Recusada pelo Chatwoot', cor: 'var(--danger)', nota: 'O Chatwoot não aplicou esta mensagem. Corrija a causa antes de enviar de novo.' },
-  invalidada: { rotulo: 'Não enviada', cor: 'var(--danger)', nota: 'O atendimento mudou de responsável antes do envio; nada saiu.' },
-};
-
 /**
- * Uma mensagem que ainda não é histórico — e que não pode parecer que é.
- *
- * O contorno tracejado e o rótulo dizem o estado real. Ela só vira histórico
- * quando o worker grava o recibo do Chatwoot (MSG-008); até lá, nenhum estado
- * afirma entrega. Só aparece botão onde agir é seguro: repetir o mesmo comando
- * (sem resposta) ou reescrever o que comprovadamente não saiu (falhou,
- * recusada). Desconhecida não tem botão: pode ter chegado.
+ * A conversa aberta: cabeçalho compacto, histórico com quase toda a altura e o
+ * compositor fixo no pé. As ferramentas ficam no ⋯ e abrem no painel lateral,
+ * que nunca empurra o compositor para fora.
  */
-function BolhaNaoConfirmada({
-  otimista,
-  aoTentarDeNovo,
-  aoRecuperar,
-}: {
-  readonly otimista: MensagemOtimista;
-  readonly aoTentarDeNovo: () => void;
-  readonly aoRecuperar: () => void;
+function Conversa({ mensageria, fetchWithAuth, modo, painel, setPainel, oculta, aoVoltar }: {
+  readonly mensageria: Mensageria;
+  readonly fetchWithAuth: AuthenticatedFetch;
+  readonly modo: ModoDoLayout;
+  readonly painel: AbaDoPainel | null;
+  readonly setPainel: (aba: AbaDoPainel | null) => void;
+  readonly oculta: boolean;
+  readonly aoVoltar: (() => void) | null;
 }) {
-  const { rotulo, cor, nota } = APRESENTACAO_DO_ENVIO[otimista.estado];
-  const emAndamento = otimista.estado === 'enviando' || otimista.estado === 'pendente';
-  return (
-    <article
-      className="flex flex-col max-w-[min(560px,78%)] self-end"
-      style={{
-        gap: 4,
-        padding: '10px 13px',
-        borderRadius: 16,
-        background: 'transparent',
-        border: `1px dashed ${cor}`,
-      }}
-    >
-      <span className="orbita-eyebrow" style={{ color: emAndamento ? 'var(--txt3)' : cor }}>
-        {rotulo}
-      </span>
-      <p className="m-0" style={{ font: '400 12.5px/1.5 var(--font-archivo), sans-serif', color: 'var(--txt2)' }}>
-        {otimista.conteudo}
-      </p>
-      {otimista.erro !== null && (
-        <output className="m-0 block" role={otimista.estado === 'falhou' ? 'alert' : undefined} style={{ fontSize: 11, color: 'var(--txt2)' }}>
-          {otimista.erro}
-        </output>
-      )}
-      {nota !== null && (
-        <p className="m-0" style={{ fontSize: 10.5, color: 'var(--txt3)' }}>
-          {nota}
-        </p>
-      )}
-      {otimista.estado === 'sem_resposta' && (
-        <button type="button" onClick={aoTentarDeNovo} className="orbita-chip cursor-pointer self-start" style={{ height: 28, fontSize: 11 }}>
-          Tentar de novo
-        </button>
-      )}
-      {(otimista.estado === 'falhou' || otimista.estado === 'recusada' || otimista.estado === 'invalidada') && (
-        <button type="button" onClick={aoRecuperar} className="orbita-chip cursor-pointer self-start" style={{ height: 28, fontSize: 11 }}>
-          Recuperar texto
-        </button>
-      )}
-    </article>
-  );
-}
-
-/** O histórico rolável, com carregando, erro e vazio distintos entre si. */
-function Historico({ mensageria }: { readonly mensageria: Mensageria }) {
-  const area = useRef<HTMLDivElement | null>(null);
-  const { historico, otimistas } = mensageria;
-
-  // Rolar pelo `scrollTop` da própria área, e não por `scrollIntoView` no fim:
-  // é a mesma rolagem, sem depender de uma API que o jsdom não implementa nem
-  // de um nó vazio só para servir de âncora.
-  useEffect(() => {
-    if (area.current) area.current.scrollTop = area.current.scrollHeight;
-  }, [historico.length, otimistas.length]);
-
-  const vazio =
-    !mensageria.carregandoHistorico &&
-    mensageria.erroDeHistorico === null &&
-    historico.length === 0 &&
-    otimistas.length === 0;
-
-  return (
-    <div ref={area} className="flex-1 min-h-0 overflow-y-auto flex flex-col" style={{ padding: 18, gap: 10 }}>
-      {mensageria.carregandoHistorico && <EstadoCarregando mensagem="Lendo o histórico desta conversa…" />}
-
-      {mensageria.erroDeHistorico !== null && (
-        <EstadoDeErro
-          titulo="Não foi possível ler o histórico"
-          detalhe={mensageria.erroDeHistorico}
-          onTentarDeNovo={mensageria.recarregarHistorico}
-        />
-      )}
-
-      {vazio && (
-        <EstadoVazio
-          titulo="Conversa sem mensagens"
-          descricao="Esta conversa existe no espelho, mas não tem nenhuma mensagem registrada."
-        />
-      )}
-
-      {historico.map((mensagem) => (
-        <Bolha key={mensagem.id_local} mensagem={mensagem} />
-      ))}
-
-      {otimistas.map((otimista) => (
-        <BolhaNaoConfirmada
-          key={otimista.id}
-          otimista={otimista}
-          aoTentarDeNovo={() => mensageria.tentarDeNovo(otimista.id)}
-          aoRecuperar={() => mensageria.recuperarRascunho(otimista.id)}
-        />
-      ))}
-    </div>
-  );
-}
-
-/** O compositor, e o bloqueio honesto quando o provedor se disse indisponível. */
-function Compositor({ mensageria }: { readonly mensageria: Mensageria }) {
-  const bloqueado = mensageria.integracaoIndisponivel !== null;
-  return (
-    <div className="flex flex-col flex-none" style={{ gap: 8, padding: 14, borderTop: '1px solid var(--line)' }}>
-      <HelpInfo ajudaId="sac.envio" />
-      {bloqueado && (
-        <Aviso tom="atencao">
-          Integração Chatwoot indisponível para esta organização — {mensageria.integracaoIndisponivel}. O histórico
-          espelhado continua legível; o envio volta quando a conexão estiver configurada.
-        </Aviso>
-      )}
-
-      <form
-        className="flex items-center"
-        style={{ gap: 10 }}
-        onSubmit={(evento) => {
-          evento.preventDefault();
-          mensageria.enviar();
-        }}
-      >
-        <input
-          type="text"
-          aria-label="Mensagem"
-          placeholder={bloqueado ? 'Envio indisponível nesta organização' : 'Escreva sua resposta'}
-          value={mensageria.rascunho}
-          onChange={(evento) => mensageria.escreverRascunho(evento.target.value)}
-          disabled={bloqueado}
-          className="orbita-campo flex-1 min-w-0"
-        />
-        <button
-          type="submit"
-          disabled={mensageria.enviando || mensageria.rascunho.trim() === '' || bloqueado}
-          className="orbita-acao shrink-0 cursor-pointer"
-        >
-          <Send className="w-4 h-4" aria-hidden />
-          {mensageria.enviando ? 'Enviando…' : 'Enviar'}
-        </button>
-      </form>
-    </div>
-  );
-}
-
-/** A coluna da direita: cabeçalho, histórico e compositor da conversa aberta. */
-function Conversa({ mensageria, fetchWithAuth }: { readonly mensageria: Mensageria; readonly fetchWithAuth: AuthenticatedFetch }) {
   const { selecionada } = mensageria;
+  const atendimento = useAtendimento(fetchWithAuth, mensageria);
+  const secao = useRef<HTMLElement | null>(null);
+
+  // O painel é aberto por um item do ⋯, que já saiu da tela quando ele fecha.
+  // Sem destino, o foco cairia no <body>: devolve-o ao ⋯ que abriu o menu.
+  const fecharPainel = () => {
+    setPainel(null);
+    requestAnimationFrame(() => {
+      secao.current?.querySelector<HTMLButtonElement>('button[aria-label="Mais ações da conversa"]')?.focus();
+    });
+  };
 
   if (selecionada === null) {
     return (
-      <section
-        className="flex flex-col flex-1 min-w-0 items-center justify-center"
-        style={{ borderRadius: 22, background: 'var(--glass2)', border: '1px solid var(--line)' }}
-      >
+      <section className={`${estilos.conversa} items-center justify-center ${oculta ? estilos.oculto : ''}`}>
         <EstadoVazio
           titulo="Nenhuma conversa selecionada"
-          descricao="Escolha uma conversa na lista à esquerda para ver o histórico espelhado e responder."
+          descricao="Escolha uma conversa na lista para ver o histórico espelhado e responder."
         />
       </section>
     );
   }
 
   return (
-    <section
-      className="flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden"
-      style={{ borderRadius: 22, background: 'var(--glass2)', border: '1px solid var(--line)' }}
-    >
-      <CabecalhoDaConversa mensageria={mensageria} selecionada={selecionada} />
-      <Historico mensageria={mensageria} />
-      <div className="flex-none min-h-0 overflow-y-auto" style={{ maxHeight: '45%' }}>
-        <BarraDoAtendimento fetchWithAuth={fetchWithAuth} mensageria={mensageria} />
-        <PainelDaTriagem fetchWithAuth={fetchWithAuth} conversaId={selecionada.id_local} />
-        <PainelDaResposta
-          key={JSON.stringify([selecionada.id_local, mensageria.historico.map((m) => [m.id_local, m.updated_at])])}
-          fetchWithAuth={fetchWithAuth}
-          conversaId={selecionada.id_local}
-          compositorOcupado={mensageria.rascunho.trim() !== ''}
-          usar={mensageria.escreverRascunho}
+    <>
+      <section ref={secao} aria-label="Conversa aberta" className={`${estilos.conversa} ${oculta ? estilos.oculto : ''}`}>
+        <CabecalhoDaConversa
+          mensageria={mensageria}
+          selecionada={selecionada}
+          atendimento={atendimento}
+          abrirPainel={setPainel}
+          aoVoltar={aoVoltar}
         />
-        <PainelDoCliente fetchWithAuth={fetchWithAuth} conversaId={selecionada.id_local} />
-      </div>
-      <Compositor mensageria={mensageria} />
-    </section>
+        <AvisosDoAtendimento atendimento={atendimento} />
+        <Historico key={selecionada.id_local} mensageria={mensageria} />
+        <Compositor mensageria={mensageria} />
+      </section>
+      {painel !== null && (
+        <PainelLateral
+          aba={painel}
+          aoTrocar={setPainel}
+          aoFechar={fecharPainel}
+          comoFolha={modo === 'compacto'}
+          fetchWithAuth={fetchWithAuth}
+          mensageria={mensageria}
+          atendimento={atendimento}
+        />
+      )}
+    </>
   );
 }
 
 /**
- * A Mensageria desktop do Orbita.
+ * A central de mensagens do Orbita.
  *
- * Duas colunas dentro da altura da `AppWindow`, sem altura fixa nenhuma: a
- * versão anterior forçava `h-[720px]`, o que sobrava da janela em 1366×768 —
- * empurrando o compositor para fora da área visível e obrigando a rolar a
- * página inteira — e faltava em 1920×1080, deixando uma faixa vazia embaixo.
- * Aqui as duas colunas ocupam o espaço que existe e rolam por dentro.
+ * Lista à esquerda, conversa no centro e ferramentas sob demanda à direita,
+ * dentro da altura da `AppWindow`, sem altura fixa: cada coluna rola por
+ * dentro. Em larguras menores a lista cede lugar ao painel, e no celular lista
+ * e conversa se alternam, com voltar. O modo vem da largura da própria central.
  *
  * O escopo é a organização ativa verificada, e ela vem de fora, dos Tickets
  * 06/07 (`SelecaoDeOrganizacao`). Esta tela não é uma segunda fonte de tenant.
@@ -589,6 +317,10 @@ export function MensageriaDesktop({
   const mensageria = useMensageria(fetchWithAuth, selecao, espelho);
   const [busca, setBusca] = useState('');
   const [filtro, setFiltro] = useState<Filtro>('open');
+  const [painel, setPainel] = useState<AbaDoPainel | null>(null);
+  // No celular, voltar mostra a lista sem fechar a conversa: o rascunho fica.
+  const [listaNoCelular, setListaNoCelular] = useState(false);
+  const [modo, medir] = useModoDoLayout();
 
   const { conversas, selecionar } = mensageria;
   const atendidoRef = useRef<string | null>(null);
@@ -621,8 +353,13 @@ export function MensageriaDesktop({
     );
   }
 
+  const aberta = mensageria.selecionada !== null;
+  const compacto = modo === 'compacto';
+  const listaOculta = compacto ? aberta && !listaNoCelular : modo === 'medio' && aberta && painel !== null;
+  const conversaOculta = compacto && (!aberta || listaNoCelular);
+
   return (
-    <div className="flex flex-1 min-h-0" style={{ gap: 16 }}>
+    <div ref={medir} className={estilos.raiz} data-modo={modo}>
       <ListaDeConversas
         mensageria={mensageria}
         busca={busca}
@@ -630,8 +367,21 @@ export function MensageriaDesktop({
         filtro={filtro}
         aoFiltrar={setFiltro}
         visiveis={visiveis}
+        aoAbrir={(conversa) => {
+          setListaNoCelular(false);
+          selecionar(conversa);
+        }}
+        oculta={listaOculta}
       />
-      <Conversa mensageria={mensageria} fetchWithAuth={fetchWithAuth} />
+      <Conversa
+        mensageria={mensageria}
+        fetchWithAuth={fetchWithAuth}
+        modo={modo}
+        painel={aberta ? painel : null}
+        setPainel={setPainel}
+        oculta={conversaOculta}
+        aoVoltar={compacto ? () => { setPainel(null); setListaNoCelular(true); } : null}
+      />
     </div>
   );
 }

@@ -1,18 +1,29 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { UserCheck } from 'lucide-react';
 
 import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizationPanel';
 import { Aviso } from './Aviso';
 import { useControle, type AcaoDoAtendimento, type ControleVisto } from './useControle';
 import type { Mensageria } from './useMensageria';
 import { HelpInfo } from '@/components/help/HelpInfo';
+import estilos from './mensageria.module.css';
 
 function rotuloDoControle(controle: ControleVisto): string {
   if (controle.modo === 'AI') return controle.automacaoAtiva ? 'Automação responde' : 'Sem atendente';
   if (controle.modo === 'HUMAN_REQUIRED') return 'Aguardando atendente';
   if (controle.souResponsavel) return 'Com você';
   return controle.responsavelId === null ? 'Sem atendente ativo' : 'Com outro atendente';
+}
+
+/** A cor do estado: a mesma leitura do rótulo, nunca no lugar dele. */
+function corDoControle(controle: ControleVisto): string {
+  if (controle.modo === 'AI') return controle.automacaoAtiva ? 'var(--accent-2)' : 'var(--warning)';
+  if (controle.modo === 'HUMAN_REQUIRED') return 'var(--warning)';
+  if (controle.souResponsavel) return 'var(--accent)';
+  return controle.responsavelId === null ? 'var(--warning)' : 'var(--info)';
 }
 
 /** Conversa de outra pessoa da organização: assumir é transferir. */
@@ -28,23 +39,18 @@ const POR_QUE_NAO_DEVOLVE: Partial<Record<NonNullable<ControleVisto['motivoSemDe
 const CHIP = { height: 28, fontSize: 11 } as const;
 
 /**
- * Quem responde esta conversa (MSG-009). Assumir pausa a automação e cancela a
- * fila de quem respondia; assumir a conversa de outra pessoa pede confirmação.
- * Devolver exige um resumo, que vai como nota privada, e só aparece quando o
- * servidor diz que a pessoa pode. Os botões só pedem: o servidor confere
- * versão, dono e permissão.
+ * Quem responde esta conversa (MSG-009), lido uma vez para a conversa aberta e
+ * repartido entre o cabeçalho (estado e assumir) e o painel (devolver e pedir
+ * atendente). Assumir pausa a automação e cancela a fila de quem respondia;
+ * assumir a conversa de outra pessoa pede confirmação. Devolver exige um
+ * resumo, que vai como nota privada, e só aparece quando o servidor diz que a
+ * pessoa pode. Os botões só pedem: o servidor confere versão, dono e permissão.
  */
-export function BarraDoAtendimento({
-  fetchWithAuth,
-  mensageria,
-}: {
-  readonly fetchWithAuth: AuthenticatedFetch;
-  readonly mensageria: Mensageria;
-}) {
+export function useAtendimento(fetchWithAuth: AuthenticatedFetch, mensageria: Mensageria) {
   const conversaId = mensageria.selecionada?.id_local ?? null;
   const controle = useControle(fetchWithAuth, conversaId);
-  const [resumo, setResumo] = useState<string | null>(null);
-  // A confirmação vale para a conversa e a versão em que foi pedida.
+  // O resumo e a confirmação valem para a conversa (e a versão) em que foram pedidos.
+  const [resumoGuardado, setResumoGuardado] = useState<{ readonly conversa: string; readonly texto: string } | null>(null);
   const [transferir, setTransferir] = useState<string | null>(null);
   const { recarregar } = controle;
 
@@ -56,12 +62,13 @@ export function BarraDoAtendimento({
   }, [estadosDosEnvios, recarregar]);
 
   const atual = controle.controle;
+  const resumo = resumoGuardado !== null && resumoGuardado.conversa === conversaId ? resumoGuardado.texto : null;
   const chaveDaTransferencia = atual === null ? null : `${conversaId}:${atual.versao}`;
   const confirmando = atual !== null && eDeOutraPessoa(atual) && transferir === chaveDaTransferencia;
   const agir = (acao: AcaoDoAtendimento, nota?: string) => {
     setTransferir(null);
     void controle.agir(acao, nota).then((ok) => {
-      if (ok) setResumo(null);
+      if (ok) setResumoGuardado(null);
     });
   };
   const assumir = () => {
@@ -71,95 +78,175 @@ export function BarraDoAtendimento({
     }
     agir('assumir');
   };
+  const escreverResumo = (texto: string | null) => {
+    setResumoGuardado(texto === null || conversaId === null ? null : { conversa: conversaId, texto });
+  };
   const motivoSemDevolver = atual?.souResponsavel && !atual.podeDevolver && atual.motivoSemDevolver !== null
     ? POR_QUE_NAO_DEVOLVE[atual.motivoSemDevolver] ?? null
     : null;
 
+  return {
+    atual,
+    carregando: controle.carregando,
+    agindo: controle.agindo,
+    erro: controle.erro,
+    aviso: controle.aviso,
+    recarregar,
+    /** Assumir aparece para quem ainda não é o responsável humano da conversa. */
+    podeAssumir: atual !== null && !(atual.modo === 'HUMAN' && atual.souResponsavel),
+    podePedirAtendente: atual?.modo === 'AI',
+    podeDevolver: atual?.podeDevolver ?? false,
+    confirmando,
+    assumir,
+    cancelarTransferencia: () => setTransferir(null),
+    pedirAtendente: () => agir('exigir_humano'),
+    resumo,
+    escreverResumo,
+    devolver: () => agir('devolver', (resumo ?? '').trim()),
+    motivoSemDevolver,
+  };
+}
+
+export type Atendimento = ReturnType<typeof useAtendimento>;
+
+/** O estado crítico, sempre no cabeçalho: com a automação, aguardando, com você ou com outra pessoa. */
+export function EstadoDoAtendimento({ atendimento }: { readonly atendimento: Atendimento }) {
+  const { atual } = atendimento;
+  const cor = atual === null ? 'var(--txt3)' : corDoControle(atual);
   return (
-    <div className="flex flex-col flex-none" style={{ gap: 8, padding: '10px 14px', borderTop: '1px solid var(--line)' }}>
-      <HelpInfo ajudaId="sac.controle" />
-      <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
-        <span className="orbita-eyebrow" style={{ color: 'var(--txt3)' }}>Atendimento</span>
-        <output aria-label="Quem atende" style={{ fontSize: 12, color: 'var(--txt)' }}>
-          {atual === null ? (controle.carregando ? 'Lendo…' : '—') : rotuloDoControle(atual)}
+    <span className={estilos.estadoDoAtendimento}>
+      <span className={estilos.estadoChip} style={{ color: cor }}>
+        <span className={estilos.ponto} style={{ background: cor }} aria-hidden />
+        <output aria-label="Quem atende" className={estilos.estadoTexto}>
+          {atual === null ? (atendimento.carregando ? 'Lendo…' : '—') : rotuloDoControle(atual)}
         </output>
-        {atual !== null && !(atual.modo === 'HUMAN' && atual.souResponsavel) && !confirmando && (
-          <button type="button" disabled={controle.agindo} onClick={assumir}
-            className="orbita-chip cursor-pointer" style={CHIP}>
-            Assumir atendimento
-          </button>
-        )}
-        {atual?.modo === 'AI' && (
-          <button type="button" disabled={controle.agindo} onClick={() => agir('exigir_humano')}
-            className="orbita-chip cursor-pointer" style={CHIP}>
-            Pedir atendente
-          </button>
-        )}
-        {atual?.podeDevolver && resumo === null && (
-          <button type="button" disabled={controle.agindo} onClick={() => setResumo('')}
-            className="orbita-chip cursor-pointer" style={CHIP}>
-            Devolver à automação
-          </button>
-        )}
-        {motivoSemDevolver !== null && (
-          <span style={{ fontSize: 11, color: 'var(--txt3)' }}>{motivoSemDevolver}</span>
-        )}
-      </div>
+      </span>
+      <HelpInfo ajudaId="sac.controle" />
+    </span>
+  );
+}
 
-      <p style={{ margin: 0, fontSize: 11, color: 'var(--txt3)' }}>
-        Assuma, responda e devolva a conversa pelo ORBITA. Mudanças feitas no Chatwoot chegam por eventos e podem levar tempo.
-      </p>
+/**
+ * Assumir, compacto, no cabeçalho. Assumir a conversa de outro atendente abre a
+ * confirmação de transferência, com as mesmas regras de antes.
+ */
+export function AssumirAtendimento({ atendimento }: { readonly atendimento: Atendimento }) {
+  return (
+    <>
+      {atendimento.podeAssumir && (
+        <button type="button" disabled={atendimento.agindo} onClick={atendimento.assumir}
+          className={`orbita-acao ${estilos.assumir}`} aria-label="Assumir atendimento" title="Assumir atendimento">
+          <UserCheck className="w-4 h-4" aria-hidden />
+          <span className={estilos.assumirTexto} aria-hidden>Assumir</span>
+        </button>
+      )}
+      <Dialog.Root open={atendimento.confirmando} onOpenChange={(aberto) => { if (!aberto) atendimento.cancelarTransferencia(); }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className={estilos.veu} />
+          <Dialog.Content role="alertdialog" className={estilos.confirmacao}
+            style={{ backdropFilter: 'blur(var(--blur-modal)) saturate(1.4)', WebkitBackdropFilter: 'blur(var(--blur-modal)) saturate(1.4)' }}>
+            <Dialog.Title className={estilos.confirmacaoTitulo}>Confirmar transferência</Dialog.Title>
+            <Dialog.Description className={estilos.confirmacaoTexto}>
+              Esta conversa está com outro atendente. Assumir transfere o atendimento para você e cancela as respostas dele na fila.
+            </Dialog.Description>
+            <div className={estilos.confirmacaoAcoes}>
+              <Dialog.Close asChild>
+                <button type="button" className="orbita-chip cursor-pointer">Cancelar</button>
+              </Dialog.Close>
+              <button type="button" disabled={atendimento.agindo} onClick={atendimento.assumir} className="orbita-acao cursor-pointer">
+                Transferir para mim
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </>
+  );
+}
 
-      {atual?.modo === 'AI' && !atual.automacaoAtiva && (
+/** O que precisa ser lido agora, logo abaixo do cabeçalho: só aparece quando existe. */
+export function AvisosDoAtendimento({ atendimento }: { readonly atendimento: Atendimento }) {
+  const { atual } = atendimento;
+  const semNinguem = atual?.modo === 'AI' && !atual.automacaoAtiva;
+  if (!semNinguem && atendimento.erro === null && atendimento.aviso === null) return null;
+  return (
+    <div className={estilos.avisos}>
+      {semNinguem && (
         <Aviso tom="atencao">
           A automação ainda não responde conversas: ninguém está atendendo esta. Assuma para responder.
         </Aviso>
       )}
+      {atendimento.erro !== null && <Aviso tom="erro">{atendimento.erro}</Aviso>}
+      {atendimento.aviso !== null && <Aviso tom="atencao">{atendimento.aviso}</Aviso>}
+    </div>
+  );
+}
 
-      {confirmando && (
-        <fieldset aria-label="Confirmar transferência" className="flex items-center flex-wrap"
-          style={{ gap: 8, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-          <span style={{ fontSize: 12, color: 'var(--txt)' }}>
-            Esta conversa está com outro atendente. Assumir transfere o atendimento para você e cancela as respostas dele na fila.
-          </span>
-          <button type="button" disabled={controle.agindo} onClick={assumir} className="orbita-acao shrink-0 cursor-pointer">
-            Transferir para mim
+/** O painel do atendimento: quem responde, pedir atendente e devolver à automação. */
+export function BarraDoAtendimento({ atendimento }: { readonly atendimento: Atendimento }) {
+  const { atual, resumo } = atendimento;
+  return (
+    <section aria-label="Atendimento" className="flex flex-col" style={{ gap: 10 }}>
+      <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
+        <span className="orbita-eyebrow" style={{ color: 'var(--txt3)' }}>Agora</span>
+        <span style={{ fontSize: 12.5, color: 'var(--txt)' }}>
+          {atual === null ? (atendimento.carregando ? 'Lendo…' : '—') : rotuloDoControle(atual)}
+        </span>
+      </div>
+
+      <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
+        {atendimento.podePedirAtendente && (
+          <button type="button" disabled={atendimento.agindo} onClick={atendimento.pedirAtendente}
+            className="orbita-chip cursor-pointer" style={CHIP}>
+            Pedir atendente
           </button>
-          <button type="button" onClick={() => setTransferir(null)} className="orbita-chip cursor-pointer shrink-0" style={CHIP}>
-            Cancelar
+        )}
+        {atendimento.podeDevolver && resumo === null && (
+          <button type="button" disabled={atendimento.agindo} onClick={() => atendimento.escreverResumo('')}
+            className="orbita-chip cursor-pointer" style={CHIP}>
+            Devolver à automação
           </button>
-        </fieldset>
+        )}
+      </div>
+      {atendimento.motivoSemDevolver !== null && (
+        <span style={{ fontSize: 11, color: 'var(--txt3)' }}>{atendimento.motivoSemDevolver}</span>
       )}
 
       {resumo !== null && (
         <form
-          className="flex items-center"
+          className="flex flex-col"
           style={{ gap: 8 }}
           onSubmit={(evento) => {
             evento.preventDefault();
-            agir('devolver', resumo.trim());
+            atendimento.devolver();
           }}
         >
-          <input
-            type="text"
+          <span style={{ fontSize: 11, color: 'var(--txt3)' }}>
+            O resumo vai como nota privada: fica entre os atendentes e não é enviado à cliente.
+          </span>
+          <textarea
             aria-label="Resumo para a nota privada"
-            placeholder="Resumo do atendimento (vai como nota privada)"
+            placeholder="O que foi resolvido e o que falta"
             value={resumo}
             maxLength={2000}
-            onChange={(evento) => setResumo(evento.target.value)}
-            className="orbita-campo flex-1 min-w-0"
+            rows={3}
+            onChange={(evento) => atendimento.escreverResumo(evento.target.value)}
+            className={`orbita-campo ${estilos.areaDoResumo}`}
           />
-          <button type="submit" disabled={controle.agindo || resumo.trim() === ''} className="orbita-acao shrink-0 cursor-pointer">
-            Devolver
-          </button>
-          <button type="button" onClick={() => setResumo(null)} className="orbita-chip cursor-pointer shrink-0" style={CHIP}>
-            Cancelar
-          </button>
+          <div className="flex items-center" style={{ gap: 8 }}>
+            <button type="submit" disabled={atendimento.agindo || resumo.trim() === ''} className="orbita-acao shrink-0 cursor-pointer">
+              Devolver
+            </button>
+            <button type="button" onClick={() => atendimento.escreverResumo(null)} className="orbita-chip cursor-pointer shrink-0" style={CHIP}>
+              Cancelar
+            </button>
+          </div>
         </form>
       )}
 
-      {controle.erro !== null && <Aviso tom="erro">{controle.erro}</Aviso>}
-      {controle.aviso !== null && <Aviso tom="atencao">{controle.aviso}</Aviso>}
-    </div>
+      <p style={{ margin: 0, fontSize: 11, color: 'var(--txt3)' }}>
+        Assuma, responda e devolva a conversa pelo ORBITA. Mudanças feitas no Chatwoot chegam por eventos e podem levar tempo.
+      </p>
+    </section>
   );
 }
