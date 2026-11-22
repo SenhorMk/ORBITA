@@ -229,8 +229,8 @@ export function CriarConviteModal({
           />
         )
       }
-    >
-      <HelpInfo ajudaId="org.convidar" />
+     ajuda={<HelpInfo ajudaId="org.convidar" />}>
+
       {criado ? (
         <CodigoEntregavel
           criado={criado}

@@ -113,9 +113,9 @@ export function PainelDaTriagem({ fetchWithAuth, conversaId, semCaso = null }: {
   return (
     <section aria-label="Triagem do caso" className="flex flex-col flex-none"
       style={{ gap: 6, padding: '10px 14px', borderTop: '1px solid var(--line)' }}>
-      <HelpInfo ajudaId="sac.triagem" />
       <div className="flex items-center" style={{ gap: 8 }}>
         <span className="orbita-eyebrow flex-1" style={{ color: 'var(--txt3)' }}>Triagem</span>
+        <HelpInfo ajudaId="sac.triagem" />
         <button type="button" onClick={recarregar} className="orbita-chip cursor-pointer" style={CHIP} aria-label="Atualizar triagem">
           Atualizar
         </button>

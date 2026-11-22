@@ -1,7 +1,7 @@
 'use client';
 
 import type { Analise } from './metricasDoPainel';
-import { HelpInfo } from '@/components/help/HelpInfo';
+import { HelpContext } from '@/components/help/HelpContext';
 
 /**
  * A área analítica — o card claro que manda na tela.
@@ -23,7 +23,7 @@ import { HelpInfo } from '@/components/help/HelpInfo';
 function Cabecalho({ titulo, destaque, abaixo }: { titulo: string; destaque: string; abaixo?: React.ReactNode }) {
   return (
     <div className="flex flex-col" style={{ gap: 3 }}>
-      <span style={{ font: '500 12px/1.3 var(--font-archivo), sans-serif', opacity: 0.65 }}>{titulo}</span>
+      <HelpContext ajudaId="painel.analise"><span style={{ font: '500 12px/1.3 var(--font-archivo), sans-serif', opacity: 0.65 }}>{titulo}</span></HelpContext>
       <span
         style={{
           font: '500 34px/1 var(--font-space-grotesk), sans-serif',
@@ -202,7 +202,6 @@ export function AreaAnalitica({ analise }: { analise: Analise }) {
         gap: 14,
       }}
     >
-      <HelpInfo ajudaId="painel.analise" />
       {analise.tipo === 'serie' && <Serie analise={analise} />}
       {analise.tipo === 'distribuicao' && <Distribuicao analise={analise} />}
       {analise.tipo === 'fila' && <Fila analise={analise} />}

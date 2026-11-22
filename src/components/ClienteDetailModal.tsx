@@ -232,8 +232,8 @@ export function ClienteDetailModal({
           }
         />
       )}
-    >
-      <HelpInfo ajudaId="clientes.detalhe" />
+     ajuda={<HelpInfo ajudaId="clientes.detalhe" />}>
+
       {confirmando ? (
         <ConfirmacaoDeExclusao nome={cliente.nome} noBling={contatoNoBling(cliente)} aviso={aviso} />
       ) : (

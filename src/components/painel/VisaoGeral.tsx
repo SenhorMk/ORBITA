@@ -1,5 +1,7 @@
 'use client';
 
+import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
+
 import { useMemo, useState } from 'react';
 
 import { AvisoDeAtualizacaoFalhada, EstadoCarregando, EstadoDeErro, EstadoVazio } from '@/components/ui/estados';
@@ -15,7 +17,6 @@ import {
   type MetricaLateral,
   type MetricaId,
 } from './metricasDoPainel';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Visão Geral.
@@ -60,23 +61,24 @@ function LinhaDeTitulo({
   onSelecionar: (metrica: MetricaId) => void;
 }) {
   return (
-      <div className="flex items-start gap-8 flex-none">
+      <div className={`flex items-start gap-8 flex-none ${helpPageHeader}`}>
         <div className="flex flex-col flex-none" style={{ width: 'var(--titulo-col)', gap: 13 }}>
-          <h1
-            className="m-0"
-            style={{
-              fontFamily: 'var(--font-space-grotesk), sans-serif',
-              fontWeight: 500,
-              fontSize: 'var(--titulo-fs)',
-              lineHeight: 1.04,
-              letterSpacing: '-0.03em',
-              color: 'var(--txt)',
-            }}
-          >
-            Visão<br />Geral
-          </h1>
-      <HelpInfo ajudaId="painel.visao" />
-      <HelpInfo ajudaId="painel.metricas-detalhadas" />
+          <HelpContext ajudaId="painel.visao">
+            <h1
+              className="m-0"
+              style={{
+                fontFamily: 'var(--font-space-grotesk), sans-serif',
+                fontWeight: 500,
+                fontSize: 'var(--titulo-fs)',
+                lineHeight: 1.04,
+                letterSpacing: '-0.03em',
+                color: 'var(--txt)',
+              }}
+            >
+              Visão<br />Geral
+            </h1>
+          </HelpContext>
+          <HelpContext ajudaId="painel.metricas-detalhadas"><span className="orbita-eyebrow">Indicadores</span></HelpContext>
         </div>
 
         <div

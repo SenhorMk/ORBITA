@@ -212,8 +212,8 @@ export function NovaDespesaModal({
           }
         />
       }
-    >
-      <HelpInfo ajudaId="financeiro.despesa" />
+     ajuda={<HelpInfo ajudaId="financeiro.despesa" />}>
+
       {naoConfirmado !== null && (
         <output className="block mb-4 text-sm" style={{ color: 'var(--warning)' }}>
           {naoConfirmado}
@@ -266,7 +266,7 @@ export function NovaDespesaModal({
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label htmlFor="despesa-valor" className={ROTULO} style={COR_DO_ROTULO}>Valor (R$)</label>
             <input

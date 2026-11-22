@@ -1,5 +1,7 @@
 'use client';
 
+import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
+
 import { Plus } from 'lucide-react';
 
 import type { Cliente } from '@/types';
@@ -10,7 +12,6 @@ import {
   EstadoVazio,
 } from '@/components/ui/estados';
 import { TabelaDeClientes } from './TabelaDeClientes';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Clientes & Contatos, na linguagem do produto novo.
@@ -52,22 +53,23 @@ export function ClientesEContatos({
   return (
     <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
 
-      <div className="flex items-start gap-8 flex-none">
+      <div className={`flex items-start gap-8 flex-none ${helpPageHeader}`}>
         <div className="flex flex-col flex-none" style={{ width: 'var(--titulo-col)', gap: 13 }}>
-          <h1
-            className="m-0"
-            style={{
-              fontFamily: 'var(--font-space-grotesk), sans-serif',
-              fontWeight: 500,
-              fontSize: 'var(--titulo-fs)',
-              lineHeight: 1.04,
-              letterSpacing: '-0.03em',
-              color: 'var(--txt)',
-            }}
-          >
-            Clientes &amp;<br />Contatos
-          </h1>
-      <HelpInfo ajudaId="clientes.lista" />
+          <HelpContext ajudaId="clientes.lista">
+            <h1
+              className="m-0"
+              style={{
+                fontFamily: 'var(--font-space-grotesk), sans-serif',
+                fontWeight: 500,
+                fontSize: 'var(--titulo-fs)',
+                lineHeight: 1.04,
+                letterSpacing: '-0.03em',
+                color: 'var(--txt)',
+              }}
+            >
+              Clientes &amp;<br />Contatos
+            </h1>
+          </HelpContext>
           <span style={{ font: '400 11px/1.4 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
             {nuncaCarregou
               ? 'base de contatos da organização'

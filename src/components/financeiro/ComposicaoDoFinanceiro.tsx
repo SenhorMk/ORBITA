@@ -1,5 +1,7 @@
 'use client';
 
+import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
+
 import {
   AvisoDeAtualizacaoFalhada,
   EstadoCarregando,
@@ -12,7 +14,6 @@ import { EntradasESaidas, FluxoDeCaixa } from './Graficos';
 import { TabelaDeMovimentacoes } from './Movimentacoes';
 import { ResumoFinanceiro } from './ResumoFinanceiro';
 import type { ResumoFinanceiro as Resumo, TituloFinanceiro } from './useLeituraFinanceira';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * As duas metades visuais do Financeiro: o cabeçalho com os totais e o corpo,
@@ -42,22 +43,26 @@ export function CabecalhoDoFinanceiro({
   formatarDinheiro: (valor: number) => string;
 }) {
   return (
-    <div className="flex items-center gap-8 flex-none">
-      <h1
-        className="m-0 flex-none"
-        style={{
-          width: 'var(--titulo-col)',
-          fontFamily: 'var(--font-space-grotesk), sans-serif',
-          fontWeight: 500,
-          fontSize: 'var(--titulo-fs)',
-          lineHeight: 1.04,
-          letterSpacing: '-0.03em',
-          color: 'var(--txt)',
-        }}
-      >
-        Controle<br />Financeiro
-      </h1>
-      <HelpInfo ajudaId="financeiro.visao" />
+    <div className={`flex items-center gap-8 flex-none ${helpPageHeader}`}>
+      <div className="flex flex-col gap-2 shrink-0">
+        <HelpContext ajudaId="financeiro.visao">
+          <h1
+            className="m-0 flex-none"
+            style={{
+              width: 'var(--titulo-col)',
+              fontFamily: 'var(--font-space-grotesk), sans-serif',
+              fontWeight: 500,
+              fontSize: 'var(--titulo-fs)',
+              lineHeight: 1.04,
+              letterSpacing: '-0.03em',
+              color: 'var(--txt)',
+            }}
+          >
+            Controle<br />Financeiro
+          </h1>
+        </HelpContext>
+        <HelpContext ajudaId="financeiro.resumo"><span className="orbita-eyebrow">Resumo financeiro</span></HelpContext>
+      </div>
 
       {/*
         Os três totais só existem quando existe uma leitura para resumir. Sem

@@ -223,7 +223,6 @@ export function ImagemDoProduto({
 
   return (
     <div className="flex items-center gap-4">
-      <HelpInfo ajudaId="estoque.foto" />
       <Previa url={url} />
       <div className="flex flex-col gap-2 min-w-0">
         <div className="flex flex-wrap items-center gap-2">
@@ -242,6 +241,7 @@ export function ImagemDoProduto({
           >
             {caminho ? 'Trocar foto' : 'Adicionar foto'}
           </label>
+          <HelpInfo ajudaId="estoque.foto" />
           {caminho && (
             <button type="button" onClick={aoRemover} disabled={ocupado} className="orbita-chip cursor-pointer">
               Remover foto

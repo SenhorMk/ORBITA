@@ -99,8 +99,8 @@ export function NovaOrganizacaoModal({ aberto, onAbertoChange, onCriar, erro }: 
           }
         />
       }
-    >
-      <HelpInfo ajudaId="org.criar" />
+     ajuda={<HelpInfo ajudaId="org.criar" />}>
+
       <form id={ID_DO_FORMULARIO} onSubmit={handleSubmit} className="flex flex-col" style={{ gap: 14 }}>
         <div className="flex flex-col" style={{ gap: 6 }}>
           <label htmlFor="org-nome" className="orbita-eyebrow">Nome da organização</label>

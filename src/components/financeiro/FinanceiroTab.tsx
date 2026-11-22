@@ -19,7 +19,7 @@ import { LancamentoDeDespesa } from './LancamentoDeDespesa';
 import { OperacoesPendentes } from './OperacoesPendentes';
 import { FiltroDeMovimentacoes, FiltroDePeriodo } from './Movimentacoes';
 import { useLeituraFinanceira, type BuscaAutenticada, type TituloFinanceiro } from './useLeituraFinanceira';
-import { HelpInfo } from '@/components/help/HelpInfo';
+import { HelpContext } from '@/components/help/HelpContext';
 
 interface FinanceiroTabProps {
   fetchWithAuth: BuscaAutenticada;
@@ -117,8 +117,7 @@ export function FinanceiroTab({ fetchWithAuth, ativo = true, pedidos = null, org
       <CabecalhoDoFinanceiro resumo={resumo} formatarDinheiro={formatarDinheiro} />
 
       <div className="flex items-center flex-none flex-wrap" style={{ gap: 10 }}>
-        <FiltroDePeriodo periodo={periodo} setPeriodo={setPeriodo} />
-      <HelpInfo ajudaId="financeiro.filtros" />
+        <HelpContext ajudaId="financeiro.filtros"><FiltroDePeriodo periodo={periodo} setPeriodo={setPeriodo} /></HelpContext>
         <FiltroDeMovimentacoes filtroTipo={filtroTipo} setFiltroTipo={setFiltroTipo} />
         <div className="flex-1" />
         <AcoesFinanceiras

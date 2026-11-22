@@ -1,5 +1,8 @@
 'use client';
 
+import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
+import { HelpInfo } from '@/components/help/HelpInfo';
+
 import { useState, type ReactNode } from 'react';
 import { Building2, RefreshCw, Ticket, UserPlus, Users } from 'lucide-react';
 
@@ -13,7 +16,6 @@ import { AceitarConviteModal } from './AceitarConviteModal';
 import { NovaOrganizacaoModal } from './NovaOrganizacaoModal';
 import type { SelecaoDeOrganizacao } from './usePapelNaOrganizacaoAtiva';
 import { useOrganizationPanel, type AuthenticatedFetch, type ListaDeOrganizacoes } from './useOrganizationPanel';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 /** Como cada papel se chama na tela, e a cor que o acompanha. */
 const PAPEL: Record<'owner' | 'admin' | 'member', { readonly rotulo: string; readonly cor: string }> = {
@@ -88,22 +90,23 @@ function Cabecalho({
   convitesAguardando: number | null;
 }) {
   return (
-    <div className="flex items-start gap-8 flex-none">
+    <div className={`flex items-start gap-8 flex-none ${helpPageHeader}`}>
       <div className="flex flex-col flex-none" style={{ width: 'var(--titulo-col)', gap: 13 }}>
-        <h1
-          className="m-0"
-          style={{
-            fontFamily: 'var(--font-space-grotesk), sans-serif',
-            fontWeight: 500,
-            fontSize: 'var(--titulo-fs)',
-            lineHeight: 1.04,
-            letterSpacing: '-0.03em',
-            color: 'var(--txt)',
-          }}
-        >
-          Organização &amp;<br />Membros
-        </h1>
-      <HelpInfo ajudaId="org.visao" />
+        <HelpContext ajudaId="org.visao">
+          <h1
+            className="m-0"
+            style={{
+              fontFamily: 'var(--font-space-grotesk), sans-serif',
+              fontWeight: 500,
+              fontSize: 'var(--titulo-fs)',
+              lineHeight: 1.04,
+              letterSpacing: '-0.03em',
+              color: 'var(--txt)',
+            }}
+          >
+            Organização &amp;<br />Membros
+          </h1>
+        </HelpContext>
         <span style={{ font: '400 11px/1.4 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
           quem participa, e com qual autoridade
         </span>
@@ -166,11 +169,13 @@ function Coluna({
   titulo,
   escopo,
   children,
+  ajuda,
 }: {
   icone: ReactNode;
   titulo: string;
   /** De qual organização é o que está nesta coluna. Não é decoração. */
   escopo?: string;
+  ajuda?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -184,6 +189,7 @@ function Coluna({
       style={{ gap: 11, padding: 16, borderRadius: 20, background: 'var(--glass2)', border: '1px solid var(--line)' }}
     >
       <header className="flex flex-col flex-none" style={{ gap: 3 }}>
+        <div className="flex items-center gap-1">
         <h2
           className="flex items-center m-0"
           style={{ gap: 7, font: '600 13px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}
@@ -191,6 +197,8 @@ function Coluna({
           {icone}
           {titulo}
         </h2>
+        {ajuda}
+        </div>
         {escopo && (
           <span className="orbita-eyebrow truncate" title={escopo}>
             {escopo}
@@ -318,7 +326,7 @@ export function OrganizationPanel({ fetchWithAuth, lista, onActiveOrgChange }: O
         className="flex-1 min-h-0 grid"
         style={{ gridTemplateColumns: painel.canManage ? 'repeat(3, minmax(0, 1fr))' : 'repeat(2, minmax(0, 1fr))', gap: 12 }}
       >
-        <Coluna icone={<Building2 className="w-4 h-4" style={{ color: 'var(--txt3)' }} aria-hidden />} titulo="Suas organizações">
+        <Coluna icone={<Building2 className="w-4 h-4" style={{ color: 'var(--txt3)' }} aria-hidden />} titulo="Suas organizações" ajuda={<HelpInfo ajudaId="org.troca" />}>
           <OrganizationList
             organizacoes={painel.organizacoes}
             activeOrgId={ativa?.organizacao.id ?? null}
@@ -334,6 +342,7 @@ export function OrganizationPanel({ fetchWithAuth, lista, onActiveOrgChange }: O
         <Coluna
           icone={<Users className="w-4 h-4" style={{ color: 'var(--txt3)' }} aria-hidden />}
           titulo="Membros"
+          ajuda={<HelpInfo ajudaId="org.membros" />}
           escopo={nomeDaAtiva ?? undefined}
         >
           {ativa ? (
@@ -358,6 +367,7 @@ export function OrganizationPanel({ fetchWithAuth, lista, onActiveOrgChange }: O
           <Coluna
             icone={<Ticket className="w-4 h-4" style={{ color: 'var(--txt3)' }} aria-hidden />}
             titulo="Convites"
+            ajuda={<HelpInfo ajudaId="org.convites" />}
             escopo={nomeDaAtiva ?? undefined}
           >
             <ListaDeConvites

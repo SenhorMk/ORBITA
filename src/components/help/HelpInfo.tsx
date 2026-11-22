@@ -1,6 +1,7 @@
 'use client';
 
 import * as Dialog from '@radix-ui/react-dialog';
+import { useLayoutEffect, useState } from 'react';
 import { CircleHelp, X } from 'lucide-react';
 import { catalogoDeAjuda, type AjudaId } from './catalogo';
 import styles from './HelpInfo.module.css';
@@ -8,8 +9,25 @@ import styles from './HelpInfo.module.css';
 /** Ajuda por clique/toque/teclado. O Radix mantém foco, Escape e retorno ao acionador. */
 export function HelpInfo({ ajudaId }: { readonly ajudaId: AjudaId }) {
   const ajuda = catalogoDeAjuda[ajudaId];
+  const [aberta, setAberta] = useState(false);
+
+  useLayoutEffect(() => {
+    if (!aberta) return;
+    // A camada Radix de origem pode manter o listener de Escape até seu próximo
+    // efeito passivo. Interceptar no window, antes do document, evita fechar os
+    // dois diálogos quando Escape chega logo depois da abertura da ajuda.
+    const fecharAjuda = (evento: KeyboardEvent) => {
+      if (evento.key !== 'Escape') return;
+      evento.preventDefault();
+      evento.stopPropagation();
+      setAberta(false);
+    };
+    window.addEventListener('keydown', fecharAjuda, true);
+    return () => window.removeEventListener('keydown', fecharAjuda, true);
+  }, [aberta]);
+
   return (
-    <Dialog.Root>
+    <Dialog.Root open={aberta} onOpenChange={setAberta}>
       <Dialog.Trigger asChild>
         <button type="button" className={styles.trigger} aria-label={`Ajuda: ${ajuda.titulo}`} data-help-id={ajudaId}
           onClick={(event) => event.stopPropagation()}

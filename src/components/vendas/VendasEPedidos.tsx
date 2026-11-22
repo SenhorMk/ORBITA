@@ -1,5 +1,7 @@
 'use client';
 
+import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
+
 import { useMemo, useReducer, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 
@@ -13,7 +15,6 @@ import { DrawerDoPedido } from './DrawerDoPedido';
 import { CancelamentoDePedido } from './CancelamentoDePedido';
 import { ORDENS, PERIODOS, buscar, ordenar, recortarPorPeriodo, type Ordem, type Periodo } from './filtrosDeVendas';
 import { calcularChips, ehChipDePedido, pedidosDoChip } from './resumoDeVendas';
-import { HelpInfo } from '@/components/help/HelpInfo';
 
 /**
  * Vendas & Pedidos — a tela da jornada operacional.
@@ -125,22 +126,23 @@ export function VendasEPedidos({
     <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
 
       {/* Título e resumo NA MESMA LINHA — a composição do protótipo. */}
-      <div className="flex items-start gap-8 flex-none">
+      <div className={`flex items-start gap-8 flex-none ${helpPageHeader}`}>
         <div className="flex flex-col flex-none" style={{ width: 'var(--titulo-col)', gap: 13 }}>
-          <h1
-            className="m-0"
-            style={{
-              fontFamily: 'var(--font-space-grotesk), sans-serif',
-              fontWeight: 500,
-              fontSize: 'var(--titulo-fs)',
-              lineHeight: 1.04,
-              letterSpacing: '-0.03em',
-              color: 'var(--txt)',
-            }}
-          >
-            Vendas &amp;<br />Pedidos
-          </h1>
-      <HelpInfo ajudaId="vendas.lista" />
+          <HelpContext ajudaId="vendas.lista">
+            <h1
+              className="m-0"
+              style={{
+                fontFamily: 'var(--font-space-grotesk), sans-serif',
+                fontWeight: 500,
+                fontSize: 'var(--titulo-fs)',
+                lineHeight: 1.04,
+                letterSpacing: '-0.03em',
+                color: 'var(--txt)',
+              }}
+            >
+              Vendas &amp;<br />Pedidos
+            </h1>
+          </HelpContext>
           <div className="flex items-center gap-2.5 flex-wrap">
             <span
               className="inline-flex items-center"

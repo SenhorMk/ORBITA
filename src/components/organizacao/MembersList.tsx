@@ -6,7 +6,7 @@ import { Pilula } from '@/components/ui/StatusPill';
 import { AvisoDeAtualizacaoFalhada, EstadoCarregando, EstadoDeErro, EstadoVazio } from '@/components/ui/estados';
 import { rotuloDoMembro } from '@/lib/organizacao/identidadeDoMembro';
 import type { MembroOrganizacao } from './types';
-import { HelpInfo } from '@/components/help/HelpInfo';
+import { HelpContext } from '@/components/help/HelpContext';
 
 /**
  * Como o membro é chamado nesta lista.
@@ -77,8 +77,9 @@ export function MembersList({
 }: MembersListProps) {
   return (
     <div className="flex flex-col min-h-0" style={{ gap: 8 }} data-testid="members-list">
-      <HelpInfo ajudaId="org.membros" />
-      <HelpInfo ajudaId="org.papeis-detalhados" />
+      <HelpContext ajudaId="org.papeis-detalhados">
+        <span className="orbita-eyebrow">Papéis e permissões</span>
+      </HelpContext>
       {erroDeAcao !== null && (
         <p
           role="alert"

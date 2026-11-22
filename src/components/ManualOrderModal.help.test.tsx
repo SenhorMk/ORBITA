@@ -12,14 +12,15 @@ vi.mock('@/lib/supabaseClient', () => ({ supabase: {
 } }));
 
 describe('HelpInfo no pedido manual', () => {
-  it('a ajuda de destino abre no corpo sem alternar Bling ou iniciar uma venda', async () => {
+  it('a ajuda fica junto do destino no rodapé, sem alternar Bling ou iniciar uma venda', async () => {
     localStorage.clear();
     const user = userEvent.setup(), onSuccess = vi.fn();
     render(<ManualOrderModal open onOpenChange={vi.fn()} onSuccess={onSuccess} organizacaoId="11111111-1111-4111-8111-111111111111" />);
     const checkbox = screen.getByRole('checkbox', { name: 'Sincronizar pedido com o Bling v3' });
     expect(checkbox).toBeChecked();
     const help = screen.getByRole('button', { name: 'Ajuda: Destino do pedido manual' });
-    expect(help.closest('footer')).toBeNull();
+    expect(help.closest('footer')).toContainElement(checkbox);
+    expect(help.parentElement).toContainElement(checkbox);
     expect(help.closest('label')).toBeNull();
     await user.click(help);
     expect(screen.getByRole('dialog', { name: 'Destino do pedido manual' })).toHaveTextContent('apenas como registro local');

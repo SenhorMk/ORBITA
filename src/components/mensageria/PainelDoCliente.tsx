@@ -65,9 +65,9 @@ export function PainelDoCliente({
 
   return (
     <div className="flex flex-col flex-none" style={{ gap: 8, padding: '10px 14px', borderTop: '1px solid var(--line)' }}>
-      <HelpInfo ajudaId="sac.cliente" />
       <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
         <span className="orbita-eyebrow" style={{ color: 'var(--txt3)' }}>Cliente</span>
+        <HelpInfo ajudaId="sac.cliente" />
         <output aria-label="Cliente da conversa" style={TEXTO}>
           {v.verificacao === null
             ? (v.carregando ? 'Lendo…' : '—')

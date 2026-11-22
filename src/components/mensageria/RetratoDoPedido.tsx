@@ -108,11 +108,11 @@ export function RetratoDoPedido({
   return (
     <section aria-label="Detalhes do pedido" className="flex flex-col"
       style={{ gap: 6, padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 12 }}>
-      <HelpInfo ajudaId="sac.pedido" />
       <div className="flex items-center" style={{ gap: 8 }}>
         <span className="orbita-eyebrow flex-1" style={{ color: 'var(--txt3)' }}>
           {retrato === null ? 'Detalhes do pedido' : `Pedido ${retrato.pedido.numero ?? 'sem número'} · ${retrato.pedido.status}`}
         </span>
+        <HelpInfo ajudaId="sac.pedido" />
         <button type="button" onClick={onFechar} aria-label="Fechar detalhes do pedido" className="orbita-chip cursor-pointer" style={CHIP}>
           Fechar
         </button>

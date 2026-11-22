@@ -75,6 +75,28 @@ jobs:
       - name: Check build artifact allowlist
         run: npm run build:artifact:check
 
+  helpinfo-visual:
+    name: HelpInfo visual regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:helpinfo:visual
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helpinfo-visual
+          path: |
+            playwright-report/helpinfo
+            test-results/helpinfo
+          retention-days: 7
+
   database-lab:
     name: Disposable Supabase database lab
     runs-on: ubuntu-latest

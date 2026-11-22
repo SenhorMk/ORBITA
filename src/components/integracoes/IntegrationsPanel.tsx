@@ -1,5 +1,7 @@
 'use client';
 
+import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
+
 import { useState, type ReactNode } from 'react';
 import { Building2, MessageCircle, RefreshCw, ShoppingBag } from 'lucide-react';
 
@@ -73,11 +75,13 @@ function Cartao({
   titulo,
   estado,
   children,
+  ajuda,
 }: {
   readonly icone: ReactNode;
   readonly titulo: string;
   readonly estado: EstadoDaIntegracao;
   readonly children: ReactNode;
+  readonly ajuda?: ReactNode;
 }) {
   return (
     <section
@@ -85,13 +89,13 @@ function Cartao({
       style={{ gap: 14, padding: 16, borderRadius: 20, background: 'var(--glass2)', border: '1px solid var(--line)' }}
     >
       <header className="flex items-start justify-between" style={{ gap: 12 }}>
-        <h2
+        <div className="flex items-center gap-2 min-w-0"><h2
           className="flex items-center m-0"
           style={{ gap: 7, font: '600 13px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}
         >
           {icone}
           {titulo}
-        </h2>
+        </h2>{ajuda}</div>
         <EstadoDoProvedor estado={estado} />
       </header>
       {children}
@@ -133,6 +137,7 @@ function Campo({
   secreto = false,
   obrigatorio = true,
   desabilitado = false,
+  ajudaContextual,
   ajuda,
 }: {
   readonly id: string;
@@ -143,10 +148,14 @@ function Campo({
   readonly obrigatorio?: boolean;
   readonly desabilitado?: boolean;
   readonly ajuda?: string;
+  readonly ajudaContextual?: ReactNode;
 }) {
   return (
     <div className="flex flex-col" style={{ gap: 5 }}>
-      <label htmlFor={id} className="orbita-eyebrow">{rotulo}</label>
+      <div className="flex items-center gap-1">
+        <label htmlFor={id} className="orbita-eyebrow">{rotulo}</label>
+        {ajudaContextual}
+      </div>
       <input
         id={id}
         // Segredos sao sempre `password`: eles nao podem ser lidos por cima do
@@ -273,8 +282,8 @@ function CartaoBling({
       icone={<ShoppingBag className="w-4 h-4" style={{ color: 'var(--txt3)' }} aria-hidden />}
       titulo="Bling ERP"
       estado={estado}
-    >
-      <HelpInfo ajudaId="integracoes.bling" />
+     ajuda={<HelpInfo ajudaId="integracoes.bling" />}>
+
       <form onSubmit={salvar} className="flex flex-col" style={{ gap: 10 }}>
         <Passo numero={1} titulo="credenciais do seu aplicativo no Bling">
           {credenciaisGravadas && (
@@ -409,12 +418,12 @@ function CartaoChatwoot({ fetchWithAuth, leitura, organizacaoId, podeGerir, reca
       icone={<MessageCircle className="w-4 h-4" style={{ color: 'var(--txt3)' }} aria-hidden />}
       titulo="Chatwoot"
       estado={estado}
+      ajuda={<HelpInfo ajudaId="integracoes.chatwoot" />}
     >
-      <HelpInfo ajudaId="integracoes.chatwoot" />
-      <HelpInfo ajudaId="integracoes.formato-url" />
       <form onSubmit={salvar} className="flex flex-col" style={{ gap: 10 }}>
         <Campo
           id="chatwoot-url"
+          ajudaContextual={<HelpInfo ajudaId="integracoes.formato-url" />}
           rotulo="URL da instância Chatwoot"
           valor={apiUrl}
           aoMudar={setApiUrl}
@@ -545,22 +554,23 @@ export function IntegrationsPanel({
 
   return (
     <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
-      <div className="flex items-start gap-8 flex-none">
+      <div className={`flex items-start gap-8 flex-none ${helpPageHeader}`}>
         <div className="flex flex-col flex-none" style={{ width: 'var(--titulo-col)', gap: 13 }}>
-          <h1
-            className="m-0"
-            style={{
-              fontFamily: 'var(--font-space-grotesk), sans-serif',
-              fontWeight: 500,
-              fontSize: 'var(--titulo-fs)',
-              lineHeight: 1.04,
-              letterSpacing: '-0.03em',
-              color: 'var(--txt)',
-            }}
-          >
-            Integrações
-          </h1>
-      <HelpInfo ajudaId="integracoes.visao" />
+          <HelpContext ajudaId="integracoes.visao">
+            <h1
+              className="m-0"
+              style={{
+                fontFamily: 'var(--font-space-grotesk), sans-serif',
+                fontWeight: 500,
+                fontSize: 'var(--titulo-fs)',
+                lineHeight: 1.04,
+                letterSpacing: '-0.03em',
+                color: 'var(--txt)',
+              }}
+            >
+              Integrações
+            </h1>
+          </HelpContext>
           <span style={{ font: '400 11px/1.4 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
             o que o ORBITA conversa por fora, e o que já foi provado
           </span>
