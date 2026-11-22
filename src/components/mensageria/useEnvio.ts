@@ -114,7 +114,7 @@ export function useEnvio(
         ? envios.flatMap((e): MensagemOtimista[] => {
           const estado = estadoDaBolha(e);
           if (estado === null || conhecidos.has(e.commandId)) return [];
-          return [{ id: idLocal(), commandId: e.commandId, conteudo: e.conteudo, estado, erro: estado === 'pendente' ? null : e.explicacao, criadaEm: e.criadoEm }];
+          return [{ id: idLocal(), commandId: e.commandId, conteudo: e.conteudo, estado, erro: estado === 'pendente' ? null : e.explicacao, criadaEm: e.criadoEm, local: false }];
         })
         : [];
       if (confirmadas.length === 0 && recuperados.length === 0 && otimistas.length === anterior.otimistas.length
@@ -229,6 +229,7 @@ export function useEnvio(
       estado: 'enviando',
       erro: null,
       criadaEm: new Date().toISOString(),
+      local: true,
     };
     alterar(chave, (anterior) => ({
       ...anterior,

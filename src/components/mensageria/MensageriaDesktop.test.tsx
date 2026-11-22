@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { MensageriaDesktop } from './MensageriaDesktop';
@@ -27,6 +27,20 @@ import type { ChatwootConversation, ChatwootMessage } from '@/types';
  * `supabaseClient` lê configuração no topo do arquivo e lança sem ela.
  */
 vi.mock('@/lib/supabaseClient', () => ({ supabase: {} }));
+
+// O menu ⋯ (Radix) mede o gatilho com ResizeObserver, que o jsdom não tem. Sem
+// medida, a central fica no layout de mesa (lista, conversa e painel ao lado).
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver;
+
+/** Abre o menu ⋯ da conversa e escolhe uma ação pelo nome. */
+async function escolherNoMenu(nome: string | RegExp) {
+  await userEvent.click(screen.getByRole('button', { name: 'Mais ações da conversa' }));
+  await userEvent.click(await screen.findByRole('menuitem', { name: nome }));
+}
 
 const ORG_A: SelecaoDeOrganizacao = { id: 'org-a', versao: 1 };
 const ORG_B: SelecaoDeOrganizacao = { id: 'org-b', versao: 2 };
@@ -478,9 +492,11 @@ describe('MensageriaDesktop — envio', () => {
         }),
       });
       await abrirComposer(fetchWithAuth);
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Devolver à automação' })).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Com você'));
 
-      await userEvent.click(screen.getByRole('button', { name: 'Devolver à automação' }));
+      // Devolver mora no ⋯ e abre o painel do atendimento já com o resumo.
+      await escolherNoMenu('Devolver à automação…');
+      expect(screen.getByRole('tab', { name: 'Atendimento' })).toHaveAttribute('aria-selected', 'true');
       expect(screen.getByRole('button', { name: 'Devolver' })).toBeDisabled();
       await userEvent.type(screen.getByLabelText('Resumo para a nota privada'), 'Pedido localizado');
       await userEvent.click(screen.getByRole('button', { name: 'Devolver' }));
@@ -501,9 +517,13 @@ describe('MensageriaDesktop — envio', () => {
         permissoes: () => ({ devolver: false, motivoSemDevolver: motivo, automacaoAtiva: false }),
       });
       await abrirComposer(fetchWithAuth);
+      await waitFor(() => expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Com você'));
 
-      await waitFor(() => expect(screen.getByText(explicacao)).toBeInTheDocument());
-      expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Com você');
+      await userEvent.click(screen.getByRole('button', { name: 'Mais ações da conversa' }));
+      expect(screen.queryByRole('menuitem', { name: /Devolver à automação/ })).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Detalhes do atendimento' }));
+
+      expect(screen.getByText(explicacao)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Devolver à automação' })).not.toBeInTheDocument();
     });
 
@@ -531,10 +551,10 @@ describe('MensageriaDesktop — envio', () => {
 
       await userEvent.click(screen.getByRole('button', { name: 'Assumir atendimento' }));
       expect(postsDeControle(fetchWithAuth)).toEqual([]);
-      expect(screen.getByRole('group', { name: 'Confirmar transferência' })).toHaveTextContent('Esta conversa está com outro atendente');
+      expect(screen.getByRole('alertdialog', { name: 'Confirmar transferência' })).toHaveTextContent('Esta conversa está com outro atendente');
 
       await userEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
-      expect(screen.queryByRole('group', { name: 'Confirmar transferência' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('alertdialog', { name: 'Confirmar transferência' })).not.toBeInTheDocument();
       expect(postsDeControle(fetchWithAuth)).toEqual([]);
 
       await userEvent.click(screen.getByRole('button', { name: 'Assumir atendimento' }));
@@ -560,6 +580,148 @@ describe('MensageriaDesktop — envio', () => {
       expect(screen.getByText(/mudou de responsável antes do envio; nada saiu/)).toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: 'Recuperar texto' }));
       expect(screen.getByLabelText('Mensagem')).toHaveValue('resposta antiga');
+    });
+  });
+
+  describe('central de mensagens (UX)', () => {
+    it('autoria: cliente à esquerda, atendimento à direita com a conta, evento discreto; nada de "IA" ou "Você" sem prova', async () => {
+      const fetchWithAuth = servidor({});
+      const dublado = criarEspelho();
+      montar(dublado.espelho, ORG_A, fetchWithAuth);
+      await responder(dublado.conversas, CONVERSA);
+      await abrir('Ana');
+      await responder(dublado.mensagens, [
+        { ...mensagem(1, 1, 'Oi, cadê meu pedido?', '2026-11-20T12:00:00.000Z'), sender_type: 'contact', sender_name: 'Ana' },
+        { ...mensagem(2, 1, 'Já verifico para você.', '2026-11-20T12:01:00.000Z'), message_type: 'outgoing', sender_type: 'user', sender_name: 'Atendente Orbita' },
+        { ...mensagem(3, 1, 'Conversa atribuída', '2026-11-20T12:02:00.000Z'), message_type: 'activity', sender_name: null },
+      ]);
+
+      const daCliente = screen.getByText('Oi, cadê meu pedido?').closest('article')!;
+      const doAtendimento = screen.getByText('Já verifico para você.').closest('article')!;
+      expect(daCliente).toHaveAttribute('data-lado', 'esquerda');
+      expect(daCliente).toHaveTextContent('Ana');
+      expect(doAtendimento).toHaveAttribute('data-lado', 'direita');
+      expect(doAtendimento).toHaveTextContent('Atendimento');
+      expect(doAtendimento).toHaveTextContent('Atendente Orbita');
+      expect(screen.getByText('Conversa atribuída').closest('article')).toBeNull();
+      expect(screen.getByText(/Evento do sistema/)).toBeInTheDocument();
+      const historico = screen.getByRole('log', { name: 'Histórico da conversa' });
+      expect(within(historico).queryByText('Você')).not.toBeInTheDocument();
+      expect(within(historico).queryByText(/^IA$|Assistente virtual/)).not.toBeInTheDocument();
+    });
+
+    it('"Você" só no que este navegador enviou; o que volta da fila do servidor é "Atendimento"', async () => {
+      const fetchWithAuth = servidor({
+        lista: () => [{
+          id: 'envio-7', commandId: '70000000-0000-4000-8000-000000000007', conteudo: 'resposta na fila', estado: 'pendente',
+          explicacao: 'Na fila.', mensagemIdLocal: null, criadoEm: '2026-11-20T12:00:00Z',
+        }],
+      });
+      await abrirComposer(fetchWithAuth);
+      const daFila = (await screen.findByText('resposta na fila')).closest('article')!;
+      expect(daFila).toHaveTextContent('Atendimento');
+      expect(daFila).not.toHaveTextContent('Você');
+
+      await userEvent.type(screen.getByLabelText('Mensagem'), 'minha resposta');
+      await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
+      const minha = (await screen.findByText('minha resposta')).closest('article')!;
+      expect(minha).toHaveTextContent('Você');
+    });
+
+    it('Enter envia; Shift+Enter quebra a linha; Enter vazio não envia', async () => {
+      const fetchWithAuth = servidor({});
+      await abrirComposer(fetchWithAuth);
+      const campo = screen.getByLabelText('Mensagem');
+
+      await userEvent.type(campo, '{Enter}');
+      expect(postsDe(fetchWithAuth)).toEqual([]);
+
+      await userEvent.type(campo, 'linha 1{Shift>}{Enter}{/Shift}linha 2');
+      expect(campo).toHaveValue('linha 1\nlinha 2');
+      expect(postsDe(fetchWithAuth)).toEqual([]);
+
+      await userEvent.type(campo, '{Enter}');
+      await waitFor(() => expect(postsDe(fetchWithAuth)).toEqual([
+        { conversaId: uuidDaConversa(1), commandId: expect.any(String), content: 'linha 1\nlinha 2' },
+      ]));
+      expect(campo).toHaveValue('');
+    });
+
+    it('as ferramentas ficam no ⋯ e abrem no painel por assunto; o rascunho e o compositor continuam lá', async () => {
+      const fetchWithAuth = servidor({});
+      await abrirComposer(fetchWithAuth);
+      await userEvent.type(screen.getByLabelText('Mensagem'), 'rascunho em andamento');
+
+      // Sem painel aberto, as ferramentas não ocupam a conversa.
+      expect(screen.queryByRole('complementary', { name: 'Ferramentas da conversa' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Gerar rascunho de resposta' })).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Mais ações da conversa' }));
+      for (const nome of ['Marcar resolvida', 'Atualizar conversa', 'Detalhes do atendimento', 'Triagem da IA', 'Resposta sugerida',
+        'Identidade do cliente', 'Pedidos e informações comerciais']) {
+        expect(screen.getByRole('menuitem', { name: nome })).toBeInTheDocument();
+      }
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Mensagem')).toHaveValue('rascunho em andamento');
+
+      await escolherNoMenu('Resposta sugerida');
+      const painel = screen.getByRole('complementary', { name: 'Ferramentas da conversa' });
+      expect(within(painel).getByRole('tab', { name: 'Resposta' })).toHaveAttribute('aria-selected', 'true');
+      expect(within(painel).getByRole('button', { name: 'Gerar rascunho de resposta' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Mensagem')).toHaveValue('rascunho em andamento');
+
+      // Setas trocam de aba, como numa lista de abas.
+      within(painel).getByRole('tab', { name: 'Resposta' }).focus();
+      await userEvent.keyboard('{ArrowRight}');
+      expect(within(painel).getByRole('tab', { name: 'Cliente' })).toHaveAttribute('aria-selected', 'true');
+      expect(within(painel).getByRole('tab', { name: 'Cliente' })).toHaveFocus();
+
+      await userEvent.click(within(painel).getByRole('button', { name: 'Fechar ferramentas' }));
+      expect(screen.queryByRole('complementary', { name: 'Ferramentas da conversa' })).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Mensagem')).toHaveValue('rascunho em andamento');
+    });
+
+    it('fechar o painel (Escape ou X) devolve o foco ao ⋯ que abriu o menu, e não ao <body>', async () => {
+      const fetchWithAuth = servidor({});
+      await abrirComposer(fetchWithAuth);
+      const gatilho = screen.getByRole('button', { name: 'Mais ações da conversa' });
+
+      await escolherNoMenu('Triagem da IA');
+      const painel = screen.getByRole('complementary', { name: 'Ferramentas da conversa' });
+      within(painel).getByRole('tab', { name: 'Triagem' }).focus();
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByRole('complementary', { name: 'Ferramentas da conversa' })).not.toBeInTheDocument();
+      await waitFor(() => expect(gatilho).toHaveFocus());
+
+      await escolherNoMenu('Identidade do cliente');
+      await userEvent.click(screen.getByRole('button', { name: 'Fechar ferramentas' }));
+      await waitFor(() => expect(gatilho).toHaveFocus());
+    });
+
+    it('quem lê mensagens antigas não é puxado para o fim: aparece "Ir para as recentes"', async () => {
+      const fetchWithAuth = servidor({});
+      const dublado = criarEspelho();
+      montar(dublado.espelho, ORG_A, fetchWithAuth);
+      await responder(dublado.conversas, CONVERSA);
+      await abrir('Ana');
+      await responder(dublado.mensagens, [mensagem(1, 1, 'primeira', '2026-11-20T12:00:00.000Z')]);
+
+      const historico = screen.getByRole('log', { name: 'Histórico da conversa' });
+      Object.defineProperty(historico, 'scrollHeight', { configurable: true, value: 2000 });
+      Object.defineProperty(historico, 'clientHeight', { configurable: true, value: 500 });
+      historico.scrollTop = 200;
+      fireEvent.scroll(historico);
+      expect(screen.getByRole('button', { name: 'Ir para as recentes' })).toBeInTheDocument();
+
+      const assinatura = dublado.assinaturas.find((a) => a.tipo === 'mensagens' && a.ativa)!;
+      await act(async () => {
+        assinatura.aoInserir!(mensagem(2, 1, 'chegou agora', '2026-11-20T12:05:00.000Z'));
+      });
+      expect(historico.scrollTop).toBe(200);
+      await userEvent.click(screen.getByRole('button', { name: 'Ir para as recentes · 1 nova' }));
+      expect(historico.scrollTop).toBe(2000);
+      expect(screen.queryByRole('button', { name: /Ir para as recentes/ })).not.toBeInTheDocument();
     });
   });
 
@@ -771,7 +933,7 @@ describe('MensageriaDesktop — resolver e reabrir', () => {
 
     await abrir('Ana');
     await responder(mensagens, []);
-    await userEvent.click(screen.getByRole('button', { name: 'Marcar resolvida' }));
+    await escolherNoMenu('Marcar resolvida');
     // MSG-003B: o status também referencia a conversa só pelo UUID local.
     const [, pedidoDeStatus] = fetchWithAuth.mock.calls.find(([url]) => url === '/api/chatwoot/status')!;
     expect(JSON.parse(String(pedidoDeStatus!.body))).toEqual({ conversaId: uuidDaConversa(1), status: 'resolved' });
@@ -784,7 +946,8 @@ describe('MensageriaDesktop — resolver e reabrir', () => {
 
     // O cabeçalho aberto é o do Bruno, e ele continua aberto.
     const cabecalho = screen.getByRole('heading', { name: 'Bruno' }).closest('header')!;
-    expect(within(cabecalho).getByRole('button', { name: 'Marcar resolvida' })).toBeInTheDocument();
+    await userEvent.click(within(cabecalho).getByRole('button', { name: 'Mais ações da conversa' }));
+    expect(await screen.findByRole('menuitem', { name: 'Marcar resolvida' })).toBeInTheDocument();
   });
 });
 

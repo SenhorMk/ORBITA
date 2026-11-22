@@ -36,6 +36,12 @@ export interface MensagemOtimista {
   /** O motivo da falha, quando houve. */
   readonly erro: string | null;
   readonly criadaEm: string;
+  /**
+   * `true` quando este navegador criou o envio pelo compositor: é de quem está
+   * logado. `false` quando ele voltou da lista do servidor ao abrir a conversa,
+   * que não diz quem pediu (pode ser outra pessoa ou a resposta automática).
+   */
+  readonly local: boolean;
 }
 
 /**

@@ -304,3 +304,24 @@
     --tabela-pad: 22px;
   }
 }
+
+/* Celular (até 640 px). A janela de mesa, com margens de 22–30 px e rail de
+   80 px, deixava ~220 px úteis numa tela de 390: a conversa da Mensageria não
+   cabia. Aqui a moldura encolhe para o conteúdo respirar; as medidas internas
+   das telas continuam as da faixa de 1366. */
+@media (max-width: 640px) {
+  :root {
+    --window-inset-top: 8px;
+    --window-inset-right: 8px;
+    --window-inset-bottom: 8px;
+    --window-inset-left: 8px;
+    --r-window: 22px;
+
+    --rail-width: 64px;
+    --rail-logo: 28px;
+    --rail-pad-y: 12px;
+
+    --conteudo-pad: 10px 10px 10px 2px;
+    --conteudo-gap: 10px;
+  }
+}
