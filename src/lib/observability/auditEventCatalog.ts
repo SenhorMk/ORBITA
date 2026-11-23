@@ -134,6 +134,7 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   // Cadastro de produto e sincronização de categorias (migration 79, PRE-006B).
   // Metadata: ids técnicos, operação, desfecho e contagens — nunca nome, SKU,
   // preço, descrição de categoria ou corpo do Bling.
+  ['inventory.demo_debit_applied', 'catalog', 'info', 'user', 730, 'Baixa confirmada no estoque de demonstração.'],
   ['catalog.product_saved', 'catalog', 'info', 'user', 730, 'Produto cadastrado ou atualizado no Bling e espelhado no ORBITA.'],
   ['catalog.product_save_rejected', 'catalog', 'info', 'user', 730, 'O Bling recusou o cadastro ou a atualização do produto; nada foi gravado.'],
   ['catalog.product_reconcile_required', 'catalog', 'critical', 'user', 730, 'Gravação do produto sem confirmação do Bling, ou confirmada lá e não espelhada no ORBITA.'],

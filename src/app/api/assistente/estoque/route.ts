@@ -1,3 +1,4 @@
+import { proporBaixa } from '@/services/assistenteAdministrativo/baixaDeDemonstracao';
 import { resolveVerifiedOrganizationScope } from '@/lib/requestOrganizationContext';
 import { escopoTemCapacidade } from '@/lib/verifiedOrganizationScope';
 import { logger } from '@/lib/observability/logger';
@@ -16,6 +17,20 @@ export async function POST(request: Request) {
   if (!entrada.success) return Response.json({ mensagem: 'Escreva uma pergunta de até 240 caracteres.' }, { status: 400 });
   try {
     const intencao = await interpretarPerguntaDeEstoque(entrada.data.pergunta, request.signal);
+    if (intencao.acao === 'baixar_uma' && process.env.ORBITA_BAIXA_DEMO_ENABLED === 'true') {
+      if (!escopoTemCapacidade(sessao.scope, 'organization:manage')) {
+        return Response.json({ mensagem: 'A baixa exige gestão da organização.' }, { status: 403 });
+      }
+      const pedido = entrada.data;
+      if (!intencao.produto && pedido.produtoConsultado) {
+        return await proporBaixa(sessao.scope, pedido.produtoConsultado);
+      }
+      // Uma referência explícita tem precedência sobre o produto consultado.
+      const busca = await responderConsultaDeEstoque({ ...intencao, acao: 'consultar' }, pedido.pergunta,
+        referencia => lerSaldoDoProduto(supabaseServer, sessao.scope, referencia));
+      if (busca.estado === 'ok') return await proporBaixa(sessao.scope, busca.produto.id);
+      return Response.json(busca, { headers: { 'Cache-Control': 'no-store' } });
+    }
     const resposta = await responderConsultaDeEstoque(intencao, entrada.data.pergunta,
       referencia => lerSaldoDoProduto(supabaseServer, sessao.scope, referencia));
     logger.info('assistente_administrativo.consulta_estoque', { resultado: resposta.estado });

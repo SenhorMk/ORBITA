@@ -13,7 +13,7 @@ vi.mock('@/services/assistenteAdministrativo/interpretarEstoque', async importOr
 import { POST } from './route';
 
 const escopo = { actorId: 'sessao', organizationId: 'org-verificada', role: 'member' };
-const produto = { nome: 'Amostra', codigo: 'DEMO', estoque: 7, estoque_reservado: 3 };
+const produto = { id: '11111111-1111-4111-8111-111111111111', nome: 'Amostra', codigo: 'DEMO', estoque: 7, estoque_reservado: 3 };
 const pedir = (body: object) => POST(new Request('http://localhost/api/assistente/estoque', {
   method: 'POST', body: JSON.stringify(body),
 }));
