@@ -950,3 +950,125 @@ describe('MensageriaDesktop — resolver e reabrir', () => {
     expect(await screen.findByRole('menuitem', { name: 'Marcar resolvida' })).toBeInTheDocument();
   });
 });
+
+/**
+ * O rascunho pertence a uma conversa. Trocar de conversa não pode levar o texto
+ * escrito para uma cliente ao compositor de outra, e voltar não pode perder o
+ * que estava sendo escrito. A chave é a mesma que já isola o histórico:
+ * organização + conversa.
+ */
+describe('MensageriaDesktop — rascunho por conversa', () => {
+  /** Um servidor que aceita tudo: lista vazia de envios e POST de envio registrado. */
+  function servidorQualquer() {
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('/api/sac/')) {
+        return respostaJson({
+          success: true, versao: 1, candidatos: [],
+          verificacao: { estado: 'sem_prova', cliente: null, verificadoEm: null, expiraEm: null, totalDeCandidatos: 0, consultaPorNumeroBloqueada: false },
+        });
+      }
+      if (url.startsWith('/api/chatwoot/controle')) {
+        return respostaJson({
+          success: true,
+          controle: { modo: 'HUMAN_REQUIRED', responsavelId: null, souResponsavel: false, versao: 0 },
+          permissoes: { devolver: false, motivoSemDevolver: 'nao_e_responsavel', automacaoAtiva: false },
+        });
+      }
+      if (init?.method === 'POST' && url === '/api/chatwoot/send') {
+        const { commandId } = JSON.parse(String(init.body));
+        return respostaJson({ success: true, envio: { id: 'envio-1', commandId, estado: 'pendente', duplicado: false } }, 202);
+      }
+      return respostaJson({ success: true, envios: [] });
+    });
+  }
+
+  const enviosDe = (fetchWithAuth: ReturnType<typeof servidorQualquer>) =>
+    fetchWithAuth.mock.calls.filter(([url, init]) => init?.method === 'POST' && url === '/api/chatwoot/send')
+      .map(([, init]) => JSON.parse(String(init!.body)) as { conversaId: string; content: string });
+
+  async function abrirNaLista(nome: string, mensagens: LeituraPendente<ChatwootMessage[]>[]) {
+    await abrir(nome);
+    await responder(mensagens, []);
+  }
+
+  it('o rascunho da Ana não aparece no compositor do Bruno, e enviar no Bruno leva só o texto dele', async () => {
+    const fetchWithAuth = servidorQualquer();
+    const { espelho, conversas, mensagens } = criarEspelho();
+    montar(espelho, ORG_A, fetchWithAuth);
+    await responder(conversas, [conversa(1, 'Ana'), conversa(2, 'Bruno')]);
+
+    await abrirNaLista('Ana', mensagens);
+    await userEvent.type(screen.getByLabelText('Mensagem'), 'para a Ana');
+    await abrirNaLista('Bruno', mensagens);
+
+    expect(screen.getByLabelText('Mensagem')).toHaveValue('');
+    await userEvent.type(screen.getByLabelText('Mensagem'), 'para o Bruno');
+    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
+
+    await waitFor(() => expect(enviosDe(fetchWithAuth)).toHaveLength(1));
+    expect(enviosDe(fetchWithAuth)[0]).toMatchObject({ conversaId: uuidDaConversa(2), content: 'para o Bruno' });
+  });
+
+  it('voltar à conversa devolve o rascunho dela; o que foi enviado não volta', async () => {
+    const fetchWithAuth = servidorQualquer();
+    const { espelho, conversas, mensagens } = criarEspelho();
+    montar(espelho, ORG_A, fetchWithAuth);
+    await responder(conversas, [conversa(1, 'Ana'), conversa(2, 'Bruno')]);
+
+    await abrirNaLista('Ana', mensagens);
+    await userEvent.type(screen.getByLabelText('Mensagem'), 'para a Ana');
+    await abrirNaLista('Bruno', mensagens);
+    await userEvent.type(screen.getByLabelText('Mensagem'), 'para o Bruno');
+    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
+    await waitFor(() => expect(enviosDe(fetchWithAuth)).toHaveLength(1));
+
+    await abrirNaLista('Ana', mensagens);
+    expect(screen.getByLabelText('Mensagem')).toHaveValue('para a Ana');
+
+    await abrirNaLista('Bruno', mensagens);
+    expect(screen.getByLabelText('Mensagem')).toHaveValue('');
+  });
+
+  it('trocar de organização descarta os rascunhos da anterior', async () => {
+    const fetchWithAuth = servidorQualquer();
+    const { espelho, conversas, mensagens } = criarEspelho();
+    const { trocar } = montar(espelho, ORG_A, fetchWithAuth);
+    await responder(conversas, [conversa(1, 'Ana')]);
+    await abrirNaLista('Ana', mensagens);
+    await userEvent.type(screen.getByLabelText('Mensagem'), 'rascunho em A');
+
+    await act(async () => {
+      trocar(ORG_B);
+    });
+    await act(async () => {
+      trocar({ ...ORG_A, versao: 3 });
+    });
+    await responder(conversas, [conversa(1, 'Ana')]);
+    await abrirNaLista('Ana', mensagens);
+
+    expect(screen.getByLabelText('Mensagem')).toHaveValue('');
+  });
+
+  it('sair da sessão descarta os rascunhos, mesmo voltando à mesma organização', async () => {
+    const fetchWithAuth = servidorQualquer();
+    const { espelho, conversas, mensagens } = criarEspelho();
+    const { trocar } = montar(espelho, ORG_A, fetchWithAuth);
+    await responder(conversas, [conversa(1, 'Ana')]);
+    await abrirNaLista('Ana', mensagens);
+    await userEvent.type(screen.getByLabelText('Mensagem'), 'rascunho antes de sair');
+
+    await act(async () => {
+      trocar(null);
+    });
+    // Mesma organização e mesma versão: a chave volta igual, e mesmo assim nada sobrevive.
+    await act(async () => {
+      trocar(ORG_A);
+    });
+    await responder(conversas, [conversa(1, 'Ana')]);
+    // Com a mesma chave, a seleção carimbada volta e a Ana já está aberta.
+    await responder(mensagens, []);
+
+    expect(screen.getByRole('heading', { name: 'Ana' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Mensagem')).toHaveValue('');
+  });
+});

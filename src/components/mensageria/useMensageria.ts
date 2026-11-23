@@ -155,15 +155,39 @@ export function useMensageria(
     }
   }, [alterar, espelho, selecao?.id, selecionada?.id_local]);
 
+  /**
+   * Os rascunhos das conversas que não estão abertas, pela mesma chave
+   * (organização + conversa) que isola o histórico. Só em memória: nada vai para
+   * o armazenamento do navegador. Trocar de organização ou sair descarta todos.
+   */
+  const rascunhos = useRef<{ contexto: string | null; porConversa: Map<string, string> }>({
+    contexto: chaveDoContexto,
+    porConversa: new Map(),
+  });
+  if (rascunhos.current.contexto !== chaveDoContexto) {
+    rascunhos.current = { contexto: chaveDoContexto, porConversa: new Map() };
+  }
+
+  // Guarda o rascunho da conversa aberta enquanto ele muda. Vazio (inclusive
+  // depois de enviar) apaga a entrada: o que foi enviado não volta.
+  useEffect(() => {
+    if (estado === null || !estado.chave.startsWith(`${rascunhos.current.contexto}#`)) return;
+    if (estado.rascunho === '') rascunhos.current.porConversa.delete(estado.chave);
+    else rascunhos.current.porConversa.set(estado.chave, estado.rascunho);
+  }, [estado]);
+
   // A leitura do histórico, **uma vez por chave**. O estado é trocado por um
   // vazio na mesma passada em que a chave muda: é isso que faz o histórico
   // anterior sair da tela imediatamente, e não quando a leitura nova voltar.
+  // O rascunho volta só se for desta mesma chave.
   useEffect(() => {
     if (chaveDaConversa === null) {
       setEstado(null);
       return;
     }
-    setEstado((anterior) => (anterior?.chave === chaveDaConversa ? anterior : estadoVazio(chaveDaConversa)));
+    setEstado((anterior) => (anterior?.chave === chaveDaConversa
+      ? anterior
+      : { ...estadoVazio(chaveDaConversa), rascunho: rascunhos.current.porConversa.get(chaveDaConversa) ?? '' }));
     void lerHistorico();
   }, [chaveDaConversa, lerHistorico]);
 
