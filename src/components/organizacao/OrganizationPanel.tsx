@@ -1,4 +1,6 @@
 'use client';
+import responsive from '@/components/ui/Responsive.module.css';
+import { corDeTexto } from '@/components/ui/corDeTexto';
 
 import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
 import { HelpInfo } from '@/components/help/HelpInfo';
@@ -72,7 +74,7 @@ function Resumo({ rotulo, valor, cor }: { rotulo: string; valor: number | null; 
         lado de uma leitura que falhou ou que ainda não chegou seria o mesmo
         erro de confundir zero com "não sei", na posição mais visível da tela.
       */}
-      <span className="orbita-numero" style={{ fontSize: 'var(--resumo-fs)', color: valor === null ? 'var(--txt3)' : cor }}>
+      <span className="orbita-numero" style={{ fontSize: 'var(--resumo-fs)', color: valor === null ? 'var(--txt3)' : corDeTexto(cor) }}>
         {valor === null ? '—' : valor}
       </span>
     </div>
@@ -185,7 +187,7 @@ function Coluna({
       // cima do painel, fora do arredondamento. Ele nunca deveria ser
       // acionado — o corpo abaixo rola antes disso —, mas quando for, o que
       // some é o excesso, e não o formato da coluna.
-      className="flex flex-col min-h-0 min-w-0 overflow-hidden"
+      className={`flex flex-col min-h-0 min-w-0 overflow-hidden ${responsive.organizationColumn}`}
       style={{ gap: 11, padding: 16, borderRadius: 20, background: 'var(--glass2)', border: '1px solid var(--line)' }}
     >
       <header className="flex flex-col flex-none" style={{ gap: 3 }}>
@@ -283,7 +285,7 @@ export function OrganizationPanel({ fetchWithAuth, lista, onActiveOrgChange }: O
       : null;
 
   return (
-    <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
+    <div className={`flex flex-col flex-1 min-h-0 ${responsive.page}`} style={{ gap: 'var(--conteudo-gap)' }}>
       <Cabecalho
         totalDeOrganizacoes={totalDeOrganizacoes}
         totalDeMembros={painel.membros?.length ?? null}
@@ -323,8 +325,8 @@ export function OrganizationPanel({ fetchWithAuth, lista, onActiveOrgChange }: O
       </div>
 
       <div
-        className="flex-1 min-h-0 grid"
-        style={{ gridTemplateColumns: painel.canManage ? 'repeat(3, minmax(0, 1fr))' : 'repeat(2, minmax(0, 1fr))', gap: 12 }}
+        className={`flex-1 min-h-0 grid ${responsive.columns} ${painel.canManage ? responsive.threeColumns : responsive.twoColumns}`}
+        style={{ gap: 12 }}
       >
         <Coluna icone={<Building2 className="w-4 h-4" style={{ color: 'var(--txt3)' }} aria-hidden />} titulo="Suas organizações" ajuda={<HelpInfo ajudaId="org.troca" />}>
           <OrganizationList

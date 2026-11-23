@@ -1,0 +1,35 @@
+.donutColumn { width: var(--anel-col); padding-left: 26px; }
+.twoColumns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.threeColumns { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+:global(:root[data-theme='light']) .page {
+  --texto-acento: #426000;
+  --texto-perigo: #b52d23;
+  --texto-info: #005b7a;
+  --texto-atencao: #795000;
+}
+/* O ERP rola pela página em telas estreitas; o cockpit mantém seu próprio layout. */
+@media (max-width: 1100px) {
+  .viewport { overflow: auto; }
+  .viewport > :not(:global(.hidden)) { flex: none; min-height: 100%; }
+  .page { flex: none; min-width: 0; }
+  .topbar { flex-wrap: wrap; justify-content: flex-start; }
+  .toolbar { flex-wrap: wrap; }
+  .search { flex-basis: 240px; min-width: min(240px, 100%); }
+  .pills { flex-wrap: wrap; max-width: 100%; }
+  .tableFrame { flex: none; height: min(520px, 65dvh); min-height: 320px; }
+  .dashboardBody { flex-direction: column; flex: none; }
+  .donutColumn { width: 100%; padding-left: 0; }
+  .donutSpace { flex: none; height: 220px; }
+  .analysis { flex: none; min-height: 260px; }
+  .legend { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .twoColumns, .threeColumns { grid-template-columns: minmax(0, 1fr); }
+  .columns { flex: none; }
+  .integrationPage li { min-width: 0; overflow-wrap: anywhere; }
+  .integrationPage li > div { flex-wrap: wrap; }
+  .organizationColumn { min-height: 240px; max-height: 500px; }
+  .seriesFooter { flex-wrap: wrap; }
+  .seriesFooter > div { flex-basis: 100%; order: 1; flex-wrap: wrap; justify-content: space-between; }
+}
+@media (max-width: 480px) {
+  .legend { grid-template-columns: minmax(0, 1fr) !important; }
+}

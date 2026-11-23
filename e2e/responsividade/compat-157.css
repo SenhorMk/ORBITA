@@ -1,0 +1,8 @@
+/* Apenas no harness: bloco móvel do PR157, conferido no HEAD 1b5b332. */
+@media (max-width:640px) {
+  :root[data-future='157'] {
+    --window-inset-top:8px; --window-inset-right:8px; --window-inset-bottom:8px; --window-inset-left:8px;
+    --r-window:22px; --rail-width:64px; --rail-logo:28px; --rail-pad-y:12px;
+    --conteudo-pad:10px 10px 10px 2px; --conteudo-gap:10px;
+  }
+}

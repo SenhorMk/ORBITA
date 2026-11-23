@@ -1,4 +1,6 @@
 'use client';
+import responsive from '@/components/ui/Responsive.module.css';
+import { corDeTexto } from '@/components/ui/corDeTexto';
 
 import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
 
@@ -123,7 +125,7 @@ export function VendasEPedidos({
   };
 
   return (
-    <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
+    <div className={`flex flex-col flex-1 min-h-0 ${responsive.page}`} style={{ gap: 'var(--conteudo-gap)' }}>
 
       {/* Título e resumo NA MESMA LINHA — a composição do protótipo. */}
       <div className={`flex items-start gap-8 flex-none ${helpPageHeader}`}>
@@ -206,7 +208,7 @@ export function VendasEPedidos({
                     {chip.rotulo}
                   </span>
                   <span className="flex items-baseline" style={{ gap: 7 }}>
-                    <span className="orbita-numero" style={{ fontSize: 'var(--resumo-fs)', color: chip.cor }}>
+                    <span className="orbita-numero" style={{ fontSize: 'var(--resumo-fs)', color: corDeTexto(chip.cor) }}>
                       {chip.quantidade}
                     </span>
                     {chip.soma !== null && (
@@ -232,9 +234,9 @@ export function VendasEPedidos({
       </div>
 
       {/* Toolbar: períodos à esquerda, busca, espaço, ordenação. */}
-      <div className="flex items-center flex-none" style={{ gap: 10 }}>
+      <div className={`flex items-center flex-none ${responsive.toolbar}`} style={{ gap: 10 }}>
         <div
-          className="flex"
+          className={`flex ${responsive.pills}`}
           style={{ gap: 3, padding: 4, borderRadius: 14, background: 'var(--chip)', border: '1px solid var(--line)' }}
         >
           {PERIODOS.map((p) => {
@@ -262,7 +264,7 @@ export function VendasEPedidos({
         </div>
 
         <div
-          className="flex items-center flex-1 min-w-0"
+          className={`flex items-center flex-1 min-w-0 ${responsive.search}`}
           style={{
             gap: 10,
             height: 38,

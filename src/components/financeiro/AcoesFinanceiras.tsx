@@ -20,7 +20,7 @@ export function AcoesFinanceiras({
   onNovaDespesa: () => void;
 }) {
   return (
-    <div className="flex items-center flex-none" style={{ gap: 8 }}>
+    <div className="flex items-center flex-none flex-wrap min-w-0 max-w-full" style={{ gap: 8 }}>
       <HelpContext ajudaId="integracoes.sync"><button type="button" onClick={onSync} disabled={syncing} className="orbita-chip cursor-pointer">
         <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
         {syncing ? 'Sincronizando...' : 'Sincronizar'}

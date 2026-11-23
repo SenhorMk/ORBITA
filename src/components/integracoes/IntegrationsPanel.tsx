@@ -1,4 +1,5 @@
 'use client';
+import responsive from '@/components/ui/Responsive.module.css';
 
 import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
 
@@ -58,10 +59,10 @@ function Erro({ falha }: { readonly falha: Falha | null }) {
 /** O estado da integracao, com a evidencia que o sustenta logo abaixo. */
 function EstadoDoProvedor({ estado }: { readonly estado: EstadoDaIntegracao }) {
   return (
-    <div className="flex flex-col items-end flex-none" style={{ gap: 4 }}>
+    <div className="flex flex-col items-end flex-none min-w-0 max-w-full" style={{ gap: 4 }}>
       <Pilula rotulo={estado.rotulo} cor={estado.cor} />
       {estado.detalhe && (
-        <span className="text-[11px] text-right" style={{ color: 'var(--txt3)', maxWidth: 280 }}>
+        <span className="text-[11px] text-right" style={{ color: 'var(--txt3)', maxWidth: 'min(280px, 100%)' }}>
           {estado.detalhe}
         </span>
       )}
@@ -88,7 +89,7 @@ function Cartao({
       className="flex flex-col min-w-0"
       style={{ gap: 14, padding: 16, borderRadius: 20, background: 'var(--glass2)', border: '1px solid var(--line)' }}
     >
-      <header className="flex items-start justify-between" style={{ gap: 12 }}>
+      <header className="flex items-start justify-between flex-wrap" style={{ gap: 12 }}>
         <div className="flex items-center gap-2 min-w-0"><h2
           className="flex items-center m-0"
           style={{ gap: 7, font: '600 13px/1.2 var(--font-archivo), sans-serif', color: 'var(--txt)' }}
@@ -553,7 +554,7 @@ export function IntegrationsPanel({
   const chave = chaveDaSelecao(selecao);
 
   return (
-    <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
+    <div className={`flex flex-col flex-1 min-h-0 ${responsive.page} ${responsive.integrationPage}`} style={{ gap: 'var(--conteudo-gap)' }}>
       <div className={`flex items-start gap-8 flex-none ${helpPageHeader}`}>
         <div className="flex flex-col flex-none" style={{ width: 'var(--titulo-col)', gap: 13 }}>
           <HelpContext ajudaId="integracoes.visao">
@@ -617,7 +618,7 @@ export function IntegrationsPanel({
       ) : (
         // A `key` e a selecao: trocar de organizacao (ou voltar para a mesma,
         // que e outra selecao) destroi os cartoes e todo segredo em digitacao.
-        <div key={chave ?? 'sem-organizacao'} className="grid" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+        <div key={chave ?? 'sem-organizacao'} className={`grid ${responsive.twoColumns}`} style={{ gap: 12 }}>
           <CartaoBling
             fetchWithAuth={fetchWithAuth}
             leitura={integracoes.dados}

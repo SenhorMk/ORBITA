@@ -1,4 +1,5 @@
 'use client';
+import responsive from '@/components/ui/Responsive.module.css';
 
 import { useMemo, useState } from 'react';
 
@@ -112,7 +113,7 @@ export function FinanceiroTab({ fetchWithAuth, ativo = true, pedidos = null, org
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
   return (
-    <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
+    <div className={`flex flex-col flex-1 min-h-0 ${responsive.page}`} style={{ gap: 'var(--conteudo-gap)' }}>
 
       <CabecalhoDoFinanceiro resumo={resumo} formatarDinheiro={formatarDinheiro} />
 
@@ -137,6 +138,7 @@ export function FinanceiroTab({ fetchWithAuth, ativo = true, pedidos = null, org
       />
 
       <CorpoDoFinanceiro
+        ativo={ativo}
         estado={{ nuncaCarregou, erroDeLeitura, carregando }}
         titulos={noPeriodo}
         serie={serie}

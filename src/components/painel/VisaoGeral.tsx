@@ -1,4 +1,6 @@
 'use client';
+import responsive from '@/components/ui/Responsive.module.css';
+import { corDeTexto } from '@/components/ui/corDeTexto';
 
 import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
 
@@ -108,7 +110,7 @@ function LinhaDeTitulo({
                 </span>
                 <span
                   className="orbita-numero truncate"
-                  style={{ fontSize: 'var(--resumo-fs)', color: celula.cor ?? 'var(--txt)' }}
+                  style={{ fontSize: 'var(--resumo-fs)', color: corDeTexto(celula.cor ?? 'var(--txt)') }}
                 >
                   {celula.valor}
                 </span>
@@ -131,8 +133,8 @@ function ColunaDoAnel({
   const anelBg = degradeDoAnel(anel.fatias);
   return (
           <div
-            className="flex flex-col flex-none min-w-0"
-            style={{ width: 'var(--anel-col)', paddingLeft: 26, gap: 16 }}
+            className={`flex flex-col flex-none min-w-0 ${responsive.donutColumn}`}
+            style={{ gap: 16 }}
           >
             {/*
               O anel absorve a sobra e as métricas ficam com a altura natural.
@@ -141,7 +143,7 @@ function ColunaDoAnel({
               cede é o desenho, nunca o número: o anel encolhe até o espaço que
               existir, e as legendas continuam inteiras.
             */}
-            <div className="flex-1 min-h-0 flex items-center justify-center">
+            <div className={`flex-1 min-h-0 flex items-center justify-center ${responsive.donutSpace}`}>
               <div
                 className="relative"
                 style={{ height: '100%', aspectRatio: '1', maxHeight: 'var(--anel-tam)', maxWidth: '100%' }}
@@ -190,7 +192,7 @@ function ColunaDoAnel({
                       fontSize: 'var(--metrica-fs)',
                       lineHeight: 1,
                       letterSpacing: '-0.02em',
-                      color: metrica.cor,
+                      color: corDeTexto(metrica.cor),
                     }}
                   >
                     {metrica.valor}
@@ -244,7 +246,7 @@ export function VisaoGeral({ dados, erroDeLeitura, onRecarregar }: VisaoGeralPro
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
+    <div className={`flex flex-col flex-1 min-h-0 ${responsive.page}`} style={{ gap: 'var(--conteudo-gap)' }}>
       {erroDeLeitura !== null && <AvisoDeAtualizacaoFalhada detalhe={erroDeLeitura} />}
 
       <LinhaDeTitulo
@@ -259,15 +261,15 @@ export function VisaoGeral({ dados, erroDeLeitura, onRecarregar }: VisaoGeralPro
           descricao="Sincronize o Bling ou registre uma venda manual para a visão geral ter o que mostrar."
         />
       ) : (
-        <div className="flex flex-1 min-h-0" style={{ gap: 26 }}>
+        <div className={`flex flex-1 min-h-0 ${responsive.dashboardBody}`} style={{ gap: 26 }}>
           <ColunaDoAnel anel={anel} metricas={metricas} />
 
           {/* Coluna direita: a área analítica, e a legenda do anel embaixo. */}
           <div className="flex-1 min-w-0 flex flex-col" style={{ gap: 14 }}>
-            <div className="flex-1 min-h-0 flex">{analise && <AreaAnalitica analise={analise} />}</div>
+            <div className={`flex-1 min-h-0 flex ${responsive.analysis}`}>{analise && <AreaAnalitica analise={analise} />}</div>
 
             <div
-              className="grid flex-none"
+              className={`grid flex-none ${responsive.legend}`}
               style={{ gridTemplateColumns: `repeat(${anel.fatias.length || 1}, 1fr)`, gap: 14 }}
             >
               {anel.fatias.map((fatia) => (
@@ -290,7 +292,7 @@ export function VisaoGeral({ dados, erroDeLeitura, onRecarregar }: VisaoGeralPro
                     {fatia.rotulo}
                   </span>
                   <span className="flex items-baseline" style={{ gap: 8 }}>
-                    <span className="orbita-numero" style={{ fontSize: 23, color: fatia.cor }}>
+                    <span className="orbita-numero" style={{ fontSize: 23, color: corDeTexto(fatia.cor) }}>
                       {fatia.quantidade}
                     </span>
                     <span style={{ font: '400 10.5px/1 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>

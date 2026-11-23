@@ -1,4 +1,5 @@
 'use client';
+import { corDeTexto } from '@/components/ui/corDeTexto';
 
 import { format, parseISO } from 'date-fns';
 
@@ -29,7 +30,7 @@ import type { FiltroDeTipo, SituacaoDeTitulo, TituloFinanceiro } from './useLeit
 const GRADE = 'var(--tabela-financeiro-cols)';
 
 /** A soma das colunas na geometria de 1366 — abaixo disso a tabela rola dentro da moldura. */
-const LARGURA_MINIMA = 430;
+const LARGURA_MINIMA = 520;
 
 /** Quantas linhas cabem em "últimas": o mesmo teto de antes. */
 const TETO_DE_LINHAS = 10;
@@ -83,7 +84,7 @@ function GrupoDePills<T extends string>({
 }) {
   return (
     <div
-      className="flex flex-none"
+      className="flex flex-wrap min-w-0 max-w-full"
       style={{ gap: 3, padding: 4, borderRadius: 14, background: 'var(--chip)', border: '1px solid var(--line)' }}
     >
       {opcoes.map((opcao) => {
@@ -94,7 +95,7 @@ function GrupoDePills<T extends string>({
             type="button"
             onClick={() => onEscolher(opcao.id)}
             aria-pressed={selecionado}
-            className="cursor-pointer"
+            className="cursor-pointer whitespace-nowrap"
             style={{
               height: 30,
               padding: '0 13px',
@@ -202,7 +203,7 @@ export function TabelaDeMovimentacoes({
               className="orbita-numero text-right truncate"
               style={{
                 fontSize: 13.5,
-                color: corDoValor,
+                color: corDeTexto(corDoValor),
                 textDecoration: terminal ? 'line-through' : undefined,
               }}
             >
