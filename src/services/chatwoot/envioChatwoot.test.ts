@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 
 import type { VerifiedOrganizationScope } from '../../lib/verifiedOrganizationScope';
-import { lerUltimoEnvioPublicoDaConversa, listarEnviosDaConversa, RegistroDeEnvioIndisponivel } from './envioChatwoot';
+import { lerUltimoEnvioConfirmadoDaConversa, listarEnviosDaConversa, provaDoEnvio, RegistroDeEnvioIndisponivel } from './envioChatwoot';
 
 const scope = { organizationId: 'e0080000-0000-4000-8000-00000000000a', actorId: 'e0080000-0000-4000-8000-0000000000a1' } as VerifiedOrganizationScope;
 
@@ -36,7 +36,7 @@ describe('listarEnviosDaConversa', () => {
     });
   });});
 
-describe('lerUltimoEnvioPublicoDaConversa (corte do que já foi respondido)', () => {
+describe('envio como prova de atendimento (corte do assistente)', () => {
   const ESCOPO = { organizacaoId: 'e0080000-0000-4000-8000-00000000000a', conexaoId: 'e0080000-0000-4000-8000-0000000000c1' };
   const CONVERSA = 'e0080000-0000-4000-8000-0000000000d1';
   function gravador(resposta: { data: unknown; error: unknown }) {
@@ -49,25 +49,54 @@ describe('lerUltimoEnvioPublicoDaConversa (corte do que já foi respondido)', ()
     const cliente = { from: (tabela: string) => { chamadas.push(['from', tabela]); return cadeia; } } as unknown as SupabaseClient;
     return { cliente, chamadas };
   }
+  const linha = (segundos: number, status: string, invalidado = false) => ({
+    created_at: new Date(Date.UTC(2026, 10, 23, 15, 0, segundos)).toISOString(),
+    invalidado_em: invalidado ? '2026-11-23T15:10:00.000Z' : null,
+    outbox_eventos: { status },
+  });
 
-  it('só envio público, não invalidado, da organização, conexão e conversa; lê só o instante', async () => {
-    const { cliente, chamadas } = gravador({ data: [{ created_at: '2026-11-23T15:00:12.797+00:00' }], error: null });
-    await expect(lerUltimoEnvioPublicoDaConversa(cliente, ESCOPO, CONVERSA)).resolves.toBe('2026-11-23T15:00:12.797+00:00');
+  it.each([
+    ['sent', 'confirmado'],
+    ['pending', 'registrado'], ['processing', 'registrado'], ['failed_transient', 'registrado'], ['in_flight', 'registrado'],
+    ['dead_letter', 'nao_entregue'], ['unknown', 'desconhecido'], ['estado_novo', 'desconhecido'],
+  ])('outbox %s → %s', (status, prova) => {
+    expect(provaDoEnvio({ status, invalidadoEm: null })).toBe(prova);
+  });
+
+  it('invalidado por mudança de responsável nunca prova entrega, mesmo marcado como sent', () => {
+    expect(provaDoEnvio({ status: 'sent', invalidadoEm: '2026-11-23T15:10:00Z' })).toBe('nao_entregue');
+  });
+
+  it('lê instante e estado dos envios públicos da organização, conexão e conversa, sem filtrar estado no PostgREST', async () => {
+    const { cliente, chamadas } = gravador({ data: [linha(12, 'sent')], error: null });
+    await expect(lerUltimoEnvioConfirmadoDaConversa(cliente, ESCOPO, CONVERSA)).resolves.toBe(linha(12, 'sent').created_at);
     expect(chamadas).toEqual([
-      ['from', 'chatwoot_envios'], ['select', 'created_at'],
+      ['from', 'chatwoot_envios'], ['select', 'created_at, invalidado_em, outbox_eventos!fk_chatwoot_envios_evento(status)'],
       ['eq', 'organizacao_id', ESCOPO.organizacaoId], ['eq', 'conexao_id', ESCOPO.conexaoId], ['eq', 'conversa_id_local', CONVERSA],
-      ['eq', 'privada', false], ['is', 'invalidado_em', null], ['order', 'created_at', { ascending: false }], ['limit', 1],
+      ['eq', 'privada', false], ['order', 'created_at', { ascending: false }], ['limit', 20],
     ]);
   });
 
-  it('sem envio: null; escopo inválido, erro ou formato inesperado falham fechado', async () => {
-    await expect(lerUltimoEnvioPublicoDaConversa(gravador({ data: [], error: null }).cliente, ESCOPO, CONVERSA)).resolves.toBeNull();
+  it.each(['pending', 'processing', 'failed_transient', 'in_flight', 'dead_letter', 'unknown'])(
+    'resposta mais recente em %s não vira corte: vale a última confirmada antes dela', async (status) => {
+      const { cliente } = gravador({ data: [linha(40, status), linha(10, 'sent')], error: null });
+      await expect(lerUltimoEnvioConfirmadoDaConversa(cliente, ESCOPO, CONVERSA)).resolves.toBe(linha(10, 'sent').created_at);
+    });
+
+  it('dead_letter sem invalidado_em, registrada sem confirmação ou invalidada: sem confirmada, nenhum corte', async () => {
+    const { cliente } = gravador({ data: [linha(40, 'dead_letter'), linha(30, 'unknown'), linha(20, 'sent', true), linha(10, 'pending')], error: null });
+    await expect(lerUltimoEnvioConfirmadoDaConversa(cliente, ESCOPO, CONVERSA)).resolves.toBeNull();
+  });
+
+  it('escopo inválido, erro ou formato inesperado falham fechado, sem consulta ou dado parcial', async () => {
     const semConsulta = gravador({ data: [], error: null });
-    await expect(lerUltimoEnvioPublicoDaConversa(semConsulta.cliente, ESCOPO, 'x')).rejects.toBeInstanceOf(RegistroDeEnvioIndisponivel);
+    await expect(lerUltimoEnvioConfirmadoDaConversa(semConsulta.cliente, ESCOPO, 'x')).rejects.toBeInstanceOf(RegistroDeEnvioIndisponivel);
     expect(semConsulta.chamadas).toEqual([]);
-    await expect(lerUltimoEnvioPublicoDaConversa(gravador({ data: null, error: { code: '42501' } }).cliente, ESCOPO, CONVERSA))
+    await expect(lerUltimoEnvioConfirmadoDaConversa(gravador({ data: null, error: { code: '42501' } }).cliente, ESCOPO, CONVERSA))
       .rejects.toBeInstanceOf(RegistroDeEnvioIndisponivel);
-    await expect(lerUltimoEnvioPublicoDaConversa(gravador({ data: [{ created_at: 'ontem' }], error: null }).cliente, ESCOPO, CONVERSA))
+    await expect(lerUltimoEnvioConfirmadoDaConversa(gravador({ data: [{ created_at: 'ontem', invalidado_em: null, outbox_eventos: { status: 'sent' } }], error: null }).cliente, ESCOPO, CONVERSA))
+      .rejects.toBeInstanceOf(RegistroDeEnvioIndisponivel);
+    await expect(lerUltimoEnvioConfirmadoDaConversa(gravador({ data: [{ created_at: linha(1, 'sent').created_at, invalidado_em: null }], error: null }).cliente, ESCOPO, CONVERSA))
       .rejects.toBeInstanceOf(RegistroDeEnvioIndisponivel);
   });
 });

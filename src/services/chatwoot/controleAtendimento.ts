@@ -186,3 +186,32 @@ function motivoSemDevolver(conversa: ControleDaConversa, podeGerenciar: boolean,
   if (!automacaoAtiva) return 'automacao_inativa';
   return null;
 }
+
+const DevolucaoSchema = z.array(z.object({ created_at: z.string().datetime({ offset: true }) })).max(1);
+
+/**
+ * Instante da última devolução à automação (handback) na conversa, ou `null`.
+ * O atendente resolveu o que veio antes e deixou o resumo; a IA retoma só a
+ * partir daí (a mesma regra de `ai_contexto_worker`). `iniciar_ia` não conta:
+ * ali ninguém atendeu, e as mensagens pendentes continuam sendo pedido.
+ * Leitura com service role: organização e conversa explícitas no filtro.
+ */
+export async function lerUltimaDevolucaoDaConversa(
+  supabase: SupabaseClient,
+  organizacaoId: string,
+  conversaId: string,
+): Promise<string | null> {
+  const uuid = z.string().uuid();
+  if (!uuid.safeParse(organizacaoId).success || !uuid.safeParse(conversaId).success) throw new ControleIndisponivel();
+  const { data, error } = await supabase
+    .from('chatwoot_controle_historico')
+    .select('created_at')
+    .eq('organizacao_id', organizacaoId)
+    .eq('conversa_id_local', conversaId)
+    .eq('acao', 'devolver')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  const linhas = DevolucaoSchema.safeParse(data ?? []);
+  if (error || !linhas.success) throw new ControleIndisponivel();
+  return linhas.data[0]?.created_at ?? null;
+}

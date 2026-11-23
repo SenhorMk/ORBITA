@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { consumirAiFirstUmaVez, ultimaRespostaEntre, type CanalDeProjecaoAiFirst, type LerUltimaResposta } from './workerAiFirst';
+import { consumirAiFirstUmaVez, atendidaAteEntre, type CanalDeProjecaoAiFirst, type LerAtendidaAte } from './workerAiFirst';
 import type { ModeloDeResposta } from '../sac/gerarResposta';
 
 const ESCOPO = { p_org: 'c75eb92d-9222-49cc-ac0f-6aebaf8fa69f', p_conexao: 'bc55e20a-dd17-416c-9343-c511e3cd0b1b',
@@ -20,7 +20,7 @@ const canal: CanalDeProjecaoAiFirst = {
   async alterarSemAtribuir() { throw new Error('sem projeção neste teste'); },
 };
 
-function montar(ultimaResposta?: LerUltimaResposta) {
+function montar(atendida?: LerAtendidaAte) {
   const rpcs: Array<[string, Record<string, unknown>]> = [];
   const banco = {
     async rpc(nome: string, args: Record<string, unknown>) {
@@ -34,11 +34,11 @@ function montar(ultimaResposta?: LerUltimaResposta) {
   const entradas: string[] = [];
   const modelo: ModeloDeResposta = { provedor: 'fake', async gerar(_i, entrada) { entradas.push(entrada); return { texto: 'Temos kuripes.' }; } };
   const leituras: Array<[unknown, string]> = [];
-  const leitor: LerUltimaResposta | undefined = ultimaResposta && (async (escopo, conversa) => {
+  const leitor: LerAtendidaAte | undefined = atendida && (async (escopo, conversa) => {
     leituras.push([escopo, conversa]);
-    return ultimaResposta(escopo, conversa);
+    return atendida(escopo, conversa);
   });
-  const passar = () => consumirAiFirstUmaVez({ escopo: ESCOPO, habilitado: true, modelo, canal, banco, ultimaResposta: leitor });
+  const passar = () => consumirAiFirstUmaVez({ escopo: ESCOPO, habilitado: true, modelo, canal, banco, atendidaAte: leitor });
   return { passar, rpcs, entradas, leituras };
 }
 
@@ -70,14 +70,14 @@ describe('worker AI-first: corte do que já foi respondido', () => {
 
 describe('corte entre espelho e envio registrado', () => {
   it('vale o mais recente: a resposta registrada ainda não espelhada já atende a mensagem anterior', async () => {
-    const espelho: LerUltimaResposta = async () => '2026-11-23T15:00:04.000Z';
-    const envio: LerUltimaResposta = async () => '2026-11-23T15:00:28.823+00:00';
-    await expect(ultimaRespostaEntre(espelho, envio)(ESCOPO, TRABALHO.conversa)).resolves.toBe('2026-11-23T15:00:28.823+00:00');
-    await expect(ultimaRespostaEntre(async () => null, async () => null)(ESCOPO, TRABALHO.conversa)).resolves.toBeNull();
+    const espelho: LerAtendidaAte = async () => '2026-11-23T15:00:04.000Z';
+    const envio: LerAtendidaAte = async () => '2026-11-23T15:00:28.823+00:00';
+    await expect(atendidaAteEntre(espelho, envio)(ESCOPO, TRABALHO.conversa)).resolves.toBe('2026-11-23T15:00:28.823+00:00');
+    await expect(atendidaAteEntre(async () => null, async () => null)(ESCOPO, TRABALHO.conversa)).resolves.toBeNull();
   });
 
   it('falha em qualquer fonte rejeita, e o worker cai no corte conservador', async () => {
-    const corte = ultimaRespostaEntre(async () => '2026-11-23T15:00:04.000Z', async () => { throw new Error('rede'); });
+    const corte = atendidaAteEntre(async () => '2026-11-23T15:00:04.000Z', async () => { throw new Error('rede'); });
     await expect(corte(ESCOPO, TRABALHO.conversa)).rejects.toThrow('rede');
     const w = montar(corte);
     await w.passar();
