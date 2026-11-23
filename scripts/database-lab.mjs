@@ -156,6 +156,46 @@ export async function alinharStubDeAuthComProducao({
 }
 
 /**
+ * Migrations com guarda de DADO do staging. A ordem 104
+ * (`101_lista_conversas_teste.sql`) termina num `DO $guard$` que exige
+ * alterar exatamente a linha de runtime da inbox 2 do Haux com
+ * `conversa_teste_externa='10'` e aborta (P0001 "Escopo WhatsApp mudou")
+ * se ela não existir — o que é sempre o caso num banco vazio. A migration
+ * já está aplicada no staging e é checksum-locked: não se edita. O
+ * laboratório recria só a pré-condição que ela verificou no staging,
+ * aplica o arquivo canônico intacto e remove os dados sintéticos em
+ * seguida, para que o esquema final seja o mesmo do staging.
+ */
+const HAUX = {
+  org: 'c75eb92d-9222-49cc-ac0f-6aebaf8fa69f',
+  conexao: 'bc55e20a-dd17-416c-9343-c511e3cd0b1b',
+  executor: '1abfa500-0000-4000-8000-000000000104',
+};
+export const PRECONDICOES_DE_DADOS = Object.freeze({
+  104: Object.freeze({
+    antes: `
+      insert into auth.users (id, email) values ('${HAUX.executor}', 'lab-ordem-104@orbita.test');
+      insert into public.organizacoes (id, nome, slug, status) values ('${HAUX.org}', 'Lab ordem 104', 'lab-ordem-104', 'active');
+      insert into public.conexoes_integracao (id, organizacao_id, provedor, nome, status)
+        values ('${HAUX.conexao}', '${HAUX.org}', 'chatwoot', 'Lab ordem 104', 'conectado');
+      insert into public.chatwoot_ai_runtime (conexao_id, organizacao_id, executor_id, inbox_id, corte, ativo, conversa_teste_externa, clientes_liberados)
+        values ('${HAUX.conexao}', '${HAUX.org}', '${HAUX.executor}', 2, now(), false, '10', false);`,
+    depois: `
+      delete from public.chatwoot_ai_runtime where conexao_id = '${HAUX.conexao}';
+      delete from public.conexoes_integracao where id = '${HAUX.conexao}';
+      delete from public.organizacoes where id = '${HAUX.org}';
+      delete from auth.users where id = '${HAUX.executor}';`,
+  }),
+});
+
+/** SQLSTATE e mensagem do Postgres, sem valores de conexão: o CI mostrava só "failed after N". */
+function causaSql(cause) {
+  if (!cause || typeof cause !== 'object') return String(cause);
+  const { code, message, where } = /** @type {{ code?: string, message?: string, where?: string }} */ (cause);
+  return [code, message, where].filter(Boolean).join(' | ');
+}
+
+/**
  * Apply every checksum-locked migration in exact ledger order.
  *
  * @param {object} [options] - Injected local database, ledger and filesystem boundaries.
@@ -176,7 +216,10 @@ export async function applyCanonicalMigrations({
       const migrationPath = path.resolve(path.dirname(SUPABASE_CONFIG_PATH), migration.path);
       console.log(`[database-lab] apply ${String(migration.order).padStart(2, '0')} ${migration.path} ${migration.sha256.slice(0, 12)}`);
       const canonicalSql = fileSystem.readFileSync(migrationPath, 'utf8').replace(/^\uFEFF/, '');
+      const precondicao = PRECONDICOES_DE_DADOS[migration.order];
+      if (precondicao) await client.query(precondicao.antes);
       await client.query(canonicalSql);
+      if (precondicao) await client.query(precondicao.depois);
       applied.push(migration);
       if (migration.order === failAfterOrder) {
         outcome = err(
@@ -191,7 +234,7 @@ export async function applyCanonicalMigrations({
   } catch (cause) {
     outcome = err(
       'MigrationApplyFailed',
-      `Canonical migration application failed after ${applied.length} migrations`,
+      `Canonical migration application failed after ${applied.length} migrations: ${causaSql(cause)}`,
       { appliedMigrations: applied.length },
       cause,
     );
