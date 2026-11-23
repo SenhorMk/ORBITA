@@ -187,6 +187,11 @@ const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
   ['sac.customer_verified', 'sac', 'info', 'user', 1825, 'Atendente confirmou o cliente da conversa; a consulta de pedidos fica liberada para esse cliente.', undefined, ['payload', 'content', 'documento', 'telefone', 'numero']],
   ['sac.customer_verification_revoked', 'sac', 'info', 'user', 1825, 'Atendente desfez a confirmação do cliente da conversa.', undefined, ['payload', 'content', 'documento', 'telefone', 'numero']],
   ['sac.order_lookup_blocked', 'sac', 'warning', 'system', 1825, 'Consulta de pedido por número bloqueada na conversa depois de tentativas seguidas sem resultado.', undefined, ['payload', 'content', 'documento', 'telefone', 'numero']],
+  ['sac.policy_published', 'sac', 'warning', 'user', 1825, 'Política D7 formalmente aprovada e publicada.', undefined, ['conteudo', 'referencia', 'fonte']],
+  ['sac.proposal_created', 'sac', 'info', 'user', 1825, 'Rascunho de resolução criado.', undefined, ['entrada', 'fatos']],
+  ['sac.proposal_edited', 'sac', 'info', 'user', 1825, 'Nova versão do rascunho de resolução.', undefined, ['entrada', 'fatos']],
+  ['sac.proposal_approved', 'sac', 'warning', 'user', 1825, 'Aprovação humana de versão de proposta.', undefined, ['entrada', 'fatos']],
+  ['sac.proposal_rejected', 'sac', 'info', 'user', 1825, 'Rejeição humana de versão de proposta.', undefined, ['entrada', 'fatos']],
   ['org.migration_readiness_failed', 'platform', 'critical', 'system', 400, 'Checagem de readiness/migration falhou (deploy potencialmente inseguro).', 'migrationReadiness'],
 ];
 

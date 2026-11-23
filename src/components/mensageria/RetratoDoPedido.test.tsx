@@ -88,6 +88,40 @@ describe('RetratoDoPedido', () => {
     expect(screen.queryByText('Camiseta Sintética')).not.toBeInTheDocument();
   });
 
+
+  it('prepara uma troca no cockpit e deixa a decisão bloqueada', async () => {
+    const item = retrato.itens[0];
+    const fetchWithAuth = vi.fn()
+      .mockResolvedValueOnce(respostaJson({ success: true, versao: 1, retrato }))
+      .mockResolvedValueOnce(respostaJson({
+        versao: 1, casoId: CONVERSA, conversaId: CONVERSA, tipo: 'troca',
+        estado: 'requer_compatibilidade', pendencias: ['ranking', 'politica'], proximaPergunta: null,
+        pedido: { id: PEDIDO, numero: '1001', sincronizadoEm: atual.sincronizadoEm, fonte: 'espelho_bling',
+          item: { id: item.id, nome: item.nome, quantidadeComprada: 2, precoUnitarioCentavos: 4990, moeda: 'BRL' } },
+        quantidadeSolicitada: 1, motivo: 'avaria', substitutoPretendido: 'Camiseta azul',
+        rastreio: 'sem_fonte', podeAprovar: false,
+      }));
+    const user = userEvent.setup();
+    render(<RetratoDoPedido fetchWithAuth={fetchWithAuth} conversaId={CONVERSA} pedidoId={PEDIDO} onFechar={() => {}} />);
+
+    await user.click(await screen.findByText('Preparar troca ou devolução'));
+    await user.selectOptions(screen.getByLabelText('Item', { exact: true }), item.id);
+    await user.type(screen.getByLabelText('Quantidade', { exact: true }), '1');
+    await user.selectOptions(screen.getByLabelText('Motivo', { exact: true }), 'avaria');
+    await user.type(screen.getByLabelText('Substituto desejado', { exact: true }), 'Camiseta azul');
+    await user.click(screen.getByRole('button', { name: 'Conferir prévia' }));
+
+    const previa = await screen.findByRole('region', { name: 'Prévia da proposta' });
+    expect(previa).toHaveTextContent(/49,90/u);
+    expect(previa).toHaveTextContent('Política de elegibilidade pendente');
+    expect(screen.queryByRole('button', { name: /aprovar/u })).not.toBeInTheDocument();
+    expect(fetchWithAuth).toHaveBeenCalledTimes(2);
+    const [, opcoes] = fetchWithAuth.mock.calls[1];
+    expect(JSON.parse(opcoes.body)).toEqual({
+      conversaId: CONVERSA, pedidoId: PEDIDO, itemId: item.id, tipo: 'troca', quantidade: 1,
+      motivo: 'avaria', substitutoPretendido: 'Camiseta azul',
+    });
+  });
   it('fechar devolve o controle ao painel', async () => {
     const onFechar = vi.fn();
     render(<RetratoDoPedido fetchWithAuth={servidor(respostaJson({ success: true, versao: 1, retrato }))}
