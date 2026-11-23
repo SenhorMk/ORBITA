@@ -1,0 +1,80 @@
+services:
+  api:
+    image: ${EVOLUTION_API_IMAGE:?Informe a imagem 2.3.7 por digest}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${EVOLUTION_ENV_FILE:?Informe o ambiente protegido Evolution}
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - instances:/evolution/instances
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    mem_limit: 768m
+    cpus: 1.0
+    stop_grace_period: 30s
+    networks:
+      private:
+      chatwoot:
+        aliases:
+          - orbita-evolution
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+  postgres:
+    image: ${EVOLUTION_POSTGRES_IMAGE:?Informe Postgres16 por digest}
+    restart: unless-stopped
+    env_file:
+      - ${EVOLUTION_POSTGRES_ENV_FILE:?Informe o ambiente protegido do banco Evolution}
+    environment:
+      POSTGRES_USER: haux_evolution
+      POSTGRES_DB: evolution
+    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=40"]
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U haux_evolution -d evolution"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+    cpus: 0.5
+    networks:
+      private:
+        aliases:
+          - haux-evolution-db
+  redis:
+    image: ${EVOLUTION_REDIS_IMAGE:?Informe Redis7 por digest}
+    restart: unless-stopped
+    env_file:
+      - ${EVOLUTION_REDIS_ENV_FILE:?Informe o ambiente protegido Redis}
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - redis:/data
+      - ${EVOLUTION_REDIS_CONFIG:?Informe a configuração protegida Redis}:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 96m
+    cpus: 0.25
+    networks:
+      private:
+        aliases:
+          - haux-evolution-cache
+networks:
+  private:
+  chatwoot:
+    external: true
+    name: orbita-chatwoot_default
+volumes:
+  instances:
+  postgres:
+  redis:

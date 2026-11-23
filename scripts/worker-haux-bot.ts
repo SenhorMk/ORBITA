@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { ChatwootAdapter } from '../src/services/chatwoot/chatwootAdapter';
 import { criarCanalAiFirst } from '../src/services/chatwoot/canalAiFirst';
 import { consumirAiFirstUmaVez } from '../src/services/chatwoot/workerAiFirst';
+import { criarWorkerAiFirstPorInbox } from '../src/services/chatwoot/workerAiFirstPorInbox';
 import { verifyOrganizationScope } from '../src/lib/verifiedOrganizationScope';
 import { CONEXAO_HAUX, ORGANIZACAO_HAUX, criarModeloHauxPorAiSdk, lerConfiguracaoHaux } from '../src/services/sac/respostaAutomaticaHaux';
 import { criarClassificadorHaux, criarRotaHaux } from '../src/services/sac/provedoresHaux';
@@ -23,7 +24,7 @@ async function iniciar() {
   const banco = createClient(c.NEXT_PUBLIC_SUPABASE_URL, c.SUPABASE_SERVICE_ROLE_KEY,
     { auth: { persistSession: false, autoRefreshToken: false } });
   const escopo = { p_org: ORGANIZACAO_HAUX, p_conexao: CONEXAO_HAUX, p_executor: c.CHATWOOT_AI_FIRST_EXECUTOR };
-  const canal = criarCanalAiFirst({ escopo, inbox: c.CHATWOOT_AI_FIRST_INBOX, tecnico: c.CHATWOOT_AI_FIRST_ADMIN_ID,
+  const criarCanal = (inbox: number) => criarCanalAiFirst({ escopo, inbox, tecnico: c.CHATWOOT_AI_FIRST_ADMIN_ID,
     async resolver() {
       const verificado = await verifyOrganizationScope(banco, { organizationId: ORGANIZACAO_HAUX, actorId: escopo.p_executor });
       if (verificado._tag !== 'OrganizationScopeVerified') return null;
@@ -31,6 +32,13 @@ async function iniciar() {
       return adapter?.correspondeAOrigemDaProjecao(c.CHATWOOT_AI_FIRST_ORIGEM) ? adapter : null;
     },
   });
+  const inboxes = c.HAUX_BOT_INBOXES?.split(',').map(Number);
+  if (inboxes && !inboxes.includes(c.CHATWOOT_AI_FIRST_INBOX)) throw new Error('Inbox principal ausente.');
+  const porInbox = inboxes ? criarWorkerAiFirstPorInbox({ escopo, banco,
+    canais: new Map(inboxes.map(inbox => [inbox, criarCanal(inbox)])),
+  }) : null;
+  const canal = porInbox?.canal ?? criarCanal(c.CHATWOOT_AI_FIRST_INBOX);
+  const bancoDoWorker = porInbox?.banco ?? banco;
   const parada = new AbortController();
   const rota = criarRotaHaux(c, parada.signal);
   const resposta = criarModeloHauxPorAiSdk(rota.modelo, rota.provedor, parada.signal);
@@ -48,7 +56,7 @@ async function iniciar() {
   try {
     while (!parada.signal.aborted) {
       try {
-        const passo = await consumirAiFirstUmaVez({ escopo, canal, banco, habilitado: true, modelo: resposta });
+        const passo = await consumirAiFirstUmaVez({ escopo, canal, banco: bancoDoWorker, habilitado: true, modelo: resposta });
         if (passo.estado !== 'desligado') {
           await consumirTriagensUmaVez(porta, triagem, { workerId, limite: 1, leaseSegundos: 120,
             limiteDiario: c.HAUX_BOT_LIMITE_TRIAGENS_DIA, timeoutMs: 15000, deveParar: () => parada.signal.aborted });
@@ -56,13 +64,13 @@ async function iniciar() {
         console.info('Bot Haux:', passo.estado);
       } catch {
         // Never authorize a dispatch when a provider or control RPC failed.
-        await banco.rpc('renovar_worker_ai_first', { ...escopo, p_pronto: false });
+        await bancoDoWorker.rpc('renovar_worker_ai_first', { ...escopo, p_pronto: false });
         console.error('Bot Haux: passada interrompida; nenhum reenvio forçado.');
       }
       await esperar(2000, undefined, { signal: parada.signal }).catch(() => undefined);
     }
   } finally {
-    await banco.rpc('renovar_worker_ai_first', { ...escopo, p_pronto: false });
+    await bancoDoWorker.rpc('renovar_worker_ai_first', { ...escopo, p_pronto: false });
   }
 }
 

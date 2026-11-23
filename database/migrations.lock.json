@@ -510,6 +510,16 @@
       "order": 102,
       "path": "../database/99_haux_bot_limits.sql",
       "sha256": "a74752d8fd9defbe448c06260f64dcfee307d834970b4ddfa8cc0f1379db29fc"
+    },
+    {
+      "order": 103,
+      "path": "../database/100_runtime_ai_por_inbox.sql",
+      "sha256": "f55719ddab297a51a0cb373b99474ad6268a36ad60a99326795a8ba48a290abf"
+    },
+    {
+      "order": 104,
+      "path": "../database/101_lista_conversas_teste.sql",
+      "sha256": "ec9d4361a10c21d7fb559954e43255e027f70d49acf96da47673207699774598"
     }
   ],
   "references": [
