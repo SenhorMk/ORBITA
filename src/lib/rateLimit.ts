@@ -7,7 +7,7 @@
  */
 
 /** One rate-limited action recognised by the durable store. */
-export type RateLimitAction = 'register' | 'bling_authorize' | 'bling_callback' | 'empresa_cnpj' | 'chatwoot_webhook' | 'sac_rascunho';
+export type RateLimitAction = 'register' | 'bling_authorize' | 'bling_callback' | 'empresa_cnpj' | 'chatwoot_webhook' | 'sac_rascunho' | 'assistente_orbita';
 
 /** Outcome recorded by the durable store for one consume attempt. */
 export type RateLimitStoreResult =
@@ -49,6 +49,7 @@ export const DEFAULT_RATE_LIMIT_POLICIES: Readonly<Record<RateLimitAction, RateL
   // Entregas assinadas do webhook do Chatwoot, por conexão (MSG-005).
   chatwoot_webhook: { limit: 300, windowMs: 60 * 1_000 },
   sac_rascunho: { limit: 10, windowMs: 60 * 1_000 },
+  assistente_orbita: { limit: 8, windowMs: 60 * 1_000 },
 };
 
 /** Check and record one rate-limited attempt for `action:identifier`. */

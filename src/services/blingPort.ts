@@ -52,7 +52,7 @@ export interface BlingPort {
 
   // ── Pedidos de venda ───────────────────────────────────────────────────
   getPedidos(pagina?: number, limite?: number, dataInicial?: string): Promise<BlingPedido[]>;
-  getPedido(id: string): Promise<BlingPedido | null>;
+  getPedido(id: string, signal?: AbortSignal): Promise<BlingPedido | null>;
   updatePedido(id: string, payload: unknown): Promise<unknown>;
   deletePedido(id: string): Promise<unknown>;
   /** Falha tipada: a rota distingue recusa comprovada de desfecho desconhecido. */
