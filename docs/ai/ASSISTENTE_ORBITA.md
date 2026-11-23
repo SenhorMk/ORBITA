@@ -32,7 +32,7 @@ O assistente atua em dois contextos com autorização separada:
 - O prompt declarava que o único fato verificado era o nome da loja.
 
 ### Ausente
-- Descrições, indicações e modo de uso aprovados dos produtos: o ERP só tem nome, categoria, preço e estoque.
+- Descrições por produto no ERP. As quatro linhas de defumador já têm a descrição da marca, do briefing de 12/10/2026, em `organizacoes/portalDoHaux.ts`.
 - Políticas comerciais aprovadas do Portal do Haux (ver §6).
 - Consulta de pedidos pelo cliente com identidade verificada.
 - Assistente do comerciante (contexto B): projetado em §5, sem código.
@@ -69,7 +69,7 @@ O assistente **não** usa um prompt gigante. A cada mensagem, o worker monta só
 | 1. Instruções fundamentais | código versionado | `INSTRUCOES_GLOBAIS` | sempre |
 | 2. Identidade da organização | configuração versionada | `assistente/conhecimento.ts` | sempre, poucas linhas |
 | 3. Políticas aprovadas | configuração versionada, com situação e fonte | `conhecimento.ts` | só as `confirmada` viram fato; as demais vão como "NÃO INFORMADA" |
-| 4. Dados dinâmicos do ERP | Supabase (`produtos` + `categorias`), espelho do Bling | `assistente/catalogo.ts` e `leitorDeProdutos.ts` | só os produtos relacionados à mensagem atual (até 12) e a lista de categorias |
+| 4. Dados dinâmicos do ERP | Supabase (`produtos` + `categorias`), espelho do Bling | ferramenta `consultar_catalogo` (`assistente/ferramentas.ts`, `catalogo.ts`, `leitorDeProdutos.ts`) | só os produtos relacionados às últimas mensagens (até 12) e a lista de categorias |
 | 5. Histórico da conversa | `sac_cases` e mensagens do caso | RPC `reivindicar_geracao_ai_first` | mascarado e limitado |
 | 6. Ferramentas e permissões | escopo verificado do worker ou da sessão | runtime e papel | o cliente não tem ferramentas de escrita |
 
@@ -240,3 +240,35 @@ Diferença para [outro produto]: [...]
 | F | "Quero falar com uma pessoa." | `HUMAN_REQUIRED` sem novas respostas automáticas | triagem `precisaDeHumano` mais RPC; em L2, o cliente ainda não recebe mensagem |
 | G | Devolução à IA e nova mensagem | retomada com contexto, sem duplicação | validação real na conversa 11 do WhatsApp |
 | H–J | Comerciante: estoque baixo, vendas do mês, "exclua todos" | consulta real por permissão; exclusão em massa recusada | projetado em §5 (próxima etapa) |
+
+## 10. Camada de ferramentas
+
+O modelo **não** chama banco, RPC ou API. A aplicação escolhe e executa as ferramentas, valida o escopo e entrega ao modelo só o resultado, marcado como `[ferramenta]` ou `[ferramenta — FALHOU]`. A saída do modelo passa pela validação de §3 antes de qualquer envio.
+
+### Cliente (P0, implementado neste PR)
+| Ferramenta | O que faz | Fonte real | Escopo |
+|---|---|---|---|
+| `consultar_catalogo` | produtos vendáveis relacionados à conversa: nome, categoria, preço e disponível/sem estoque | `produtos` + `categorias` (espelho do Bling) | `organizacao_id` do worker; sem custo, fornecedor, quantidade ou imagem |
+| `consultar_linhas` | linhas descritas pela marca (síntese, aroma, descrição, essências provisórias) e quais delas **não** têm item no ERP | `organizacoes/<org>.ts` | por organização |
+| `consultar_politica_comercial` | políticas, chamada só quando a conversa trata de pagamento, frete, prazo, troca, devolução, cancelamento ou reembolso | `organizacoes/<org>.ts` | só as `confirmada` viram fato |
+
+**Validações específicas** (além das de §3):
+- preço só ao lado do **nome real** do item do ERP com esse valor;
+- preço ou estoque afirmado para produto **sem cadastro** é recusado;
+- o item não pode ser renomeado.
+
+Todos esses casos foram vistos no smoke real e estão cobertos por teste.
+
+### Mapeamento das ferramentas pedidas para o que existe no ORBITA
+| Ferramenta | Estado | Serviço real que será reutilizado |
+|---|---|---|
+| consultar_catalogo / produto / preço / disponibilidade | **implementada** (`consultar_catalogo`) | `produtos`, `categorias` (repositório do catálogo, #114) |
+| consultar_politica_comercial | **implementada** (sem políticas confirmadas ainda) | `organizacoes/<org>.ts` |
+| consultar_pedido_autorizado (P1) | **a conectar** | `retratoDoPedido.ts` e `clienteVerificado.ts` (MSG-010/011); exige vínculo verificado conversa → cliente |
+| consultar_vendas / pedidos / estoque / financeiro / estoque baixo (P2) | **a desenvolver como ferramenta** | serviços de vendas, estoque (`movimentacaoEstoqueRepository`) e financeiro já usados pelo painel; precisam de rota autenticada do comerciante |
+| preparar_pedido / ajuste_estoque / troca / devolução / cancelamento / reposição (P2) | **a desenvolver**; a execução já existe por comando | `pedidos/manual` e `bling/pedidos/[id]` (#115), `produtos/update` (#114), cancelamento com estorno (#155). A IA só **prepara**; o comerciante confirma e o comando existente executa com idempotência e auditoria |
+
+### Regras invariantes
+- Uma conversa do Chatwoot nunca herda permissão do comerciante. O worker do cliente não tem ferramenta de escrita.
+- Não existe SQL livre. As ferramentas são funções tipadas com escopo fixo.
+- **P2:** ferramentas administrativas só em rota com sessão verificada (`VerifiedOrganizationScope`) e papel do membro. Ações que alteram estoque, valores, pedidos ou integrações passam por confirmação explícita e pelos comandos existentes (outbox, idempotência, auditoria).
