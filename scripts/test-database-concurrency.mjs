@@ -34,6 +34,7 @@ import { runVinculoClienteRaceRehearsal } from './database-concurrency-vinculo-c
 import { runTriagemRaceRehearsal } from './database-concurrency-triagem.mjs';
 import { runAutorrespostaRaceRehearsal } from './database-concurrency-autorresposta.mjs';
 import { testarBaixaDemo } from './database-concurrency-baixa-demo.mjs';
+import { runPropostasSacRaceRehearsal } from './database-concurrency-propostas-sac.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -76,6 +77,7 @@ let outcomeControleChatwoot;
 let outcomeVinculoCliente;
 let outcomeTriagem;
 let outcomeAutorresposta;
+let outcomePropostasSac;
 try {
   const started = executeSupabaseStep(start);
   if (started._tag === 'err') {
@@ -107,6 +109,7 @@ try {
     outcomeVinculoCliente = started;
     outcomeTriagem = started;
     outcomeAutorresposta = started;
+    outcomePropostasSac = started;
   } else {
     const alinhado = await alinharStubDeAuthComProducao();
     const applied = alinhado._tag === 'err' ? alinhado : await applyCanonicalMigrations({});
@@ -139,6 +142,7 @@ try {
       outcomeVinculoCliente = applied;
       outcomeTriagem = applied;
       outcomeAutorresposta = applied;
+      outcomePropostasSac = applied;
     } else {
       await testarBaixaDemo();
       outcomeVenda = await runManualOrderRaceRehearsal();
@@ -169,6 +173,7 @@ try {
       outcomeVinculoCliente = await runVinculoClienteRaceRehearsal();
       outcomeTriagem = await runTriagemRaceRehearsal();
       outcomeAutorresposta = await runAutorrespostaRaceRehearsal();
+      outcomePropostasSac = await runPropostasSacRaceRehearsal();
     }
   }
 } finally {
@@ -243,6 +248,7 @@ const relatos = [
   [outcomeVinculoCliente, (v) => v.relato],
   [outcomeTriagem, (v) => v.relato],
   [outcomeAutorresposta, (v) => v.relato],
+  [outcomePropostasSac, (v) => v.relato],
 ];
 
 const falhou = relatos.map(([outcome, resumo]) => relatar(outcome, resumo)).includes(true);

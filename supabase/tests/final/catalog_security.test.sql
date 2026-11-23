@@ -114,7 +114,8 @@ select is(
       ('public.obter_entitlements_organizacao(uuid)'),
       ('public.usuario_tem_papel_na_organizacao(uuid,text,uuid)'),
       ('public.agendar_encerramento_organizacao(uuid,text,integer,uuid)'),
-      ('public.cancelar_agendamento_encerramento(uuid,uuid)')
+      ('public.cancelar_agendamento_encerramento(uuid,uuid)'),
+      ('public.sac_publicar_politica_resolucao(uuid,text,text,text,timestamptz,text,text,text,text)')
     ), actual as (
       select p.oid
       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
