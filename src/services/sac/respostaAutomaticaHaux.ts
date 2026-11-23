@@ -55,6 +55,8 @@ const Configuracao = z.object({
   ENCRYPTION_KEY: z.string().regex(/^[a-f\d]{64}$/iu),
   CHATWOOT_AI_FIRST_EXECUTOR: z.string().uuid(),
   CHATWOOT_AI_FIRST_INBOX: z.coerce.number().int().positive(),
+  HAUX_BOT_INBOXES: z.string().regex(/^[1-9]\d{0,8}(,[1-9]\d{0,8}){0,7}$/u)
+    .refine(s => new Set(s.split(',')).size === s.split(',').length).optional(),
   CHATWOOT_AI_FIRST_ADMIN_ID: z.coerce.number().int().positive(),
   CHATWOOT_AI_FIRST_ORIGEM: z.string().url().refine((s) => {
     const u = new URL(s);

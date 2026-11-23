@@ -1,0 +1,14 @@
+services:
+  inbox:
+    image: orbita-haux-bot:2b069b995d32c1c1e4b7f1a0d9267f60c24c2a31
+    networks: [default]
+  envio:
+    image: orbita-haux-bot:2b069b995d32c1c1e4b7f1a0d9267f60c24c2a31
+    env_file:
+      - ${WORKER_ENV_FILE:?defina WORKER_ENV_FILE}
+      - ${WORKER_ENVIO_ENV_FILE:?defina WORKER_ENVIO_ENV_FILE}
+    networks: [default, chatwoot]
+networks:
+  chatwoot:
+    external: true
+    name: orbita-chatwoot_default

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyCanonicalMigrations,
   DATABASE_LAB_CLEANUP,
   databaseLabCycleSteps,
   parseLocalOnlyPlan,
@@ -156,5 +157,30 @@ describe('database lab lifecycle', () => {
       expect(result.error.primaryFailure).toEqual({ tag: 'MigrationApplyFailed', message: 'migration failed' });
       expect(result.error.cleanupFailure).toEqual({ tag: 'SupabaseStepFailed', message: 'cleanup failed' });
     }
+  });
+
+  it('aplica a pré-condição de dados da ordem 104 antes do arquivo canônico e a remove depois', async () => {
+    const consultas: string[] = [];
+    const client = { connect: async () => {}, end: async () => {}, query: async (sql: string) => { consultas.push(sql); } };
+    const migrations = [103, 104].map((order) => ({ order, path: `../database/m${order}.sql`, sha256: `${order}`.padEnd(64, '0') }));
+    const fileSystem = { readFileSync: (p: string) => `-- canonical ${p}` } as never;
+    const result = await applyCanonicalMigrations({ client, ledgerResult: ok({ migrations }), fileSystem });
+    expect(result._tag).toBe('ok');
+    expect(consultas).toHaveLength(4);
+    expect(consultas[0]).toContain('m103.sql');
+    expect(consultas[1]).toContain("insert into public.chatwoot_ai_runtime");
+    expect(consultas[1]).toContain("'10', false");
+    expect(consultas[2]).toContain('m104.sql');
+    expect(consultas[3]).toContain('delete from public.chatwoot_ai_runtime');
+  });
+
+  it('mostra o SQLSTATE e a mensagem do Postgres quando uma migration falha', async () => {
+    const erro = Object.assign(new Error('Escopo WhatsApp mudou; rollback obrigatório'), { code: 'P0001' });
+    const client = { connect: async () => {}, end: async () => {}, query: async () => { throw erro; } };
+    const migrations = [{ order: 104, path: '../database/m104.sql', sha256: '1'.padEnd(64, '0') }];
+    const fileSystem = { readFileSync: () => 'select 1' } as never;
+    const result = await applyCanonicalMigrations({ client, ledgerResult: ok({ migrations }), fileSystem });
+    expect(result._tag).toBe('err');
+    if (result._tag === 'err') expect(result.error.message).toContain('P0001 | Escopo WhatsApp mudou');
   });
 });
