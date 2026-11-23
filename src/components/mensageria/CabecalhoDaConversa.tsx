@@ -22,6 +22,7 @@ import { AssumirAtendimento, EstadoDoAtendimento, type Atendimento } from './Bar
 import type { AbaDoPainel } from './PainelLateral';
 import type { Mensageria } from './useMensageria';
 import estilos from './mensageria.module.css';
+import { estaResolvida, rotuloDoStatus } from './statusDaConversa';
 
 /**
  * O canal da conversa, só quando o espelho o trouxe. O nome conhecido é
@@ -74,11 +75,11 @@ function MenuDaConversa({ mensageria, selecionada, atendimento, abrirPainel }: {
         <Menu.Content align="end" sideOffset={6} collisionPadding={12} className={estilos.menu}>
           <Menu.Label className={estilos.menuGrupo}>Conversa</Menu.Label>
           <ItemDoMenu
-            icone={selecionada.status === 'open' ? <CheckCircle className={icone} aria-hidden /> : <RotateCcw className={icone} aria-hidden />}
+            icone={!estaResolvida(selecionada.status) ? <CheckCircle className={icone} aria-hidden /> : <RotateCcw className={icone} aria-hidden />}
             aoEscolher={mensageria.alternarStatus}
             desativado={mensageria.alterandoStatus}
           >
-            {mensageria.alterandoStatus ? 'Alterando…' : selecionada.status === 'open' ? 'Marcar resolvida' : 'Reabrir conversa'}
+            {mensageria.alterandoStatus ? 'Alterando…' : !estaResolvida(selecionada.status) ? 'Marcar resolvida' : 'Reabrir conversa'}
           </ItemDoMenu>
           <ItemDoMenu icone={<RefreshCw className={icone} aria-hidden />} aoEscolher={() => { mensageria.recarregarHistorico(); void atendimento.recarregar(); }}>
             Atualizar conversa
@@ -162,7 +163,7 @@ export function CabecalhoDaConversa({ mensageria, selecionada, atendimento, abri
               </>
             )}
             <span className={estilos.separadorMeta} aria-hidden />
-            <span>{selecionada.status === 'open' ? 'Aberta' : 'Resolvida'}</span>
+            <span>{rotuloDoStatus(selecionada.status)}</span>
             <span className={estilos.separadorMeta} aria-hidden />
             <span className={estilos.aoVivo} title={aoVivo ? 'O histórico se atualiza sozinho.' : 'Sem tempo real: use Atualizar conversa no menu.'}>
               <span className={estilos.ponto} style={{ background: aoVivo ? 'var(--accent)' : 'var(--txt3)' }} aria-hidden />
