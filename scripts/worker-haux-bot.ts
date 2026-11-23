@@ -62,11 +62,17 @@ async function iniciar() {
   const workerId = `haux-triagem-${randomUUID()}`;
   try {
     while (!parada.signal.aborted) {
+      // Pausa só quando a passada não encontrou trabalho: com projeção, geração
+      // ou triagem feita, a próxima passada começa logo (a fila da conversa não
+      // espera 2 s por etapa). Fences, cotas e idempotência continuam nas RPCs.
+      let houveTrabalho = false;
       try {
         const passo = await consumirAiFirstUmaVez({ escopo, canal, banco: bancoDoWorker, habilitado: true, modelo: resposta });
+        houveTrabalho = passo.estado === 'processado' || ('projecao' in passo && passo.projecao != null);
         if (passo.estado !== 'desligado') {
-          await consumirTriagensUmaVez(porta, triagem, { workerId, limite: 1, leaseSegundos: 120,
+          const triagens = await consumirTriagensUmaVez(porta, triagem, { workerId, limite: 1, leaseSegundos: 120,
             limiteDiario: c.HAUX_BOT_LIMITE_TRIAGENS_DIA, timeoutMs: 15000, deveParar: () => parada.signal.aborted });
+          houveTrabalho ||= triagens.reivindicados > 0;
         }
         console.info('Bot Haux:', passo.estado);
       } catch {
@@ -74,7 +80,7 @@ async function iniciar() {
         await bancoDoWorker.rpc('renovar_worker_ai_first', { ...escopo, p_pronto: false });
         console.error('Bot Haux: passada interrompida; nenhum reenvio forçado.');
       }
-      await esperar(2000, undefined, { signal: parada.signal }).catch(() => undefined);
+      await esperar(houveTrabalho ? 100 : 2000, undefined, { signal: parada.signal }).catch(() => undefined);
     }
   } finally {
     await bancoDoWorker.rpc('renovar_worker_ai_first', { ...escopo, p_pronto: false });
