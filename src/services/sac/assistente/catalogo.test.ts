@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { criarCatalogoComCache, descreverCatalogo, montarCatalogo, selecionarRelevantes, termos, type LinhaDeProduto } from './catalogo';
-import { CONHECIMENTO_PORTAL_DO_HAUX, conhecimentoDe, descreverPoliticas } from './conhecimento';
+import { CONHECIMENTO_PORTAL_DO_HAUX, conhecimentoDe } from './conhecimento';
+import { descreverPoliticasRecuperadas, recuperarPoliticas } from './politicas';
 
 const linha = (nome: string, preco: number, estoque: number, extra: Partial<LinhaDeProduto> = {}): LinhaDeProduto => ({
   nome, preco, estoque, estoque_reservado: 0, situacao: 'ativo', arquivado_em: null, categoria: null, ...extra,
@@ -61,14 +62,16 @@ describe('conhecimento por organização', () => {
   });
 
   it('política não confirmada chega ao modelo como NÃO INFORMADA', () => {
-    const texto = descreverPoliticas(CONHECIMENTO_PORTAL_DO_HAUX);
+    const recuperadas = recuperarPoliticas(CONHECIMENTO_PORTAL_DO_HAUX.organizacaoId, CONHECIMENTO_PORTAL_DO_HAUX.politicas, ['como faço uma troca?']);
+    const texto = descreverPoliticasRecuperadas(recuperadas);
     expect(texto).toContain('trocas e devoluções: NÃO INFORMADA');
     expect(texto).not.toMatch(/dias|gr[aá]tis|pix/iu);
   });
 
-  it('política confirmada vira fato, com o texto aprovado', () => {
-    const texto = descreverPoliticas({ ...CONHECIMENTO_PORTAL_DO_HAUX,
-      politicas: [{ tema: 'formas de pagamento', situacao: 'confirmada', texto: 'Pix e cartão.', fonte: 'decisão 23/11' }] });
-    expect(texto).toBe('- formas de pagamento: Pix e cartão.');
+  it('política confirmada e vigente vira fato, com o texto aprovado e o registro', () => {
+    const confirmada = { ...CONHECIMENTO_PORTAL_DO_HAUX.politicas[0], situacao: 'confirmada' as const,
+      texto: 'Aceitamos Pix e cartão de crédito.', fonte: 'FIXTURE DE TESTE', aprovadoPor: 'teste', vigencia: { inicio: '2026-01-01T00:00:00Z', fim: null } };
+    const texto = descreverPoliticasRecuperadas(recuperarPoliticas(CONHECIMENTO_PORTAL_DO_HAUX.organizacaoId, [confirmada], ['aceitam pix?']));
+    expect(texto).toBe('- formas de pagamento [haux.pagamento v1]: Aceitamos Pix e cartão de crédito. (fonte: FIXTURE DE TESTE)');
   });
 });

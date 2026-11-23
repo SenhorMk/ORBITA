@@ -8,7 +8,7 @@ import { atendidaAteEntre, consumirAiFirstUmaVez } from '../src/services/chatwoo
 import { criarWorkerAiFirstPorInbox } from '../src/services/chatwoot/workerAiFirstPorInbox';
 import { lerUltimaRespostaDaConversa } from '../src/services/chatwoot/espelhoChatwootSupabase';
 import { lerUltimoEnvioConfirmadoDaConversa } from '../src/services/chatwoot/envioChatwoot';
-import { lerUltimaDevolucaoDaConversa } from '../src/services/chatwoot/controleAtendimento';
+import { lerModoDoAtendimento, lerUltimaDevolucaoDaConversa } from '../src/services/chatwoot/controleAtendimento';
 import { verifyOrganizationScope } from '../src/lib/verifiedOrganizationScope';
 import { CONEXAO_HAUX, ORGANIZACAO_HAUX, criarModeloHauxPorAiSdk, lerConfiguracaoHaux } from '../src/services/sac/respostaAutomaticaHaux';
 import { criarClassificadorHaux, criarRotaHaux } from '../src/services/sac/provedoresHaux';
@@ -78,7 +78,7 @@ async function iniciar() {
       let houveTrabalho = false;
       try {
         const passo = await consumirAiFirstUmaVez({ escopo, canal, banco: bancoDoWorker, habilitado: true, modelo: resposta,
-          atendidaAte });
+          atendidaAte, modoDoAtendimento: (e, conversa) => lerModoDoAtendimento(banco, e.p_org, conversa) });
         houveTrabalho = passo.estado === 'processado' || ('projecao' in passo && passo.projecao != null);
         if (passo.estado !== 'desligado') {
           const triagens = await consumirTriagensUmaVez(porta, triagem, { workerId, limite: 1, leaseSegundos: 120,

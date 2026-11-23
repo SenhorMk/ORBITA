@@ -1,5 +1,6 @@
 import { descreverCatalogo, normalizar, selecionarRelevantes, termos, type ItemDoCatalogo } from './catalogo';
-import { descreverPoliticas, type ConhecimentoDaOrganizacao, type LinhaDeProduto } from './conhecimento';
+import type { ConhecimentoDaOrganizacao, LinhaDeProduto } from './conhecimento';
+import { descreverPoliticasRecuperadas, recuperarPoliticas, type PoliticaRecuperada } from './politicas';
 
 /**
  * Camada de ferramentas do assistente do CLIENTE: somente leitura, escopada
@@ -22,9 +23,14 @@ export interface ResultadoDasConsultas {
   readonly itensCitaveis: readonly ItemDoCatalogo[];
   /** Linhas enviadas ao modelo sem item correspondente no ERP: sem preço nem estoque. */
   readonly nomesSemCadastro: readonly string[];
+  /** Temas de política recuperados (até 3), com estado e registros: a validação confere as afirmações contra eles. */
+  readonly politicas: readonly PoliticaRecuperada[];
 }
 
 const POLITICA = /\b(?:pag|pix|cart|boleto|parcel|frete|entreg|envi|prazo|postag|troc|devol|cancel|reembols|estorn|garantia)/u;
+
+/** A mensagem só continua a anterior ("e quanto tempo...?", "mas isso vale...?"). */
+const RETOMA_ANTERIOR = /^(?:e|mas|tambem)\b|\b(?:isso|disso|nesse caso|nessa|nesse|dela|dele)\b/u;
 
 /** A conversa como o modelo a recebe: o histórico é contexto, a solicitação atual é o pedido. */
 export interface Conversa {
@@ -98,12 +104,13 @@ export async function executarConsultas(
   conhecimento: ConhecimentoDaOrganizacao,
   catalogo: () => Promise<readonly ItemDoCatalogo[]>,
   conversa: Conversa,
+  agora: Date = new Date(),
 ): Promise<ResultadoDasConsultas> {
   const resultados: ResultadoDaFerramenta[] = [];
   let itensCitaveis: readonly ItemDoCatalogo[] = [];
   let todos: readonly ItemDoCatalogo[] = [];
   const assunto = assuntoDaResposta(conversa);
-  if (assunto.busca.length === 0) return { resultados, itensCitaveis, nomesSemCadastro: [] };
+  if (assunto.busca.length === 0) return { resultados, itensCitaveis, nomesSemCadastro: [], politicas: [] };
   const busca = assunto.busca.join(' ');
   const linhas = selecionarLinhas(conhecimento, assunto.linhas);
 
@@ -124,8 +131,16 @@ export async function executarConsultas(
     .filter((n) => !cadastrados.some((c) => c.includes('portal') && c.includes(propria(n))));
   if (linhas.length) resultados.push({ ferramenta: 'consultar_linhas', ok: true, conteudo: descreverLinhas(conhecimento, linhas, nomesSemCadastro) });
 
-  if (POLITICA.test(normalizar(busca))) {
-    resultados.push({ ferramenta: 'consultar_politica_comercial', ok: true, conteudo: `Políticas comerciais:\n${descreverPoliticas(conhecimento)}` });
+  // Só os temas do assunto desta resposta, nunca a lista inteira de políticas.
+  let politicas = recuperarPoliticas(conhecimento.organizacaoId, conhecimento.politicas, assunto.busca, agora);
+  // "e quanto tempo eu tenho?" depois de "como funciona a troca?": sem assunto próprio, retoma só a mensagem anterior.
+  const anterior = conversa.historico.at(-1);
+  if (politicas.length === 0 && itensCitaveis.length === 0 && linhas.length === 0 && anterior !== undefined
+    && RETOMA_ANTERIOR.test(normalizar(conversa.atual.join(' ')).trim())) {
+    politicas = recuperarPoliticas(conhecimento.organizacaoId, conhecimento.politicas, [anterior, ...conversa.atual], agora);
   }
-  return { resultados, itensCitaveis, nomesSemCadastro };
+  if (politicas.length > 0 || POLITICA.test(normalizar(busca))) {
+    resultados.push({ ferramenta: 'consultar_politica_comercial', ok: true, conteudo: `Políticas comerciais:\n${descreverPoliticasRecuperadas(politicas)}` });
+  }
+  return { resultados, itensCitaveis, nomesSemCadastro, politicas };
 }

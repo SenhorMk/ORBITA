@@ -102,6 +102,8 @@ export interface OpcoesDoWorkerAiFirst {
   readonly banco: BancoDoWorkerAiFirst;
   /** Até onde a conversa foi atendida; sem ele, só a última mensagem é pedido. */
   readonly atendidaAte?: LerAtendidaAte;
+  /** Lê o modo persistido da conversa para confirmar uma transferência ambígua. */
+  readonly modoDoAtendimento?: (escopo: Escopo, conversaIdLocal: string) => Promise<'AI' | 'HUMAN_REQUIRED' | 'HUMAN' | null>;
 }
 
 /** Falha na leitura não bloqueia a resposta: cai no corte conservador (só a última mensagem). */
@@ -136,13 +138,61 @@ export async function consumirAiFirstUmaVez(opcoes: OpcoesDoWorkerAiFirst) {
   const resposta = await gerarResposta(async () => contexto, modelo);
   // The true second read is the completion RPC: it revalidates authorization,
   // run, case marker, control, inbox and the durable fencing token together.
-  const geracao = await rpc(banco, 'concluir_geracao_ai_first', {
+  const conclusao = {
     ...escopo, p_token: trabalho.token, p_conversa: trabalho.conversa, p_caso: trabalho.caso, p_run: trabalho.run,
     p_versao: trabalho.versao, p_global: trabalho.versao_global, p_org_versao: trabalho.versao_org,
-    // null requests exigir_humano in the same fenced transaction, without enqueuing a reply.
-    p_texto: resposta.estado === 'rascunho' ? resposta.texto : null,
-  });
-  return { estado: 'processado', projecao, geracao, escalonamento } as const;
+  };
+  if (resposta.estado === 'rascunho') {
+    const geracao = await rpc(banco, 'concluir_geracao_ai_first', { ...conclusao, p_texto: resposta.texto });
+    return { estado: 'processado', projecao, geracao, escalonamento } as const;
+  }
+  const transferida = await transferirParaEquipe(opcoes, escopo, conclusao, trabalho.conversa, resposta.estado);
+  return { estado: 'processado', projecao, escalonamento, ...transferida } as const;
+}
+
+/**
+ * Estado da transferência depois da tentativa:
+ * - `confirmada`: esta conclusão aplicou `exigir_humano` (AI → HUMAN_REQUIRED);
+ * - `humano_no_controle`: não foi esta chamada, mas o estado persistido já é
+ *   humano (ACK perdido de uma tentativa anterior, ou atendente que assumiu);
+ * - `nao_confirmada`: a conversa continua na automação (geração obsoleta,
+ *   runtime indisponível); a próxima mensagem passa de novo pela triagem;
+ * - `desconhecida`: nem a conclusão nem a leitura do estado responderam.
+ */
+export type EstadoDaTransferencia = 'confirmada' | 'humano_no_controle' | 'nao_confirmada' | 'desconhecida';
+
+/**
+ * Transferência para a equipe pelo único caminho com fencing, idempotência e
+ * autorização: `concluir_geracao_ai_first` sem texto, que revalida o contexto
+ * e chama `exigir_humano` com o token da reivindicação como comando. Nenhum
+ * texto é registrado: uma mudança de controle invalida o envio ainda na fila,
+ * e a automação não registra envio depois de sair do controle. Resultado
+ * ambíguo é conferido no estado persistido; falha sem confirmação propaga,
+ * para o laço marcar o worker como não pronto (como antes).
+ */
+async function transferirParaEquipe(opcoes: OpcoesDoWorkerAiFirst, escopo: Escopo, conclusao: Argumentos, conversa: string, motivo: string) {
+  let geracao: unknown = 'falhou';
+  let falhou = false;
+  try {
+    geracao = await rpc(opcoes.banco, 'concluir_geracao_ai_first', { ...conclusao, p_texto: null });
+  } catch {
+    falhou = true;
+  }
+  const transferencia: EstadoDaTransferencia = geracao === 'escalonada' ? 'confirmada' : await conferirModo(opcoes, escopo, conversa);
+  logger.info('chatwoot.ai_first.transferencia', { subsystem: 'queue', organizacaoId: escopo.p_org, motivo,
+    geracao: String(geracao), transferencia });
+  if (falhou && transferencia !== 'humano_no_controle') throw new Error('Falha no worker AI-first: concluir_geracao_ai_first');
+  return { geracao, transferencia };
+}
+
+async function conferirModo(opcoes: OpcoesDoWorkerAiFirst, escopo: Escopo, conversa: string): Promise<EstadoDaTransferencia> {
+  if (!opcoes.modoDoAtendimento) return 'desconhecida';
+  try {
+    const modo = await opcoes.modoDoAtendimento(escopo, conversa);
+    return modo === null ? 'desconhecida' : modo === 'AI' ? 'nao_confirmada' : 'humano_no_controle';
+  } catch {
+    return 'desconhecida';
+  }
 }
 
 export async function executarWorkerAiFirst(opcoes: OpcoesDoWorkerAiFirst, parar: AbortSignal) {

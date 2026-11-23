@@ -82,7 +82,7 @@ describe('assunto da resposta: a solicitação atual manda; o histórico só res
     expect(ehEncerramento('Muito obrigada! Valeu')).toBe(true);
     expect(ehEncerramento('Ok, e quanto custa?')).toBe(false);
     const r = await executarConsultas(CONHECIMENTO_PORTAL_DO_HAUX, ok, { historico: ['quanto custa o defumador?'], atual: ['obrigado!'] });
-    expect(r).toEqual({ resultados: [], itensCitaveis: [], nomesSemCadastro: [] });
+    expect(r).toEqual({ resultados: [], itensCitaveis: [], nomesSemCadastro: [], politicas: [] });
   });
 
   it('política perguntada antes não volta a ser consultada quando o assunto muda', async () => {

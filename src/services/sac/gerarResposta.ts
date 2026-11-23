@@ -4,6 +4,11 @@ import { formatarMensagens, prepararEntrada, sanitizarMensagens, type MensagemDo
 
 export const RascunhoSchema = z.object({ texto: z.string().trim().min(1).max(1200) }).strict();
 
+/**
+ * O que um modelo de resposta pode devolver: um rascunho, ou o pedido de
+ * transferência para a equipe, sem texto (nenhuma promessa ao cliente antes de
+ * a transferência ser confirmada pelo banco).
+ */
 const SaidaDoModeloSchema = z.union([RascunhoSchema, z.strictObject({ acao: z.literal('encaminhar') })]);
 
 export interface ContextoDaResposta {

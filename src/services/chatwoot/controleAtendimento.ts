@@ -215,3 +215,28 @@ export async function lerUltimaDevolucaoDaConversa(
   if (error || !linhas.success) throw new ControleIndisponivel();
   return linhas.data[0]?.created_at ?? null;
 }
+
+const ModoSchema = z.object({ ownership_mode: z.enum(MODOS_DE_ATENDIMENTO) }).nullable();
+
+/**
+ * Modo persistido da conversa, para o worker confirmar uma transferência
+ * cujo resultado foi ambíguo (ACK perdido, geração obsoleta). Só leitura, com
+ * service role: organização e conversa explícitas no filtro.
+ */
+export async function lerModoDoAtendimento(
+  supabase: SupabaseClient,
+  organizacaoId: string,
+  conversaId: string,
+): Promise<ModoDeAtendimento | null> {
+  const uuid = z.string().uuid();
+  if (!uuid.safeParse(organizacaoId).success || !uuid.safeParse(conversaId).success) throw new ControleIndisponivel();
+  const { data, error } = await supabase
+    .from('chatwoot_conversa_controle')
+    .select('ownership_mode')
+    .eq('organizacao_id', organizacaoId)
+    .eq('conversa_id_local', conversaId)
+    .maybeSingle();
+  const linha = ModoSchema.safeParse(data ?? null);
+  if (error || !linha.success) throw new ControleIndisponivel();
+  return linha.data?.ownership_mode ?? null;
+}
