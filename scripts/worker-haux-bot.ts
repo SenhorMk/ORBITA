@@ -4,8 +4,11 @@ import { setTimeout as esperar } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { ChatwootAdapter } from '../src/services/chatwoot/chatwootAdapter';
 import { criarCanalAiFirst } from '../src/services/chatwoot/canalAiFirst';
-import { consumirAiFirstUmaVez } from '../src/services/chatwoot/workerAiFirst';
+import { atendidaAteEntre, consumirAiFirstUmaVez } from '../src/services/chatwoot/workerAiFirst';
 import { criarWorkerAiFirstPorInbox } from '../src/services/chatwoot/workerAiFirstPorInbox';
+import { lerUltimaRespostaDaConversa } from '../src/services/chatwoot/espelhoChatwootSupabase';
+import { lerUltimoEnvioConfirmadoDaConversa } from '../src/services/chatwoot/envioChatwoot';
+import { lerUltimaDevolucaoDaConversa } from '../src/services/chatwoot/controleAtendimento';
 import { verifyOrganizationScope } from '../src/lib/verifiedOrganizationScope';
 import { CONEXAO_HAUX, ORGANIZACAO_HAUX, criarModeloHauxPorAiSdk, lerConfiguracaoHaux } from '../src/services/sac/respostaAutomaticaHaux';
 import { criarClassificadorHaux, criarRotaHaux } from '../src/services/sac/provedoresHaux';
@@ -49,6 +52,13 @@ async function iniciar() {
     ? { conhecimento, catalogo: criarCatalogoComCache(criarLeitorDeProdutos(banco), conhecimento) }
     : undefined;
   const resposta = criarModeloHauxPorAiSdk(rota.modelo, rota.provedor, parada.signal, fonte);
+  // Até onde a conversa foi atendida, só com prova: a resposta presente no Chatwoot, o envio confirmado
+  // pela outbox (segundos antes do espelho) ou a devolução do atendente. Registrado sem confirmação não conta.
+  const daConexao = (e: typeof escopo) => ({ organizacaoId: e.p_org, conexaoId: e.p_conexao });
+  const atendidaAte = atendidaAteEntre(
+    (e, conversa) => lerUltimaRespostaDaConversa(banco, daConexao(e), conversa),
+    (e, conversa) => lerUltimoEnvioConfirmadoDaConversa(banco, daConexao(e), conversa),
+    (e, conversa) => lerUltimaDevolucaoDaConversa(banco, e.p_org, conversa));
   const triagem = criarClassificadorHaux(rota);
   const porta = criarPortaDoConsumidorTriagem(banco, escopo);
   const interromper = () => {
@@ -67,7 +77,8 @@ async function iniciar() {
       // espera 2 s por etapa). Fences, cotas e idempotência continuam nas RPCs.
       let houveTrabalho = false;
       try {
-        const passo = await consumirAiFirstUmaVez({ escopo, canal, banco: bancoDoWorker, habilitado: true, modelo: resposta });
+        const passo = await consumirAiFirstUmaVez({ escopo, canal, banco: bancoDoWorker, habilitado: true, modelo: resposta,
+          atendidaAte });
         houveTrabalho = passo.estado === 'processado' || ('projecao' in passo && passo.projecao != null);
         if (passo.estado !== 'desligado') {
           const triagens = await consumirTriagensUmaVez(porta, triagem, { workerId, limite: 1, leaseSegundos: 120,

@@ -42,6 +42,29 @@ export async function lerMensagensRecentesDoContato(
   return MensagensDoContatoSchema.parse(data).reverse();
 }
 
+const UltimaRespostaSchema = z.array(z.object({ created_at: z.string().datetime({ offset: true }) })).max(1);
+
+/**
+ * Instante da última resposta pública (IA ou atendente) na conversa, ou
+ * `null` se não houve. Organização, conexão e conversa vão explícitas no
+ * filtro (service role ignora RLS); só o instante sai do banco. Notas
+ * privadas não são gravadas no espelho, então não deslocam o corte.
+ */
+export async function lerUltimaRespostaDaConversa(
+  supabase: SupabaseClient, escopo: EscopoDaConexaoChatwoot, conversaId: string,
+): Promise<string | null> {
+  if (!escopoValido(escopo) || !uuid.safeParse(conversaId).success) throw new Error('Histórico da conversa indisponível.');
+  const { data, error } = await supabase.from(TABELA_DO_RECURSO.mensagem)
+    .select('created_at')
+    .eq('organizacao_id', escopo.organizacaoId).eq('conexao_id', escopo.conexaoId)
+    .eq('conversa_id_local', conversaId).eq('message_type', 'outgoing')
+    .order('created_at', { ascending: false }).limit(1);
+  if (error) throw new Error('Histórico da conversa indisponível.');
+  const lidas = UltimaRespostaSchema.safeParse(data ?? []);
+  if (!lidas.success) throw new Error('Histórico da conversa indisponível.');
+  return lidas.data[0]?.created_at ?? null;
+}
+
 function falhou<T>(codigo: string | undefined): ResultadoDoStore<T> {
   return { _tag: 'StoreFalhou', codigo };
 }

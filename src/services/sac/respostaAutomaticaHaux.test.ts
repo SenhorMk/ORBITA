@@ -76,7 +76,8 @@ describe('assistente do Portal do Haux: resposta natural com fatos verificados',
 
   it('pergunta de política traz as políticas como NÃO INFORMADA', async () => {
     const { mock, modelo } = modeloQueResponde({ acao: 'encaminhar', texto: 'Ainda não tenho a política de trocas confirmada; a equipe te orienta.' });
-    await modelo.gerar('', entrada('quero devolver um produto'), AbortSignal.timeout(1000));
+    expect(await modelo.gerar('', entrada('quero devolver um produto'), AbortSignal.timeout(1000)))
+      .toEqual({ acao: 'encaminhar' });
     expect(JSON.stringify(mock.doGenerateCalls[0].prompt)).toContain('trocas e devoluções: NÃO INFORMADA');
   });
 
@@ -104,7 +105,7 @@ describe('assistente do Portal do Haux: resposta natural com fatos verificados',
     const mock = new MockLanguageModelV4({ doGenerate: async () => resultado({ acao: 'encaminhar', texto: 'Não consigo consultar os preços agora; a equipe te responde.' }) });
     const modelo = criarModeloHauxPorAiSdk(mock, 'groq', undefined, {
       conhecimento: CONHECIMENTO_PORTAL_DO_HAUX, catalogo: async () => { throw new Error('rede'); } });
-    expect(await modelo.gerar('', entrada('Quanto custa?'), AbortSignal.timeout(1000))).toMatchObject({ texto: expect.stringContaining('equipe') });
+    expect(await modelo.gerar('', entrada('Quanto custa?'), AbortSignal.timeout(1000))).toEqual({ acao: 'encaminhar' });
     expect(JSON.stringify(mock.doGenerateCalls[0].prompt)).toContain('[consultar_catalogo — FALHOU]');
   });
 

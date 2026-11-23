@@ -109,12 +109,26 @@ const neutralizar = (texto: string) => texto.replace(/</gu, '‹').replace(/>/gu
 
 export type EntradaDaTriagem = { readonly _tag: 'Pronta'; readonly conteudo: string } | { readonly _tag: 'Bloqueada' };
 
+export type MensagensSanitizadas = { readonly _tag: 'Prontas'; readonly mensagens: readonly MensagemDoContato[] } | { readonly _tag: 'Bloqueada' };
+
+/** Corta, descarta vazias, bloqueia credencial e mascara/neutraliza cada mensagem, preservando o instante. */
+export function sanitizarMensagens(mensagens: readonly MensagemDoContato[]): MensagensSanitizadas {
+  const validas = mensagens.map((m) => ({ conteudo: m.conteudo.slice(0, LIMITE_DE_TEXTO), criadaEm: m.criadaEm }))
+    .filter((m) => m.conteudo.trim() !== '');
+  if (validas.length === 0) return { _tag: 'Bloqueada' };
+  if (validas.some((m) => CREDENCIAIS.some((padrao) => padrao.test(m.conteudo)))) return { _tag: 'Bloqueada' };
+  return { _tag: 'Prontas', mensagens: validas.map((m) => ({ ...m, conteudo: neutralizar(mascarar(m.conteudo)) })) };
+}
+
+/** `<mensagem ordem="n">` já sanitizadas; `inicio` mantém a numeração global entre seções. */
+export function formatarMensagens(mensagens: readonly MensagemDoContato[], inicio = 1): string {
+  return mensagens.map((m, i) => `<mensagem ordem="${inicio + i}">${m.conteudo}</mensagem>`).join('\n');
+}
+
 export function prepararEntrada(mensagens: readonly MensagemDoContato[]): EntradaDaTriagem {
-  const textos = mensagens.map((m) => m.conteudo.slice(0, LIMITE_DE_TEXTO)).filter((t) => t.trim() !== '');
-  if (textos.length === 0) return { _tag: 'Bloqueada' };
-  if (textos.some((t) => CREDENCIAIS.some((padrao) => padrao.test(t)))) return { _tag: 'Bloqueada' };
-  const corpo = textos.map((t, i) => `<mensagem ordem="${i + 1}">${neutralizar(mascarar(t))}</mensagem>`).join('\n');
-  return { _tag: 'Pronta', conteudo: `<mensagens_do_cliente>\n${corpo}\n</mensagens_do_cliente>` };
+  const sanitizadas = sanitizarMensagens(mensagens);
+  if (sanitizadas._tag === 'Bloqueada') return sanitizadas;
+  return { _tag: 'Pronta', conteudo: `<mensagens_do_cliente>\n${formatarMensagens(sanitizadas.mensagens)}\n</mensagens_do_cliente>` };
 }
 
 const somar = (a: UsoDoModelo, b: UsoDoModelo): UsoDoModelo => ({

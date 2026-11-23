@@ -76,12 +76,43 @@ async function projetar(banco: BancoDoWorkerAiFirst, canal: CanalDeProjecaoAiFir
   });
 }
 
+/**
+ * Até quando a conversa reivindicada foi comprovadamente atendida (resposta
+ * que chegou ao cliente ou devolução do atendente); `null` = nada ainda.
+ */
+export type LerAtendidaAte = (escopo: Escopo, conversaIdLocal: string) => Promise<string | null>;
+
+/**
+ * O mais recente entre fontes de prova (espelho do Chatwoot, envio confirmado,
+ * devolução). Cada fonte só devolve prova; qualquer falha rejeita e o worker
+ * cai no corte conservador.
+ */
+export function atendidaAteEntre(...fontes: readonly LerAtendidaAte[]): LerAtendidaAte {
+  return async (escopo, conversa) => {
+    const instantes = (await Promise.all(fontes.map((ler) => ler(escopo, conversa)))).filter((v): v is string => v !== null);
+    return instantes.reduce<string | null>((maior, v) => (maior === null || Date.parse(v) > Date.parse(maior) ? v : maior), null);
+  };
+}
+
 export interface OpcoesDoWorkerAiFirst {
   readonly escopo: Escopo;
   readonly habilitado: boolean;
   readonly modelo: ModeloDeResposta | null;
   readonly canal: CanalDeProjecaoAiFirst;
   readonly banco: BancoDoWorkerAiFirst;
+  /** Até onde a conversa foi atendida; sem ele, só a última mensagem é pedido. */
+  readonly atendidaAte?: LerAtendidaAte;
+}
+
+/** Falha na leitura não bloqueia a resposta: cai no corte conservador (só a última mensagem). */
+async function lerAtendidaAte(opcoes: OpcoesDoWorkerAiFirst, escopo: Escopo, conversa: string) {
+  if (!opcoes.atendidaAte) return undefined;
+  try {
+    return await opcoes.atendidaAte(escopo, conversa);
+  } catch {
+    logger.warn('chatwoot.ai_first.historico_indisponivel', { subsystem: 'queue', organizacaoId: escopo.p_org });
+    return undefined;
+  }
 }
 
 /** One bounded pass. All durable effects are leases/observations or a MSG-022
@@ -101,13 +132,14 @@ export async function consumirAiFirstUmaVez(opcoes: OpcoesDoWorkerAiFirst) {
   const trabalho = Geracao.nullable().parse(await rpc(banco, 'reivindicar_geracao_ai_first', escopo));
   if (!trabalho) return { estado: 'sem_geracao', projecao, escalonamento } as const;
   const contexto = { intencao: trabalho.intencao, mensagens: trabalho.mensagens, marca: trabalho.token,
-    resumo: trabalho.resumo ?? undefined };
+    resumo: trabalho.resumo ?? undefined, atendidaAte: await lerAtendidaAte(opcoes, escopo, trabalho.conversa) };
   const resposta = await gerarResposta(async () => contexto, modelo);
   // The true second read is the completion RPC: it revalidates authorization,
   // run, case marker, control, inbox and the durable fencing token together.
   const geracao = await rpc(banco, 'concluir_geracao_ai_first', {
     ...escopo, p_token: trabalho.token, p_conversa: trabalho.conversa, p_caso: trabalho.caso, p_run: trabalho.run,
     p_versao: trabalho.versao, p_global: trabalho.versao_global, p_org_versao: trabalho.versao_org,
+    // null requests exigir_humano in the same fenced transaction, without enqueuing a reply.
     p_texto: resposta.estado === 'rascunho' ? resposta.texto : null,
   });
   return { estado: 'processado', projecao, geracao, escalonamento } as const;
