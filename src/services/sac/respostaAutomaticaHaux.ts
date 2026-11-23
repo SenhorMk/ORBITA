@@ -52,11 +52,11 @@ export function mensagemAtual(entrada: string): string {
 }
 
 /** Fail closed: só texto válido e verificado vira resposta; o resto escala pela RPC existente. */
-export function finalizarRespostaHaux(valor: unknown, catalogoNoContexto: readonly ItemDoCatalogo[], identificacao: string)
-  : { readonly texto: string; readonly acao: 'responder' | 'encaminhar' } | null {
+export function finalizarRespostaHaux(valor: unknown, catalogoNoContexto: readonly ItemDoCatalogo[], identificacao: string,
+  nomesSemCadastro: readonly string[] = []): { readonly texto: string; readonly acao: 'responder' | 'encaminhar' } | null {
   const lida = Resposta.safeParse(valor);
   if (!lida.success) return null;
-  const problema = validarResposta(lida.data.texto, catalogoNoContexto);
+  const problema = validarResposta(lida.data.texto, catalogoNoContexto, nomesSemCadastro);
   if (problema !== null) {
     logger.warn('haux.resposta.recusada', { subsystem: 'provider', problema });
     return null;
@@ -140,7 +140,8 @@ export function criarModeloHauxPorAiSdk(modelo: LanguageModel, provedor: ModeloD
           output: Output.object({ schema: Resposta }),
           abortSignal: parada ? AbortSignal.any([abortSignal, parada]) : abortSignal,
           maxRetries: 0, maxOutputTokens: 700 });
-        const final = finalizarRespostaHaux(resultado.output, consultas?.itensCitaveis ?? [], conhecimento?.identificacao ?? 'Atendimento automatizado');
+        const final = finalizarRespostaHaux(resultado.output, consultas?.itensCitaveis ?? [], conhecimento?.identificacao ?? 'Atendimento automatizado',
+          consultas?.nomesSemCadastro ?? []);
         return final ? { texto: final.texto } : null;
       } catch (erro: unknown) {
         const status = APICallError.isInstance(erro) ? erro.statusCode : undefined;

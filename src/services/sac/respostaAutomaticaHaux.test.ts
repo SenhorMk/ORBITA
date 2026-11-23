@@ -42,6 +42,13 @@ describe('assistente do Portal do Haux: resposta natural com fatos verificados',
       expect(finalizarRespostaHaux({ acao: 'responder', texto }, [DEFUMADOR], ID)).toBeNull();
     });
 
+  it('preço de outro item atribuído a uma linha sem cadastro é recusado', () => {
+    const linhas = ['Portal de Harmonia'];
+    expect(finalizarRespostaHaux({ acao: 'responder', texto: 'O Portal de Harmonia está disponível por R$ 40,00.' }, [DEFUMADOR], ID, linhas)).toBeNull();
+    expect(finalizarRespostaHaux({ acao: 'responder', texto: 'Recomendo o Portal de Harmonia, com preço R$ 40,00.' }, [DEFUMADOR], ID, linhas)).toBeNull();
+    expect(finalizarRespostaHaux({ acao: 'responder', texto: 'O Portal de Harmonia ainda não tem preço cadastrado. O Defumador - Limpeza e descarrego custa R$ 40,00.' }, [DEFUMADOR], ID, linhas)).not.toBeNull();
+  });
+
   it('encaminhar continua respondendo a pessoa, com texto acolhedor', () => {
     expect(finalizarRespostaHaux({ acao: 'encaminhar', texto: 'Não tenho essa informação confirmada; vou pedir para a equipe te responder.' }, [], ID))
       .toMatchObject({ acao: 'encaminhar', texto: expect.stringContaining('equipe') });

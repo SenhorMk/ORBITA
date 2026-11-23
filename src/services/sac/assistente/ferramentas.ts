@@ -20,6 +20,8 @@ export interface ResultadoDasConsultas {
   readonly resultados: readonly ResultadoDaFerramenta[];
   /** Itens do ERP enviados ao modelo: a validação só aceita preço destes itens. */
   readonly itensCitaveis: readonly ItemDoCatalogo[];
+  /** Linhas enviadas ao modelo sem item correspondente no ERP: sem preço nem estoque. */
+  readonly nomesSemCadastro: readonly string[];
 }
 
 const POLITICA = /\b(?:pag|pix|cart|boleto|parcel|frete|entreg|envi|prazo|postag|troc|devol|cancel|reembols|estorn|garantia)/u;
@@ -39,10 +41,14 @@ export function selecionarLinhas(conhecimento: ConhecimentoDaOrganizacao, mensag
   return [];
 }
 
-function descreverLinhas(conhecimento: ConhecimentoDaOrganizacao, linhas: readonly LinhaDeProduto[]): string {
+function descreverLinhas(conhecimento: ConhecimentoDaOrganizacao, linhas: readonly LinhaDeProduto[], semCadastro: readonly string[]): string {
   if (linhas.length === 0) return '';
+  const aviso = semCadastro.length
+    ? `ATENÇÃO: ${semCadastro.join(', ')} NÃO estão cadastradas no ERP: o preço e a disponibilidade delas são DESCONHECIDOS. Os produtos do catálogo são outros itens; nunca atribua o preço ou o estoque deles a estas linhas.`
+    : '';
   return [
-    `Linhas de ${linhas[0].categoria.toLowerCase()} descritas pela marca (preço destas linhas: só se aparecer no catálogo do ERP):`,
+    `Linhas de ${linhas[0].categoria.toLowerCase()} descritas pela marca:`,
+    ...(aviso ? [aviso] : []),
     ...linhas.map((l) => `- ${l.nome} (${l.codigo}): ${l.sintese}. Aroma ${l.perfilAromatico}. ${l.descricao} Essências: ${l.essencias} (composição provisória).`),
     ...conhecimento.observacoesDasLinhas.map((o) => `Obs.: ${o}`),
   ].join('\n');
@@ -59,11 +65,13 @@ export async function executarConsultas(
 ): Promise<ResultadoDasConsultas> {
   const resultados: ResultadoDaFerramenta[] = [];
   let itensCitaveis: readonly ItemDoCatalogo[] = [];
+  let todos: readonly ItemDoCatalogo[] = [];
   const busca = contextoDaBusca(mensagens);
   const linhas = selecionarLinhas(conhecimento, mensagens);
 
   try {
     const itens = await catalogo();
+    todos = itens;
     const extras = linhas.length ? ' defumador' : '';
     itensCitaveis = selecionarRelevantes(itens, `${busca}${extras}`);
     resultados.push({ ferramenta: 'consultar_catalogo', ok: true, conteudo: descreverCatalogo(itens, itensCitaveis) });
@@ -72,10 +80,12 @@ export async function executarConsultas(
       conteudo: 'Catálogo do ERP indisponível agora: não cite preços nem disponibilidade; diga que não conseguiu consultar.' });
   }
 
-  if (linhas.length) resultados.push({ ferramenta: 'consultar_linhas', ok: true, conteudo: descreverLinhas(conhecimento, linhas) });
+  const cadastrados = todos.map((i) => normalizar(i.nome));
+  const nomesSemCadastro = linhas.map((l) => l.nome).filter((n) => !cadastrados.some((c) => c.includes(normalizar(n))));
+  if (linhas.length) resultados.push({ ferramenta: 'consultar_linhas', ok: true, conteudo: descreverLinhas(conhecimento, linhas, nomesSemCadastro) });
 
   if (POLITICA.test(normalizar(busca))) {
     resultados.push({ ferramenta: 'consultar_politica_comercial', ok: true, conteudo: `Políticas comerciais:\n${descreverPoliticas(conhecimento)}` });
   }
-  return { resultados, itensCitaveis };
+  return { resultados, itensCitaveis, nomesSemCadastro };
 }

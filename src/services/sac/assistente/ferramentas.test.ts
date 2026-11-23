@@ -49,3 +49,11 @@ describe('ferramentas do assistente do cliente (somente leitura)', () => {
     expect(politica?.conteudo).toContain('frete e entrega: NÃO INFORMADA');
   });
 });
+
+describe('produto sem cadastro no ERP não herda preço de outro item', () => {
+  it('as linhas sem item correspondente no ERP vêm marcadas, com aviso ao modelo', async () => {
+    const r = await executarConsultas(CONHECIMENTO_PORTAL_DO_HAUX, ok, ['Qual você recomenda para harmonizar o ambiente?']);
+    expect(r.nomesSemCadastro).toEqual(['Portal de Luz', 'Portal de Purificação', 'Portal de Harmonia', 'Portal do Guardião']);
+    expect(r.resultados.find((x) => x.ferramenta === 'consultar_linhas')?.conteudo).toContain('NÃO estão cadastradas no ERP');
+  });
+});
