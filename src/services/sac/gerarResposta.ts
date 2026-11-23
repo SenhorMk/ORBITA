@@ -4,6 +4,13 @@ import { formatarMensagens, prepararEntrada, sanitizarMensagens, type MensagemDo
 
 export const RascunhoSchema = z.object({ texto: z.string().trim().min(1).max(1200) }).strict();
 
+/**
+ * O que um modelo de resposta pode devolver: um rascunho, ou o pedido de
+ * transferência para a equipe, sem texto (nenhuma promessa ao cliente antes de
+ * a transferência ser confirmada pelo banco).
+ */
+const SaidaDoModelo = z.union([RascunhoSchema, z.object({ acao: z.literal('encaminhar') }).strict()]);
+
 export interface ContextoDaResposta {
   readonly marca: string;
   readonly intencao: string;
@@ -91,9 +98,10 @@ export async function gerarResposta(
   } catch {
     return { estado: 'modelo_indisponivel' } as const;
   }
-  const lida = RascunhoSchema.safeParse(resposta);
+  const lida = SaidaDoModelo.safeParse(resposta);
   if (!lida.success) return { estado: 'resposta_invalida' } as const;
   const atual = await ler();
   if (atual?.marca !== contexto.marca) return { estado: 'contexto_mudou' } as const;
+  if ('acao' in lida.data) return { estado: 'encaminhar', provedor: modelo.provedor } as const;
   return { estado: 'rascunho', texto: lida.data.texto, provedor: modelo.provedor } as const;
 }

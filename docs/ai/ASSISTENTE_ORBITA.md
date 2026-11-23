@@ -86,7 +86,7 @@ O assistente **não** usa um prompt gigante. A cada mensagem, o worker monta só
 |---|---|---|---|
 | 1. Instruções fundamentais | código versionado | `INSTRUCOES_GLOBAIS` | sempre |
 | 2. Identidade da organização | configuração versionada | `assistente/conhecimento.ts` | sempre, poucas linhas |
-| 3. Políticas aprovadas | configuração versionada, com situação e fonte | `conhecimento.ts` | só as `confirmada` viram fato; as demais vão como "NÃO INFORMADA" |
+| 3. Políticas aprovadas | registros versionados por organização (`assistente/politicas.ts`; dados em `organizacoes/*.ts`) | `recuperarPoliticas` | até 3 temas do assunto atual; só `confirmada`, completa e vigente vira fato; pendente, vencida, inválida, de outra organização ou em conflito vai como "NÃO INFORMADA" ou "EM REVISÃO" |
 | 4. Dados dinâmicos do ERP | Supabase (`produtos` + `categorias`), espelho do Bling | ferramenta `consultar_catalogo` (`assistente/ferramentas.ts`, `catalogo.ts`, `leitorDeProdutos.ts`) | só os produtos relacionados à solicitação atual (até 12) e a lista de categorias |
 | 5. Histórico da conversa | `sac_cases` e mensagens do caso | RPC `reivindicar_geracao_ai_first` | mascarado e limitado |
 | 6. Ferramentas e permissões | escopo verificado do worker ou da sessão | runtime e papel | o cliente não tem ferramentas de escrita |
@@ -103,7 +103,7 @@ O assistente **não** usa um prompt gigante. A cada mensagem, o worker monta só
 Implementada em `assistente/validacao.ts`. Uma resposta que falha aqui não é enviada: devolve `null`, e a RPC `concluir_geracao_ai_first` escala para humano pelo caminho já auditado. A validação é feita frase a frase, e cada regra abaixo veio de um caso visto no smoke ou no widget real e tem teste em `validacao.test.ts`. A resposta é recusada se:
 - citar preço (`R$ x,yy`) que não está no contexto daquela mensagem;
 - trouxer link;
-- pedir CPF, RG, senha, cartão ou código;
+- pedir CPF, RG, senha, código ou os **dados** do cartão ("cartão de crédito" como meio de pagamento numa política aprovada é permitido);
 - afirmar ação executada ("já cancelei", "pedido foi enviado");
 - tiver mais de 900 caracteres;
 - citar preço longe do **nome real** do item do ERP com esse valor, ou renomear o item;
@@ -111,6 +111,9 @@ Implementada em `assistente/validacao.ts`. Uma resposta que falha aqui não é e
 - prometer envio: pronta-entrega, envio imediato, prazo de entrega ou reserva. Estoque positivo **não** é prazo;
 - apresentar como disponível um item **sem estoque**;
 - atribuir benefício ou efeito que a marca não descreve (cura, alivia, garantido, terapêutico).
+- afirmar condição comercial (pagamento, frete, prazo, troca, cancelamento, desconto) sem um tema `fundamentada` entre os recuperados, ou com número ou fato (pix, boleto, grátis, juros, prazo em dias) que não está no texto aprovado. Recuperar o registro não aprova a frase: ela é conferida contra o texto. Pergunta e recusa ("ainda não tenho essa informação confirmada") não são afirmação.
+
+Promessa de transferência para pessoas não é recusada: vira pedido de transferência real (§7), e o texto não é enviado.
 
 Em conversa em andamento, a saudação de abertura repetida é removida.
 
@@ -224,7 +227,13 @@ Diferença para [outro produto]: [...]
 - **Intenção:** a triagem classifica a mensagem e sinaliza `precisaDeHumano`.
 - **Informação complementar:** o assistente pede o número do pedido, o produto ou a preferência quando precisar, nunca dados sensíveis.
 - **Reclamação, saúde, assunto jurídico, reembolso ou pedido de pessoa:** a triagem pede humano, a RPC `escalonar_triagem_ai_first` muda o controle para `HUMAN_REQUIRED` e uma nota privada é registrada. Daí em diante não há respostas automáticas.
-- **Sem informação confirmada:** `acao: "encaminhar"`. O cliente recebe um texto acolhedor dizendo que a equipe vai continuar.
+- **Sem informação confirmada:** o assistente diz que ainda não tem a informação confirmada e, se for o caso, que a pessoa pode pedir para falar com alguém. Ele não transfere nem promete transferência.
+- **Transferência pela automação (`acao: "encaminhar"`):**
+  - **decisão:** o modelo devolve `encaminhar`; um texto de `responder` que promete transferência ("a equipe continua", "vou te encaminhar") também conta como pedido;
+  - **pedido:** o worker chama `concluir_geracao_ai_first` sem texto, que revalida contexto, versão e lease e aplica `exigir_humano` com o token da reivindicação como comando;
+  - **confirmação:** `escalonada` (AI → `HUMAN_REQUIRED`). Resultado ambíguo (obsoleta, ACK perdido) é conferido no modo persistido: `humano_no_controle`, `nao_confirmada` ou `desconhecida`;
+  - **mensagem ao cliente:** nenhuma. Nenhuma promessa sai antes de a transferência ser confirmada, porque uma mudança de controle invalida o envio na fila (pgTAP `autorresposta_sac`, "takeover protege claim IA"). O aviso ao cliente na mesma transação depende de migration (L2).
+  - Correção do defeito visto na conversa 11 (23/11/2026): o texto prometia a equipe e a conversa continuava em `AI`.
 - **Takeover e handback:**
   - assumir invalida os envios automáticos em voo;
   - devolver exige resumo, que vira nota privada, e a IA retoma só a partir de uma mensagem nova, sem resposta retroativa;

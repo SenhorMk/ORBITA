@@ -48,15 +48,23 @@ Este documento é o espelho legível do que o assistente consome em `src/service
 ## Políticas comerciais
 Nenhuma está confirmada até agora. A situação de cada tema e os modelos de preenchimento estão em `docs/ai/ASSISTENTE_ORBITA.md` §6.
 
-| Tema | Situação |
-|---|---|
-| Pagamento, frete, prazos, trocas, cancelamento e reembolso | pendente de aprovação |
-| Promoções | indisponível |
-| Rastreamento pelo assistente | indisponível (P1) |
+Cada tema é um registro em `src/services/sac/assistente/organizacoes/portalDoHaux.ts` (ID estável, versão 1, sem texto, fonte, responsável nem vigência):
+
+| ID | Tema | Situação |
+|---|---|---|
+| `haux.pagamento` | formas de pagamento | pendente |
+| `haux.frete` | frete e entrega | pendente |
+| `haux.prazo-postagem` | prazo de preparação e postagem | pendente |
+| `haux.trocas` | trocas e devoluções | pendente |
+| `haux.cancelamento` | cancelamento e reembolso | pendente |
+| `haux.promocoes` | promoções e descontos | indisponível |
+| `haux.rastreamento` | rastreamento pelo assistente | indisponível (P1) |
+
+Para publicar uma política, o Portal aprova o texto. O registro passa a `confirmada`, com texto, fonte, `aprovadoPor` e vigência, e a versão sobe a cada mudança de texto. Sem esses campos, o registro é inválido e não fundamenta nada.
 
 ## Encaminhamento humano
 - **Gatilhos:** reclamação, saúde ou uso terapêutico, assunto jurídico, pedido de reembolso, pedido explícito de pessoa ou política não informada que a pessoa precisa resolver.
-- **Ao cliente:** o assistente diz que a equipe vai continuar o atendimento. A escalada automática pela triagem ainda não envia essa mensagem: ver limitação L2.
+- **Ao cliente:** nenhuma promessa de transferência é enviada. Quando a automação transfere (`encaminhar`), a conversa vai para `HUMAN_REQUIRED` com nota privada à equipe, sem mensagem automática ao cliente (limitação L2). Sem transferência, o assistente pode dizer, com verdade, que a pessoa pode pedir para falar com alguém.
 
 ## O que o comerciante ainda precisa fornecer
 - Confirmação das descrições, da composição final e do volume das quatro linhas.

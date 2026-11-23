@@ -37,7 +37,8 @@ describe('assistente do Portal do Haux: resposta natural com fatos verificados',
     expect(finalizarRespostaHaux({ acao: 'responder', texto: 'Custa R$ 40,00.' }, [], ID)).toBeNull();
   });
 
-  it.each(['Me passa seu CPF para eu verificar.', 'Veja em https://loja.exemplo', 'Já cancelei o seu pedido.', 'Seu pedido foi enviado ontem.'])(
+  it.each(['Me passa seu CPF para eu verificar.', 'Me passa o número do cartão.', 'Envie os dados do seu cartão por aqui.', 'Preciso do seu cartão para reservar.',
+    'Veja em https://loja.exemplo', 'Já cancelei o seu pedido.', 'Seu pedido foi enviado ontem.'])(
     'recusa texto que pede dado sensível, traz link ou afirma ação: %s', (texto) => {
       expect(finalizarRespostaHaux({ acao: 'responder', texto }, [DEFUMADOR], ID)).toBeNull();
     });
@@ -55,9 +56,11 @@ describe('assistente do Portal do Haux: resposta natural com fatos verificados',
     expect(finalizarRespostaHaux({ acao: 'responder', texto: 'O Portal de Harmonia ainda não tem preço cadastrado. O Defumador - Limpeza e descarrego custa R$ 40,00.' }, [DEFUMADOR], ID, linhas)).not.toBeNull();
   });
 
-  it('encaminhar continua respondendo a pessoa, com texto acolhedor', () => {
+  it('encaminhar é transferência: nenhum texto vai ao cliente, nem o acolhedor (correção da conversa 11)', () => {
     expect(finalizarRespostaHaux({ acao: 'encaminhar', texto: 'Não tenho essa informação confirmada; vou pedir para a equipe te responder.' }, [], ID))
-      .toMatchObject({ acao: 'encaminhar', texto: expect.stringContaining('equipe') });
+      .toEqual({ acao: 'encaminhar', motivo: 'decisao_do_modelo' });
+    expect(finalizarRespostaHaux({ acao: 'responder', texto: 'Vou pedir para a equipe te responder.' }, [], ID))
+      .toEqual({ acao: 'encaminhar', motivo: 'promessa_de_transferencia' });
   });
 
   it('saída fora do schema não vira resposta', () => {
@@ -101,10 +104,10 @@ describe('assistente do Portal do Haux: resposta natural com fatos verificados',
   });
 
   it('catálogo indisponível: o modelo é avisado e não recebe preços', async () => {
-    const mock = new MockLanguageModelV4({ doGenerate: async () => resultado({ acao: 'encaminhar', texto: 'Não consigo consultar os preços agora; a equipe te responde.' }) });
+    const mock = new MockLanguageModelV4({ doGenerate: async () => resultado({ acao: 'responder', texto: 'Não consegui consultar os preços agora.' }) });
     const modelo = criarModeloHauxPorAiSdk(mock, 'groq', undefined, {
       conhecimento: CONHECIMENTO_PORTAL_DO_HAUX, catalogo: async () => { throw new Error('rede'); } });
-    expect(await modelo.gerar('', entrada('Quanto custa?'), AbortSignal.timeout(1000))).toMatchObject({ texto: expect.stringContaining('equipe') });
+    expect(await modelo.gerar('', entrada('Quanto custa?'), AbortSignal.timeout(1000))).toMatchObject({ texto: expect.stringContaining('Não consegui consultar') });
     expect(JSON.stringify(mock.doGenerateCalls[0].prompt)).toContain('[consultar_catalogo — FALHOU]');
   });
 

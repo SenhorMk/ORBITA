@@ -1,4 +1,5 @@
 import { normalizar, termos, type ItemDoCatalogo } from './catalogo';
+import { politicaSemFundamento, type PoliticaRecuperada, type RegistroDePolitica } from './politicas';
 
 /**
  * A última barreira antes do envio: o texto do modelo só sai se não afirmar
@@ -7,10 +8,37 @@ import { normalizar, termos, type ItemDoCatalogo } from './catalogo';
  * worker escala para a equipe pelo caminho que já existe.
  */
 export type Problema = 'vazio' | 'longo' | 'link' | 'dado_sensivel' | 'preco_sem_fonte' | 'acao_afirmada' | 'preco_de_produto_sem_cadastro' | 'preco_sem_produto'
-  | 'promessa_de_envio' | 'indisponivel_como_disponivel' | 'beneficio_inventado';
+  | 'promessa_de_envio' | 'indisponivel_como_disponivel' | 'beneficio_inventado' | 'politica_sem_fundamento';
+
+/** As políticas da organização e os temas recuperados para esta resposta. */
+export interface PoliticasNoContexto {
+  readonly organizacaoId: string;
+  readonly registros: readonly RegistroDePolitica[];
+  readonly recuperadas: readonly PoliticaRecuperada[];
+}
+
+/**
+ * Promessa ou afirmação de transferência para pessoas ("vou te encaminhar",
+ * "a equipe vai te responder", "já avisei o atendente"). Responder não
+ * transfere ninguém: esse texto nunca sai enquanto a conversa está na automação.
+ */
+const PROMESSA_DE_TRANSFERENCIA = new RegExp([
+  String.raw`\b(?:vou|irei|vamos|ja vou) (?:te |lhe |a sua conversa |seu atendimento )?(?:transferir|encaminhar|passar|repassar|chamar|acionar|avisar)\b`,
+  String.raw`\b(?:transferi|encaminhei|repassei|acionei|avisei|chamei)\b`,
+  String.raw`\b(?:equipe|atendente|atendimento humano|time|pessoa|alguem|humano)\b[^.!?\n]{0,50}\b(?:continua|continuara|vai \w+|ira \w+|respondera|retornara|atendera|assumira|entra em contato|entrara em contato|(?:ja )?(?:foi|esta|estao) (?:avisad|notificad|acionad)\w*|te (?:responde|responder|retorna|retornar|atende|atender|ajuda|ajudar|chama|chamar))\b`,
+  String.raw`\b(?:em breve|logo|ja ja) (?:um|uma|alguem)\b[^.!?\n]{0,20}\b(?:atendente|pessoa|equipe)\b`,
+].join('|'), 'u');
+
+export function prometeTransferencia(texto: string): boolean {
+  return PROMESSA_DE_TRANSFERENCIA.test(normalizar(texto));
+}
 
 const LINK = /\b(?:https?:\/\/|www\.)\S+|\b[a-z0-9-]+\.(?:com|net|org|br|io|app)(?:\.br)?\b/iu;
-const DADO_SENSIVEL = /\b(?:cpf|rg|senha|cart[aã]o|cvv|c[oó]digo de seguran[cç]a|n[uú]mero do cart[aã]o|pix copia)\b/iu;
+/**
+ * Pedido de dado sensível. "Cartão" sozinho é meio de pagamento (pode estar
+ * numa política aprovada); só é sensível quando a frase pede os dados dele.
+ */
+const DADO_SENSIVEL = /\b(?:cpf|rg|senha|cvv|c[oó]digo de seguran[cç]a|pix copia)\b|\b(?:n[uú]mero|dados|validade|foto|frente|verso) do cart[aã]o\b|\b(?:me (?:passa|manda|envia|informa)|envie|informe|digite|mande|preciso d[oe]s?)\b[^.!?\n]{0,30}\bcart[aã]o\b/iu;
 const ACAO_AFIRMADA = /\b(?:j[aá] (?:cancelei|estornei|reembolsei|enviei|despachei|alterei|registrei)|pedido (?:foi )?(?:cancelado|estornado|reembolsado|enviado|despachado)|reembolso (?:foi )?(?:feito|aprovado))\b/iu;
 const PRECO = /R\$\s?(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d{2}))?/giu;
 const DISPONIVEL = /\bdisponive(?:l|is)\b|\bem estoque\b/u;
@@ -89,7 +117,7 @@ function indisponivelComoDisponivel(texto: string, catalogo: readonly ItemDoCata
 const afirmaSemNegar = (texto: string, padrao: RegExp) => frases(texto).some((f) => padrao.test(f) && !NEGACAO.test(f));
 
 export function validarResposta(texto: string, catalogoNoContexto: readonly ItemDoCatalogo[],
-  nomesSemCadastro: readonly string[] = []): Problema | null {
+  nomesSemCadastro: readonly string[] = [], politicas?: PoliticasNoContexto): Problema | null {
   const limpo = texto.trim();
   if (!limpo) return 'vazio';
   if (limpo.length > 900) return 'longo';
@@ -103,5 +131,8 @@ export function validarResposta(texto: string, catalogoNoContexto: readonly Item
   if (afirmaSemNegar(limpo, PROMESSA_DE_ENVIO)) return 'promessa_de_envio';
   if (indisponivelComoDisponivel(limpo, catalogoNoContexto)) return 'indisponivel_como_disponivel';
   if (afirmaSemNegar(limpo, BENEFICIO)) return 'beneficio_inventado';
+  if (politicas && politicaSemFundamento(limpo, politicas.organizacaoId, politicas.registros, politicas.recuperadas).length > 0) {
+    return 'politica_sem_fundamento';
+  }
   return null;
 }

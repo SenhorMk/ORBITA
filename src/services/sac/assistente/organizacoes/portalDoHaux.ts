@@ -1,4 +1,14 @@
 import type { ConhecimentoDaOrganizacao } from '../conhecimento';
+import type { RegistroDePolitica, SituacaoDaPolitica } from '../politicas';
+
+const ORGANIZACAO = 'c75eb92d-9222-49cc-ac0f-6aebaf8fa69f';
+
+/** Registro ainda sem aprovação: sem texto, sem fonte, sem responsável, sem vigência. */
+function politica(id: string, tema: string, situacao: Exclude<SituacaoDaPolitica, 'confirmada'>,
+  sinonimos: readonly string[], perguntas: readonly string[]): RegistroDePolitica {
+  return { id, organizacaoId: ORGANIZACAO, tema, situacao, texto: null, perguntas, sinonimos, fonte: null, versao: 1,
+    vigencia: { inicio: null, fim: null }, aprovadoPor: null };
+}
 
 /**
  * Base de conhecimento do Portal do Haux consumida pelo assistente.
@@ -12,7 +22,7 @@ import type { ConhecimentoDaOrganizacao } from '../conhecimento';
  * volume nem efeito terapêutico. Preço e estoque vêm SEMPRE do ERP.
  */
 export const CONHECIMENTO_PORTAL_DO_HAUX: ConhecimentoDaOrganizacao = {
-  organizacaoId: 'c75eb92d-9222-49cc-ac0f-6aebaf8fa69f',
+  organizacaoId: ORGANIZACAO,
   nomeDaMarca: 'Portal do Haux',
   identificacao: 'Assistente virtual do Portal do Haux',
   tom: 'Acolhedor, respeitoso e direto, em português do Brasil; linguagem ritual e simbólica da marca sem promessas de efeito.',
@@ -56,14 +66,31 @@ export const CONHECIMENTO_PORTAL_DO_HAUX: ConhecimentoDaOrganizacao = {
     'Descrições de proteção, limpeza e harmonização são linguagem ritual e simbólica da marca, não promessa de efeito.',
   ],
   termosDaFamilia: ['defumador', 'defumadores', 'linha', 'linhas', 'portal', 'aroma', 'fragrância', 'ambiente', 'energia', 'recomenda', 'indica', 'indicação', 'diferença'],
+  // Situação conforme docs/ai/ASSISTENTE_ORBITA.md §6 (23/11/2026): nenhuma
+  // política comercial tem fonte aprovada. Nada aqui pode virar fato até o
+  // Portal aprovar o texto, com fonte, responsável e vigência.
   politicas: [
-    { tema: 'formas de pagamento', situacao: 'pendente' },
-    { tema: 'frete e entrega', situacao: 'pendente' },
-    { tema: 'prazo de preparação e postagem', situacao: 'pendente' },
-    { tema: 'trocas e devoluções', situacao: 'pendente' },
-    { tema: 'cancelamento e reembolso', situacao: 'pendente' },
-    { tema: 'promoções e descontos', situacao: 'indisponivel' },
-    { tema: 'rastreamento de pedidos pelo assistente', situacao: 'indisponivel' },
+    politica('haux.pagamento', 'formas de pagamento', 'pendente',
+      ['pagamento', 'pagar', 'pix', 'boleto', 'cartao', 'credito', 'debito', 'parcel', 'juros', 'a vista', 'aceitam'],
+      ['quais formas de pagamento vocês aceitam', 'posso pagar no pix', 'vocês parcelam no cartão']),
+    politica('haux.frete', 'frete e entrega', 'pendente',
+      ['frete', 'entrega', 'entregam', 'correios', 'sedex', 'pac', 'transportadora', 'retirada', 'gratis'],
+      ['quanto custa o frete', 'vocês entregam na minha cidade', 'o frete é grátis']),
+    politica('haux.prazo-postagem', 'prazo de preparação e postagem', 'pendente',
+      ['prazo', 'postagem', 'postam', 'despach', 'envio', 'enviam', 'quando chega', 'demora'],
+      ['qual o prazo de envio', 'em quantos dias vocês postam', 'quando meu pedido chega']),
+    politica('haux.trocas', 'trocas e devoluções', 'pendente',
+      ['troca', 'trocar', 'devolu', 'devolver', 'arrependimento', 'defeito'],
+      ['como faço uma troca', 'posso devolver o produto', 'qual o prazo para troca']),
+    politica('haux.cancelamento', 'cancelamento e reembolso', 'pendente',
+      ['cancel', 'reembols', 'estorn', 'dinheiro de volta'],
+      ['como cancelo meu pedido', 'quero meu dinheiro de volta', 'quando sai o reembolso']),
+    politica('haux.promocoes', 'promoções e descontos', 'indisponivel',
+      ['promoc', 'desconto', 'cupo', 'liquidacao', 'black friday', 'oferta'],
+      ['tem cupom de desconto', 'vocês têm promoção', 'qual o desconto à vista']),
+    politica('haux.rastreamento', 'rastreamento de pedidos pelo assistente', 'indisponivel',
+      ['rastre', 'codigo de rastreio', 'onde esta meu pedido', 'status do pedido'],
+      ['onde está meu pedido', 'me passa o código de rastreio', 'qual o status do meu pedido']),
   ],
   produtosOcultos: [/^\s*demo\b/iu, /\bteste\b/iu, /\bpremium orbita\b/iu],
 };
