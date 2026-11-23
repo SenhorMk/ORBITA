@@ -29,10 +29,13 @@ Este documento é o espelho legível do que o assistente consome em `src/service
 4. **Limites:** nunca prometer efeito terapêutico ou espiritual garantido, porque as descrições são linguagem simbólica da marca.
 5. **Cuidados:** uso ambiental; não ingerir nem aplicar na pele.
 
-### Situação no ERP (23/11/2026)
-- **Cadastrado:** o catálogo tem "Defumador - Limpeza e descarrego" (R$ 40,00, disponível).
-- **Linhas sem cadastro:** as quatro linhas da família ainda **não estão cadastradas como produtos**, então o assistente informa que o preço delas não está disponível.
-- **Associação:** o assistente não associa o produto cadastrado a uma linha sem confirmação.
+### Situação no ERP (dinâmica)
+- **Fonte:** o assistente consulta o ERP a cada mensagem.
+- **Cadastrados em 23/11/2026:**
+  - "Defumador Líquido - Portal da Purificação" (`DFR-PUF`): R$ 40,00;
+  - "Defumador Líquido - Portal da Harmonia" (`DFR-HAR`): R$ 40,00.
+- **Associação com as linhas:** as linhas da marca casam com o item do ERP pela palavra própria ("Portal" + Harmonia, Purificação, Luz ou Guardião).
+- **Linhas sem item no ERP:** Luz e Guardião, por exemplo. O preço e a disponibilidade delas são informados como **ainda não cadastrados**.
 
 ## Perguntas frequentes
 | Pergunta | Resposta esperada |

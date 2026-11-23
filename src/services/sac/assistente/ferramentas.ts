@@ -81,7 +81,10 @@ export async function executarConsultas(
   }
 
   const cadastrados = todos.map((i) => normalizar(i.nome));
-  const nomesSemCadastro = linhas.map((l) => l.nome).filter((n) => !cadastrados.some((c) => c.includes(normalizar(n))));
+  // "Portal de Harmonia" (marca) × "Defumador Líquido - Portal da Harmonia" (ERP): casa por "portal" + a palavra própria.
+  const propria = (nome: string) => normalizar(nome).split(/\s+/u).at(-1) ?? '';
+  const nomesSemCadastro = linhas.map((l) => l.nome)
+    .filter((n) => !cadastrados.some((c) => c.includes('portal') && c.includes(propria(n))));
   if (linhas.length) resultados.push({ ferramenta: 'consultar_linhas', ok: true, conteudo: descreverLinhas(conhecimento, linhas, nomesSemCadastro) });
 
   if (POLITICA.test(normalizar(busca))) {

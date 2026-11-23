@@ -56,4 +56,11 @@ describe('produto sem cadastro no ERP não herda preço de outro item', () => {
     expect(r.nomesSemCadastro).toEqual(['Portal de Luz', 'Portal de Purificação', 'Portal de Harmonia', 'Portal do Guardião']);
     expect(r.resultados.find((x) => x.ferramenta === 'consultar_linhas')?.conteudo).toContain('NÃO estão cadastradas no ERP');
   });
+
+  it('linha cadastrada no ERP com outro artigo ("Portal da Harmonia") não é marcada sem cadastro', async () => {
+    const comLinha = async () => [...CATALOGO, { nome: 'Defumador Líquido - Portal da Harmonia', categoria: 'Defumador', preco: 40, disponivel: true }];
+    const r = await executarConsultas(CONHECIMENTO_PORTAL_DO_HAUX, comLinha, ['Qual você recomenda para harmonizar o ambiente?']);
+    expect(r.nomesSemCadastro).not.toContain('Portal de Harmonia');
+    expect(r.itensCitaveis.map((i) => i.nome)).toContain('Defumador Líquido - Portal da Harmonia');
+  });
 });
