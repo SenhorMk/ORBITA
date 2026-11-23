@@ -32,7 +32,7 @@ describe('assistente do Portal do Haux: resposta natural com fatos verificados',
   });
 
   it('preço citado precisa existir no catálogo enviado ao modelo', () => {
-    expect(finalizarRespostaHaux({ acao: 'responder', texto: 'O defumador custa R$ 40,00.' }, [DEFUMADOR], ID)).not.toBeNull();
+    expect(finalizarRespostaHaux({ acao: 'responder', texto: 'O Defumador - Limpeza e descarrego custa R$ 40,00.' }, [DEFUMADOR], ID)).not.toBeNull();
     expect(finalizarRespostaHaux({ acao: 'responder', texto: 'O defumador custa R$ 25,00.' }, [DEFUMADOR], ID)).toBeNull();
     expect(finalizarRespostaHaux({ acao: 'responder', texto: 'Custa R$ 40,00.' }, [], ID)).toBeNull();
   });
@@ -46,6 +46,9 @@ describe('assistente do Portal do Haux: resposta natural com fatos verificados',
     const linhas = ['Portal de Harmonia'];
     expect(finalizarRespostaHaux({ acao: 'responder', texto: 'O Portal de Harmonia está disponível por R$ 40,00.' }, [DEFUMADOR], ID, linhas)).toBeNull();
     expect(finalizarRespostaHaux({ acao: 'responder', texto: 'Recomendo o Portal de Harmonia, com preço R$ 40,00.' }, [DEFUMADOR], ID, linhas)).toBeNull();
+    // Visto no smoke real: o item do ERP renomeado com o nome da linha.
+    expect(finalizarRespostaHaux({ acao: 'responder', texto: 'Disponíveis: Defumador Líquido – Portal da Harmonia, por R$ 40,00.' }, [DEFUMADOR], ID, linhas)).toBeNull();
+    expect(finalizarRespostaHaux({ acao: 'responder', texto: 'O defumador custa R$ 40,00.' }, [DEFUMADOR], ID, linhas)).toBeNull();
     expect(finalizarRespostaHaux({ acao: 'responder', texto: 'O Portal de Harmonia ainda não tem preço cadastrado. O Defumador - Limpeza e descarrego custa R$ 40,00.' }, [DEFUMADOR], ID, linhas)).not.toBeNull();
   });
 
