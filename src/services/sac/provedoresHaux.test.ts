@@ -5,7 +5,7 @@ import { combinarProvedoresHaux, lerProvedoresHaux } from './provedoresHaux';
 import { criarModeloHauxPorAiSdk } from './respostaAutomaticaHaux';
 import { gerarResposta } from './gerarResposta';
 
-const decisao = { acao: 'responder', abertura: 'boa_tarde', pergunta: 'como_ajudar' };
+const decisao = { acao: 'responder', texto: 'Boa tarde! Como posso ajudar?' };
 const contexto = async () => ({ marca: '1', intencao: 'outro', mensagens: [{ conteudo: 'Olá!', criadaEm: '2026-11-19T12:00:00Z' }] });
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const groqOk = (valor: unknown = decisao) => json({ id: 'fixture', created: 1, model: 'openai/gpt-oss-20b',
@@ -29,7 +29,7 @@ describe('roteamento Haux por contratos HTTP explícitos, sem chamadas externas'
       chamadas++;
       const body = JSON.parse(String(init?.body));
       expect(body.response_format.json_schema.strict).toBe(true);
-      expect(body.max_tokens ?? body.max_completion_tokens).toBe(160);
+      expect(body.max_tokens ?? body.max_completion_tokens).toBe(700);
       return groqOk();
     }, async () => { throw new Error('Fallback indevido'); });
     expect(await responder(modelo)).toMatchObject({ estado: 'rascunho', texto: expect.stringContaining('Atendimento automatizado') });
@@ -55,17 +55,18 @@ describe('roteamento Haux por contratos HTTP explícitos, sem chamadas externas'
     expect(await responder(modelo)).toMatchObject({ estado: 'resposta_invalida' });
     expect(fallback).toBe(0);
   });
-  it('parada anterior e pedido comercial impedem qualquer chamada', async () => {
+  it('parada anterior impede qualquer chamada; pergunta comercial agora chega ao modelo', async () => {
     let chamadas = 0;
     const contar = async () => { chamadas++; return groqOk(); };
     const parada = new AbortController();
     parada.abort();
     expect(await responder(rota(contar, contar, parada.signal))).toMatchObject({ estado: 'resposta_invalida' });
-    const comercial = async () => ({ ...(await contexto()), mensagens: [{ conteudo: 'Qual o preço do produto?', criadaEm: '2026-11-19T12:00:00Z' }] });
-    expect(await gerarResposta(comercial, criarModeloHauxPorAiSdk(rota(contar, contar), 'groq+google'))).toMatchObject({ estado: 'resposta_invalida' });
     expect(chamadas).toBe(0);
+    const comercial = async () => ({ ...(await contexto()), mensagens: [{ conteudo: 'Qual o preço do produto?', criadaEm: '2026-11-19T12:00:00Z' }] });
+    expect(await gerarResposta(comercial, criarModeloHauxPorAiSdk(rota(contar, contar), 'groq+google'))).toMatchObject({ estado: 'rascunho' });
+    expect(chamadas).toBe(1);
   });
-  it.each([decisao, { ...decisao, acao: 'humano' }, { ...decisao, texto: 'Cura doenças e custa 10 reais.' }])(
+  it.each([decisao, { ...decisao, acao: 'humano' }, { ...decisao, texto: 'Custa R$ 10,00 e cura doenças.' }])(
     'não tenta outro modelo após decisão válida, handoff ou violação do schema: %j', async (valor) => {
       let fallback = 0;
       const resultado = await responder(rota(async () => groqOk(valor), async () => { fallback++; return googleOk(); }));

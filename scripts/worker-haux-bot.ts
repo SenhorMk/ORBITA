@@ -9,6 +9,9 @@ import { criarWorkerAiFirstPorInbox } from '../src/services/chatwoot/workerAiFir
 import { verifyOrganizationScope } from '../src/lib/verifiedOrganizationScope';
 import { CONEXAO_HAUX, ORGANIZACAO_HAUX, criarModeloHauxPorAiSdk, lerConfiguracaoHaux } from '../src/services/sac/respostaAutomaticaHaux';
 import { criarClassificadorHaux, criarRotaHaux } from '../src/services/sac/provedoresHaux';
+import { criarCatalogoComCache } from '../src/services/sac/assistente/catalogo';
+import { conhecimentoDe } from '../src/services/sac/assistente/conhecimento';
+import { criarLeitorDeProdutos } from '../src/services/sac/assistente/leitorDeProdutos';
 import { criarPortaDoConsumidorTriagem } from '../src/services/sac/triagem/consumidorTriagemSupabase';
 import { consumirTriagensUmaVez } from '../src/services/sac/triagem/consumidorTriagem';
 
@@ -41,7 +44,11 @@ async function iniciar() {
   const bancoDoWorker = porInbox?.banco ?? banco;
   const parada = new AbortController();
   const rota = criarRotaHaux(c, parada.signal);
-  const resposta = criarModeloHauxPorAiSdk(rota.modelo, rota.provedor, parada.signal);
+  const conhecimento = conhecimentoDe(ORGANIZACAO_HAUX);
+  const fonte = conhecimento
+    ? { conhecimento, catalogo: criarCatalogoComCache(criarLeitorDeProdutos(banco), conhecimento) }
+    : undefined;
+  const resposta = criarModeloHauxPorAiSdk(rota.modelo, rota.provedor, parada.signal, fonte);
   const triagem = criarClassificadorHaux(rota);
   const porta = criarPortaDoConsumidorTriagem(banco, escopo);
   const interromper = () => {
