@@ -22,6 +22,7 @@ import { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { AppWindow } from '@/components/shell/AppWindow';
 import { AreaDeConteudo } from '@/components/shell/AreaDeConteudo';
 import responsive from '@/components/ui/Responsive.module.css';
+import { AssistenteOrbita } from '@/components/shell/AssistenteOrbita';
 import { Rail } from '@/components/shell/Rail';
 import { OrganizacaoAtiva } from '@/components/shell/OrganizacaoAtiva';
 import { SeletorDeFundo, useFundo } from '@/components/shell/SeletorDeFundo';
@@ -629,6 +630,13 @@ export default function Home() {
           </HelpContext>
 
           <SeletorDeFundo fundo={fundo} onEscolher={escolherFundo} />
+          {organizacaoConfirmada && (
+            <AssistenteOrbita
+              key={geracaoDaSessao + ':' + organizacaoConfirmada}
+              organizacaoId={organizacaoConfirmada}
+              fetchWithAuth={fetchWithAuth}
+            />
+          )}
 
           {/*
             Uma ação de sincronização na barra, e uma só.

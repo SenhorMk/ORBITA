@@ -556,9 +556,9 @@ export class BlingClient implements BlingPort {
    * rede caída, token expirado, 500 do Bling — lança `BlingLeituraError`: se
    * virasse `null`, a sincronização gravaria um "pedido sem itens".
    */
-  async getPedido(id: string): Promise<BlingPedido | null> {
+  async getPedido(id: string, signal?: AbortSignal): Promise<BlingPedido | null> {
     try {
-      const response = await this.fetchWithAuth(`${this.baseUrl}/pedidos/vendas/${id}`);
+      const response = await this.fetchWithAuth(`${this.baseUrl}/pedidos/vendas/${id}`, { signal });
       if (response.status === 404) return null;
       if (!response.ok) {
         throw new BlingLeituraError('pedido', response.status, await response.text());

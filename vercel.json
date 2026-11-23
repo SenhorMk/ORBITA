@@ -6,7 +6,8 @@
       "codex/baixa-admin-idempotente": false,
       "codex/msg012-ranking-trocas": false,
       "codex/msg015-intake-trocas": false,
-      "fix/assistente-solicitacao-atual": false
+      "fix/assistente-solicitacao-atual": false,
+      "codex/assistente-orbita-global": false
     }
   }
 }
