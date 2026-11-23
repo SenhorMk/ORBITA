@@ -13,6 +13,7 @@ import {
   type MensagemOtimista,
 } from './estadoDaConversa';
 import { useEnvio } from './useEnvio';
+import { proximoStatus } from './statusDaConversa';
 
 /** O que a superfície de mensageria expõe para a tela. */
 export interface Mensageria {
@@ -253,7 +254,7 @@ export function useMensageria(
     const chave = chaveDaConversaRef.current;
     const conversa = selecionada;
     if (chave === null || conversa === null || estadoAtual?.alterandoStatus) return;
-    const novoStatus = conversa.status === 'open' ? 'resolved' : 'open';
+    const novoStatus = proximoStatus(conversa.status);
     alterar(chave, (anterior) => ({ ...anterior, alterandoStatus: true, integracaoIndisponivel: null }));
 
     void (async () => {

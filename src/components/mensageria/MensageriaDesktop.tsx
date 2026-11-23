@@ -20,6 +20,7 @@ import { PainelLateral, type AbaDoPainel } from './PainelLateral';
 import { useModoDoLayout, type ModoDoLayout } from './useModoDoLayout';
 import { HelpInfo } from '@/components/help/HelpInfo';
 import estilos from './mensageria.module.css';
+import { estaResolvida, passaNoFiltro, rotuloDoStatus } from './statusDaConversa';
 
 type Filtro = 'open' | 'resolved' | 'all';
 
@@ -57,7 +58,7 @@ function Conexao({ ativo, rotulo }: { readonly ativo: boolean; readonly rotulo: 
   );
 }
 
-/** Uma conversa na lista: contato, telefone e hora; "Resolvida" só quando é. */
+/** Uma conversa na lista: contato, telefone e hora; marca "Resolvida" ou "Pendente" só quando é. */
 function LinhaDeConversa({
   conversa,
   aberta,
@@ -77,7 +78,7 @@ function LinhaDeConversa({
         </span>
         <span className={estilos.linhaBase}>
           <span className={estilos.linhaDetalhe}>{conversa.contact?.phone_number || 'Sem telefone'}</span>
-          {conversa.status !== 'open' && <span className={estilos.marca}>Resolvida</span>}
+          {rotuloDoStatus(conversa.status) !== 'Aberta' && <span className={estilos.marca}>{rotuloDoStatus(conversa.status)}</span>}
         </span>
       </span>
     </button>
@@ -98,7 +99,7 @@ function CabecalhoDaLista({
   readonly filtro: Filtro;
   readonly aoFiltrar: (filtro: Filtro) => void;
 }) {
-  const abertas = (mensageria.conversas ?? []).filter((c) => c.status === 'open').length;
+  const abertas = (mensageria.conversas ?? []).filter((c) => !estaResolvida(c.status)).length;
   return (
     <header className={estilos.cabecalhoDaLista}>
       <div className="flex items-center" style={{ gap: 6 }}>
@@ -336,7 +337,7 @@ export function MensageriaDesktop({
     const termo = busca.trim().toLowerCase();
     const digitos = termo.replace(/\D/g, '');
     return (conversas ?? []).filter((conversa) => {
-      if (filtro !== 'all' && conversa.status !== filtro) return false;
+      if (!passaNoFiltro(conversa.status, filtro)) return false;
       if (termo === '') return true;
       const nome = conversa.contact?.name?.toLowerCase() ?? '';
       const telefone = conversa.contact?.phone_number ?? '';
