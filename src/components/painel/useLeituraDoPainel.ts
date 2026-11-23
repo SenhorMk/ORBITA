@@ -11,6 +11,8 @@ import { descreverErro } from '@/lib/erroLegivel';
 export interface DadosDoPainel {
   pedidos: PedidoEnriquecido[];
   produtos: Produto[];
+  /** Arquivados (aqui ou excluídos no Bling), para a aba separada de Estoque. */
+  produtosArquivados?: Produto[];
   clientes: Cliente[];
   categorias?: Categoria[];
   estatisticas: {

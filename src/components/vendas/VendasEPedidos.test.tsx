@@ -120,16 +120,24 @@ describe('chips de resumo na tela', () => {
 });
 
 describe('histórico', () => {
-  it('mantém o pedido cancelado na lista, com o status visível', () => {
+  it('pedido cancelado sai da aba Ativos e fica na aba Cancelados, com o status visível', async () => {
     montar();
+
+    expect(screen.getByRole('tab', { name: /Ativos \(2\)/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByText('#18')).not.toBeInTheDocument();
+    expect(screen.getByText('#20')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /Cancelados \(1\)/ }));
 
     expect(screen.getByText('#18')).toBeInTheDocument();
     expect(screen.getByText('CANCELADO')).toBeInTheDocument();
+    expect(screen.queryByText('#20')).not.toBeInTheDocument();
   });
 
   it('desabilita as ações incompatíveis de um pedido cancelado', async () => {
     montar({ onEmitirNfe: vi.fn(), onConversarNoWhatsapp: vi.fn() });
 
+    await userEvent.click(screen.getByRole('tab', { name: /Cancelados/ }));
     await userEvent.click(screen.getByRole('button', { name: /Ações do pedido 18/i }));
 
     expect(screen.getByText('Emitir nota fiscal').closest('button')).toBeDisabled();
@@ -218,6 +226,8 @@ describe('pendências de venda manual', () => {
     // A tabela continua inteira: "Conflito Bling" não é status de pedido.
     expect(screen.getByText('#20')).toBeInTheDocument();
     expect(screen.getByText('#19')).toBeInTheDocument();
+    // O cancelado continua na aba dele.
+    await userEvent.click(screen.getByRole('tab', { name: /Cancelados/ }));
     expect(screen.getByText('#18')).toBeInTheDocument();
   });
 });

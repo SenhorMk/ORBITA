@@ -321,3 +321,35 @@ describe('webhook: conclusão do inbox que o banco não grava', () => {
     expect(respostaNoInbox(ORG_A, 'invoice.created_777')?.status).toBe('processed');
   });
 });
+
+describe('webhook: exclusão pela tela do Bling chega como product.updated com situação E (23/11/2026)', () => {
+  // Formato real recebido: o Bling não mandou product.deleted, e sim um update com situacao 'E'.
+  const excluidoPelaTela = (extra: Record<string, unknown> = {}) => ({
+    event: 'product.updated', date: '2026-11-23T21:51:00Z',
+    data: { id: Number(BLING_ID), nome: 'Kuripe Cobra', codigo: 'BLING-16656037809', situacao: 'E', ...extra },
+  });
+
+  it('situação E vira tombstone e arquiva o produto, sem GET de detalhe nem upsert', async () => {
+    const resposta = await entregar(excluidoPelaTela());
+
+    expect(resposta.status).toBe(200);
+    expect(chamadasDaExclusao()).toEqual([['registrar_exclusao_de_produto_no_bling', {
+      p_organizacao_id: ORG_A, p_bling_id: BLING_ID, p_excluido_no_bling_em: '2026-11-23T21:51:00.000Z',
+    }]]);
+    expect(getProduto).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+    expect(respostaNoInbox(ORG_A, `product.updated_${BLING_ID}`)).toMatchObject({
+      status: 'processed', response: { entity: 'produto', acao: 'excluido_no_bling', blingId: BLING_ID },
+    });
+  });
+
+  it('update comum (situação A) continua sendo atualização, não exclusão', async () => {
+    await entregar(excluidoPelaTela({ situacao: 'A' }));
+    expect(chamadasDaExclusao()).toEqual([]);
+  });
+
+  it('situação E de outro recurso (fornecedor do produto) não exclui o produto', async () => {
+    await entregar({ event: 'product_supplier.updated', data: { id: Number(BLING_ID), situacao: 'E' } });
+    expect(chamadasDaExclusao()).toEqual([]);
+  });
+});

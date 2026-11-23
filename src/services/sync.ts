@@ -4,9 +4,9 @@ import { espelhoDaPagina } from './espelhoDaImagemDoBling';
 import { jobConcluidoComSaude } from './saudeDoBlingPeloSync';
 import { clienteRepository } from '../repositories/clienteRepository';
 import { produtoRepository } from '../repositories/produtoRepository';
-import { situacaoLocalDaSituacaoBling } from '../lib/config/produtoContract';
+import { gravarProdutoDoBling } from './gravacaoDoProdutoDoBling';
 import { pedidoRepository } from '../repositories/pedidoRepository';
-import { Cliente, Produto, Pedido, ItemPedido } from '../types';
+import { Cliente, Pedido, ItemPedido } from '../types';
 import { descreverErro } from '../lib/erroLegivel';
 import { registrarFalhaInterna } from '../lib/observability/falhaInterna';
 import { mapBlingStatus, normalizeToE164 } from '../lib/utils';
@@ -324,7 +324,8 @@ export class SyncService {
           }));
         },
         async ({ raw: bp, saldo, espelharImagem }) => {
-          await produtoRepository.upsert(scope, {
+          // Situação 'E' (excluído no Bling) arquiva o local; as demais gravam como sempre.
+          await gravarProdutoDoBling(scope, (bp as { situacao?: unknown }).situacao, {
             bling_id: String(bp.id),
             codigo: bp.codigo || undefined,
             nome: bp.nome,
@@ -332,8 +333,7 @@ export class SyncService {
             unidade: bp.unidade || 'UN',
             imagem_url: await espelharImagem(bp),
             estoque: saldo,
-            situacao: situacaoLocalDaSituacaoBling((bp as { situacao?: unknown }).situacao), // arquivado fica (migration 75)
-          } satisfies Produto);
+          });
         },
         async (page, count) => {
           progress.pagina_atual = page;

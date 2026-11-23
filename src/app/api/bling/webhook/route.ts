@@ -306,7 +306,7 @@ async function processWebhookEvent(
       return { _tag: 'Concluido', produtosAtualizados: 0 };
     }
 
-    if (ehExclusaoDeProduto(entity)) {
+    if (ehExclusaoDeProduto(entity, eventData)) {
       const exclusao = await aplicarExclusaoDeProduto(eventRecord, eventData, organizationScope, idempotencyKey);
       await blingInboxService.markProcessed(supabaseServer, organizationScope, inboxResult.eventoId, exclusao._tag === 'Registrada'
         ? { success: true, entity: 'produto', acao: 'excluido_no_bling', blingId: exclusao.blingId, desfecho: exclusao.desfecho }

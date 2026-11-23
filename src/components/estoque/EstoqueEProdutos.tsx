@@ -1,5 +1,6 @@
 'use client';
 import responsive from '@/components/ui/Responsive.module.css';
+import { AbasDeVisao } from '@/components/ui/AbasDeVisao';
 import { corDeTexto } from '@/components/ui/corDeTexto';
 
 import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
@@ -78,6 +79,8 @@ function Resumo({ rotulo, valor, cor }: { rotulo: string; valor: number; cor: st
 interface EstoqueEProdutosProps {
   /** Os produtos da última leitura boa, ou `null` se nenhuma leitura deu certo ainda. */
   produtos: readonly Produto[] | null;
+  /** Arquivados aqui ou excluídos no Bling: fora do catálogo, numa aba separada. */
+  produtosArquivados?: readonly Produto[];
   categorias: readonly Categoria[];
   carregando: boolean;
   /** A falha da leitura mais recente, se houve. */
@@ -90,6 +93,7 @@ interface EstoqueEProdutosProps {
 
 export function EstoqueEProdutos({
   produtos,
+  produtosArquivados = SEM_PRODUTOS,
   categorias,
   carregando,
   erroDeLeitura,
@@ -103,8 +107,9 @@ export function EstoqueEProdutos({
   const [categoriaId, setCategoriaId] = useState('all');
   const [precoMinimo, setPrecoMinimo] = useState('');
   const [precoMaximo, setPrecoMaximo] = useState('');
+  const [visao, setVisao] = useState<'catalogo' | 'arquivados'>('catalogo');
 
-  const base = produtos ?? SEM_PRODUTOS;
+  const base = visao === 'arquivados' ? produtosArquivados : (produtos ?? SEM_PRODUTOS);
 
   const listaVisivel = useMemo(
     () =>
@@ -182,8 +187,17 @@ export function EstoqueEProdutos({
         )}
       </div>
 
-      {/* Toolbar: situação, busca, categoria, faixa de preço, cadastrar. */}
+      {/* Toolbar: catálogo × arquivados, situação, busca, categoria, faixa de preço, cadastrar. */}
       <div className="flex items-center flex-none flex-wrap" style={{ gap: 10 }}>
+        <AbasDeVisao
+          rotulo="Catálogo ou arquivados"
+          abas={[
+            { id: 'catalogo', rotulo: `Catálogo (${(produtos ?? SEM_PRODUTOS).length})` },
+            { id: 'arquivados', rotulo: `Arquivados (${produtosArquivados.length})` },
+          ]}
+          ativa={visao}
+          onMudar={setVisao}
+        />
         <div
           className={`flex ${responsive.pills}`}
           style={{ gap: 3, padding: 4, borderRadius: 14, background: 'var(--chip)', border: '1px solid var(--line)' }}

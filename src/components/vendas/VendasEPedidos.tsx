@@ -1,5 +1,6 @@
 'use client';
 import responsive from '@/components/ui/Responsive.module.css';
+import { AbasDeVisao } from '@/components/ui/AbasDeVisao';
 import { corDeTexto } from '@/components/ui/corDeTexto';
 
 import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
@@ -36,9 +37,11 @@ import { calcularChips, ehChipDePedido, pedidosDoChip } from './resumoDeVendas';
  *
  * ## Esta tela é histórico
  *
- * Pedido cancelado continua listado, buscável e abrível. `apenasVendasAtivas`
- * não é aplicado à lista: ele só aparece dentro das regras dos chips, onde a
- * pergunta é mesmo "isto é venda?".
+ * Pedido cancelado continua buscável e abrível, mas numa aba separada
+ * ("Cancelados"): a aba "Ativos", padrão, mostra só o que não foi cancelado.
+ * A aba recorta só a TABELA; os chips continuam calculados sobre o período,
+ * porque respondem perguntas sobre a operação, não sobre a aba aberta.
+ * `apenasVendasAtivas` segue valendo só dentro das regras dos chips.
  */
 
 interface VendasEPedidosProps {
@@ -56,6 +59,9 @@ interface VendasEPedidosProps {
   onConversarNoWhatsapp?: (telefone: string, nome: string) => void;
   onEmitirNfe?: (pedido: PedidoEnriquecido) => void;
 }
+
+/** Cancelado no ORBITA ou no Bling: vai para a aba "Cancelados". */
+const ehCancelado = (p: PedidoEnriquecido) => p.status === 'Cancelado';
 
 function formatarReais(valor: number): string {
   return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -79,6 +85,7 @@ export function VendasEPedidos({
   const [pedidoAberto, setPedidoAberto] = useState<PedidoEnriquecido | null>(null);
   const [pedidoParaCancelar, setPedidoParaCancelar] = useState<PedidoEnriquecido | null>(null);
   const [pendenciasEmDestaque, setPendenciasEmDestaque] = useState(false);
+  const [visao, setVisao] = useState<'ativos' | 'cancelados'>('ativos');
   /** Releitura das pendências depois de uma conferência mudar o armazenamento. */
   const [, relerPendencias] = useReducer((versao: number) => versao + 1, 0);
   /** O "agora" da tela, fixado na montagem: o recorte e as idades não se mexem sozinhos. */
@@ -102,10 +109,12 @@ export function VendasEPedidos({
     [base, pendencias.length],
   );
 
+  const cancelados = useMemo(() => base.filter(ehCancelado), [base]);
   const listaVisivel = useMemo(() => {
-    const doChip = ehChipDePedido(chipSelecionado) ? pedidosDoChip(base, chipSelecionado) : base;
+    const daAba = visao === 'cancelados' ? cancelados : base.filter((p) => !ehCancelado(p));
+    const doChip = ehChipDePedido(chipSelecionado) ? pedidosDoChip(daAba, chipSelecionado) : daAba;
     return ordenar(buscar(doChip, busca), ordem);
-  }, [base, chipSelecionado, busca, ordem]);
+  }, [base, cancelados, visao, chipSelecionado, busca, ordem]);
 
   const nuncaCarregou = pedidos === null;
   const mostrarErroDeCarga = nuncaCarregou && erroDeLeitura !== null && !carregando;
@@ -233,8 +242,17 @@ export function VendasEPedidos({
         <PendenciasDeVendaManual open organizacaoId={organizacaoId} onMudanca={relerPendencias} />
       </div>
 
-      {/* Toolbar: períodos à esquerda, busca, espaço, ordenação. */}
+      {/* Toolbar: ativos × cancelados, períodos, busca, espaço, ordenação. */}
       <div className={`flex items-center flex-none ${responsive.toolbar}`} style={{ gap: 10 }}>
+        <AbasDeVisao
+          rotulo="Pedidos ativos ou cancelados"
+          abas={[
+            { id: 'ativos', rotulo: `Ativos (${base.length - cancelados.length})` },
+            { id: 'cancelados', rotulo: `Cancelados (${cancelados.length})` },
+          ]}
+          ativa={visao}
+          onMudar={setVisao}
+        />
         <div
           className={`flex ${responsive.pills}`}
           style={{ gap: 3, padding: 4, borderRadius: 14, background: 'var(--chip)', border: '1px solid var(--line)' }}
