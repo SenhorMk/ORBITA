@@ -33,6 +33,7 @@ import { runControleChatwootRaceRehearsal } from './database-concurrency-control
 import { runVinculoClienteRaceRehearsal } from './database-concurrency-vinculo-cliente.mjs';
 import { runTriagemRaceRehearsal } from './database-concurrency-triagem.mjs';
 import { runAutorrespostaRaceRehearsal } from './database-concurrency-autorresposta.mjs';
+import { testarBaixaDemo } from './database-concurrency-baixa-demo.mjs';
 import { failureMessage } from './script-result.mjs';
 
 /**
@@ -139,6 +140,7 @@ try {
       outcomeTriagem = applied;
       outcomeAutorresposta = applied;
     } else {
+      await testarBaixaDemo();
       outcomeVenda = await runManualOrderRaceRehearsal();
       outcomeTentativa = await runTentativaClaimRaceRehearsal();
       outcomePendencia = await runPendenciaIdenticaRaceRehearsal();
