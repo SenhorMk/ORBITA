@@ -205,6 +205,7 @@ export function criarModeloHauxPorAiSdk(modelo: LanguageModel, provedor: ModeloD
           consultas?.nomesSemCadastro ?? [], conversa.historico.length + conversa.atual.length > 1,
           conhecimento && consultas ? { organizacaoId: conhecimento.organizacaoId, registros: conhecimento.politicas, recuperadas: consultas.politicas } : undefined);
         if (final === null) return null;
+        // A transição durável do worker encaminha e suspende a IA antes de outro envio.
         return final.acao === 'encaminhar' ? { acao: 'encaminhar' } : { texto: final.texto };
       } catch (erro: unknown) {
         const status = APICallError.isInstance(erro) ? erro.statusCode : undefined;

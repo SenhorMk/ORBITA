@@ -1,8 +1,10 @@
 'use client';
+import responsive from '@/components/ui/Responsive.module.css';
+import { corDeTexto } from '@/components/ui/corDeTexto';
 
 import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Package, Search } from 'lucide-react';
 
 import type { Categoria, Produto } from '@/types';
@@ -66,7 +68,7 @@ function Resumo({ rotulo, valor, cor }: { rotulo: string; valor: number; cor: st
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: cor }} aria-hidden />
         {rotulo}
       </span>
-      <span className="orbita-numero" style={{ fontSize: 'var(--resumo-fs)', color: cor }}>
+      <span className="orbita-numero" style={{ fontSize: 'var(--resumo-fs)', color: corDeTexto(cor) }}>
         {valor}
       </span>
     </div>
@@ -83,6 +85,7 @@ interface EstoqueEProdutosProps {
   onRecarregar: () => void;
   onAbrirProduto: (produto: Produto) => void;
   onCadastrarProduto: () => void;
+  assistente?: ReactNode;
 }
 
 export function EstoqueEProdutos({
@@ -93,6 +96,7 @@ export function EstoqueEProdutos({
   onRecarregar,
   onAbrirProduto,
   onCadastrarProduto,
+  assistente,
 }: EstoqueEProdutosProps) {
   const [busca, setBusca] = useState('');
   const [situacao, setSituacao] = useState<SituacaoDeEstoque>('all');
@@ -137,7 +141,7 @@ export function EstoqueEProdutos({
   const mostrarAvisoDeAtualizacao = !nuncaCarregou && erroDeLeitura !== null;
 
   return (
-    <div className="flex flex-col flex-1 min-h-0" style={{ gap: 'var(--conteudo-gap)' }}>
+    <div className={`flex flex-col flex-1 min-h-0 ${responsive.page}`} style={{ gap: 'var(--conteudo-gap)' }}>
 
       <div className={`flex items-start gap-8 flex-none ${helpPageHeader}`}>
         <div className="flex flex-col flex-none" style={{ width: 'var(--titulo-col)', gap: 13 }}>
@@ -181,7 +185,7 @@ export function EstoqueEProdutos({
       {/* Toolbar: situação, busca, categoria, faixa de preço, cadastrar. */}
       <div className="flex items-center flex-none flex-wrap" style={{ gap: 10 }}>
         <div
-          className="flex"
+          className={`flex ${responsive.pills}`}
           style={{ gap: 3, padding: 4, borderRadius: 14, background: 'var(--chip)', border: '1px solid var(--line)' }}
         >
           {SITUACOES.map((s) => {
@@ -209,7 +213,7 @@ export function EstoqueEProdutos({
         </div>
 
         <div
-          className="flex items-center flex-1 min-w-0"
+          className={`flex items-center flex-1 min-w-0 ${responsive.search}`}
           style={{
             gap: 10,
             height: 38,
@@ -298,6 +302,7 @@ export function EstoqueEProdutos({
           <Package className="w-4 h-4" />
           Cadastrar produto
         </button>
+        {assistente}
       </div>
 
       {mostrarAvisoDeAtualizacao && (

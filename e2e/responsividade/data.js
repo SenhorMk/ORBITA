@@ -1,0 +1,7 @@
+export const id = '11111111-1111-4111-8111-111111111111';
+export const organization = { id, nome: 'Portal do Haux · inspeção', slug: 'inspecao' };
+export const cliente = { id, bling_id: '1', nome: 'Cliente de inspeção visual', email: 'visual@example.invalid' };
+export const produtos = Array.from({ length: 12 }, (_, i) => ({ id: `${id.slice(0,-2)}${String(i).padStart(2,'0')}`, bling_id: String(i+1), nome: `Produto de inspeção ${i+1}`, codigo: `SKU-${i+1}`, preco: 125.5, estoque: 12, situacao: 'ativo', unidade: 'UN' }));
+export const pedidos = Array.from({ length: 12 }, (_, i) => ({ id: produtos[i].id, bling_id: String(i+1), numero: String(100+i), data: new Date().toISOString(), total: 125.5, status: i%2 ? 'Atendido' : 'Em aberto', cliente, origem: 'MANUAL', itens: [] }));
+export const titulos = pedidos.map((p, i) => ({ id: p.id, bling_id: i+1, titulo: `Lançamento de inspeção ${i+1}`, descricao: 'Dados sintéticos, sem gravação', tipo: i%2 ? 'pagar' : 'receber', situacao: 'aberto', valor: 125.5, data_vencimento: new Date().toISOString().slice(0,10) }));
+export const lista = { sessao: 'visual@example.invalid', organizacoes: [organization], activeOrg: { organizacao: organization, papel: 'owner' }, selectionVersion: 1, isLoading: false, error: null, switchingOrgId: null, async loadOrganizacoes(){}, async handleCreateOrganization(){ throw new Error('Gravação bloqueada'); }, async handleSwitchOrganization(){ throw new Error('Troca bloqueada'); } };

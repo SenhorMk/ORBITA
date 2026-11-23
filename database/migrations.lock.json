@@ -520,6 +520,16 @@
       "order": 104,
       "path": "../database/101_lista_conversas_teste.sql",
       "sha256": "ec9d4361a10c21d7fb559954e43255e027f70d49acf96da47673207699774598"
+    },
+    {
+      "order": 105,
+      "path": "../database/102_baixa_estoque_demo_idempotente.sql",
+      "sha256": "54d856dd72f31e50faea3b79b5c5320ae1d0ffd2fe0c81ef5b85c3527d12ba6e"
+    },
+    {
+      "order": 106,
+      "path": "../database/103_propostas_resolucao_sac.sql",
+      "sha256": "d5febfa40e5357b5931bf4e6e890c767883813e00cb45da706e918c490f5a2ff"
     }
   ],
   "references": [

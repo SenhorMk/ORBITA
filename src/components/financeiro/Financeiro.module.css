@@ -1,0 +1,11 @@
+.body { display: grid; flex: 1; min-height: 0; grid-template-columns: var(--financeiro-cols); gap: var(--conteudo-gap); }
+.charts { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: var(--conteudo-gap); }
+.chart { flex: 1 1 0; min-height: var(--grafico-min); }
+@media (max-width: 1100px) {
+  .body { flex: none; grid-template-columns: minmax(0, 1fr); }
+  .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chart { flex: none; height: 240px; min-height: 240px; }
+}
+@media (max-width: 640px) {
+  .charts { grid-template-columns: minmax(0, 1fr); }
+}

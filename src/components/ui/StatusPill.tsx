@@ -1,4 +1,5 @@
 'use client';
+import { corDeTexto } from './corDeTexto';
 
 import { pedidoContaComoVendaAtiva } from '@/lib/metricas/vendasAtivas';
 
@@ -76,7 +77,7 @@ export function Pilula({ rotulo, cor }: { rotulo: string; cor: string }) {
         fontSize: 10,
         fontWeight: 500,
         letterSpacing: '0.04em',
-        color: cor,
+        color: corDeTexto(cor),
       }}
     >
       <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: cor }} aria-hidden />

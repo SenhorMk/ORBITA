@@ -1,6 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
+import responsive from './Responsive.module.css';
 
 /**
  * A casca de uma tabela do Orbita: painel arredondado, área rolável e rodapé.
@@ -24,7 +25,7 @@ export function MolduraDeTabela({
 }) {
   return (
     <div
-      className="flex flex-col flex-1 min-h-0 overflow-hidden"
+      className={`flex flex-col flex-1 min-h-0 overflow-hidden ${responsive.tableFrame}`}
       style={{ borderRadius: 22, background: 'var(--glass2)', border: '1px solid var(--line)' }}
     >
       <div className="flex-1 min-h-0 overflow-auto" style={{ scrollbarGutter: 'stable' }}>

@@ -1,4 +1,5 @@
 'use client';
+import responsive from '@/components/ui/Responsive.module.css';
 
 import { MessageCircle, MoreVertical } from 'lucide-react';
 
@@ -74,7 +75,7 @@ export function TabelaDePedidos({
 }) {
   return (
     <div
-      className="flex flex-col flex-1 min-h-0 overflow-hidden"
+      className={`flex flex-col flex-1 min-h-0 overflow-hidden ${responsive.tableFrame}`}
       style={{ borderRadius: 22, background: 'var(--glass2)', border: '1px solid var(--line)' }}
     >
       <div className="flex-1 min-h-0 overflow-auto" style={{ scrollbarGutter: 'stable' }}>

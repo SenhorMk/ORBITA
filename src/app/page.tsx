@@ -20,11 +20,14 @@ import {
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 import { PedidoEnriquecido } from '@/repositories/pedidoRepository';
 import { AppWindow } from '@/components/shell/AppWindow';
+import { AreaDeConteudo } from '@/components/shell/AreaDeConteudo';
+import responsive from '@/components/ui/Responsive.module.css';
 import { Rail } from '@/components/shell/Rail';
 import { OrganizacaoAtiva } from '@/components/shell/OrganizacaoAtiva';
 import { SeletorDeFundo, useFundo } from '@/components/shell/SeletorDeFundo';
 import { VendasEPedidos } from '@/components/vendas/VendasEPedidos';
 import { EstoqueEProdutos } from '@/components/estoque/EstoqueEProdutos';
+import { AssistenteDeEstoque } from '@/components/estoque/AssistenteDeEstoque';
 import { ClientesEContatos } from '@/components/clientes/ClientesEContatos';
 import { ClienteDetailModal } from '@/components/ClienteDetailModal';
 import { ProductDetailModal } from '@/components/ProductDetailModal';
@@ -614,7 +617,7 @@ export default function Home() {
           o que precisa estar à mão de qualquer aba; navegar para Integrações,
           por exemplo, é papel do rail, não de um botão nesta barra.
         */}
-        <div className="orbita-acoes">
+        <div className={`orbita-acoes ${responsive.topbar}`}>
           <HelpContext ajudaId="shell.org">
           <OrganizacaoAtiva
             organizacoes={listaDeOrganizacoes.organizacoes}
@@ -703,9 +706,7 @@ export default function Home() {
         altura toda — a tabela é que fica com o espaço que sobra, e não a
         página; as ainda não migradas continuam empilhando e rolando aqui.
       */}
-      <main className={TELAS_QUE_OCUPAM_A_JANELA.has(activeTab)
-        ? 'flex-1 min-h-0 flex flex-col'
-        : 'flex-1 min-h-0 overflow-y-auto space-y-6 pr-1'}>
+      <AreaDeConteudo aba={activeTab} ocupaJanela={TELAS_QUE_OCUPAM_A_JANELA.has(activeTab)}>
 
         {/* TAB FINANCEIRO */}
         <div className={activeTab === 'finance' ? 'flex flex-col flex-1 min-h-0' : 'hidden'}>
@@ -775,6 +776,7 @@ export default function Home() {
             onRecarregar={() => { void loadDashboardData(); }}
             onAbrirProduto={produtoNoModal.abrir}
             onCadastrarProduto={produtoNoModal.abrirCadastro}
+            assistente={organizacaoAtivaId && <AssistenteDeEstoque key={organizacaoAtivaId} />}
           />
         )}
 
@@ -805,7 +807,7 @@ export default function Home() {
           />
         )}
 
-      </main>
+      </AreaDeConteudo>
       </div>
       </AppWindow>
 

@@ -1,4 +1,5 @@
 'use client';
+import { corDeTexto } from '@/components/ui/corDeTexto';
 
 import type { ResumoFinanceiro as Resumo } from './useLeituraFinanceira';
 
@@ -31,7 +32,7 @@ function Cartao({ rotulo, valor, cor }: { rotulo: string; valor: string; cor: st
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: cor }} aria-hidden />
         {rotulo}
       </span>
-      <span className="orbita-numero truncate" style={{ fontSize: 'var(--resumo-fs)', color: cor }}>
+      <span className="orbita-numero truncate" style={{ fontSize: 'var(--resumo-fs)', color: corDeTexto(cor) }}>
         {valor}
       </span>
     </div>

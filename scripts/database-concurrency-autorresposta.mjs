@@ -51,7 +51,7 @@ async function prepararConversa(admin, client, cenario) {
   assert.equal(inicio.resultado, 'iniciada');
   const { rows: [{ fim }] } = await client.query(
     `select public.concluir_triagem_sac($1,$2,$3,'concluida',null,
-        '{"precisaDeHumano":false}'::jsonb,true,null,null,0::smallint,null,10) as fim`,
+        '{"precisaDeHumano":false,"intencao":"duvida_sobre_produto"}'::jsonb,true,null,null,0::smallint,null,10) as fim`,
     [inicio.run_id, workerTriagem, triagem.fencing_token],
   );
   assert.equal(fim, 'concluida');
@@ -86,6 +86,44 @@ async function novaMensagem(client, fixture, worker, criadaEm) {
     'select disposicao as resultado from public.aplicar_evento_inbox_chatwoot($1,$2,$3,$4::jsonb)',
     [lease.evento_id, worker, lease.fencing_token, JSON.stringify(mensagemComData(2201, criadaEm))],
   ];
+}
+
+async function conferirEncaminhamento(admin, client) {
+  const alvo = await prepararConversa(admin, client, 'encaminhamento');
+  const escopo = [alvo.org, alvo.conexao, alvo.owner];
+  const conversa = alvo.args[2];
+  await admin.query(
+    "insert into public.chatwoot_ai_runtime (organizacao_id,conexao_id,executor_id,inbox_id,corte,ativo,pronto_ate,conversa_teste_externa,limite_geracoes_dia) values ($1,$2,$3,1,'-infinity',true,now()+interval '2 minutes','50',2)",
+    escopo,
+  );
+  await admin.query(
+    "insert into public.chatwoot_ai_projecao (organizacao_id,conversa_id,versao,desejado,fase) values ($1,$2,0,'pending','ok')",
+    [alvo.org,conversa],
+  );
+  const reivindicarSql = 'select public.reivindicar_geracao_ai_first($1,$2,$3) as trabalho';
+  const { rows: [{ trabalho }] } = await client.query(reivindicarSql, escopo);
+  assert.equal(trabalho?.conversa, conversa, 'a geração precisa ser reivindicada no escopo sintético');
+  const concluir = 'select public.concluir_geracao_ai_first($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) as resultado';
+  const args = [...escopo, trabalho.token, trabalho.caso, conversa, trabalho.run,
+    trabalho.versao, trabalho.versao_global, trabalho.versao_org, null];
+  const obsoleta = [...args];
+  obsoleta[3] = randomUUID();
+  assert.equal((await client.query(concluir, obsoleta)).rows[0].resultado, 'obsoleta');
+  assert.equal((await client.query(concluir, args)).rows[0].resultado, 'escalonada');
+  assert.equal((await client.query(concluir, args)).rows[0].resultado, 'obsoleta');
+  assert.equal((await client.query(reivindicarSql, escopo)).rows[0].trabalho, null);
+
+  const { rows: [evidencia] } = await admin.query(`
+    select c.ownership_mode as modo, c.control_version::int as versao,
+           (select count(*)::int from public.chatwoot_controle_historico h
+             where h.organizacao_id=$1 and h.conversa_id_local=$2 and h.acao='exigir_humano') as transicoes,
+           (select count(*)::int from public.chatwoot_envios e where e.organizacao_id=$1
+             and e.conversa_id_local=$2 and not e.privada) as publicas,
+           (select count(*)::int from public.chatwoot_envios e where e.organizacao_id=$1
+             and e.conversa_id_local=$2 and e.privada) as privadas
+      from public.chatwoot_conversa_controle c where c.organizacao_id=$1 and c.conversa_id_local=$2
+  `, [alvo.org,conversa]);
+  assert.deepEqual(evidencia, { modo: 'HUMAN_REQUIRED', versao: 1, transicoes: 1, publicas: 0, privadas: 1 });
 }
 
 async function ensaiar(clientes) {
@@ -131,6 +169,7 @@ async function ensaiar(clientes) {
     [cinco.caso],
   );
   assert.equal(versao.avancou, true);
+  await conferirEncaminhamento(admin, clientA);
 
 }
 
@@ -151,7 +190,7 @@ export async function runAutorrespostaRaceRehearsal({ criarCliente = createLocal
       await client.query("set statement_timeout = '15s'");
     }
     await ensaiar({ admin, clientA, clientB });
-    return ok({ relato: 'MSG-022: seis corridas serializadas no PostgreSQL, incluindo mensagem no mesmo segundo e atrasada' });
+    return ok({ relato: 'MSG-022: seis corridas serializadas no PostgreSQL, incluindo mensagem no mesmo segundo e atrasada; encaminhamento persistiu HUMAN_REQUIRED com nota privada única e sem resposta pública' });
   } catch (cause) {
     return err('AutorrespostaRehearsalFailed', 'Falha nas corridas de autorresposta', {}, cause);
   } finally {

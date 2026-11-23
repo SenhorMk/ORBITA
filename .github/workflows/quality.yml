@@ -78,7 +78,7 @@ jobs:
   helpinfo-visual:
     name: HelpInfo visual regression
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -88,6 +88,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:helpinfo:visual
+      - run: npm run test:responsividade
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -95,6 +96,8 @@ jobs:
           path: |
             playwright-report/helpinfo
             test-results/helpinfo
+            playwright-report/responsividade
+            test-results/responsividade
           retention-days: 7
 
   database-lab:

@@ -20,19 +20,19 @@ const canal: CanalDeProjecaoAiFirst = {
   async alterarSemAtribuir() { throw new Error('sem projeção neste teste'); },
 };
 
-function montar(atendida?: LerAtendidaAte) {
+function montar(atendida?: LerAtendidaAte, saida: unknown = { texto: 'Temos kuripes.' }) {
   const rpcs: Array<[string, Record<string, unknown>]> = [];
   const banco = {
     async rpc(nome: string, args: Record<string, unknown>) {
       rpcs.push([nome, args]);
       if (nome === 'renovar_worker_ai_first') return { data: true, error: null };
       if (nome === 'reivindicar_geracao_ai_first') return { data: TRABALHO, error: null };
-      if (nome === 'concluir_geracao_ai_first') return { data: 'registrada', error: null };
+      if (nome === 'concluir_geracao_ai_first') return { data: args.p_texto === null ? 'escalonada' : 'registrada', error: null };
       return { data: null, error: null };
     },
   };
   const entradas: string[] = [];
-  const modelo: ModeloDeResposta = { provedor: 'fake', async gerar(_i, entrada) { entradas.push(entrada); return { texto: 'Temos kuripes.' }; } };
+  const modelo: ModeloDeResposta = { provedor: 'fake', async gerar(_i, entrada) { entradas.push(entrada); return saida; } };
   const leituras: Array<[unknown, string]> = [];
   const leitor: LerAtendidaAte | undefined = atendida && (async (escopo, conversa) => {
     leituras.push([escopo, conversa]);
@@ -52,6 +52,16 @@ describe('worker AI-first: corte do que já foi respondido', () => {
     expect(w.entradas[0]).toMatch(/<solicitacao_atual>\n<mensagem ordem="2">E kuripe\?<\/mensagem>\n<\/solicitacao_atual>/u);
     const conclusao = w.rpcs.find(([nome]) => nome === 'concluir_geracao_ai_first')?.[1];
     expect(conclusao).toMatchObject({ p_token: TRABALHO.token, p_versao: 7, p_texto: 'Temos kuripes.' });
+  });
+
+  it('propaga encaminhamento à conclusão cercada e não pede autorresposta', async () => {
+    const w = montar(undefined, { acao: 'encaminhar' });
+    expect(await w.passar()).toMatchObject({ estado: 'processado', geracao: 'escalonada' });
+    expect(w.rpcs.filter(([nome]) => nome === 'concluir_geracao_ai_first')).toEqual([
+      ['concluir_geracao_ai_first', { ...ESCOPO, p_token: TRABALHO.token, p_conversa: TRABALHO.conversa,
+        p_caso: TRABALHO.caso, p_run: TRABALHO.run, p_versao: 7, p_global: 1, p_org_versao: 2, p_texto: null }],
+    ]);
+    expect(w.rpcs.some(([nome]) => nome === 'registrar_autorresposta_chatwoot')).toBe(false);
   });
 
   it('falha na leitura não bloqueia a resposta e não torna o histórico pedido', async () => {

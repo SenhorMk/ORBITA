@@ -1,4 +1,23 @@
 /* O corpo cede altura ao cabeçalho e rodapé; a geometria desktop vem dos tokens. */
+:global(:root[data-theme='light']) .content {
+  --texto-acento: #426000;
+  --texto-perigo: #b52d23;
+  --texto-info: #005b7a;
+  --texto-atencao: #795000;
+}
+:global(:root[data-theme='light']) .content :global(.text-white) { color: var(--txt); }
+:global(:root[data-theme='light']) .content :global(.text-slate-200) { color: var(--txt); }
+:global(:root[data-theme='light']) .content :global(.glass-input) {
+  background: var(--glass2);
+  border-color: var(--line);
+  color: var(--txt);
+}
+:global(:root[data-theme='light']) .content :global(.bg-slate-900\/95) { background: var(--modal); }
+:global(:root[data-theme='light']) .content :global(.text-slate-300),
+:global(:root[data-theme='light']) .content :global(.text-slate-400),
+:global(:root[data-theme='light']) .content :global(.text-slate-500) { color: var(--txt2); }
+:global(:root[data-theme='light']) .content input::placeholder,
+:global(:root[data-theme='light']) .content textarea::placeholder { color: var(--txt2); opacity: 1; }
 @media (max-width: 640px) {
   .content { max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); }
   .drawer { top: 16px; bottom: 16px; right: 16px; }

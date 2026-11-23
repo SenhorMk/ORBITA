@@ -12,6 +12,8 @@ import {
 } from '@/lib/integrations/contratoDoRetrato';
 import { Aviso } from './Aviso';
 import { HelpInfo } from '@/components/help/HelpInfo';
+import { PreviaDeTroca } from './PreviaDeTroca';
+import { PropostaPersistida } from './PropostaPersistida';
 
 const CHIP = { height: 28, fontSize: 11 } as const;
 const NOTA = { fontSize: 11, color: 'var(--txt3)' } as const;
@@ -123,6 +125,8 @@ export function RetratoDoPedido({
 
       {retrato !== null && (
         <>
+          <PreviaDeTroca key={chave} fetchWithAuth={fetchWithAuth} conversaId={conversaId} pedidoId={pedidoId} itens={retrato.itens} />
+          <PropostaPersistida key={chave + ":proposta"} fetchWithAuth={fetchWithAuth} conversaId={conversaId} pedidoId={pedidoId} itens={retrato.itens} />
           {avisos.length > 0 && (
             <Aviso tom="atencao">
               {avisos.join(' ')} Confirme no Bling antes de responder ao cliente.

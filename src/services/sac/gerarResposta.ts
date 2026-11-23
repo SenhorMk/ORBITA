@@ -9,7 +9,7 @@ export const RascunhoSchema = z.object({ texto: z.string().trim().min(1).max(120
  * transferência para a equipe, sem texto (nenhuma promessa ao cliente antes de
  * a transferência ser confirmada pelo banco).
  */
-const SaidaDoModelo = z.union([RascunhoSchema, z.object({ acao: z.literal('encaminhar') }).strict()]);
+const SaidaDoModeloSchema = z.union([RascunhoSchema, z.strictObject({ acao: z.literal('encaminhar') })]);
 
 export interface ContextoDaResposta {
   readonly marca: string;
@@ -98,10 +98,10 @@ export async function gerarResposta(
   } catch {
     return { estado: 'modelo_indisponivel' } as const;
   }
-  const lida = SaidaDoModelo.safeParse(resposta);
+  const lida = SaidaDoModeloSchema.safeParse(resposta);
   if (!lida.success) return { estado: 'resposta_invalida' } as const;
   const atual = await ler();
   if (atual?.marca !== contexto.marca) return { estado: 'contexto_mudou' } as const;
-  if ('acao' in lida.data) return { estado: 'encaminhar', provedor: modelo.provedor } as const;
+  if ('acao' in lida.data) return { estado: 'encaminhar' } as const;
   return { estado: 'rascunho', texto: lida.data.texto, provedor: modelo.provedor } as const;
 }

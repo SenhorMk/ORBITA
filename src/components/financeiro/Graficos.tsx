@@ -1,6 +1,7 @@
 'use client';
 
 import { HelpContext } from '@/components/help/HelpContext';
+import styles from './Financeiro.module.css';
 
 import type { ReactElement } from 'react';
 import {
@@ -82,10 +83,8 @@ function estiloDoTooltip() {
 function PainelDeGrafico({ titulo, children }: { titulo: string; children: ReactElement }) {
   return (
     <section
-      className="flex flex-col min-h-0"
+      className={`flex flex-col min-h-0 ${styles.chart}`}
       style={{
-        flex: '1 1 0',
-        minHeight: 'var(--grafico-min)',
         padding: '13px 15px',
         borderRadius: 'var(--r-panel)',
         background: 'var(--glass2)',

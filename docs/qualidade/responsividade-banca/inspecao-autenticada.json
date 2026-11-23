@@ -1,0 +1,254 @@
+[
+  {
+    "name": "financeiro",
+    "height": 844,
+    "mainHeight": 608,
+    "mainScrollHeight": 1627,
+    "mainScrollWidth": 222,
+    "mainWidth": 222,
+    "theme": "dark",
+    "title": [
+      "ControleFinanceiro"
+    ],
+    "topbarOverflow": 0,
+    "width": 390
+  },
+  {
+    "name": "visao-geral",
+    "height": 844,
+    "mainHeight": 608,
+    "mainScrollHeight": 1514,
+    "mainScrollWidth": 222,
+    "mainWidth": 222,
+    "theme": "dark",
+    "title": [
+      "VisãoGeral"
+    ],
+    "topbarOverflow": 0,
+    "width": 390
+  },
+  {
+    "name": "vendas",
+    "height": 844,
+    "mainHeight": 562,
+    "mainScrollHeight": 1261,
+    "mainScrollWidth": 222,
+    "mainWidth": 222,
+    "theme": "dark",
+    "title": [
+      "Vendas &Pedidos"
+    ],
+    "topbarOverflow": 0,
+    "width": 390
+  },
+  {
+    "name": "estoque",
+    "height": 844,
+    "mainHeight": 608,
+    "mainScrollHeight": 1154,
+    "mainScrollWidth": 222,
+    "mainWidth": 222,
+    "theme": "dark",
+    "title": [
+      "Estoque &Produtos"
+    ],
+    "topbarOverflow": 0,
+    "width": 390
+  },
+  {
+    "name": "integracoes",
+    "height": 844,
+    "mainHeight": 608,
+    "mainScrollHeight": 5613,
+    "mainScrollWidth": 222,
+    "mainWidth": 222,
+    "theme": "dark",
+    "title": [
+      "Integrações"
+    ],
+    "topbarOverflow": 0,
+    "width": 390
+  },
+  {
+    "name": "organizacao",
+    "height": 844,
+    "mainHeight": 608,
+    "mainScrollHeight": 1431,
+    "mainScrollWidth": 222,
+    "mainWidth": 222,
+    "theme": "dark",
+    "title": [
+      "Organização &Membros"
+    ],
+    "topbarOverflow": 0,
+    "width": 390
+  },
+  {
+    "name": "financeiro",
+    "height": 1024,
+    "mainHeight": 880,
+    "mainScrollHeight": 1157,
+    "mainScrollWidth": 600,
+    "mainWidth": 600,
+    "theme": "dark",
+    "title": [
+      "ControleFinanceiro"
+    ],
+    "topbarOverflow": 0,
+    "width": 768
+  },
+  {
+    "name": "visao-geral",
+    "height": 1024,
+    "mainHeight": 880,
+    "mainScrollHeight": 1111,
+    "mainScrollWidth": 600,
+    "mainWidth": 600,
+    "theme": "dark",
+    "title": [
+      "VisãoGeral"
+    ],
+    "topbarOverflow": 0,
+    "width": 768
+  },
+  {
+    "name": "vendas",
+    "height": 1024,
+    "mainHeight": 834,
+    "mainScrollHeight": 1021,
+    "mainScrollWidth": 600,
+    "mainWidth": 600,
+    "theme": "dark",
+    "title": [
+      "Vendas &Pedidos"
+    ],
+    "topbarOverflow": 0,
+    "width": 768
+  },
+  {
+    "name": "estoque",
+    "height": 1024,
+    "mainHeight": 880,
+    "mainScrollHeight": 897,
+    "mainScrollWidth": 600,
+    "mainWidth": 600,
+    "theme": "dark",
+    "title": [
+      "Estoque &Produtos"
+    ],
+    "topbarOverflow": 0,
+    "width": 768
+  },
+  {
+    "name": "integracoes",
+    "height": 1024,
+    "mainHeight": 880,
+    "mainScrollHeight": 3975,
+    "mainScrollWidth": 600,
+    "mainWidth": 600,
+    "theme": "dark",
+    "title": [
+      "Integrações"
+    ],
+    "topbarOverflow": 0,
+    "width": 768
+  },
+  {
+    "name": "organizacao",
+    "height": 1024,
+    "mainHeight": 880,
+    "mainScrollHeight": 1191,
+    "mainScrollWidth": 600,
+    "mainWidth": 600,
+    "theme": "dark",
+    "title": [
+      "Organização &Membros"
+    ],
+    "topbarOverflow": 0,
+    "width": 768
+  },
+  {
+    "name": "financeiro",
+    "height": 768,
+    "mainHeight": 624,
+    "mainScrollHeight": 624,
+    "mainScrollWidth": 1204,
+    "mainWidth": 1204,
+    "theme": "dark",
+    "title": [
+      "ControleFinanceiro"
+    ],
+    "topbarOverflow": 0,
+    "width": 1366
+  },
+  {
+    "name": "visao-geral",
+    "height": 768,
+    "mainHeight": 624,
+    "mainScrollHeight": 624,
+    "mainScrollWidth": 1204,
+    "mainWidth": 1204,
+    "theme": "dark",
+    "title": [
+      "VisãoGeral"
+    ],
+    "topbarOverflow": 0,
+    "width": 1366
+  },
+  {
+    "name": "vendas",
+    "height": 768,
+    "mainHeight": 624,
+    "mainScrollHeight": 624,
+    "mainScrollWidth": 1204,
+    "mainWidth": 1204,
+    "theme": "dark",
+    "title": [
+      "Vendas &Pedidos"
+    ],
+    "topbarOverflow": 0,
+    "width": 1366
+  },
+  {
+    "name": "estoque",
+    "height": 768,
+    "mainHeight": 624,
+    "mainScrollHeight": 624,
+    "mainScrollWidth": 1204,
+    "mainWidth": 1204,
+    "theme": "dark",
+    "title": [
+      "Estoque &Produtos"
+    ],
+    "topbarOverflow": 0,
+    "width": 1366
+  },
+  {
+    "name": "integracoes",
+    "height": 768,
+    "mainHeight": 624,
+    "mainScrollHeight": 3406,
+    "mainScrollWidth": 1198,
+    "mainWidth": 1198,
+    "theme": "dark",
+    "title": [
+      "Integrações"
+    ],
+    "topbarOverflow": 0,
+    "width": 1366
+  },
+  {
+    "name": "organizacao",
+    "height": 768,
+    "mainHeight": 624,
+    "mainScrollHeight": 624,
+    "mainScrollWidth": 1204,
+    "mainWidth": 1204,
+    "theme": "dark",
+    "title": [
+      "Organização &Membros"
+    ],
+    "topbarOverflow": 0,
+    "width": 1366
+  }
+]

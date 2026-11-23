@@ -221,8 +221,13 @@ select is((select count(*)::int from public.eventos_auditoria_sistema e
               and e.metadata ->> 'metodo' = 'humano' and (e.metadata ->> 'telefone_confere')::boolean
               and not (e.metadata ->> 'substituiu')::boolean), 1,
           '28. confirmação auditada com ator, método e conferência do telefone');
-select ok((select e.metadata::text !~ '123|789|4890000' from public.eventos_auditoria_sistema e
+-- Comparar o contrato inteiro evita falsos positivos com dígitos de UUIDs e timestamps.
+select is((select e.metadata from public.eventos_auditoria_sistema e
             where e.acao = 'sac.customer_verified' and e.recurso_id = (select vinculo_id::text from t_confirma)),
+          (select jsonb_build_object('conversa_id_local', v.conversa_id_local, 'caso_id', v.caso_id,
+                    'cliente_id', v.cliente_id, 'metodo', 'humano', 'telefone_confere', true,
+                    'substituiu', false, 'expira_em', v.expira_em)
+             from public.sac_vinculos_cliente v where v.id = (select vinculo_id from t_confirma)),
           '29. a trilha não leva documento nem telefone');
 select is(pg_temp.confirmar('ea000000-0000-4000-8000-00000000000a', 'ea000000-0000-4000-8000-0000000000a1', pg_temp.c('a70'),
                             'eb000000-0000-4000-8000-000000000010', 'ea000000-0000-4000-8000-0000000001a1'),
