@@ -167,3 +167,60 @@ export async function listarEnviosDaConversa(
     };
   });
 }
+
+/**
+ * O que o envio prova para o corte do assistente. Só `sent` (que o banco só
+ * aceita com `confirmacao`) prova que a resposta chegou. Registrado e ainda
+ * na fila (`pending`, `processing`, `failed_transient`, `in_flight`), morto
+ * (`dead_letter`, com ou sem invalidação de política) e de resultado
+ * desconhecido (`unknown`, mesmo depois de resolvido) não provam: tratar
+ * qualquer um deles como resposta faria a pergunta parecer atendida sem o
+ * cliente ter recebido nada. Invalidado por mudança de responsável não saiu.
+ */
+export type ProvaDoEnvio = 'confirmado' | 'registrado' | 'nao_entregue' | 'desconhecido';
+
+export function provaDoEnvio(envio: { readonly status: string; readonly invalidadoEm: string | null }): ProvaDoEnvio {
+  if (envio.invalidadoEm !== null) return 'nao_entregue';
+  switch (envio.status) {
+    case 'sent': return 'confirmado';
+    case 'pending': case 'processing': case 'failed_transient': case 'in_flight': return 'registrado';
+    case 'dead_letter': return 'nao_entregue';
+    default: return 'desconhecido';
+  }
+}
+
+const EnvioParaCorteSchema = z.object({
+  created_at: z.string().datetime({ offset: true }),
+  invalidado_em: z.string().nullable(),
+  outbox_eventos: z.object({ status: z.string() }),
+});
+/** Basta para achar o último confirmado atrás de alguns registrados ou mortos; se não achar, o corte fica mais cedo (conservador). */
+const ENVIOS_PARA_O_CORTE = 20;
+
+/**
+ * Instante do último envio público **confirmado** na conversa (IA ou
+ * atendente), ou `null`. A decisão é feita aqui, sobre o estado lido da
+ * outbox, e não por filtro do PostgREST. Organização, conexão e conversa vão
+ * explícitas no filtro (service role); só instante e estado saem do banco.
+ */
+export async function lerUltimoEnvioConfirmadoDaConversa(
+  supabase: SupabaseClient,
+  escopo: { readonly organizacaoId: string; readonly conexaoId: string },
+  conversaId: string,
+): Promise<string | null> {
+  const uuid = z.string().uuid();
+  if (![escopo.organizacaoId, escopo.conexaoId, conversaId].every((v) => uuid.safeParse(v).success)) throw new RegistroDeEnvioIndisponivel();
+  const { data, error } = await supabase
+    .from('chatwoot_envios')
+    .select('created_at, invalidado_em, outbox_eventos!fk_chatwoot_envios_evento(status)')
+    .eq('organizacao_id', escopo.organizacaoId)
+    .eq('conexao_id', escopo.conexaoId)
+    .eq('conversa_id_local', conversaId)
+    .eq('privada', false)
+    .order('created_at', { ascending: false })
+    .limit(ENVIOS_PARA_O_CORTE);
+  const linhas = EnvioParaCorteSchema.array().max(ENVIOS_PARA_O_CORTE).safeParse(data ?? []);
+  if (error || !linhas.success) throw new RegistroDeEnvioIndisponivel();
+  const confirmado = linhas.data.find((l) => provaDoEnvio({ status: l.outbox_eventos.status, invalidadoEm: l.invalidado_em }) === 'confirmado');
+  return confirmado?.created_at ?? null;
+}
