@@ -67,14 +67,14 @@ function atribuiPrecoASemCadastro(texto: string, nomesSemCadastro: readonly stri
 
 /**
  * Todo preço citado precisa vir junto do nome real de um item do ERP com
- * esse valor, na mesma frase ou na anterior: o modelo não pode renomear um
+ * esse valor, na mesma frase ou em uma das três anteriores: o modelo não pode renomear um
  * produto nem pendurar o valor num nome inventado.
  */
 function precoSemProduto(texto: string, catalogo: readonly ItemDoCatalogo[]): boolean {
   const todas = frases(texto);
   return todas.some((frase, i) => [...frase.matchAll(PRECO)].some((m) => {
     const valor = Number(`${m[1].replace(/\./gu, '')}.${m[2] ?? '00'}`).toFixed(2);
-    const trecho = `${todas[i - 1] ?? ''} ${frase}`;
+    const trecho = todas.slice(Math.max(0, i - 3), i + 1).join(' ');
     return !catalogo.some((item) => item.preco !== null && item.preco.toFixed(2) === valor && citaItem(trecho, item, catalogo));
   }));
 }

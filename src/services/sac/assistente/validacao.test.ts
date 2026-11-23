@@ -18,6 +18,8 @@ describe('afirmações comerciais só com fonte verificada', () => {
     expect(validar('O Defumador Líquido - Portal da Harmonia custa R$ 40,00.')).toBeNull();
     expect(validar('O Kuripe Cobra custa R$ 80,00.')).toBeNull();
     expect(validar('O Kuripe Cobra custa R$ 40,00.')).toBe('preco_sem_produto');
+    // Texto real do Groq recusado antes: nome na 1ª frase, preço na 3ª.
+    expect(validar('Para harmonizar o ambiente, recomendo o Defumador Líquido - Portal da Harmonia. Ele oferece aroma fresco, herbal, levemente cítrico e floral. O preço é R$ 40,00 e está disponível no ERP.')).toBeNull();
   });
 
   it('2. produto existente sem preço confirmado: aparece como "preço não cadastrado" e não aceita valor', () => {
