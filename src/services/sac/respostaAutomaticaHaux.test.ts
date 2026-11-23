@@ -52,6 +52,21 @@ describe('assistente do Portal do Haux: resposta natural com fatos verificados',
     expect(finalizarRespostaHaux({ acao: 'humano', texto: 'x' }, [], ID)).toBeNull();
   });
 
+  it('pergunta de recomendação sem a palavra "defumador" usa o histórico e as linhas da marca', async () => {
+    const { mock, modelo } = modeloQueResponde({ acao: 'responder', texto: 'Para energia leve no ambiente, o Portal de Harmonia combina frescor das ervas e suavidade floral.' });
+    await modelo.gerar('', entrada('queria saber o preço dos defumadores', 'qual você indica pra deixar o ambiente com uma energia melhor?'), AbortSignal.timeout(1000));
+    const prompt = JSON.stringify(mock.doGenerateCalls[0].prompt);
+    expect(prompt).toContain('Defumador - Limpeza e descarrego | Defumador | R$ 40,00');
+    expect(prompt).toContain('[consultar_linhas]');
+    expect(prompt).toContain('Portal de Purificação (DEF 002): limpeza, descarrego e renovação');
+  });
+
+  it('pergunta de política traz as políticas como NÃO INFORMADA', async () => {
+    const { mock, modelo } = modeloQueResponde({ acao: 'encaminhar', texto: 'Ainda não tenho a política de trocas confirmada; a equipe te orienta.' });
+    await modelo.gerar('', entrada('quero devolver um produto'), AbortSignal.timeout(1000));
+    expect(JSON.stringify(mock.doGenerateCalls[0].prompt)).toContain('trocas e devoluções: NÃO INFORMADA');
+  });
+
   it('a mensagem atual é a de maior ordem', () => {
     expect(mensagemAtual(entrada('Quero atendente.', 'Quanto custam os defumadores?'))).toBe('Quanto custam os defumadores?');
   });
@@ -63,7 +78,8 @@ describe('assistente do Portal do Haux: resposta natural com fatos verificados',
     const prompt = JSON.stringify(mock.doGenerateCalls[0].prompt);
     expect(prompt).toContain('Defumador - Limpeza e descarrego | Defumador | R$ 40,00 | disponível');
     expect(prompt).not.toContain('Rapé Sansara');
-    expect(prompt).toContain('trocas e devoluções: NÃO INFORMADA');
+    expect(prompt).toContain('[consultar_catalogo]');
+    expect(prompt).toContain('Portal de Harmonia (DEF 003)');
   });
 
   it('preço inventado pelo modelo é recusado e escala (null)', async () => {
@@ -76,7 +92,7 @@ describe('assistente do Portal do Haux: resposta natural com fatos verificados',
     const modelo = criarModeloHauxPorAiSdk(mock, 'groq', undefined, {
       conhecimento: CONHECIMENTO_PORTAL_DO_HAUX, catalogo: async () => { throw new Error('rede'); } });
     expect(await modelo.gerar('', entrada('Quanto custa?'), AbortSignal.timeout(1000))).toMatchObject({ texto: expect.stringContaining('equipe') });
-    expect(JSON.stringify(mock.doGenerateCalls[0].prompt)).toContain('Catálogo indisponível agora');
+    expect(JSON.stringify(mock.doGenerateCalls[0].prompt)).toContain('[consultar_catalogo — FALHOU]');
   });
 
   it('recusa configuração sem chave, sem expor o valor', () => {

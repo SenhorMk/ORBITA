@@ -30,9 +30,9 @@ async function testar() {
   if (primeiro === 'google' || primeiro === 'groq') config.HAUX_AI_PRIMARY = primeiro;
   const rota = criarRotaHaux(config, undefined, modo === 'google' || modo === 'groq' ? modo : undefined);
   const pergunta = process.argv.find((s) => s.startsWith('--pergunta='))?.slice('--pergunta='.length) || 'Olá! Boa tarde, tudo bem?';
-  const contexto = { marca: 'smoke-real-haux-v1', intencao: 'outro', mensagens: [
-    { conteudo: pergunta, criadaEm: new Date().toISOString() },
-  ] };
+  // "a||b||c" vira uma conversa de várias mensagens do cliente, em ordem.
+  const contexto = { marca: 'smoke-real-haux-v1', intencao: 'outro',
+    mensagens: pergunta.split('||').map((conteudo) => ({ conteudo, criadaEm: new Date().toISOString() })) };
   if (process.argv.includes('--triagem')) {
     const resultado = await executarTriagem(contexto.mensagens,
       criarClassificadorHaux(rota), { timeoutMs: 15000 });

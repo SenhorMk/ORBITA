@@ -1,13 +1,13 @@
+import { CONHECIMENTO_PORTAL_DO_HAUX } from './organizacoes/portalDoHaux';
+
 /**
  * O que o assistente sabe de cada organização, separado das regras globais.
  *
  * Regras globais (comportamento, segurança, limites) ficam em
- * `respostaAutomaticaHaux.ts`/`docs/ai/ASSISTENTE_ORBITA.md`. Aqui ficam só a
- * identidade e as políticas comerciais de uma organização, cada uma com a sua
- * situação: `confirmada` (com fonte), `pendente` (aguarda aprovação do
- * comerciante) ou `indisponivel`. Política que não está `confirmada` nunca
- * chega ao modelo como fato: chega como "não informada", e a resposta orienta
- * a falar com a equipe.
+ * `respostaAutomaticaHaux.ts`/`docs/ai/ASSISTENTE_ORBITA.md`. Cada organização
+ * tem o seu arquivo em `organizacoes/` (identidade, linhas de produto,
+ * políticas com situação e fonte). Política que não está `confirmada` nunca
+ * chega ao modelo como fato. Preço e estoque nunca ficam aqui: vêm do ERP.
  */
 
 export type SituacaoDaPolitica = 'confirmada' | 'pendente' | 'indisponivel';
@@ -21,39 +21,34 @@ export interface Politica {
   readonly fonte?: string;
 }
 
+/** Linha de produto descrita pela marca (não é item do ERP; não tem preço aqui). */
+export interface LinhaDeProduto {
+  readonly nome: string;
+  readonly codigo: string;
+  readonly categoria: string;
+  readonly sintese: string;
+  readonly perfilAromatico: string;
+  readonly descricao: string;
+  readonly palavrasChave: readonly string[];
+  readonly essencias: string;
+}
+
 export interface ConhecimentoDaOrganizacao {
   readonly organizacaoId: string;
   readonly nomeDaMarca: string;
   /** Primeira linha de toda resposta automática: atendimento automatizado, sem disfarce. */
   readonly identificacao: string;
   readonly tom: string;
+  readonly linhas: readonly LinhaDeProduto[];
+  readonly observacoesDasLinhas: readonly string[];
+  /** Termos que indicam que a conversa é sobre a família de linhas. */
+  readonly termosDaFamilia: readonly string[];
   readonly politicas: readonly Politica[];
   /** Produtos do ERP que não são vendáveis ao público (demonstração, teste). */
   readonly produtosOcultos: readonly RegExp[];
 }
 
-/**
- * Portal do Haux. Nenhuma política comercial foi aprovada até 23/11/2026:
- * as fontes do Portal (BRAND.md, briefing dos defumadores, tema Shopify) não
- * trazem troca, frete, prazo ou pagamento. Ver a seção de decisões pendentes
- * em `docs/ai/ASSISTENTE_ORBITA.md`.
- */
-export const CONHECIMENTO_PORTAL_DO_HAUX: ConhecimentoDaOrganizacao = {
-  organizacaoId: 'c75eb92d-9222-49cc-ac0f-6aebaf8fa69f',
-  nomeDaMarca: 'Portal do Haux',
-  identificacao: 'Assistente virtual do Portal do Haux',
-  tom: 'Acolhedor, respeitoso e direto, em português do Brasil; sem gírias forçadas e sem promessas.',
-  politicas: [
-    { tema: 'formas de pagamento', situacao: 'pendente' },
-    { tema: 'frete e entrega', situacao: 'pendente' },
-    { tema: 'prazo de preparação e postagem', situacao: 'pendente' },
-    { tema: 'trocas e devoluções', situacao: 'pendente' },
-    { tema: 'cancelamento e reembolso', situacao: 'pendente' },
-    { tema: 'promoções e descontos', situacao: 'indisponivel' },
-    { tema: 'rastreamento de pedidos pelo assistente', situacao: 'indisponivel' },
-  ],
-  produtosOcultos: [/^\s*demo\b/iu, /\bteste\b/iu, /\bpremium orbita\b/iu],
-};
+export { CONHECIMENTO_PORTAL_DO_HAUX };
 
 const REGISTRO: ReadonlyMap<string, ConhecimentoDaOrganizacao> = new Map([
   [CONHECIMENTO_PORTAL_DO_HAUX.organizacaoId, CONHECIMENTO_PORTAL_DO_HAUX],
