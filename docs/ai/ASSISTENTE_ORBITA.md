@@ -22,6 +22,17 @@ O assistente atua em dois contextos com autorização separada:
 - Triagem estruturada (`sac.triagem`) com `precisaDeHumano` para reclamação, saúde, assunto jurídico, reembolso, pedido de pessoa ou confiança baixa.
 - Takeover e handback pelo ORBITA, com versão de controle, nota privada e invalidação de envios em voo. Em 22/11 a conversa 11 foi assumida e devolvida pelo fluxo normal, e a projeção ficou `ok` em cerca de 5 s.
 - Outbox com idempotência (`command_id`), fencing token e recibo do Chatwoot.
+- **Assistente de atendimento ao cliente (contexto A), implementado neste PR e validado no WebWidget real em 23/11:**
+  - respostas naturais geradas pelo Groq;
+  - consultas somente leitura ao catálogo do ERP, às linhas da marca e às políticas (§10);
+  - histórico recente da conversa;
+  - validação de saída (§3).
+
+### Ainda não conectado à IA (existe no ERP, sem ferramenta)
+Nenhuma destas operações é acessível ao assistente hoje. O mapeamento está em §10.
+- **Comandos de escrita:** produto e categorias (#114), clientes, pedido manual e situação de pedido no Bling (#115), cancelamento com estorno de estoque (#155).
+- **Painéis de leitura:** vendas, estoque e movimentações, financeiro e cockpit.
+- **Retrato verificado de pedido** (MSG-011), hoje usado só pelo atendente humano.
 
 ### Implementado, mas não ativado
 - Inbox 2 (WhatsApp) liberada para conversas novas em 22/11, com autorização registrada. Conversas antigas continuam humanas por desenho: a IA só entra com prova de `conversation_created` recente ou após devolução.
@@ -35,13 +46,14 @@ O assistente atua em dois contextos com autorização separada:
 - Descrições por produto no ERP. As quatro linhas de defumador já têm a descrição da marca, do briefing de 12/10/2026, em `organizacoes/portalDoHaux.ts`.
 - Políticas comerciais aprovadas do Portal do Haux (ver §6).
 - Consulta de pedidos pelo cliente com identidade verificada.
-- Assistente do comerciante (contexto B): projetado em §5, sem código.
+- Assistente do comerciante (contexto B): projetado em §5 e §10, **sem código**. Nenhuma ferramenta administrativa está acessível à IA.
 - Mensagem ao cliente no momento da escalada para humano (ver §8, L2).
 
 ### Depende de configuração
 - Políticas e identidade de cada organização (`src/services/sac/assistente/conhecimento.ts`).
 - Lista de produtos ocultos (demonstração e teste), também por organização.
-- Limite diário de gerações por inbox (`chatwoot_ai_runtime.limite_geracoes_dia`): 20 na inbox 2 desde 22/11.
+- Limite diário de gerações por inbox (`chatwoot_ai_runtime.limite_geracoes_dia`): 20 nas inboxes 1 e 2.
+- Limite diário de triagens do bot (`HAUX_BOT_LIMITE_TRIAGENS_DIA`): 50 desde 23/11. Com 20, os testes de 22–23/11 esgotaram a cota, e a conversa seguinte foi para humano sem resposta ao cliente.
 
 ### Depende de migration
 - Escalada com mensagem ao cliente na mesma transação (L2).
@@ -81,12 +93,19 @@ O assistente **não** usa um prompt gigante. A cada mensagem, o worker monta só
 - O catálogo fica em cache de 60 s por organização.
 
 ### Validação de saída
-Implementada em `assistente/validacao.ts`. Uma resposta que falha aqui não é enviada: devolve `null`, e a RPC `concluir_geracao_ai_first` escala para humano pelo caminho já auditado. A resposta é recusada se:
+Implementada em `assistente/validacao.ts`. Uma resposta que falha aqui não é enviada: devolve `null`, e a RPC `concluir_geracao_ai_first` escala para humano pelo caminho já auditado. A validação é feita frase a frase, e cada regra abaixo veio de um caso visto no smoke ou no widget real e tem teste em `validacao.test.ts`. A resposta é recusada se:
 - citar preço (`R$ x,yy`) que não está no contexto daquela mensagem;
 - trouxer link;
 - pedir CPF, RG, senha, cartão ou código;
 - afirmar ação executada ("já cancelei", "pedido foi enviado");
-- tiver mais de 900 caracteres.
+- tiver mais de 900 caracteres;
+- citar preço longe do **nome real** do item do ERP com esse valor, ou renomear o item;
+- atribuir preço ou estoque a um produto **sem cadastro** no ERP;
+- prometer envio: pronta-entrega, envio imediato, prazo de entrega ou reserva. Estoque positivo **não** é prazo;
+- apresentar como disponível um item **sem estoque**;
+- atribuir benefício ou efeito que a marca não descreve (cura, alivia, garantido, terapêutico).
+
+Em conversa em andamento, a saudação de abertura repetida é removida.
 
 ### Visão futura
 - Os documentos Markdown por organização (`docs/ai/organizacoes/*.md`) podem virar fonte versionada das políticas, compiladas para o formato de `conhecimento.ts`.
@@ -222,11 +241,14 @@ Diferença para [outro produto]: [...]
 ### Limitações restantes
 | # | Limitação | Próximo passo |
 |---|---|---|
-| L1 | Sem descrições aprovadas, a recomendação compara apenas categoria, preço e disponibilidade | o comerciante aprova as descrições (§6) |
+| L1 | As descrições das linhas vêm do briefing (12/10/2026), com composição provisória; os demais produtos não têm descrição | o comerciante confirma o texto final e descreve os outros produtos |
 | L2 | Na escalada da triagem (pedido de pessoa ou reclamação), o cliente não recebe mensagem automática, só a equipe é avisada | migration: `concluir_geracao_ai_first` registrar texto de passagem e mudar o controle na mesma transação, para que o envio não seja invalidado |
 | L3 | Sem consulta de pedido pelo cliente | verificar identidade (número do pedido + e-mail/telefone já cadastrado no ERP) antes de qualquer leitura |
 | L4 | O worker serve uma organização fixa (`ORGANIZACAO_HAUX`) | runtime multi-organização com conhecimento por organização (o registro já é por id) |
 | L5 | Recuperação por termos não entende sinônimos ("incenso" × "defumador") | sinônimos por organização na configuração e, depois, busca semântica |
+| L6 | De 14 a 24 s até a resposta no widget, medidos por etapa. O Groq leva menos de 1 s. O resto é a espera dos workers (inbox de 2 a 5 s, envio de 1 a 4 s) e do laço do bot, que já não pausa quando há trabalho | reduzir o intervalo de consulta dos workers e o refresh de projeções ociosas (60 s, regra SQL), sem tocar em fences |
+| L7 | Trocar a imagem do bot desliga o runtime (trava do SIGTERM) | reativação explícita e autorizada a cada deploy; runbook em `infra/worker/RUNTIME-HAUX.md` |
+| L8 | A validação de saída é por regras: um texto fora delas pode ser recusado (e escalado), e uma afirmação nova e sutil pode passar | ampliar casos a partir dos logs `haux.resposta.recusada` |
 
 ## 9. Testes de aceitação
 
@@ -272,3 +294,11 @@ Todos esses casos foram vistos no smoke real e estão cobertos por teste.
 - Uma conversa do Chatwoot nunca herda permissão do comerciante. O worker do cliente não tem ferramenta de escrita.
 - Não existe SQL livre. As ferramentas são funções tipadas com escopo fixo.
 - **P2:** ferramentas administrativas só em rota com sessão verificada (`VerifiedOrganizationScope`) e papel do membro. Ações que alteram estoque, valores, pedidos ou integrações passam por confirmação explícita e pelos comandos existentes (outbox, idempotência, auditoria).
+
+## 11. Autorização para futuras operações de escrita
+
+1. **Sessão verificada:** a operação nasce na sessão autenticada do comerciante (`VerifiedOrganizationScope` + papel com capacidade), nunca numa conversa do Chatwoot.
+2. **Rascunho:** a IA monta um rascunho tipado com o comando, os parâmetros e o efeito esperado. Ela não executa.
+3. **Confirmação:** a interface mostra o rascunho e pede confirmação explícita, que é obrigatória para estoque, valores, pedidos, cancelamentos e integrações externas.
+4. **Execução:** é feita pelo comando que já existe (#114, #115, #155), com `command_id` idempotente, outbox quando houver integração e evento de auditoria com `ator_id`.
+5. **Proibições:** operações em massa ("excluir todos os produtos") não têm ferramenta e são recusadas com explicação.
