@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": {
+      "codex/fundacao-assistente-admin": false,
+      "codex/baixa-admin-idempotente": false,
+      "codex/msg012-ranking-trocas": false,
+      "codex/msg015-intake-trocas": false,
+      "fix/assistente-solicitacao-atual": false
+    }
+  }
+}

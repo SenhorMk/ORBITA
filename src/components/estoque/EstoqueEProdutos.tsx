@@ -2,7 +2,7 @@
 
 import { HelpContext, helpPageHeader } from '@/components/help/HelpContext';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Package, Search } from 'lucide-react';
 
 import type { Categoria, Produto } from '@/types';
@@ -83,6 +83,7 @@ interface EstoqueEProdutosProps {
   onRecarregar: () => void;
   onAbrirProduto: (produto: Produto) => void;
   onCadastrarProduto: () => void;
+  assistente?: ReactNode;
 }
 
 export function EstoqueEProdutos({
@@ -93,6 +94,7 @@ export function EstoqueEProdutos({
   onRecarregar,
   onAbrirProduto,
   onCadastrarProduto,
+  assistente,
 }: EstoqueEProdutosProps) {
   const [busca, setBusca] = useState('');
   const [situacao, setSituacao] = useState<SituacaoDeEstoque>('all');
@@ -298,6 +300,7 @@ export function EstoqueEProdutos({
           <Package className="w-4 h-4" />
           Cadastrar produto
         </button>
+        {assistente}
       </div>
 
       {mostrarAvisoDeAtualizacao && (
