@@ -8,8 +8,8 @@ import type { ConhecimentoDaOrganizacao } from './conhecimento';
 export interface ItemDoCatalogo {
   readonly nome: string;
   readonly categoria: string | null;
-  /** Preço do ERP em reais, com duas casas. */
-  readonly preco: number;
+  /** Preço do ERP em reais, com duas casas; `null` = item existe mas não tem preço cadastrado. */
+  readonly preco: number | null;
   readonly disponivel: boolean;
 }
 
@@ -33,17 +33,18 @@ export function normalizar(texto: string): string {
   return texto.normalize('NFD').replace(/[̀-ͯ]/gu, '').toLowerCase();
 }
 
-/** Só o que é vendável ao público: ativo, não arquivado, com preço, fora dos ocultos. */
+/** Só o que é vendável ao público: ativo, não arquivado, fora dos ocultos (preço ausente fica `null`). */
 export function montarCatalogo(linhas: readonly LinhaDeProduto[], conhecimento: ConhecimentoDaOrganizacao): ItemDoCatalogo[] {
   const itens: ItemDoCatalogo[] = [];
   for (const linha of linhas) {
     const nome = linha.nome?.trim();
     const preco = Number(linha.preco);
     if (!nome || linha.arquivado_em || (linha.situacao ?? 'ativo') !== 'ativo') continue;
-    if (!Number.isFinite(preco) || preco <= 0) continue;
     if (conhecimento.produtosOcultos.some((r) => r.test(nome))) continue;
     const livre = (linha.estoque ?? 0) - (linha.estoque_reservado ?? 0);
-    itens.push({ nome, categoria: linha.categoria?.descricao?.trim() || null, preco: Math.round(preco * 100) / 100, disponivel: livre > 0 });
+    const comPreco = Number.isFinite(preco) && preco > 0;
+    itens.push({ nome, categoria: linha.categoria?.descricao?.trim() || null,
+      preco: comPreco ? Math.round(preco * 100) / 100 : null, disponivel: livre > 0 });
   }
   return itens;
 }
@@ -81,11 +82,11 @@ export const formatarPreco = (valor: number) => `R$ ${valor.toFixed(2).replace('
 /** O bloco de catálogo enviado ao modelo: mínimo, sem estoque exato nem ids. */
 export function descreverCatalogo(itens: readonly ItemDoCatalogo[], relevantes: readonly ItemDoCatalogo[]): string {
   const categorias = [...new Set(itens.map((i) => i.categoria).filter((c): c is string => c !== null))].sort();
-  const linhas = relevantes.map((i) => `- ${i.nome} | ${i.categoria ?? 'sem categoria'} | ${formatarPreco(i.preco)} | ${i.disponivel ? 'disponível' : 'sem estoque no momento'}`);
+  const linhas = relevantes.map((i) => `- ${i.nome} | ${i.categoria ?? 'sem categoria'} | ${i.preco === null ? 'preço não cadastrado' : formatarPreco(i.preco)} | ${i.disponivel ? 'disponível' : 'sem estoque no momento'}`);
   return [
     `Categorias do catálogo: ${categorias.length ? categorias.join(', ') : 'não informadas'}.`,
     linhas.length ? `Produtos relacionados à mensagem (preço do ERP):\n${linhas.join('\n')}` : 'Nenhum produto do catálogo corresponde à mensagem atual.',
-    'Não há descrições, indicações ou modo de uso aprovados para estes produtos.',
+    '"disponível" = há estoque no ERP agora; não significa pronta-entrega, reserva nem prazo de envio.',
   ].join('\n');
 }
 

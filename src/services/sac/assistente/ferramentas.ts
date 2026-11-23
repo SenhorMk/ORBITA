@@ -72,8 +72,14 @@ export async function executarConsultas(
   try {
     const itens = await catalogo();
     todos = itens;
-    const extras = linhas.length ? ' defumador' : '';
-    itensCitaveis = selecionarRelevantes(itens, `${busca}${extras}`);
+    // A mensagem atual define os itens principais; o histórico só completa
+    // (mudança de assunto: "quais defumadores?" → "e kuripe, tem?").
+    const atual = mensagens.at(-1) ?? '';
+    const familiaNaAtual = selecionarLinhas(conhecimento, [atual]).length > 0 ? ' defumador' : '';
+    const familiaNoHistorico = linhas.length ? ' defumador' : '';
+    const doAtual = selecionarRelevantes(itens, `${atual}${familiaNaAtual}`);
+    const doHistorico = selecionarRelevantes(itens, `${busca}${familiaNoHistorico}`).filter((i) => !doAtual.includes(i));
+    itensCitaveis = [...doAtual, ...doHistorico].slice(0, 12);
     resultados.push({ ferramenta: 'consultar_catalogo', ok: true, conteudo: descreverCatalogo(itens, itensCitaveis) });
   } catch {
     resultados.push({ ferramenta: 'consultar_catalogo', ok: false,

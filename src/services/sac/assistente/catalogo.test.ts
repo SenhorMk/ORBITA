@@ -38,11 +38,11 @@ describe('catálogo verificado do assistente', () => {
     expect(selecionarRelevantes(itens, 'tem kuripe?').map((i) => i.nome)).toEqual(['Kuripe Cobra', 'Kuripe Floral']);
   });
 
-  it('o bloco do modelo traz categorias, preço formatado e aviso de que não há descrições', () => {
+  it('o bloco do modelo traz categorias, preço formatado e o aviso de que estoque não é prazo', () => {
     const bloco = descreverCatalogo(itens, selecionarRelevantes(itens, 'defumador'));
     expect(bloco).toContain('Categorias do catálogo: Defumador, Kuripe.');
     expect(bloco).toContain('Defumador - Limpeza e descarrego | Defumador | R$ 40,00 | disponível');
-    expect(bloco).toContain('Não há descrições');
+    expect(bloco).toContain('não significa pronta-entrega');
   });
 
   it('cache curto: uma leitura por janela, por organização', async () => {
