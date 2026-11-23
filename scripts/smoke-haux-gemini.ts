@@ -3,6 +3,19 @@ import { gerarResposta } from '../src/services/sac/gerarResposta';
 import { criarModeloHauxPorAiSdk } from '../src/services/sac/respostaAutomaticaHaux';
 import { criarClassificadorHaux, criarRotaHaux, lerProvedoresHaux } from '../src/services/sac/provedoresHaux';
 import { executarTriagem } from '../src/services/sac/triagem/triagemDoCaso';
+import { createClient } from '@supabase/supabase-js';
+import { criarCatalogoComCache } from '../src/services/sac/assistente/catalogo';
+import { CONHECIMENTO_PORTAL_DO_HAUX } from '../src/services/sac/assistente/conhecimento';
+import { criarLeitorDeProdutos } from '../src/services/sac/assistente/leitorDeProdutos';
+
+/** Catálogo real (somente leitura) quando o ambiente do worker estiver presente. */
+function fonteReal() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const chave = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !chave) return undefined;
+  const banco = createClient(url, chave, { auth: { persistSession: false, autoRefreshToken: false } });
+  return { conhecimento: CONHECIMENTO_PORTAL_DO_HAUX, catalogo: criarCatalogoComCache(criarLeitorDeProdutos(banco), CONHECIMENTO_PORTAL_DO_HAUX) };
+}
 
 async function testar() {
   const lida = lerProvedoresHaux(process.env);
@@ -16,9 +29,10 @@ async function testar() {
   const config = lida.data;
   if (primeiro === 'google' || primeiro === 'groq') config.HAUX_AI_PRIMARY = primeiro;
   const rota = criarRotaHaux(config, undefined, modo === 'google' || modo === 'groq' ? modo : undefined);
-  const contexto = { marca: 'smoke-real-haux-v1', intencao: 'outro', mensagens: [
-    { conteudo: 'Olá! Boa tarde, tudo bem?', criadaEm: new Date().toISOString() },
-  ] };
+  const pergunta = process.argv.find((s) => s.startsWith('--pergunta='))?.slice('--pergunta='.length) || 'Olá! Boa tarde, tudo bem?';
+  // "a||b||c" vira uma conversa de várias mensagens do cliente, em ordem.
+  const contexto = { marca: 'smoke-real-haux-v1', intencao: 'outro',
+    mensagens: pergunta.split('||').map((conteudo) => ({ conteudo, criadaEm: new Date().toISOString() })) };
   if (process.argv.includes('--triagem')) {
     const resultado = await executarTriagem(contexto.mensagens,
       criarClassificadorHaux(rota), { timeoutMs: 15000 });
@@ -28,12 +42,13 @@ async function testar() {
     if (!aprovado) process.exitCode = 1;
     return;
   }
-  const resposta = await gerarResposta(async () => contexto, criarModeloHauxPorAiSdk(rota.modelo, rota.provedor));
+  const inicio = Date.now();
+  const resposta = await gerarResposta(async () => contexto, criarModeloHauxPorAiSdk(rota.modelo, rota.provedor, undefined, fonteReal()));
   if (resposta.estado !== 'rascunho') {
     console.error('Smoke real não aprovado:', resposta.estado);
     process.exitCode = 1;
     return;
   }
-  console.info(JSON.stringify({ etapa: 'resposta', estado: 'aprovado', provedor: rota.provedor, modelo: rota.identificacao, textoSintetico: resposta.texto }));
+  console.info(JSON.stringify({ etapa: 'resposta', estado: 'aprovado', provedor: rota.provedor, modelo: rota.identificacao, latenciaMs: Date.now() - inicio, texto: resposta.texto }));
 }
 void testar().catch(() => { console.error('Smoke real: falha sem exposição de credenciais.'); process.exitCode = 1; });
