@@ -1,13 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
-import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
+// Imports relativos: este arquivo entra no grafo do worker do bot (scripts/worker-haux-bot.ts),
+// compilado por tsc sem reescrever o alias @/ (ver scripts/tsconfig.worker.json).
+import type { VerifiedOrganizationScope } from '../../lib/verifiedOrganizationScope';
 import {
   TABELA_DO_RECURSO,
   type CandidatoDeIdentidade,
   type EscopoDaConexaoChatwoot,
   type EspelhoChatwootStore,
   type ResultadoDoStore,
-} from '@/services/chatwoot/identidadeChatwoot';
+} from './identidadeChatwoot';
 
 /**
  * Store dos espelhos do Chatwoot sobre o cliente `service_role`. A RLS não
