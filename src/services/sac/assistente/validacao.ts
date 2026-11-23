@@ -12,7 +12,8 @@ const LINK = /\b(?:https?:\/\/|www\.)\S+|\b[a-z0-9-]+\.(?:com|net|org|br|io|app)
 const DADO_SENSIVEL = /\b(?:cpf|rg|senha|cart[aã]o|cvv|c[oó]digo de seguran[cç]a|n[uú]mero do cart[aã]o|pix copia)\b/iu;
 const ACAO_AFIRMADA = /\b(?:j[aá] (?:cancelei|estornei|reembolsei|enviei|despachei|alterei|registrei)|pedido (?:foi )?(?:cancelado|estornado|reembolsado|enviado|despachado)|reembolso (?:foi )?(?:feito|aprovado))\b/iu;
 const PRECO = /R\$\s?(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d{2}))?/giu;
-const PRECO_OU_ESTOQUE = /r\$|\bdisponive(?:l|is)\b|\bem estoque\b/u;
+const DISPONIVEL = /\bdisponive(?:l|is)\b|\bem estoque\b/u;
+const NEGACAO = /\b(?:nao|sem|ainda|indisponive(?:l|is)|desconhecid[oa]s?)\b/u;
 
 function valoresCitados(texto: string): number[] {
   return [...texto.matchAll(PRECO)].map((m) => Number(`${m[1].replace(/\./gu, '')}.${m[2] ?? '00'}`));
@@ -32,26 +33,37 @@ function citaProduto(frase: string, nome: string): boolean {
   return frase.includes(n) || (frase.includes('portal') && frase.includes(propria));
 }
 
-function atribuiPrecoASemCadastro(texto: string, nomesSemCadastro: readonly string[]): boolean {
-  if (nomesSemCadastro.length === 0) return false;
-  return frases(texto).some((frase) => PRECO_OU_ESTOQUE.test(frase) && nomesSemCadastro.some((n) => citaProduto(frase, n)));
+/** O trecho cita o nome real do item (ao menos metade dos termos do nome). */
+function citaItem(trecho: string, item: ItemDoCatalogo): boolean {
+  const doTrecho = new Set(termos(trecho));
+  const doNome = termos(item.nome);
+  return doNome.length > 0 && doNome.filter((t) => doTrecho.has(t)).length >= Math.ceil(doNome.length / 2);
 }
 
 /**
- * Todo preço citado precisa estar na mesma frase que o nome real de um item
- * do ERP com esse preço (ao menos metade dos termos do nome): o modelo não
- * pode renomear um produto nem pendurar o valor num nome inventado.
+ * Preço, ou disponibilidade afirmada, numa frase que cita um produto sem
+ * cadastro no ERP e nenhum item real do catálogo: atribuição inventada.
+ */
+function atribuiPrecoASemCadastro(texto: string, nomesSemCadastro: readonly string[], catalogo: readonly ItemDoCatalogo[]): boolean {
+  if (nomesSemCadastro.length === 0) return false;
+  return frases(texto).some((frase) => {
+    if (!nomesSemCadastro.some((n) => citaProduto(frase, n))) return false;
+    if (catalogo.some((item) => citaItem(frase, item))) return false;
+    return /r\$/u.test(frase) || (DISPONIVEL.test(frase) && !NEGACAO.test(frase));
+  });
+}
+
+/**
+ * Todo preço citado precisa vir junto do nome real de um item do ERP com
+ * esse valor, na mesma frase ou na anterior: o modelo não pode renomear um
+ * produto nem pendurar o valor num nome inventado.
  */
 function precoSemProduto(texto: string, catalogo: readonly ItemDoCatalogo[]): boolean {
-  return frases(texto).some((frase) => [...frase.matchAll(PRECO)].some((m) => {
+  const todas = frases(texto);
+  return todas.some((frase, i) => [...frase.matchAll(PRECO)].some((m) => {
     const valor = Number(`${m[1].replace(/\./gu, '')}.${m[2] ?? '00'}`).toFixed(2);
-    const daFrase = new Set(termos(frase));
-    return !catalogo.some((item) => {
-      if (item.preco.toFixed(2) !== valor) return false;
-      const doNome = termos(item.nome);
-      const presentes = doNome.filter((t) => daFrase.has(t)).length;
-      return doNome.length > 0 && presentes >= Math.ceil(doNome.length / 2);
-    });
+    const trecho = `${todas[i - 1] ?? ''} ${frase}`;
+    return !catalogo.some((item) => item.preco.toFixed(2) === valor && citaItem(trecho, item));
   }));
 }
 
@@ -65,7 +77,7 @@ export function validarResposta(texto: string, catalogoNoContexto: readonly Item
   if (ACAO_AFIRMADA.test(limpo)) return 'acao_afirmada';
   const permitidos = new Set(catalogoNoContexto.map((i) => i.preco.toFixed(2)));
   if (valoresCitados(limpo).some((v) => !permitidos.has(v.toFixed(2)))) return 'preco_sem_fonte';
-  if (atribuiPrecoASemCadastro(limpo, nomesSemCadastro)) return 'preco_de_produto_sem_cadastro';
+  if (atribuiPrecoASemCadastro(limpo, nomesSemCadastro, catalogoNoContexto)) return 'preco_de_produto_sem_cadastro';
   if (precoSemProduto(limpo, catalogoNoContexto)) return 'preco_sem_produto';
   return null;
 }

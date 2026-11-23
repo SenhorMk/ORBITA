@@ -49,6 +49,9 @@ describe('assistente do Portal do Haux: resposta natural com fatos verificados',
     // Visto no smoke real: o item do ERP renomeado com o nome da linha.
     expect(finalizarRespostaHaux({ acao: 'responder', texto: 'Disponíveis: Defumador Líquido – Portal da Harmonia, por R$ 40,00.' }, [DEFUMADOR], ID, linhas)).toBeNull();
     expect(finalizarRespostaHaux({ acao: 'responder', texto: 'O defumador custa R$ 40,00.' }, [DEFUMADOR], ID, linhas)).toBeNull();
+    // Correto: lista o item real com preço e as linhas sem preço; disponibilidade negada.
+    expect(finalizarRespostaHaux({ acao: 'responder', texto: 'Temos o Defumador - Limpeza e descarrego por R$ 40,00 e as linhas Portal de Luz e Portal de Harmonia, ainda sem preço cadastrado.' }, [DEFUMADOR], ID, linhas)).not.toBeNull();
+    expect(finalizarRespostaHaux({ acao: 'responder', texto: 'O Portal de Harmonia ainda não está disponível no catálogo.' }, [DEFUMADOR], ID, linhas)).not.toBeNull();
     expect(finalizarRespostaHaux({ acao: 'responder', texto: 'O Portal de Harmonia ainda não tem preço cadastrado. O Defumador - Limpeza e descarrego custa R$ 40,00.' }, [DEFUMADOR], ID, linhas)).not.toBeNull();
   });
 
