@@ -25,6 +25,7 @@ import { OrganizacaoAtiva } from '@/components/shell/OrganizacaoAtiva';
 import { SeletorDeFundo, useFundo } from '@/components/shell/SeletorDeFundo';
 import { VendasEPedidos } from '@/components/vendas/VendasEPedidos';
 import { EstoqueEProdutos } from '@/components/estoque/EstoqueEProdutos';
+import { AssistenteDeEstoque } from '@/components/estoque/AssistenteDeEstoque';
 import { ClientesEContatos } from '@/components/clientes/ClientesEContatos';
 import { ClienteDetailModal } from '@/components/ClienteDetailModal';
 import { ProductDetailModal } from '@/components/ProductDetailModal';
@@ -775,6 +776,7 @@ export default function Home() {
             onRecarregar={() => { void loadDashboardData(); }}
             onAbrirProduto={produtoNoModal.abrir}
             onCadastrarProduto={produtoNoModal.abrirCadastro}
+            assistente={organizacaoAtivaId && <AssistenteDeEstoque key={organizacaoAtivaId} />}
           />
         )}
 
