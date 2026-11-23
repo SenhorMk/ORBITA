@@ -31,7 +31,7 @@ const INSTRUCOES_GLOBAIS = [
   'Entenda mensagens informais, abreviações e erros de digitação. A mensagem com a maior ordem é a atual; as anteriores são histórico. Responda à atual considerando o histórico.',
   'Não repita saudação quando a conversa já está em andamento (há mais de uma mensagem): responda direto à última pergunta, usando as anteriores só quando forem relevantes. Seja breve: no máximo 5 frases curtas.',
   'Estoque não é prazo: "disponível" quer dizer que há estoque no ERP; nunca prometa pronta-entrega, envio imediato, prazo de entrega ou reserva. Produto sem estoque é "sem estoque no momento". Item com "preço não cadastrado" não tem preço: diga isso.',
-  'FATOS: use apenas o que está em <contexto_verificado>, que traz o resultado das ferramentas da loja (catálogo do ERP, linhas de produto descritas pela marca, políticas). Cite preços exatamente como aparecem no catálogo (ex.: R$ 40,00), sempre junto com o nome exato do item do catálogo; nunca renomeie um produto.',
+  'FATOS: use apenas o que está em <contexto_verificado>, que traz o resultado das ferramentas da loja (catálogo do ERP, linhas de produto descritas pela marca, políticas). Cite preços exatamente como aparecem no catálogo (ex.: R$ 40,00), sempre junto com o nome exato do item do catálogo; nunca renomeie um produto. Liste cada produto uma única vez e não anuncie quantidades ("temos três").',
   'Nunca invente preço, estoque, produto, prazo, frete, forma de pagamento, desconto, política de troca, efeito terapêutico ou compromisso da equipe. Se a informação não estiver no contexto, diga com naturalidade que não tem essa informação confirmada e ofereça falar com a equipe.',
   'Recomendações: compare as linhas pela proposta, aroma e descrição que a marca deu (contexto); relacione com a necessidade da pessoa e, quando ajudar, pergunte a preferência (aroma, intenção, ambiente). Se uma linha não tiver preço no catálogo, diga que o preço dela ainda não está cadastrado; nunca estime. Use a linguagem simbólica da marca, sem prometer efeito.',
   'Pedidos: você não consulta pedidos nem rastreio. Peça o número do pedido e explique que a equipe confirma o andamento; nunca afirme que um pedido foi enviado, cancelado ou reembolsado.',
@@ -55,6 +55,18 @@ export function mensagemAtual(entrada: string): string {
 /** Fail closed: só texto válido e verificado vira resposta; o resto escala pela RPC existente. */
 const SAUDACAO_INICIAL = /^\s*(?:ol[aá]|oi|bom dia|boa tarde|boa noite)\s*[!,.]*\s*/iu;
 
+/** Linhas repetidas (o mesmo item listado duas vezes) saem; a primeira ocorrência fica. */
+export function semLinhasRepetidas(texto: string): string {
+  const vistas = new Set<string>();
+  return texto.split('\n').filter((linha) => {
+    const chave = linha.normalize('NFD').replace(/[\u0300-\u036f]/gu, '').replace(/[\s\-–•*]+/gu, ' ').trim().toLowerCase();
+    if (!chave) return true;
+    if (vistas.has(chave)) return false;
+    vistas.add(chave);
+    return true;
+  }).join('\n');
+}
+
 /** Em conversa em andamento, a resposta vai direto ao ponto: tira a saudação de abertura. */
 export function semSaudacaoRepetida(texto: string): string {
   const sem = texto.replace(SAUDACAO_INICIAL, '');
@@ -70,7 +82,8 @@ export function finalizarRespostaHaux(valor: unknown, catalogoNoContexto: readon
     logger.warn('haux.resposta.recusada', { subsystem: 'provider', problema });
     return null;
   }
-  const corpo = continuacao ? semSaudacaoRepetida(lida.data.texto.trim()) : lida.data.texto.trim();
+  const limpo = semLinhasRepetidas(lida.data.texto.trim());
+  const corpo = continuacao ? semSaudacaoRepetida(limpo) : limpo;
   return { texto: `${identificacao}\n\n${corpo}`, acao: lida.data.acao };
 }
 

@@ -3,7 +3,7 @@ import { validarResposta } from './validacao';
 import { descreverCatalogo, montarCatalogo, type ItemDoCatalogo } from './catalogo';
 import { executarConsultas } from './ferramentas';
 import { CONHECIMENTO_PORTAL_DO_HAUX } from './conhecimento';
-import { semSaudacaoRepetida } from '../respostaAutomaticaHaux';
+import { semLinhasRepetidas, semSaudacaoRepetida } from '../respostaAutomaticaHaux';
 
 const HARMONIA: ItemDoCatalogo = { nome: 'Defumador Líquido - Portal da Harmonia', categoria: 'Defumador', preco: 40, disponivel: true };
 const COBRA: ItemDoCatalogo = { nome: 'Kuripe Cobra', categoria: 'Kuripe', preco: 80, disponivel: true };
@@ -83,5 +83,13 @@ describe('naturalidade em conversa em andamento', () => {
     expect(semSaudacaoRepetida('Boa noite, o Kuripe Cobra custa R$ 80,00.')).toBe('O Kuripe Cobra custa R$ 80,00.');
     expect(semSaudacaoRepetida('Temos o Kuripe Cobra.')).toBe('Temos o Kuripe Cobra.');
     expect(semSaudacaoRepetida('Olá!')).toBe('Olá!');
+  });
+
+  it('item listado duas vezes aparece uma vez (visto no widget, conversa 24)', () => {
+    const texto = 'Temos:\n- Defumador Líquido – Portal da Harmonia: R$ 40,00, disponível\n'
+      + '- Defumador Líquido – Portal da Purificação: R$ 40,00, disponível\n'
+      + '- Defumador Líquido – Portal da Harmonia: R$ 40,00, disponível\nRecomendo o Portal da Harmonia.';
+    expect(semLinhasRepetidas(texto).match(/Portal da Harmonia: R\$/gu)).toHaveLength(1);
+    expect(semLinhasRepetidas(texto)).toContain('Recomendo o Portal da Harmonia.');
   });
 });
