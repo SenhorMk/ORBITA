@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { criarEspelhoChatwootSupabase } from '@/services/chatwoot/espelhoChatwootSupabase';
+import { criarEspelhoChatwootSupabase, lerUltimaRespostaDaConversa } from '@/services/chatwoot/espelhoChatwootSupabase';
+import { TABELA_DO_RECURSO } from '@/services/chatwoot/identidadeChatwoot';
 
 const ORG = 'a0000000-0000-4000-8000-00000000000a';
 const CONEXAO = 'a0000000-0000-4000-8000-0000000000a1';
@@ -13,7 +14,7 @@ type Chamada = [string, ...unknown[]];
 function clienteGravador(resposta: { data: unknown; error: { code: string } | null }) {
   const chamadas: Chamada[] = [];
   const cadeia: Record<string, unknown> = {};
-  for (const metodo of ['select', 'eq', 'or', 'insert', 'update', 'single', 'maybeSingle']) {
+  for (const metodo of ['select', 'eq', 'or', 'insert', 'update', 'single', 'maybeSingle', 'order', 'limit']) {
     cadeia[metodo] = (...args: unknown[]) => {
       chamadas.push([metodo, ...args]);
       return cadeia;
@@ -100,5 +101,31 @@ describe('store Supabase dos espelhos: toda consulta leva organização e conex�
     await expect(criarEspelhoChatwootSupabase(comErro.cliente).inserir('contato', { id: 5 })).resolves.toEqual({ _tag: 'StoreFalhou', codigo: '23505' });
     const torta = clienteGravador({ data: [{ id_local: 'x', conexao_id: CONEXAO }], error: null });
     await expect(criarEspelhoChatwootSupabase(torta.cliente).buscarPorIdExterno('contato', ESCOPO, '5')).resolves.toEqual({ _tag: 'StoreFalhou', codigo: 'resposta_invalida' });
+  });
+});
+
+describe('última resposta pública da conversa (corte do que já foi atendido)', () => {
+  it('filtra organização, conexão, conversa e saída; lê só o instante', async () => {
+    const { cliente, chamadas } = clienteGravador({ data: [{ created_at: '2026-11-23T15:00:20.123+00:00' }], error: null });
+    await expect(lerUltimaRespostaDaConversa(cliente, ESCOPO, ID_LOCAL)).resolves.toBe('2026-11-23T15:00:20.123+00:00');
+    expect(chamadas).toEqual([
+      ['from', TABELA_DO_RECURSO.mensagem], ['select', 'created_at'],
+      ['eq', 'organizacao_id', ORG], ['eq', 'conexao_id', CONEXAO], ['eq', 'conversa_id_local', ID_LOCAL],
+      ['eq', 'message_type', 'outgoing'], ['order', 'created_at', { ascending: false }], ['limit', 1],
+    ]);
+  });
+
+  it('conversa sem resposta devolve null', async () => {
+    await expect(lerUltimaRespostaDaConversa(clienteGravador({ data: [], error: null }).cliente, ESCOPO, ID_LOCAL)).resolves.toBeNull();
+  });
+
+  it('escopo inválido, erro do banco ou formato inesperado falham fechado, sem consulta ou dado parcial', async () => {
+    const semConsulta = clienteGravador({ data: [], error: null });
+    await expect(lerUltimaRespostaDaConversa(semConsulta.cliente, { ...ESCOPO, conexaoId: 'x' }, ID_LOCAL)).rejects.toThrow('Histórico da conversa indisponível.');
+    expect(semConsulta.chamadas).toEqual([]);
+    await expect(lerUltimaRespostaDaConversa(clienteGravador({ data: null, error: { code: '42501' } }).cliente, ESCOPO, ID_LOCAL))
+      .rejects.toThrow('Histórico da conversa indisponível.');
+    await expect(lerUltimaRespostaDaConversa(clienteGravador({ data: [{ created_at: 'ontem' }], error: null }).cliente, ESCOPO, ID_LOCAL))
+      .rejects.toThrow('Histórico da conversa indisponível.');
   });
 });

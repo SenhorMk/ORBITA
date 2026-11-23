@@ -57,8 +57,9 @@ describe('afirmações comerciais só com fonte verificada', () => {
   });
 
   it('6. histórico com mudança de assunto: a mensagem atual define os itens principais', async () => {
-    const r = await executarConsultas(CONHECIMENTO_PORTAL_DO_HAUX, async () => CATALOGO, ['Quais defumadores vocês têm?', 'e kuripe, tem?']);
-    expect(r.itensCitaveis[0].categoria).toBe('Kuripe');
+    const r = await executarConsultas(CONHECIMENTO_PORTAL_DO_HAUX, async () => CATALOGO,
+      { historico: ['Quais defumadores vocês têm?'], atual: ['e kuripe, tem?'] });
+    expect(r.itensCitaveis.map((i) => i.categoria)).toEqual(['Kuripe', 'Kuripe', 'Kuripe']);
     expect(r.itensCitaveis.map((i) => i.nome)).toContain('Kuripe Cobra');
   });
 

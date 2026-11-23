@@ -67,7 +67,8 @@ As regras abaixo valem para qualquer organização e ficam em `INSTRUCOES_GLOBAI
 
 - **Transparência:** toda resposta automática começa com a identificação da organização (por exemplo "Assistente virtual do Portal do Haux"). O assistente não se passa por pessoa.
 - **Linguagem:** português do Brasil, natural, educado e objetivo. Entende abreviações, gírias e erros de digitação.
-- **Continuidade:** a mensagem de maior ordem é a atual e as anteriores são histórico. O assistente não repete saudação numa conversa em andamento e responde em no máximo cinco frases curtas.
+- **Continuidade:** o modelo recebe duas seções, `<historico_contextual>` e `<solicitacao_atual>`, e responde só à atual. O histórico serve para entender referências ("e quanto custa?", "qual desses?"), nunca como fila de perguntas a responder de novo. Duas perguntas na mesma mensagem são respondidas juntas. O assistente não repete saudação numa conversa em andamento e responde em no máximo cinco frases curtas.
+- **Solicitação atual:** são as mensagens do cliente posteriores à última resposta pública da conversa (IA ou atendente), encadeadas por intervalos de até 90 s. O corte é o mais recente entre a resposta no espelho (`chatwoot_messages`) e o envio público já registrado e não invalidado (`chatwoot_envios`), que aparece de 3 a 8 s antes do espelho. Só o instante é lido, com organização, conexão e conversa explícitas; nenhum texto de resposta vai ao modelo. Uma troca explícita de assunto na rajada ("na verdade", "mudando de assunto") deixa só o pedido novo. Se a leitura da última resposta falhar, só a última mensagem é pedido.
 - **Ambiguidade:** quando falta informação, faz uma pergunta útil em vez de supor.
 - **Personalização:** tom e identidade vêm da configuração da organização (§4), nunca do texto do cliente.
 - **Memória:** o contexto é o histórico do caso SAC, mascarado (CPF, cartão, e-mail e telefone ocultados), mais o resumo do atendente quando houve devolução. Não há memória entre casos.
@@ -81,15 +82,16 @@ O assistente **não** usa um prompt gigante. A cada mensagem, o worker monta só
 | 1. Instruções fundamentais | código versionado | `INSTRUCOES_GLOBAIS` | sempre |
 | 2. Identidade da organização | configuração versionada | `assistente/conhecimento.ts` | sempre, poucas linhas |
 | 3. Políticas aprovadas | configuração versionada, com situação e fonte | `conhecimento.ts` | só as `confirmada` viram fato; as demais vão como "NÃO INFORMADA" |
-| 4. Dados dinâmicos do ERP | Supabase (`produtos` + `categorias`), espelho do Bling | ferramenta `consultar_catalogo` (`assistente/ferramentas.ts`, `catalogo.ts`, `leitorDeProdutos.ts`) | só os produtos relacionados às últimas mensagens (até 12) e a lista de categorias |
+| 4. Dados dinâmicos do ERP | Supabase (`produtos` + `categorias`), espelho do Bling | ferramenta `consultar_catalogo` (`assistente/ferramentas.ts`, `catalogo.ts`, `leitorDeProdutos.ts`) | só os produtos relacionados à solicitação atual (até 12) e a lista de categorias |
 | 5. Histórico da conversa | `sac_cases` e mensagens do caso | RPC `reivindicar_geracao_ai_first` | mascarado e limitado |
 | 6. Ferramentas e permissões | escopo verificado do worker ou da sessão | runtime e papel | o cliente não tem ferramentas de escrita |
 
 ### Recuperação
 - A recuperação é por termos, sem embeddings nem serviço externo.
 - Os termos úteis da mensagem são normalizados: sem acento, minúsculos e com singular simples ("defumadores" vira "defumador").
-- O assistente recebe os produtos cujo nome ou categoria compartilham termos com a mensagem.
-- Saudação não seleciona produto.
+- O assistente recebe os produtos cujo nome ou categoria compartilham termos com a **solicitação atual**. Catálogo, linhas da marca e políticas não são consultados pelo histórico.
+- Se a solicitação só aponta para trás ("e quanto custa?", "qual você recomenda?", "tem disponível?"), entra apenas a mensagem anterior mais recente que tem assunto.
+- Saudação não seleciona produto. Agradecimento ou despedida não consulta nada.
 - O catálogo fica em cache de 60 s por organização.
 
 ### Validação de saída

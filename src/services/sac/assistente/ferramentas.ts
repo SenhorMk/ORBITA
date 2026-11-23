@@ -1,4 +1,4 @@
-import { descreverCatalogo, normalizar, selecionarRelevantes, type ItemDoCatalogo } from './catalogo';
+import { descreverCatalogo, normalizar, selecionarRelevantes, termos, type ItemDoCatalogo } from './catalogo';
 import { descreverPoliticas, type ConhecimentoDaOrganizacao, type LinhaDeProduto } from './conhecimento';
 
 /**
@@ -26,10 +26,45 @@ export interface ResultadoDasConsultas {
 
 const POLITICA = /\b(?:pag|pix|cart|boleto|parcel|frete|entreg|envi|prazo|postag|troc|devol|cancel|reembols|estorn|garantia)/u;
 
-/** Termos da conversa: a mensagem atual pesa mais, mas o histórico mantém o assunto. */
-function contextoDaBusca(mensagens: readonly string[]): string {
-  const atual = mensagens.at(-1) ?? '';
-  return [...mensagens.slice(-4, -1), atual, atual].join(' ');
+/** A conversa como o modelo a recebe: o histórico é contexto, a solicitação atual é o pedido. */
+export interface Conversa {
+  readonly historico: readonly string[];
+  readonly atual: readonly string[];
+}
+
+/** Palavras que só apontam para algo já dito ("e quanto custa?", "qual desses?", "tem disponível?"). */
+const REFERENCIAIS = new Set(termos(['desse desses dessa dessas deste destes desta destas esse esses essa essas este estes',
+  'esta estas aquele aqueles aquela aquelas dele dela deles delas ele ela eles elas menor maior barato barata caro cara',
+  'outro outra outros outras ultimo ultima primeiro primeira segundo segunda diferenca melhor melhores indica indicacao',
+  'recomendacao recomendo disponivel disponiveis estoque tamanho tamanhos opcao opcoes sai fica ficaria ainda tambem',
+  'entao sim pode fala diz unidade unidades voces vcs gente teria teriam'].join(' ')));
+
+/** Agradecimento ou despedida sem pergunta: nenhuma consulta comercial. */
+const ENCERRAMENTO = new Set(['obrigado', 'obrigada', 'obrigadao', 'brigado', 'brigada', 'valeu', 'vlw', 'ok', 'okay', 'beleza',
+  'blz', 'tchau', 'ate', 'mais', 'logo', 'perfeito', 'show', 'certo', 'entendi', 'combinado', 'otimo', 'top', 'legal', 'grato',
+  'grata', 'agradeco', 'muito', 'ta', 'bom', 'beijo', 'abraco', 'abracos', 'por', 'enquanto', 'so', 'isso']);
+
+const proprias = (texto: string) => termos(texto).filter((t) => !REFERENCIAIS.has(t));
+
+export function ehEncerramento(texto: string): boolean {
+  if (texto.includes('?')) return false;
+  const palavras = normalizar(texto).split(/[^a-z]+/u).filter(Boolean);
+  return palavras.length > 0 && palavras.every((p) => ENCERRAMENTO.has(p));
+}
+
+/**
+ * O assunto desta resposta. Com termos próprios, a solicitação atual define
+ * tudo (inclusive troca de assunto e retomada explícita). Se ela só aponta
+ * para trás, entra apenas a mensagem anterior mais recente com assunto: as
+ * outras do histórico não alimentam ferramentas. Agradecimento: nada.
+ */
+export function assuntoDaResposta(conversa: Conversa): { readonly busca: readonly string[]; readonly linhas: readonly string[] } {
+  const atual = conversa.atual.join('\n');
+  if (ehEncerramento(atual)) return { busca: [], linhas: [] };
+  if (proprias(atual).length > 0) return { busca: conversa.atual, linhas: conversa.atual };
+  const referencia = [...conversa.historico].reverse().find((m) => !ehEncerramento(m) && proprias(m).length > 0);
+  return referencia === undefined ? { busca: conversa.atual, linhas: conversa.atual }
+    : { busca: [referencia, ...conversa.atual], linhas: [referencia] };
 }
 
 /** Linhas pertinentes: por palavra-chave; se a conversa é sobre a família, todas. */
@@ -55,31 +90,27 @@ function descreverLinhas(conhecimento: ConhecimentoDaOrganizacao, linhas: readon
 }
 
 /**
- * Executa as consultas pertinentes à conversa. Cada ferramenta falha
- * isoladamente: catálogo indisponível não derruba linhas nem políticas.
+ * Executa as consultas pertinentes ao assunto desta resposta (nunca ao
+ * histórico inteiro). Cada ferramenta falha isoladamente: catálogo
+ * indisponível não derruba linhas nem políticas.
  */
 export async function executarConsultas(
   conhecimento: ConhecimentoDaOrganizacao,
   catalogo: () => Promise<readonly ItemDoCatalogo[]>,
-  mensagens: readonly string[],
+  conversa: Conversa,
 ): Promise<ResultadoDasConsultas> {
   const resultados: ResultadoDaFerramenta[] = [];
   let itensCitaveis: readonly ItemDoCatalogo[] = [];
   let todos: readonly ItemDoCatalogo[] = [];
-  const busca = contextoDaBusca(mensagens);
-  const linhas = selecionarLinhas(conhecimento, mensagens);
+  const assunto = assuntoDaResposta(conversa);
+  if (assunto.busca.length === 0) return { resultados, itensCitaveis, nomesSemCadastro: [] };
+  const busca = assunto.busca.join(' ');
+  const linhas = selecionarLinhas(conhecimento, assunto.linhas);
 
   try {
     const itens = await catalogo();
     todos = itens;
-    // A mensagem atual define os itens principais; o histórico só completa
-    // (mudança de assunto: "quais defumadores?" → "e kuripe, tem?").
-    const atual = mensagens.at(-1) ?? '';
-    const familiaNaAtual = selecionarLinhas(conhecimento, [atual]).length > 0 ? ' defumador' : '';
-    const familiaNoHistorico = linhas.length ? ' defumador' : '';
-    const doAtual = selecionarRelevantes(itens, `${atual}${familiaNaAtual}`);
-    const doHistorico = selecionarRelevantes(itens, `${busca}${familiaNoHistorico}`).filter((i) => !doAtual.includes(i));
-    itensCitaveis = [...doAtual, ...doHistorico].slice(0, 12);
+    itensCitaveis = selecionarRelevantes(itens, `${busca}${linhas.length ? ' defumador' : ''}`);
     resultados.push({ ferramenta: 'consultar_catalogo', ok: true, conteudo: descreverCatalogo(itens, itensCitaveis) });
   } catch {
     resultados.push({ ferramenta: 'consultar_catalogo', ok: false,

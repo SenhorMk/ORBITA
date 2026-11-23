@@ -167,3 +167,34 @@ export async function listarEnviosDaConversa(
     };
   });
 }
+
+const UltimoEnvioSchema = z.array(z.object({ created_at: z.string().datetime({ offset: true }) })).max(1);
+
+/**
+ * Instante do último envio público registrado na conversa (IA ou atendente),
+ * ainda que não despachado: a resposta registrada já atende as mensagens
+ * anteriores, alguns segundos antes de aparecer no espelho. Envio invalidado
+ * (mudança de responsável) não saiu e não conta; nota privada não é resposta.
+ * Organização, conexão e conversa vão explícitas no filtro (service role).
+ */
+export async function lerUltimoEnvioPublicoDaConversa(
+  supabase: SupabaseClient,
+  escopo: { readonly organizacaoId: string; readonly conexaoId: string },
+  conversaId: string,
+): Promise<string | null> {
+  const uuid = z.string().uuid();
+  if (![escopo.organizacaoId, escopo.conexaoId, conversaId].every((v) => uuid.safeParse(v).success)) throw new RegistroDeEnvioIndisponivel();
+  const { data, error } = await supabase
+    .from('chatwoot_envios')
+    .select('created_at')
+    .eq('organizacao_id', escopo.organizacaoId)
+    .eq('conexao_id', escopo.conexaoId)
+    .eq('conversa_id_local', conversaId)
+    .eq('privada', false)
+    .is('invalidado_em', null)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  const linhas = UltimoEnvioSchema.safeParse(data ?? []);
+  if (error || !linhas.success) throw new RegistroDeEnvioIndisponivel();
+  return linhas.data[0]?.created_at ?? null;
+}

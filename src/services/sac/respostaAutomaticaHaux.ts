@@ -7,7 +7,7 @@ import { logger } from '../../lib/observability/logger';
 import { ConfiguracaoProvedoresHaux } from './provedoresHaux';
 import type { ItemDoCatalogo } from './assistente/catalogo';
 import type { ConhecimentoDaOrganizacao } from './assistente/conhecimento';
-import { executarConsultas, type ResultadoDasConsultas } from './assistente/ferramentas';
+import { executarConsultas, type Conversa, type ResultadoDasConsultas } from './assistente/ferramentas';
 import { validarResposta } from './assistente/validacao';
 
 /** Tenant verified against the existing G8 connection, never taken from a message. */
@@ -28,8 +28,10 @@ const Resposta = z.object({
 
 const INSTRUCOES_GLOBAIS = [
   'Você é o assistente virtual de atendimento de uma loja, operado pelo ORBITA. Converse em português do Brasil, de forma natural, educada e objetiva.',
-  'Entenda mensagens informais, abreviações e erros de digitação. A mensagem com a maior ordem é a atual; as anteriores são histórico. Responda à atual considerando o histórico.',
-  'Não repita saudação quando a conversa já está em andamento (há mais de uma mensagem): responda direto à última pergunta, usando as anteriores só quando forem relevantes. Seja breve: no máximo 5 frases curtas.',
+  'Entenda mensagens informais, abreviações e erros de digitação. A conversa chega em duas seções: <historico_contextual> traz mensagens anteriores do cliente, já atendidas; <solicitacao_atual> traz o que ele quer resolver agora.',
+  'Responda somente à <solicitacao_atual>. O histórico não é uma fila de perguntas: nunca responda de novo ao que está nele; use-o só para entender referências ("e quanto custa?", "qual desses?", "e o menor?"), preferências e continuidade. Se a solicitação atual tiver mais de uma pergunta, responda a todas.',
+  'Não repita preços, produtos ou recomendações do histórico se a solicitação atual não pedir. Agradecimento ou despedida: responda breve e cordialmente, sem catálogo. O cliente pode retomar um assunto anterior; aí ele passa a ser o atual.',
+  'Não repita saudação quando há histórico. Seja breve: no máximo 5 frases curtas.',
   'Estoque não é prazo: "disponível" quer dizer que há estoque no ERP; nunca prometa pronta-entrega, envio imediato, prazo de entrega ou reserva. Produto sem estoque é "sem estoque no momento". Item com "preço não cadastrado" não tem preço: diga isso.',
   'FATOS: use apenas o que está em <contexto_verificado>, que traz o resultado das ferramentas da loja (catálogo do ERP, linhas de produto descritas pela marca, políticas). Cite preços exatamente como aparecem no catálogo (ex.: R$ 40,00), sempre junto com o nome exato do item do catálogo; nunca renomeie um produto. Liste cada produto uma única vez e não anuncie quantidades ("temos três").',
   'Nunca invente preço, estoque, produto, prazo, frete, forma de pagamento, desconto, política de troca, efeito terapêutico ou compromisso da equipe. Se a informação não estiver no contexto, diga com naturalidade que não tem essa informação confirmada e ofereça falar com a equipe.',
@@ -47,9 +49,27 @@ export interface FonteDeConhecimento {
   readonly catalogo: () => Promise<readonly ItemDoCatalogo[]>;
 }
 
-/** A mensagem atual (maior ordem) já sanitizada pela entrada da triagem. */
+const MENSAGEM = /<mensagem ordem="\d+">([\s\S]*?)<\/mensagem>/gu;
+const mensagensDoBloco = (bloco: string) => [...bloco.matchAll(MENSAGEM)].map((m) => m[1]);
+const secao = (entrada: string, nome: string) => entrada.match(new RegExp(`<${nome}>([\\s\\S]*?)</${nome}>`, 'u'))?.[1] ?? null;
+
+/**
+ * Histórico e solicitação atual como `gerarResposta` os separou. O texto do
+ * cliente chega neutralizado (sem `<`), então não abre nem fecha seções.
+ * Entrada no formato antigo: só a última mensagem é pedido.
+ */
+export function conversaDaEntrada(entrada: string): Conversa {
+  const atual = secao(entrada, 'solicitacao_atual');
+  if (atual !== null) {
+    return { historico: mensagensDoBloco(secao(entrada, 'historico_contextual') ?? ''), atual: mensagensDoBloco(atual) };
+  }
+  const todas = mensagensDoBloco(entrada);
+  return todas.length ? { historico: todas.slice(0, -1), atual: todas.slice(-1) } : { historico: [], atual: [entrada] };
+}
+
+/** A mensagem atual (a última da solicitação), já sanitizada. */
 export function mensagemAtual(entrada: string): string {
-  return [...entrada.matchAll(/<mensagem ordem="\d+">([\s\S]*?)<\/mensagem>/gu)].at(-1)?.[1] ?? entrada;
+  return conversaDaEntrada(entrada).atual.at(-1) ?? entrada;
 }
 
 /** Fail closed: só texto válido e verificado vira resposta; o resto escala pela RPC existente. */
@@ -85,12 +105,6 @@ export function finalizarRespostaHaux(valor: unknown, catalogoNoContexto: readon
   const limpo = semLinhasRepetidas(lida.data.texto.trim());
   const corpo = continuacao ? semSaudacaoRepetida(limpo) : limpo;
   return { texto: `${identificacao}\n\n${corpo}`, acao: lida.data.acao };
-}
-
-/** As mensagens do cliente, em ordem, já sanitizadas pela entrada da triagem. */
-export function mensagensDoCliente(entrada: string): string[] {
-  const todas = [...entrada.matchAll(/<mensagem ordem="\d+">([\s\S]*?)<\/mensagem>/gu)].map((m) => m[1]);
-  return todas.length ? todas : [entrada];
 }
 
 function blocoDeContexto(conhecimento: ConhecimentoDaOrganizacao | null, consultas: ResultadoDasConsultas | null): string {
@@ -151,7 +165,8 @@ export function criarModeloHauxPorAiSdk(modelo: LanguageModel, provedor: ModeloD
     async gerar(_instrucoes, entrada, abortSignal) {
       if (parada?.aborted) return null;
       const conhecimento = fonte?.conhecimento ?? null;
-      const consultas = fonte ? await executarConsultas(fonte.conhecimento, fonte.catalogo, mensagensDoCliente(entrada)) : null;
+      const conversa = conversaDaEntrada(entrada);
+      const consultas = fonte ? await executarConsultas(fonte.conhecimento, fonte.catalogo, conversa) : null;
       if (consultas) {
         logger.info('haux.ferramentas', { subsystem: 'provider',
           ferramentas: consultas.resultados.map((r) => `${r.ferramenta}:${r.ok ? 'ok' : 'falhou'}`).join(','),
@@ -164,7 +179,7 @@ export function criarModeloHauxPorAiSdk(modelo: LanguageModel, provedor: ModeloD
           abortSignal: parada ? AbortSignal.any([abortSignal, parada]) : abortSignal,
           maxRetries: 0, maxOutputTokens: 700 });
         const final = finalizarRespostaHaux(resultado.output, consultas?.itensCitaveis ?? [], conhecimento?.identificacao ?? 'Atendimento automatizado',
-          consultas?.nomesSemCadastro ?? [], mensagensDoCliente(entrada).length > 1);
+          consultas?.nomesSemCadastro ?? [], conversa.historico.length + conversa.atual.length > 1);
         return final ? { texto: final.texto } : null;
       } catch (erro: unknown) {
         const status = APICallError.isInstance(erro) ? erro.statusCode : undefined;
