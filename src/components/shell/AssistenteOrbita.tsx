@@ -5,7 +5,14 @@ import { Bot, ChevronRight, X } from 'lucide-react';
 
 import { respostaAssistenteSchema, type RespostaAssistente } from '@/services/assistenteAdministrativo/contratoAssistenteOrbita';
 
-type Turno = { readonly pergunta: string; readonly resposta?: RespostaAssistente; readonly falha?: string; readonly chave?: string; readonly confirmacaoIniciada?: boolean };
+type Turno = {
+  readonly pergunta: string; readonly resposta?: RespostaAssistente; readonly falha?: string; readonly chave?: string;
+  readonly confirmacaoIniciada?: boolean; readonly selecionados?: readonly string[];
+};
+
+/** "confirmo"/"cancelar" digitados equivalem aos botões da prévia pendente. */
+const CONFIRMAR_DIGITADO = /^(?:sim|ok|confirmo|confirmar|confirma|pode confirmar|confirmado)[.!\s]*$/iu;
+const CANCELAR_DIGITADO = /^(?:n[aã]o|cancelar|cancela|cancelo|desisto)[.!\s]*$/iu;
 
 interface Props {
   readonly organizacaoId: string;
@@ -59,6 +66,48 @@ export function AssistenteOrbita({ organizacaoId, fetchWithAuth }: Props) {
     }
   }
 
+  function alternarCandidato(indice: number, produtoId: string) {
+    setTurnos(anteriores => anteriores.map((turno, i) => {
+      if (i !== indice) return turno;
+      const atuais = new Set(turno.selecionados ?? []);
+      if (atuais.has(produtoId)) atuais.delete(produtoId); else atuais.add(produtoId);
+      return { ...turno, selecionados: [...atuais] };
+    }));
+  }
+
+  /** Pede a prévia para os candidatos marcados (um ou vários); nada é enviado ao Bling aqui. */
+  async function escolher(indice: number) {
+    const turno = turnos[indice];
+    const escolha = turno.resposta?.escolha;
+    const produtoIds = turno.selecionados ?? [];
+    if (!escolha || !produtoIds.length || carregando) return;
+    setCarregando(true);
+    try {
+      const response = await fetchWithAuth('/api/assistente/orbita/escolher', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ organizacaoEsperada: organizacaoId, pedido: escolha.pedido, produtoIds }),
+        signal: AbortSignal.timeout(270_000),
+      });
+      const parsed = respostaAssistenteSchema.safeParse(await response.json());
+      if (!parsed.success) throw new Error('Resposta inválida.');
+      const dados = parsed.data;
+      setTurnos(anteriores => anteriores.map((t, i) => i !== indice ? t
+        : response.ok ? { pergunta: t.pergunta, resposta: dados } : { ...t, falha: dados.mensagem }));
+    } catch {
+      setTurnos(anteriores => anteriores.map((t, i) => i !== indice ? t : {
+        ...t, falha: 'Não consegui preparar a prévia. Tente de novo; nada foi alterado.',
+      }));
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  function descartarEscolha(indice: number) {
+    setTurnos(anteriores => anteriores.map((turno, i) => i !== indice ? turno : {
+      pergunta: turno.pergunta, resposta: { mensagem: 'Escolha descartada. Nenhum produto foi alterado.' },
+    }));
+  }
+
   function cancelar(indice: number) {
     if (turnos[indice].confirmacaoIniciada) return;
     setTurnos(anteriores => anteriores.map((turno, i) => i !== indice ? turno : {
@@ -74,7 +123,15 @@ export function AssistenteOrbita({ organizacaoId, fetchWithAuth }: Props) {
   async function enviar(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
     const pergunta = texto.trim();
-    if (carregando || temProposta || pergunta.length < 4) return;
+    if (carregando) return;
+    if (temProposta) {
+      // Com uma prévia pendente, só "confirmo" ou "cancelar" digitados (ou os botões) seguem.
+      const indice = turnos.findLastIndex(t => t.resposta?.proposta);
+      if (indice >= 0 && CONFIRMAR_DIGITADO.test(pergunta)) { setTexto(''); void confirmar(indice); return; }
+      if (indice >= 0 && CANCELAR_DIGITADO.test(pergunta) && !turnos[indice].confirmacaoIniciada) { setTexto(''); cancelar(indice); return; }
+      return;
+    }
+    if (pergunta.length < 4) return;
     setTexto('');
     setCarregando(true);
     const anteriores = turnos.slice(-15);
@@ -135,6 +192,26 @@ export function AssistenteOrbita({ organizacaoId, fetchWithAuth }: Props) {
                       </ul>
                     )}
                     {turno.resposta.fonte && <p className="text-xs" style={{ color: 'var(--txt2)' }}>{turno.resposta.fonte}</p>}
+                    {turno.resposta.escolha && <fieldset aria-label="Produtos parecidos" className="space-y-2">
+                      <legend className="sr-only">Escolha os produtos para alterar</legend>
+                      <ul className="space-y-1">
+                        {turno.resposta.escolha.candidatos.map(c => <li key={c.produtoId}>
+                          <label className="flex cursor-pointer items-start gap-2 rounded border p-2" style={{ borderColor: 'var(--line)' }}>
+                            <input type="checkbox" className="mt-1" disabled={carregando}
+                              checked={turno.selecionados?.includes(c.produtoId) ?? false}
+                              onChange={() => alternarCandidato(indice, c.produtoId)} />
+                            <span>{c.nome}{c.codigo ? ' · SKU ' + c.codigo : ''}</span>
+                          </label>
+                        </li>)}
+                      </ul>
+                      <div className="flex gap-2">
+                        <button type="button" className="orbita-chip" disabled={carregando || !turno.selecionados?.length}
+                          onClick={() => escolher(indice)}>
+                          Preparar prévia{turno.selecionados?.length ? ' (' + turno.selecionados.length + ')' : ''}
+                        </button>
+                        <button type="button" className="orbita-chip" disabled={carregando} onClick={() => descartarEscolha(indice)}>Cancelar</button>
+                      </div>
+                    </fieldset>}
                     {turno.resposta.proposta && <section aria-label="Prévia de alteração" className="space-y-2">
                       <p>Válida até {new Date(turno.resposta.proposta.expiraEm).toLocaleTimeString('pt-BR')}.</p>
                       {turno.resposta.proposta.deposito && <p>Saldo físico no depósito: {turno.resposta.proposta.deposito.nome}. Este valor substitui o saldo atual.</p>}
@@ -166,11 +243,17 @@ export function AssistenteOrbita({ organizacaoId, fetchWithAuth }: Props) {
             <div className="min-w-0 flex-1">
               <label htmlFor={campoId} className="sr-only">Pergunta para o Assistente ORBITA</label>
               <textarea id={campoId} rows={2} value={texto} onChange={e => setTexto(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Escape') fechar(); }}
-                maxLength={4500} placeholder="Consulte dados ou peça uma alteração de produto"
+                onKeyDown={e => {
+                  if (e.key === 'Escape') fechar();
+                  // Enter envia, Shift+Enter quebra a linha (como no cockpit de atendimento).
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); }
+                }}
+                maxLength={4500}
+                placeholder={temProposta ? 'Escreva "confirmo" ou "cancelar", ou use os botões' : 'Consulte dados ou peça uma alteração de produto'}
                 className="w-full rounded-lg border bg-transparent px-2 py-2" style={{ borderColor: 'var(--line)' }} />
             </div>
-            <button type="submit" disabled={carregando || temProposta || texto.trim().length < 4}
+            <button type="submit"
+              disabled={carregando || (temProposta ? !(CONFIRMAR_DIGITADO.test(texto.trim()) || CANCELAR_DIGITADO.test(texto.trim())) : texto.trim().length < 4)}
               aria-label="Enviar pergunta" className="orbita-chip p-2">
               <ChevronRight className="h-4 w-4" aria-hidden />
             </button>

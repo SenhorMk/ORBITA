@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { pedidoEdicao, propostaEdicao, resultadoEdicao } from './edicaoDeProdutosContract';
+import { escolhaEdicao, pedidoEdicao, propostaEdicao, resultadoEdicao } from './edicaoDeProdutosContract';
 
 export const pedidoAssistente = z.object({
   pergunta: z.string().trim().min(4).max(4500),
@@ -72,7 +72,7 @@ export function paraFerramentaAssistente(escolha: FerramentaDoModelo): Ferrament
 export const respostaAssistenteSchema = z.object({
   mensagem: z.string(), fonte: z.string().optional(), detalhes: z.array(z.string()).readonly().optional(),
   proposta: propostaEdicao.optional(), resultados: z.array(resultadoEdicao).readonly().optional(),
-  emAndamento: z.boolean().optional(),
+  emAndamento: z.boolean().optional(), escolha: escolhaEdicao.optional(),
 }).strict();
 /** Resposta de consulta, prévia ou recibo do assistente autenticado. */
 export type RespostaAssistente = z.infer<typeof respostaAssistenteSchema>;

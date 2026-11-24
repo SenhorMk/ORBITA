@@ -46,10 +46,21 @@ export const resultadoEdicao = z.object({
 }).strict();
 /** Resultado durável de uma tentativa, sem texto do provedor. */
 export type ResultadoEdicao = z.infer<typeof resultadoEdicao>;
+/** Produto sugerido pelo ranking para a pessoa escolher; a identidade é revalidada no servidor. */
+export const candidatoEdicao = z.object({
+  produtoId: z.string().uuid(), nome: z.string(), codigo: z.string().nullable(),
+}).strict();
+/** Quando a referência é ambígua: até 5 candidatos, o total de parecidos e o pedido a aplicar nos escolhidos. */
+export const escolhaEdicao = z.object({
+  pedido: pedidoEdicao, candidatos: z.array(candidatoEdicao).min(1).max(5), total: z.number().int().min(1),
+}).strict();
+/** Escolha pendente exibida no painel. */
+export type EscolhaEdicao = z.infer<typeof escolhaEdicao>;
 /** Resposta comum à prévia e à confirmação, renderizada como texto no painel. */
 export type RespostaEdicao = {
   readonly mensagem: string;
   readonly proposta?: PropostaEdicao;
   readonly resultados?: readonly ResultadoEdicao[];
   readonly emAndamento?: boolean;
+  readonly escolha?: EscolhaEdicao;
 };
