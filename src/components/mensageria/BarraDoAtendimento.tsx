@@ -172,9 +172,9 @@ export function AvisosDoAtendimento({ atendimento }: { readonly atendimento: Ate
   return (
     <div className={estilos.avisos}>
       {aguardandoAutomacao && (
-        <p role="status" className="px-3 py-2 text-xs" style={{ color: 'var(--txt2)' }}>
+        <output className="block px-3 py-2 text-xs" style={{ color: 'var(--txt2)' }}>
           A conversa está no modo automático. A atividade do bot ainda não foi confirmada; o estado será atualizado automaticamente.
-        </p>
+        </output>
       )}
       {atendimento.erro !== null && <Aviso tom="erro">{atendimento.erro}</Aviso>}
       {atendimento.aviso !== null && <Aviso tom="atencao">{atendimento.aviso}</Aviso>}
