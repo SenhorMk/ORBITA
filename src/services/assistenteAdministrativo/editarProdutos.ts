@@ -4,11 +4,14 @@ import {
   pedidoEdicao, type ItemEdicao, type PedidoEdicao, type PropostaEdicao,
   type RespostaEdicao, type ResultadoEdicao,
 } from './edicaoDeProdutosContract';
+import { decidirProduto, ranquearProdutos } from './rankingDeProdutos';
 
 /** Falhas esperadas das portas são valores; nenhuma mensagem externa chega ao painel. */
 export type Disponivel<T> = { readonly _tag: 'ok'; readonly valor: T } | { readonly _tag: 'indisponivel' };
 /** Produto encontrado no catálogo escopado; a referência do modelo não é um ID autorizado. */
 export type ProdutoParaEdicao = { id: string; blingId: string; nome: string; codigo: string | null };
+/** Produto ativo do catálogo escopado, com a categoria para o ranking. */
+export type ProdutoDoCatalogo = ProdutoParaEdicao & { categoria: string | null };
 /** Campo atual lido e parseado no Bling. */
 export type DadosProdutoEdicao = { nome: string; descricao: string; estoque: number | null };
 type Conteudo = Pick<PropostaEdicao, 'itens' | 'deposito'>;
@@ -21,6 +24,10 @@ export type ReivindicacaoEdicao =
 /** Fronteiras externas da operação administrativa, inclusive relógio e persistência. */
 export interface PortasDeEdicao {
   buscar(scope: VerifiedOrganizationScope, pedido: PedidoEdicao): Promise<Disponivel<ProdutoParaEdicao[]>>;
+  /** Catálogo ativo da organização (até 1000), base do ranking de um produto. */
+  catalogo(scope: VerifiedOrganizationScope): Promise<Disponivel<ProdutoDoCatalogo[]>>;
+  /** Produtos ativos da organização com estes IDs (os ausentes não voltam). */
+  porIds(scope: VerifiedOrganizationScope, ids: readonly string[]): Promise<Disponivel<ProdutoParaEdicao[]>>;
   ler(id: string, campo: ItemEdicao['campo']): Promise<Disponivel<DadosProdutoEdicao>>;
   deposito(): Promise<Disponivel<NonNullable<PropostaEdicao['deposito']> | null>>;
   guardar(scope: VerifiedOrganizationScope, conteudo: Conteudo): Promise<Disponivel<PropostaEdicao>>;
@@ -58,13 +65,58 @@ class EdicaoDeProdutos {
           || (typeof pedido.valor === 'number' && !pergunta.match(/-?\d+(?:[.,]\d+)?/gu)?.includes(String(pedido.valor)))) {
         return { mensagem: 'Informe o produto ou categoria e o novo valor literalmente. Para um lote, diga “todos” ou “todas”.' };
       }
+      if (pedido.selecao === 'um') {
+        let unico: ProdutoParaEdicao | null = null;
+        if (pedido.por === 'sku') {
+          const exato = await portas.buscar(scope, pedido);
+          if (exato._tag !== 'ok') return indisponivel;
+          if (exato.valor.length === 1) unico = exato.valor[0];
+        }
+        if (!unico) {
+          // Ranking determinístico sobre o catálogo escopado: um produto inequívoco segue para a prévia;
+          // com dúvida, a pessoa escolhe entre os mais prováveis (um ou vários).
+          const catalogo = await portas.catalogo(scope);
+          if (catalogo._tag !== 'ok') return indisponivel;
+          const decisao = decidirProduto(ranquearProdutos(pedido.referencia, catalogo.valor));
+          if (decisao.tipo === 'nenhum') return { mensagem: 'Não encontrei produtos parecidos com “' + pedido.referencia + '”. Tente o SKU ou outra parte do nome.' };
+          if (decisao.tipo === 'escolher') {
+            const n = decisao.candidatos.length;
+            return {
+              mensagem: decisao.total > n
+                ? 'Encontrei ' + decisao.total + ' produtos parecidos com “' + pedido.referencia + '”. Estes são os ' + n + ' mais prováveis: marque qual (ou quais) quer alterar, ou peça de novo com o SKU.'
+                : 'Encontrei ' + n + ' produtos parecidos com “' + pedido.referencia + '”. Marque qual (ou quais) quer alterar.',
+              escolha: { pedido, total: decisao.total, candidatos: decisao.candidatos.map(c => ({
+                produtoId: c.produto.id, nome: c.produto.nome, codigo: c.produto.codigo })) },
+            };
+          }
+          unico = decisao.candidato.produto;
+        }
+        return this.montarPrevia(scope, [unico], pedido);
+      }
       const encontrados = await portas.buscar(scope, pedido);
       if (encontrados._tag !== 'ok') return indisponivel;
       if (!encontrados.valor.length) return { mensagem: 'Não encontrei produtos ativos com essa referência na organização atual.' };
       if (encontrados.valor.length > 20) return { mensagem: 'Encontrei mais de 20 produtos. Restrinja a seleção; nenhum produto foi alterado.' };
-      if (pedido.selecao === 'um' && encontrados.valor.length !== 1) return { mensagem: 'Há mais de um produto. Informe o SKU exato ou peça explicitamente todos os produtos da seleção.' };
-      if (new Set(encontrados.valor.map(p => p.id)).size !== encontrados.valor.length
-          || encontrados.valor.some(p => !/^\d{1,15}$/u.test(p.blingId))) return indisponivel;
+      return this.montarPrevia(scope, encontrados.valor, pedido);
+    }
+
+    /** Prévia para os produtos que a pessoa marcou entre os candidatos; IDs revalidados na organização. */
+    async proporEscolhidos(scope: VerifiedOrganizationScope, entrada: PedidoEdicao, produtoIds: readonly string[]): Promise<RespostaEdicao> {
+      if (!escopoTemCapacidade(scope, 'organization:manage')) return negada;
+      const parsed = pedidoEdicao.safeParse(entrada);
+      const unicos = new Set(produtoIds);
+      if (!parsed.success || produtoIds.length < 1 || produtoIds.length > 20 || unicos.size !== produtoIds.length) return indisponivel;
+      const produtos = await this.portas.porIds(scope, [...unicos]);
+      if (produtos._tag !== 'ok') return indisponivel;
+      if (produtos.valor.length !== unicos.size) return { mensagem: 'Algum produto escolhido não está mais ativo nesta organização. Faça o pedido de novo.' };
+      return this.montarPrevia(scope, produtos.valor, parsed.data);
+    }
+
+    /** Lê o valor atual no Bling e guarda a proposta; nada é enviado ao Bling aqui. */
+    private async montarPrevia(scope: VerifiedOrganizationScope, selecionados: readonly ProdutoParaEdicao[], pedido: PedidoEdicao): Promise<RespostaEdicao> {
+      const portas = this.portas;
+      if (new Set(selecionados.map(p => p.id)).size !== selecionados.length
+          || selecionados.some(p => !/^\d{1,15}$/u.test(p.blingId))) return indisponivel;
       let deposito: PropostaEdicao['deposito'] = null;
       if (pedido.campo === 'estoque') {
         const dep = await portas.deposito();
@@ -74,7 +126,7 @@ class EdicaoDeProdutos {
       }
       const itens: ItemEdicao[] = [];
       const limiteDaPrevia = portas.agora() + 230_000;
-      for (const produto of encontrados.valor) {
+      for (const produto of selecionados) {
         if (portas.agora() >= limiteDaPrevia) return indisponivel;
         const remoto = await portas.ler(produto.blingId, pedido.campo);
         if (remoto._tag !== 'ok') return indisponivel;

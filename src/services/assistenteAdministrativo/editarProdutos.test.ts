@@ -4,6 +4,10 @@ import { criarEdicaoDeProdutos, type PortasDeEdicao } from './editarProdutos';
 
 const scope = { organizationId: 'org-a', actorId: 'ator-a', role: 'admin' } as VerifiedOrganizationScope;
 const produto = { id: '11111111-1111-4111-8111-111111111111', blingId: '123', nome: 'Rapé A', codigo: 'RAP-1' };
+const cravo15 = { id: '55555555-5555-4555-8555-555555555555', blingId: '515', nome: 'Rapé 15ml Nome:Cravo', codigo: 'HX-RAP-15-CRAVO', categoria: null };
+const cravo20 = { id: '66666666-6666-4666-8666-666666666666', blingId: '520', nome: 'Rapé 20ml Nome:Cravo', codigo: 'HX-RAP-20-CRAVO', categoria: null };
+const cacau = { id: '77777777-7777-4777-8777-777777777777', blingId: '530', nome: 'Rapé 15ml Nome:Cacau', codigo: 'HX-RAP-15-CACAU', categoria: null };
+const catalogoBase = [{ ...produto, categoria: null }, cravo15, cravo20, cacau];
 const ok = <T>(valor: T) => ({ _tag: 'ok' as const, valor });
 
 function ambiente() {
@@ -13,6 +17,8 @@ function ambiente() {
   const resultados: unknown[] = [];
   const portas: PortasDeEdicao = {
     buscar: async () => ok([produto]),
+    catalogo: async () => ok(catalogoBase),
+    porIds: async (_scope, ids) => ok(catalogoBase.filter(p => ids.includes(p.id))),
     ler: async () => ok({ nome: 'Rapé A', descricao: 'Descrição anterior', estoque: 12 }),
     deposito: async () => ok({ id: 7, nome: 'Geral' }),
     guardar: async (_scope, conteudo) => {
@@ -79,9 +85,10 @@ describe('edição pelo assistente: proposta → confirmação → resultado', (
 
   it('uma seleção ambígua ou maior que o limite não cria um lote parcial', async () => {
     const a = ambiente();
-    a.portas.buscar = async () => ok([produto, { ...produto, id: '33333333-3333-4333-8333-333333333333' }]);
     const pedido = { acao: 'editar_produtos', selecao: 'um', por: 'nome', referencia: 'Rapé', campo: 'estoque', valor: 5 } as const;
-    expect((await a.servico.propor(scope, pedido, 'Defina o Rapé em 5')).proposta).toBeUndefined();
+    const ambiguo = await a.servico.propor(scope, pedido, 'Defina o Rapé em 5');
+    expect(ambiguo.proposta).toBeUndefined();
+    expect(ambiguo.escolha?.candidatos.length).toBeGreaterThan(1);
     a.portas.buscar = async () => ok(Array.from({ length: 21 }, (_, i) => ({ ...produto, id: String(i) })));
     expect((await a.servico.propor(scope, { ...pedido, selecao: 'todos' }, 'Defina todos os rapés em 5')).mensagem).toContain('mais de 20');
     expect(a.envios).toEqual([]);
@@ -146,6 +153,66 @@ describe('edição pelo assistente: proposta → confirmação → resultado', (
     a.portas.deposito = async () => ok(null);
     expect((await a.servico.confirmar(scope, previa.proposta!.chave)).resultados).toMatchObject([{ estado: 'nao_enviado' }]);
     expect((await a.servico.propor(scope, pedido, 'Deixe RAP-1 com estoque de 5')).proposta).toBeUndefined();
+    expect(a.envios).toEqual([]);
+  });
+
+  it("referência por nome com um produto inequívoco vai direto para a prévia (ranking)", async () => {
+    const a = ambiente();
+    const previa = await a.servico.propor(scope, {
+      acao: 'editar_produtos', selecao: 'um', por: 'nome', referencia: 'rapé de cacau', campo: 'estoque', valor: 5,
+    }, 'Defina o estoque do rapé de cacau para 5');
+    expect(previa.proposta?.itens).toMatchObject([{ produtoId: cacau.id, valor: 5 }]);
+    expect(a.envios).toEqual([]);
+  });
+
+  it("referência ambígua devolve os candidatos para escolher, sem proposta nem escrita", async () => {
+    const a = ambiente();
+    const pedido = { acao: 'editar_produtos', selecao: 'um', por: 'nome', referencia: 'rape de cravo', campo: 'estoque', valor: 5 } as const;
+    const resposta = await a.servico.propor(scope, pedido, 'consegue definir o estoque do rape de cravo para 5');
+    expect(resposta.proposta).toBeUndefined();
+    expect(resposta.escolha).toMatchObject({ pedido, total: 2, candidatos: [{ produtoId: cravo15.id }, { produtoId: cravo20.id }] });
+    expect(resposta.mensagem).toContain('Marque qual (ou quais)');
+    expect(a.envios).toEqual([]);
+  });
+
+  it("SKU inexistente cai no ranking (SKU parcial encontra o produto)", async () => {
+    const a = ambiente();
+    a.portas.buscar = async () => ok([]);
+    const previa = await a.servico.propor(scope, {
+      acao: 'editar_produtos', selecao: 'um', por: 'sku', referencia: 'RAP-15-CACAU', campo: 'estoque', valor: 3,
+    }, 'Defina o estoque do RAP-15-CACAU para 3');
+    expect(previa.proposta?.itens).toMatchObject([{ produtoId: cacau.id }]);
+  });
+
+  it("nada parecido orienta a tentar o SKU", async () => {
+    const a = ambiente();
+    const resposta = await a.servico.propor(scope, {
+      acao: 'editar_produtos', selecao: 'um', por: 'nome', referencia: 'bicicleta', campo: 'estoque', valor: 1,
+    }, 'Defina o estoque da bicicleta para 1');
+    expect(resposta.mensagem).toContain('Não encontrei produtos parecidos');
+    expect(resposta.escolha).toBeUndefined();
+  });
+
+  it("escolhidos (um ou vários) viram uma única prévia; nada vai ao Bling antes de confirmar", async () => {
+    const a = ambiente();
+    const pedido = { acao: 'editar_produtos', selecao: 'um', por: 'nome', referencia: 'rape de cravo', campo: 'estoque', valor: 5 } as const;
+    const previa = await a.servico.proporEscolhidos(scope, pedido, [cravo15.id, cravo20.id]);
+    expect(previa.proposta?.itens.map(i => i.produtoId)).toEqual([cravo15.id, cravo20.id]);
+    expect(a.envios).toEqual([]);
+    const resultado = await a.servico.confirmar(scope, previa.proposta!.chave);
+    expect(resultado.resultados?.map(r => r.estado)).toEqual(['aplicado', 'aplicado']);
+  });
+
+  it("escolha inválida, repetida, de outra organização ou sem gestão não gera prévia", async () => {
+    const a = ambiente();
+    const pedido = { acao: 'editar_produtos', selecao: 'um', por: 'nome', referencia: 'rape', campo: 'estoque', valor: 5 } as const;
+    expect((await a.servico.proporEscolhidos(scope, pedido, [])).proposta).toBeUndefined();
+    expect((await a.servico.proporEscolhidos(scope, pedido, [cravo15.id, cravo15.id])).proposta).toBeUndefined();
+    const fora = await a.servico.proporEscolhidos(scope, pedido, [cravo15.id, '99999999-9999-4999-8999-999999999999']);
+    expect(fora.proposta).toBeUndefined();
+    expect(fora.mensagem).toContain('não está mais ativo');
+    const membro = { ...scope, role: 'member' } as VerifiedOrganizationScope;
+    expect((await a.servico.proporEscolhidos(membro, pedido, [cravo15.id])).proposta).toBeUndefined();
     expect(a.envios).toEqual([]);
   });
 });
