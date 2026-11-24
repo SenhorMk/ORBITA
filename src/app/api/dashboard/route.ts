@@ -31,6 +31,8 @@ export async function GET(request: Request) {
     // É esta leitura que abastece Estoque: a foto do ORBITA, quando existe,
     // vira aqui a `imagem_url` apresentada — por URL assinada, gerada agora.
     const produtos = await comImagemEfetiva(scope, await produtoRepository.getAll(scope), armazenamentoDeImagem);
+    // A aba "Arquivados" de Estoque: fora do catálogo, mas consultável.
+    const produtosArquivados = await comImagemEfetiva(scope, await produtoRepository.getArquivados(scope), armazenamentoDeImagem);
     const clientes = await clienteRepository.getAll(scope);
     const pedidos = await pedidoRepository.getAllEnriched(scope);
     const stats = await pedidoRepository.getDashboardStats(scope);
@@ -48,6 +50,7 @@ export async function GET(request: Request) {
         categorias,
         pedidos,
         produtos,
+        produtosArquivados,
         clientes,
         estatisticas: {
           faturamento30Dias: stats.faturamento30 || 0,

@@ -18,14 +18,19 @@ const dadosDoProdutoSchema = z
 
 
 /**
- * `product.deleted` (ou `produto.excluido`): o recurso antes do ponto é
- * exatamente produto. `product_supplier.deleted` e `stock.deleted` não são
- * exclusão do produto — o id deles é de outro recurso.
+ * Exclusão do produto no Bling, em qualquer das duas formas que ele usa:
+ * - `product.deleted` (ou `produto.excluido`);
+ * - `product.updated` com `situacao: 'E'` (Excluído). É assim que o Bling
+ *   avisa a exclusão feita pela tela: em 23/11/2026 chegaram 23 eventos desse
+ *   tipo e nenhum `product.deleted`, e os produtos continuavam ativos aqui.
+ *   O mesmo critério já vale para contatos (`contato.ts`).
+ * O recurso antes do ponto é exatamente produto: `product_supplier.*` e
+ * `stock.*` não são exclusão do produto — o id deles é de outro recurso.
  */
-export function ehExclusaoDeProduto(entity: string): boolean {
+export function ehExclusaoDeProduto(entity: string, eventData: Record<string, unknown> = {}): boolean {
   const [recurso, acao = ''] = entity.split('.');
-  return (recurso === 'product' || recurso === 'produto')
-    && (acao.includes('delet') || acao.includes('exclu') || acao.includes('remov'));
+  if (recurso !== 'product' && recurso !== 'produto') return false;
+  return acao.includes('delet') || acao.includes('exclu') || acao.includes('remov') || eventData.situacao === 'E';
 }
 
 /** O `bling_id` do produto do evento, quando é um id numérico do Bling; senão `null`. */

@@ -778,6 +778,7 @@ export default function Home() {
         {activeTab === 'inventory' && (
           <EstoqueEProdutos
             produtos={data?.produtos ?? null}
+            produtosArquivados={data?.produtosArquivados ?? []}
             categorias={data?.categorias ?? []}
             carregando={isLoading}
             erroDeLeitura={erroDaLeitura}

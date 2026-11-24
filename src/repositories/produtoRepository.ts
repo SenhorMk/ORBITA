@@ -18,11 +18,18 @@ export type { MotivoDeReconciliacaoDeProduto } from './reconciliacaoDeProduto';
 export type ProdutoParaGravar = Omit<Produto, 'estoque'> & { readonly estoque?: number };
 
 export class ProdutoRepository {
+  /**
+   * O catálogo que a tela lista (Estoque & Produtos, dashboard). Produto
+   * arquivado (PRE-003) saiu da venda e não aparece: sem este filtro, arquivar
+   * dava certo no banco, mas o produto continuava na lista e parecia que a
+   * remoção tinha falhado. Ele continua no banco para o histórico de pedidos.
+   */
   async getAll(scope: VerifiedOrganizationScope): Promise<Produto[]> {
     const { data, error } = await supabaseServer
       .from('produtos')
       .select('*')
       .eq('organizacao_id', scope.organizationId)
+      .neq('situacao', 'arquivado')
       .order('nome', { ascending: true });
 
     if (error) {
@@ -30,6 +37,22 @@ export class ProdutoRepository {
       throw error;
     }
 
+    return data || [];
+  }
+
+  /**
+   * Os arquivados da organização (arquivados aqui ou excluídos no Bling), para
+   * a aba separada de Estoque & Produtos. Ficam fora do catálogo e da venda.
+   */
+  async getArquivados(scope: VerifiedOrganizationScope): Promise<Produto[]> {
+    const { data, error } = await supabaseServer
+      .from('produtos')
+      .select('*')
+      .eq('organizacao_id', scope.organizationId)
+      .eq('situacao', 'arquivado')
+      .order('nome', { ascending: true });
+
+    if (error) throw error;
     return data || [];
   }
 
