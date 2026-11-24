@@ -9,7 +9,7 @@ const seletor = {
 };
 
 /** Intenção sem autoridade: o servidor resolve os produtos dentro da organização. */
-export const pedidoEdicao = z.discriminatedUnion('campo', [
+export const pedidoEdicao = z.union([
   z.object({ ...seletor, campo: z.literal('estoque'), valor: z.number().int().min(0).max(1_000_000) }).strict(),
   z.object({ ...seletor, campo: z.literal('nome'), valor: texto.max(120) }).strict(),
   z.object({ ...seletor, campo: z.literal('descricao'), valor: texto }).strict(),
