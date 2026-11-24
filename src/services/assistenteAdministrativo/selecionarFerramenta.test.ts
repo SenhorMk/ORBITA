@@ -16,9 +16,8 @@ it.each([
   const capturadas: unknown[] = [];
   vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
     const corpo = JSON.parse(String(init.body));
-    const { schema, strict } = corpo.response_format.json_schema;
-    capturadas.push(schema);
-    if (strict && JSON.stringify(schema).includes('"oneOf"')) {
+    capturadas.push(corpo.response_format);
+    if (corpo.response_format.type !== 'json_object') {
       return Response.json({ error: { message: 'Composição não suportada na fixture.' } }, { status: 400 });
     }
     return Response.json({
@@ -31,5 +30,5 @@ it.each([
   });
   await expect(selecionarFerramenta(pergunta, '2026-11-24', new AbortController().signal)).resolves.toEqual(ferramenta);
   expect(capturadas).toHaveLength(1);
-  expect(JSON.stringify(capturadas[0])).toContain('"anyOf"');
+  expect(capturadas[0]).toEqual({ type: 'json_object' });
 });
