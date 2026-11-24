@@ -167,7 +167,8 @@ schema_paths = [
   "../database/100_runtime_ai_por_inbox.sql",
   "../database/101_lista_conversas_teste.sql",
   "../database/102_baixa_estoque_demo_idempotente.sql",
-  "../database/103_propostas_resolucao_sac.sql"
+  "../database/103_propostas_resolucao_sac.sql",
+  "../database/104_assistente_edicao_produtos.sql"
 ]
 
 [db.seed]

@@ -112,7 +112,7 @@ describe('nova despesa', () => {
     await userEvent.type(screen.getByLabelText('Descrição do Gasto'), '1kg de rapé');
     await userEvent.type(screen.getByLabelText('Valor (R$)'), '120.5');
     await userEvent.selectOptions(screen.getByLabelText('Categoria'), CATEGORIAS[0]!.id);
-    await userEvent.click(screen.getByRole('button', { name: /Salvar Despesa/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Registrar saída' }));
 
     expect(capturado).toMatchObject({
       titulo: 'Insumos',

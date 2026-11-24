@@ -101,6 +101,14 @@ export interface BlingPort {
   criarProduto(payload: ProdutoBlingEntrada): Promise<BlingCallResult<{ id: string }>>;
   atualizarProduto(id: string, payload: ProdutoBlingEntrada): Promise<BlingCallResult<void>>;
   definirSaldoProduto(idProduto: string, quantidade: number): Promise<BlingCallResult<void>>;
+  /** Leitura parseada do produto para a prévia administrativa. */
+  consultarProdutoAdministrativo(id: string, incluirEstoque?: boolean): Promise<LeituraRemota<{ nome: string; descricao: string; estoque: number | null }>>;
+  /** Um único depósito ativo; null exige escolha fora deste fluxo. */
+  consultarDepositoUnico(): Promise<LeituraRemota<{ id: number; nome: string } | null>>;
+  /** PATCH de um único campo, preservando preço, imagens e variantes. */
+  atualizarCampoProduto(id: string, campo: 'nome' | 'descricao', valor: string): Promise<EscritaRemota>;
+  /** Saldo absoluto no depósito que constou da prévia. */
+  definirSaldoNoDeposito(id: string, depositoId: number, quantidade: number): Promise<EscritaRemota>;
 
   // ── Contatos ───────────────────────────────────────────────────────────
   getClientes(pagina?: number, limite?: number, dataAlteracaoInicial?: string): Promise<BlingCliente[]>;

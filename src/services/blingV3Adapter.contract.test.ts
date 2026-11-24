@@ -52,6 +52,51 @@ afterAll(async () => {
 });
 
 describe('caminho e corpo enviados ao Bling', () => {
+  it('encerra e cancela uma leitura administrativa cujo corpo nunca termina', async () => {
+    fake.programar({ status: 200, body: '{"data":', corpoInterminavel: true });
+    expect(await adapter().consultarProdutoAdministrativo('123')).toMatchObject({ _tag: 'RemotoIndeterminado' });
+    expect(fake.recebidas).toHaveLength(1);
+  }, 30_000);
+  it.each(['nome', 'descricao'] as const)('edita somente %s por PATCH, preservando campos não solicitados', async campo => {
+    fake.programar({ status: 204, body: '' });
+    expect(await adapter().atualizarCampoProduto('123', campo, 'Novo texto')).toEqual({ _tag: 'EscritaAceita' });
+    const enviada = fake.recebidas.at(-1)!;
+    expect(enviada.method).toBe('PATCH');
+    expect(enviada.url).toBe('/produtos/123');
+    expect(JSON.parse(enviada.body)).toEqual(campo === 'nome' ? { nome: 'Novo texto' } : { descricaoCurta: 'Novo texto' });
+  });
+
+  it('define o saldo físico zero no depósito da prévia por balanço', async () => {
+    fake.programar({ status: 201, body: '{}' });
+    expect(await adapter().definirSaldoNoDeposito('123', 7, 0)).toEqual({ _tag: 'EscritaAceita' });
+    expect(fake.recebidas.at(-1)).toMatchObject({ method: 'POST', url: '/estoques' });
+    expect(JSON.parse(fake.recebidas.at(-1)!.body)).toEqual({ produto: { id: 123 }, deposito: { id: 7 }, operacao: 'B', quantidade: 0 });
+  });
+
+  it('parseia a prévia remota e recusa o produto de outro ID', async () => {
+    fake.programar({ status: 200, body: JSON.stringify({ data: {
+      id: 123, nome: 'Rapé A', descricaoCurta: 'Descrição real',
+    } }) });
+    fake.programar({ status: 200, body: JSON.stringify({ data: [{ produto: { id: 123 }, saldoFisicoTotal: 12 }] }) });
+    expect(await adapter().consultarProdutoAdministrativo('123')).toEqual({
+      _tag: 'RemotoPresente', valor: { nome: 'Rapé A', descricao: 'Descrição real', estoque: 12 },
+    });
+    fake.programar({ status: 200, body: JSON.stringify({ data: { id: 999, nome: 'Outro' } }) });
+    expect(await adapter().consultarProdutoAdministrativo('123')).toMatchObject({ _tag: 'RemotoIndeterminado' });
+  });
+
+  it('não escolhe silenciosamente entre dois depósitos ativos', async () => {
+    fake.programar({ status: 200, body: JSON.stringify({ data: [
+      { id: 7, descricao: 'Geral', situacao: 1, desconsiderarSaldo: false }, { id: 8, descricao: 'Loja', situacao: 1, desconsiderarSaldo: false },
+    ] }) });
+    expect(await adapter().consultarDepositoUnico()).toEqual({ _tag: 'RemotoPresente', valor: null });
+  });
+
+  it('mantém falha de servidor como indeterminada, sem repetir o POST de saldo', async () => {
+    fake.programar({ status: 500, body: 'erro interno do provedor' });
+    expect(await adapter().definirSaldoNoDeposito('123', 7, 5)).toMatchObject({ _tag: 'RemotoIndeterminado' });
+    expect(fake.recebidas).toHaveLength(1);
+  });
   it('cria o pedido de venda em POST /pedidos/vendas com o payload serializado', async () => {
     fake.programar({ status: 201, body: JSON.stringify({ data: { id: 918273 } }) });
 

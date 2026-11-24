@@ -71,7 +71,7 @@ async function preencherEEnviar(descricao = 'Aluguel') {
     // `userEvent.type` não preenche `type="date"` no jsdom.
     fireEvent.change(screen.getByLabelText('Data Vencimento'), { target: { value: '2026-09-10' } });
   }
-  await userEvent.click(screen.getByRole('button', { name: /Salvar Despesa|Salvando/i }));
+  await userEvent.click(screen.getByRole('button', { name: /^(Registrar saída|Registrando\.\.\.)$/i }));
 }
 
 let alerta: ReturnType<typeof vi.fn>;
@@ -96,7 +96,7 @@ describe('PRE-001 — o formulário diante de um resultado não confirmado', () 
     await preencherEEnviar();
 
     expect(await screen.findByRole('status')).toHaveTextContent('Não lance de novo');
-    const botao = screen.getByRole('button', { name: /Salvar Despesa/i });
+    const botao = screen.getByRole('button', { name: 'Registrar saída' });
     expect(botao).toBeDisabled();
     await userEvent.click(botao);
     expect(posts).toHaveLength(1);

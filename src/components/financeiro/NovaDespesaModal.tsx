@@ -207,7 +207,7 @@ export function NovaDespesaModal({
               className="orbita-chip cursor-pointer"
               style={{ background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-fg)' }}
             >
-              {syncing ? <><Loader2 className="w-4 h-4 animate-spin" /> Salvando...</> : 'Salvar Despesa'}
+              {syncing ? <><Loader2 className="w-4 h-4 animate-spin" /> Registrando...</> : 'Registrar saída'}
             </button>
           }
         />

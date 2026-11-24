@@ -12,7 +12,7 @@ import { HelpInfo } from '@/components/help/HelpInfo';
 import estilos from './mensageria.module.css';
 
 function rotuloDoControle(controle: ControleVisto): string {
-  if (controle.modo === 'AI') return controle.automacaoAtiva ? 'Automação responde' : 'Sem atendente';
+  if (controle.modo === 'AI') return controle.automacaoAtiva ? 'Automação responde' : 'Aguardando automação';
   if (controle.modo === 'HUMAN_REQUIRED') return 'Aguardando atendente';
   if (controle.souResponsavel) return 'Com você';
   return controle.responsavelId === null ? 'Sem atendente ativo' : 'Com outro atendente';
@@ -167,14 +167,14 @@ export function AssumirAtendimento({ atendimento }: { readonly atendimento: Aten
 /** O que precisa ser lido agora, logo abaixo do cabeçalho: só aparece quando existe. */
 export function AvisosDoAtendimento({ atendimento }: { readonly atendimento: Atendimento }) {
   const { atual } = atendimento;
-  const semNinguem = atual?.modo === 'AI' && !atual.automacaoAtiva;
-  if (!semNinguem && atendimento.erro === null && atendimento.aviso === null) return null;
+  const aguardandoAutomacao = atual?.modo === 'AI' && !atual.automacaoAtiva;
+  if (!aguardandoAutomacao && atendimento.erro === null && atendimento.aviso === null) return null;
   return (
     <div className={estilos.avisos}>
-      {semNinguem && (
-        <Aviso tom="atencao">
-          A automação ainda não responde conversas: ninguém está atendendo esta. Assuma para responder.
-        </Aviso>
+      {aguardandoAutomacao && (
+        <output className="block px-3 py-2 text-xs" style={{ color: 'var(--txt2)' }}>
+          A conversa está no modo automático. A atividade do bot ainda não foi confirmada; o estado será atualizado automaticamente.
+        </output>
       )}
       {atendimento.erro !== null && <Aviso tom="erro">{atendimento.erro}</Aviso>}
       {atendimento.aviso !== null && <Aviso tom="atencao">{atendimento.aviso}</Aviso>}

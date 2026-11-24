@@ -3,16 +3,24 @@
 import { useId, useRef, useState, type FormEvent } from 'react';
 import { Bot, ChevronRight, X } from 'lucide-react';
 
-import type { RespostaAssistente } from '@/services/assistenteAdministrativo/contratoAssistenteOrbita';
+import { respostaAssistenteSchema, type RespostaAssistente } from '@/services/assistenteAdministrativo/contratoAssistenteOrbita';
 
-type Turno = { readonly pergunta: string; readonly resposta?: RespostaAssistente; readonly falha?: string };
+type Turno = { readonly pergunta: string; readonly resposta?: RespostaAssistente; readonly falha?: string; readonly chave?: string; readonly confirmacaoIniciada?: boolean };
 
 interface Props {
   readonly organizacaoId: string;
   readonly fetchWithAuth: (url: string, options?: RequestInit) => Promise<Response>;
 }
 
-const sugestoes = ['Quanto vendemos nos últimos 30 dias?', 'Quais os produtos mais vendidos?', 'Quais produtos estão com estoque baixo?'];
+const sugestoes = ['Quanto vendemos nos últimos 30 dias?', 'Quais produtos estão com estoque baixo?', 'Defina o estoque do SKU X em 5'];
+
+const estadosDoResultado = {
+  aplicado: 'Alteração aceita no Bling e registrada no ORBITA',
+  recusado: 'O Bling recusou a alteração',
+  alterado_apos_previa: 'O produto mudou após a prévia; prepare outra seleção',
+  indeterminado: 'Resultado desconhecido; confira no Bling antes de repetir',
+  nao_enviado: 'Nenhuma alteração enviada para este produto',
+} as const;
 
 export function AssistenteOrbita({ organizacaoId, fetchWithAuth }: Props) {
   const regiaoId = useId();
@@ -22,6 +30,41 @@ export function AssistenteOrbita({ organizacaoId, fetchWithAuth }: Props) {
   const [texto, setTexto] = useState('');
   const [turnos, setTurnos] = useState<Turno[]>([]);
   const [carregando, setCarregando] = useState(false);
+  const temProposta = turnos.some(t => t.resposta?.proposta);
+
+  async function confirmar(indice: number) {
+    const proposta = turnos[indice].resposta?.proposta;
+    if (!proposta || carregando) return;
+    setCarregando(true);
+    setTurnos(anteriores => anteriores.map((turno, i) => i !== indice ? turno : { ...turno, confirmacaoIniciada: true }));
+    try {
+      const response = await fetchWithAuth('/api/assistente/orbita/confirmar', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chave: proposta.chave, organizacaoEsperada: organizacaoId }),
+        signal: AbortSignal.timeout(270_000),
+      });
+      const parsed = respostaAssistenteSchema.safeParse(await response.json());
+      if (!parsed.success) throw new Error('Resposta inválida.');
+      const dados = parsed.data;
+      setTurnos(anteriores => anteriores.map((turno, i) => i !== indice ? turno
+        : response.ok ? { pergunta: turno.pergunta, resposta: dados.emAndamento ? { ...dados, proposta } : dados,
+          chave: proposta.chave, confirmacaoIniciada: true }
+          : { ...turno, falha: dados.mensagem }));
+    } catch {
+      setTurnos(anteriores => anteriores.map((turno, i) => i !== indice ? turno : {
+        ...turno, falha: 'A resposta da confirmação não chegou. Use o mesmo botão para conferir; não prepare outra operação.',
+      }));
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  function cancelar(indice: number) {
+    if (turnos[indice].confirmacaoIniciada) return;
+    setTurnos(anteriores => anteriores.map((turno, i) => i !== indice ? turno : {
+      pergunta: turno.pergunta, resposta: { mensagem: 'Proposta descartada. Nenhum comando de alteração foi enviado.' },
+    }));
+  }
 
   function fechar() {
     setAberto(false);
@@ -31,7 +74,7 @@ export function AssistenteOrbita({ organizacaoId, fetchWithAuth }: Props) {
   async function enviar(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
     const pergunta = texto.trim();
-    if (carregando || pergunta.length < 4) return;
+    if (carregando || temProposta || pergunta.length < 4) return;
     setTexto('');
     setCarregando(true);
     const anteriores = turnos.slice(-15);
@@ -41,9 +84,11 @@ export function AssistenteOrbita({ organizacaoId, fetchWithAuth }: Props) {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ pergunta, organizacaoEsperada: organizacaoId }),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(270_000),
       });
-      const dados = await resposta.json() as RespostaAssistente;
+      const parsed = respostaAssistenteSchema.safeParse(await resposta.json());
+      if (!parsed.success) throw new Error('Resposta inválida.');
+      const dados = parsed.data;
       if (!resposta.ok) {
         setTurnos([...anteriores, { pergunta, falha: dados.mensagem || 'Não foi possível consultar o assistente.' }]);
         return;
@@ -90,22 +135,42 @@ export function AssistenteOrbita({ organizacaoId, fetchWithAuth }: Props) {
                       </ul>
                     )}
                     {turno.resposta.fonte && <p className="text-xs" style={{ color: 'var(--txt2)' }}>{turno.resposta.fonte}</p>}
+                    {turno.resposta.proposta && <section aria-label="Prévia de alteração" className="space-y-2">
+                      <p>Válida até {new Date(turno.resposta.proposta.expiraEm).toLocaleTimeString('pt-BR')}.</p>
+                      {turno.resposta.proposta.deposito && <p>Saldo físico no depósito: {turno.resposta.proposta.deposito.nome}. Este valor substitui o saldo atual.</p>}
+                      <ul className="space-y-2">
+                        {turno.resposta.proposta.itens.map(item => <li key={item.produtoId} className="rounded border p-2" style={{ borderColor: 'var(--line)' }}>
+                          <p className="font-semibold">{item.nome}{item.codigo ? ' · SKU ' + item.codigo : ''}</p>
+                          <p>{item.campo === 'descricao' ? 'Descrição curta' : item.campo === 'estoque' ? 'Estoque físico' : 'Nome'}</p>
+                          <p className="whitespace-pre-wrap">Antes: {item.anterior === '' ? '(vazio)' : item.anterior}</p>
+                          <p className="whitespace-pre-wrap">Depois: {item.valor}</p>
+                        </li>)}
+                      </ul>
+                      <div className="flex gap-2">
+                        <button type="button" className="orbita-chip" disabled={carregando} onClick={() => confirmar(indice)}>{turno.confirmacaoIniciada ? 'Conferir confirmação' : 'Confirmar alterações'}</button>
+                        <button type="button" className="orbita-chip" disabled={carregando || turno.confirmacaoIniciada} onClick={() => cancelar(indice)}>Cancelar</button>
+                      </div>
+                    </section>}
+                    {turno.resposta.resultados && <ul className="space-y-1">
+                      {turno.resposta.resultados.map(resultado => <li key={resultado.produtoId}>{resultado.nome}: {estadosDoResultado[resultado.estado]}.</li>)}
+                    </ul>}
+                    {turno.chave && <p className="text-xs">Confirmação: {turno.chave}</p>}
                   </>
                 )}
                 {turno.falha && <p role="alert">{turno.falha}</p>}
               </article>
             ))}
-            {carregando && <output>Consultando…</output>}
+            {carregando && <output>Processando… Aguarde a conferência dos produtos.</output>}
           </div>
           <form onSubmit={enviar} className="flex items-end gap-2">
             <div className="min-w-0 flex-1">
               <label htmlFor={campoId} className="sr-only">Pergunta para o Assistente ORBITA</label>
-              <input id={campoId} value={texto} onChange={e => setTexto(e.target.value)}
+              <textarea id={campoId} rows={2} value={texto} onChange={e => setTexto(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Escape') fechar(); }}
-                maxLength={400} placeholder="Pergunte sobre vendas, estoque ou pedidos"
+                maxLength={4500} placeholder="Consulte dados ou peça uma alteração de produto"
                 className="w-full rounded-lg border bg-transparent px-2 py-2" style={{ borderColor: 'var(--line)' }} />
             </div>
-            <button type="submit" disabled={carregando || texto.trim().length < 4}
+            <button type="submit" disabled={carregando || temProposta || texto.trim().length < 4}
               aria-label="Enviar pergunta" className="orbita-chip p-2">
               <ChevronRight className="h-4 w-4" aria-hidden />
             </button>
