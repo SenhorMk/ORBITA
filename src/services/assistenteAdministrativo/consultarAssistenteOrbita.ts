@@ -68,6 +68,8 @@ export async function consultarAssistente(
   ferramenta: FerramentaAssistente, pergunta: string, hoje: string, deps: Dependencias,
 ): Promise<RespostaAssistente> {
   switch (ferramenta.acao) {
+    case 'editar_produtos':
+      return { mensagem: 'A prévia de edição deve ser preparada pelo fluxo administrativo autenticado.' };
     case 'vendas_do_periodo':
     case 'produtos_mais_vendidos': {
       const periodo = intervalo(ferramenta.periodo, hoje);

@@ -87,7 +87,7 @@ export async function POST(request: Request) {
     return recusar('Sem permissão para devolver o atendimento à automação.', 403);
   }
   if (corpo.acao === 'devolver' && !await automacaoDoAtendimentoAtiva(supabaseServer, sessao.scope, corpo.conversaId)) {
-    return recusar('A automação ainda não responde conversas: devolver deixaria a conversa sem atendente.', 409,
+    return recusar('Não foi possível confirmar a disponibilidade da automação. Atualize o atendimento e tente novamente.', 409,
       { motivo: 'automacao_inativa' });
   }
 

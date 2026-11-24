@@ -27,7 +27,7 @@ export interface ControleVisto {
   /** Calculado pelo servidor a partir do escopo verificado; a rota confere de novo. */
   readonly podeDevolver: boolean;
   readonly motivoSemDevolver: (typeof MOTIVOS)[number] | null;
-  /** Sem automação ativa, `AI` quer dizer que ninguém responde. */
+  /** False também ocorre enquanto a projeção da devolução ainda não foi confirmada. */
   readonly automacaoAtiva: boolean;
 }
 

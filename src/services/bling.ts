@@ -1386,6 +1386,58 @@ export class BlingClient implements BlingPort {
     }
   }
 
+  /** Lê apenas os campos que podem constar da prévia; não transporta payload cru. */
+  async consultarProdutoAdministrativo(id: string, incluirEstoque = true): Promise<LeituraRemota<{ nome: string; descricao: string; estoque: number | null }>> {
+    const produto = await this.lerDadoAdministrativo(`/produtos/${encodeURIComponent(id)}`, z.object({ data: z.object({
+      id: z.number().int().positive().safe().refine(valor => String(valor) === id),
+      nome: z.string().min(1), descricaoCurta: z.string().nullish(),
+    }) }), dados => ({ nome: dados.nome, descricao: dados.descricaoCurta ?? '' }));
+    if (produto._tag !== 'RemotoPresente') return produto;
+    if (!incluirEstoque) return { _tag: 'RemotoPresente', valor: { ...produto.valor, estoque: null } };
+    const saldos = await this.lerDadoAdministrativo(`/estoques/saldos?idsProdutos%5B%5D=${encodeURIComponent(id)}`,
+      z.object({ data: z.array(z.object({
+        produto: z.object({ id: z.number().int().positive().safe() }), saldoFisicoTotal: z.number().finite(),
+      })).length(1).refine(linhas => String(linhas[0].produto.id) === id) }), dados => dados[0].saldoFisicoTotal);
+    return saldos._tag === 'RemotoPresente' ? { _tag: 'RemotoPresente', valor: { ...produto.valor, estoque: saldos.valor } } : saldos;
+  }
+
+  /** Recusa seleção implícita entre depósitos e páginas possivelmente truncadas. */
+  async consultarDepositoUnico(): Promise<LeituraRemota<{ id: number; nome: string } | null>> {
+    return this.lerDadoAdministrativo('/depositos?pagina=1&limite=100', z.object({ data: z.array(z.object({
+      id: z.number().int().positive().safe(), descricao: z.string(), situacao: z.union([z.literal(0), z.literal(1)]),
+      desconsiderarSaldo: z.boolean(),
+    })) }), dados => {
+      return dados.length === 1 && dados[0].situacao === 1 && !dados[0].desconsiderarSaldo
+        ? { id: dados[0].id, nome: dados[0].descricao } : null;
+    });
+  }
+
+  /** O orçamento permanece ativo até o corpo terminar e passar no parser. */
+  private async lerDadoAdministrativo<S extends z.ZodType<{ data: unknown }>, T>(
+    caminho: string, schema: S, projetar: (data: z.infer<S>['data']) => T,
+  ): Promise<LeituraRemota<T>> {
+    const resultado = await this.comOrcamento<LeituraRemota<T>>('bling.assistente.ler', 'conferir o produto', async sinal => {
+      const response = await this.fetchWithAuth(`${this.baseUrl}${caminho}`, { signal: sinal });
+      return { _tag: 'BlingOk', value: await this.lerRecursoConfirmado(response, schema, projetar) };
+    });
+    return resultado._tag === 'BlingOk' ? resultado.value : { _tag: 'RemotoIndeterminado', causa: 'falha_de_rede' };
+  }
+
+  /** PATCH parcial, sem passar pelo payload de cadastro com defaults. */
+  async atualizarCampoProduto(id: string, campo: 'nome' | 'descricao', valor: string): Promise<EscritaRemota> {
+    const resposta = await this.requisicaoDeCorrecao('bling.produto.editar-campo', `/produtos/${encodeURIComponent(id)}`,
+      'PATCH', campo === 'nome' ? { nome: valor } : { descricaoCurta: valor });
+    return resposta._tag === 'Resposta' ? this.escritaConfirmada(resposta.response) : resposta;
+  }
+
+  /** Balanço explícito, sem escolher depósito nem repetir uma tentativa indeterminada. */
+  async definirSaldoNoDeposito(id: string, depositoId: number, quantidade: number): Promise<EscritaRemota> {
+    const resposta = await this.requisicaoDeCorrecao('bling.produto.definir-saldo', '/estoques', 'POST', {
+      produto: { id: Number(id) }, deposito: { id: depositoId }, operacao: 'B', quantidade,
+    });
+    return resposta._tag === 'Resposta' ? this.escritaConfirmada(resposta.response) : resposta;
+  }
+
   // Deletar um pedido no Bling ERP
   async deletePedido(id: string): Promise<unknown> {
     const url = `${this.baseUrl}/pedidos/vendas/${id}`;
@@ -1868,7 +1920,7 @@ export class BlingClient implements BlingPort {
   private async requisicaoDeCorrecao(
     operacao: string,
     caminho: string,
-    metodo: 'GET' | 'DELETE' | 'PATCH',
+    metodo: 'GET' | 'DELETE' | 'PATCH' | 'POST',
     corpo?: Record<string, unknown>,
   ): Promise<{ readonly _tag: 'Resposta'; readonly response: Response } | FalhaDeOperacaoRemota> {
     const controle = new AbortController();

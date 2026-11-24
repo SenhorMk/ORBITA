@@ -1,7 +1,8 @@
 import { z } from 'zod';
+import { pedidoEdicao, propostaEdicao, resultadoEdicao } from './edicaoDeProdutosContract';
 
 export const pedidoAssistente = z.object({
-  pergunta: z.string().trim().min(4).max(400),
+  pergunta: z.string().trim().min(4).max(4500),
   organizacaoEsperada: z.string().uuid(),
 }).strict();
 
@@ -15,6 +16,7 @@ const referencia = z.string().trim().min(1).max(120);
 const idPedido = z.string().regex(/^\d{1,18}$/u);
 
 export const ferramentaAssistente = z.discriminatedUnion('acao', [
+  pedidoEdicao,
   z.object({ acao: z.literal('vendas_do_periodo'), periodo }).strict(),
   z.object({ acao: z.literal('produtos_mais_vendidos'), periodo, ordenar: z.enum(['quantidade', 'valor']) }).strict(),
   z.object({ acao: z.literal('consultar_estoque'), referencia }).strict(),
@@ -25,8 +27,11 @@ export const ferramentaAssistente = z.discriminatedUnion('acao', [
 ]);
 
 export type FerramentaAssistente = z.infer<typeof ferramentaAssistente>;
-export type RespostaAssistente = {
-  readonly mensagem: string;
-  readonly fonte?: string;
-  readonly detalhes?: readonly string[];
-};
+/** Resposta parseada também no navegador antes de mostrar uma confirmação. */
+export const respostaAssistenteSchema = z.object({
+  mensagem: z.string(), fonte: z.string().optional(), detalhes: z.array(z.string()).readonly().optional(),
+  proposta: propostaEdicao.optional(), resultados: z.array(resultadoEdicao).readonly().optional(),
+  emAndamento: z.boolean().optional(),
+}).strict();
+/** Resposta de consulta, prévia ou recibo do assistente autenticado. */
+export type RespostaAssistente = z.infer<typeof respostaAssistenteSchema>;

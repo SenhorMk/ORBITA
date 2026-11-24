@@ -80,6 +80,7 @@ const PROIBIDOS_DA_FOTO = [
 ] as const;
 
 const AUDIT_EVENT_ROWS: readonly AuditEventRow[] = [
+  ['catalog.assistant_product_edit', 'catalog', 'info', 'user', 730, 'Confirmação e resultado de edição de produtos pelo assistente administrativo.'],
   ['auth.login_failed', 'auth', 'warning', 'user', 400, 'Tentativa de login com credenciais inválidas.', 'authFailureBurst'],
   ['auth.login_success', 'auth', 'info', 'user', 400, 'Login bem-sucedido de um usuário.'],
   ['auth.password_reset_requested', 'auth', 'info', 'user', 400, 'Solicitação de redefinição de senha.'],

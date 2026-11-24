@@ -527,14 +527,36 @@ describe('MensageriaDesktop — envio', () => {
       expect(screen.queryByRole('button', { name: 'Devolver à automação' })).not.toBeInTheDocument();
     });
 
-    it('conversa em AI sem automação ativa: não promete resposta automática e pede que alguém assuma', async () => {
+    it('conversa em AI sem confirmação de atividade: aguarda atualização sem afirmar que o bot não responde', async () => {
       const fetchWithAuth = servidor({ controle: () => ({ modo: 'AI', responsavelId: null, souResponsavel: false, versao: 4 }) });
       await abrirComposer(fetchWithAuth);
 
-      await waitFor(() => expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Sem atendente'));
+      await waitFor(() => expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Aguardando automação'));
       expect(screen.queryByText('Automação responde')).not.toBeInTheDocument();
-      expect(screen.getByText(/A automação ainda não responde conversas: ninguém está atendendo esta/)).toBeInTheDocument();
+      expect(screen.queryByText(/A automação ainda não responde conversas/)).not.toBeInTheDocument();
+      expect(screen.getByText(/A atividade do bot ainda não foi confirmada/)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Assumir atendimento' })).toBeInTheDocument();
+    });
+
+    it('devolução aceita aguarda a projeção sem avisar falsamente que o bot não assume', async () => {
+      const fetchWithAuth = servidor({
+        controle: () => ({ modo: 'HUMAN', responsavelId: 'eu', souResponsavel: true, versao: 2 }),
+        permissoes: () => ({ devolver: true, motivoSemDevolver: null, automacaoAtiva: true }),
+        postControle: async () => respostaJson({
+          success: true, duplicado: false, invalidados: 0, emVoo: 0, notaRegistrada: true,
+          controle: { modo: 'AI', responsavelId: null, souResponsavel: false, versao: 3 },
+          permissoes: { devolver: false, motivoSemDevolver: 'nao_e_responsavel', automacaoAtiva: false },
+        }),
+      });
+      await abrirComposer(fetchWithAuth);
+      await waitFor(() => expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Com você'));
+      await escolherNoMenu('Devolver à automação…');
+      await userEvent.type(screen.getByLabelText('Resumo para a nota privada'), 'Atendimento concluído');
+      await userEvent.click(screen.getByRole('button', { name: 'Devolver' }));
+      await waitFor(() => expect(screen.getByLabelText('Quem atende')).toHaveTextContent('Aguardando automação'));
+      expect(screen.queryByText(/A automação ainda não responde conversas|ninguém está atendendo esta/)).not.toBeInTheDocument();
+      expect(screen.getByText(/A atividade do bot ainda não foi confirmada/)).toBeInTheDocument();
+      expect(postsDeControle(fetchWithAuth)).toHaveLength(1);
     });
 
     it('assumir a conversa de outro atendente pede confirmação antes de transferir', async () => {

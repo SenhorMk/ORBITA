@@ -9,6 +9,11 @@ import { consultarAssistente } from '@/services/assistenteAdministrativo/consult
 import { pedidoAssistente, type RespostaAssistente } from '@/services/assistenteAdministrativo/contratoAssistenteOrbita';
 import { selecionarFerramenta } from '@/services/assistenteAdministrativo/selecionarFerramenta';
 import { bling } from '@/services/bling';
+import { edicoesDeProdutosDoAssistente } from '@/services/assistenteAdministrativo/adaptadorDeEdicao';
+import { criarEdicaoDeProdutos } from '@/services/assistenteAdministrativo/editarProdutos';
+
+/** Lotes possuem leituras e escritas sequenciais com limite por chamada. */
+export const maxDuration = 300;
 
 const dataDeSaoPaulo = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' });
 
@@ -30,7 +35,7 @@ export async function POST(request: Request) {
     return responder({ mensagem: 'O Assistente ORBITA ainda não foi habilitado neste ambiente.' }, 503);
   }
   const entrada = pedidoAssistente.safeParse(await request.json().catch(() => null));
-  if (!entrada.success) return responder({ mensagem: 'Escreva uma pergunta de até 400 caracteres.' }, 400);
+  if (!entrada.success) return responder({ mensagem: 'Escreva um pedido de até 4500 caracteres.' }, 400);
   if (entrada.data.organizacaoEsperada !== scope.organizationId) return responder({
     mensagem: 'A organização ativa mudou. Abra o assistente na organização atual.',
   }, 409);
@@ -51,6 +56,13 @@ export async function POST(request: Request) {
   const sinal = AbortSignal.any([request.signal, AbortSignal.timeout(12_000)]);
   try {
     const ferramenta = await selecionarFerramenta(pergunta, hoje, sinal);
+    if (ferramenta.acao === 'editar_produtos') {
+      if (!escopoTemCapacidade(scope, 'organization:manage')) return responder({ mensagem: 'A alteração de produtos exige permissão de gestão.' }, 403);
+      if (process.env.ORBITA_ASSISTENTE_EDICAO_PRODUTOS_ENABLED !== 'true') return responder({ mensagem: 'A edição de produtos pelo assistente ainda não está habilitada neste ambiente.' }, 503);
+      return responder(await criarEdicaoDeProdutos(edicoesDeProdutosDoAssistente(
+        supabaseServer, bling.forVerifiedOrganization(scope),
+      )).propor(scope, ferramenta, pergunta));
+    }
     const resposta = await consultarAssistente(ferramenta, pergunta, hoje, {
       leituras: leiturasDoAssistente(supabaseServer, scope, sinal),
       estoque: referencia => lerSaldoDoProduto(supabaseServer, scope, referencia),

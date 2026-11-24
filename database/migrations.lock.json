@@ -530,6 +530,11 @@
       "order": 106,
       "path": "../database/103_propostas_resolucao_sac.sql",
       "sha256": "d5febfa40e5357b5931bf4e6e890c767883813e00cb45da706e918c490f5a2ff"
+    },
+    {
+      "order": 107,
+      "path": "../database/104_assistente_edicao_produtos.sql",
+      "sha256": "2b001c13f3c48999e8c5c183144895db2632c8e3c9fd1a2048aeb66b12db1b0f"
     }
   ],
   "references": [
