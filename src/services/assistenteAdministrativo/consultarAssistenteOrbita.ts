@@ -64,6 +64,19 @@ function ranking(itens: Awaited<ReturnType<Leituras['itensDasVendas']>>, ordenar
   return [...produtos.values()].sort((a, b) => b[ordenar] - a[ordenar] || a.nome.localeCompare(b.nome));
 }
 
+/**
+ * Também é a resposta de um pedido relativo de estoque ("aumente em 3"), que a
+ * trava de `selecionarFerramenta` transforma em esclarecer: por isso explica
+ * como pedir uma alteração, e não só uma consulta.
+ */
+export const MENSAGEM_ESCLARECER = 'Não consegui identificar o pedido. Para consultar, indique o período, o produto (nome ou SKU) '
+  + 'ou o número do pedido. Para alterar um produto, diga o valor final, por exemplo: "defina o estoque do SKU X para 10" '
+  + 'ou "mude o nome do SKU X para Y". Somar ou retirar unidades não é feito por aqui: informe o saldo final.';
+
+/** O assistente prepara edições de estoque, nome e descrição (com confirmação); o resto fica nos painéis. */
+export const MENSAGEM_FORA_DO_ESCOPO = 'Posso consultar vendas, produtos, estoque, pedidos e rastreio, e preparar alterações de estoque, '
+  + 'nome ou descrição de produtos para você confirmar. Para outras alterações, use o painel correspondente.';
+
 export async function consultarAssistente(
   ferramenta: FerramentaAssistente, pergunta: string, hoje: string, deps: Dependencias,
 ): Promise<RespostaAssistente> {
@@ -168,8 +181,8 @@ export async function consultarAssistente(
     case 'sem_fonte_procura':
       return { mensagem: 'O ORBITA não tem uma fonte de buscas ou interesse validada para calcular produtos mais procurados. Posso consultar os mais vendidos.' };
     case 'esclarecer':
-      return { mensagem: 'Indique o período, nome, SKU ou número do pedido que você quer consultar.' };
+      return { mensagem: MENSAGEM_ESCLARECER };
     case 'fora_do_escopo':
-      return { mensagem: 'Posso consultar vendas, produtos, estoque, pedidos e rastreio. Use o painel correspondente para fazer alterações.' };
+      return { mensagem: MENSAGEM_FORA_DO_ESCOPO };
   }
 }
