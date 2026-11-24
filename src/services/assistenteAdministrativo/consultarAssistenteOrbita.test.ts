@@ -107,3 +107,18 @@ describe('ferramentas de consulta do Assistente ORBITA', () => {
     expect(ferramentaAssistente.safeParse({ acao: 'consultar_estoque', referencia: 'Camiseta', loja: 'B' }).success).toBe(false);
   });
 });
+
+describe('mensagens de orientação do Assistente ORBITA', () => {
+  it('esclarecer explica como pedir alteração com valor final (resposta de "aumente em 3")', async () => {
+    const r = await consultarAssistente({ acao: 'esclarecer' }, 'Aumente em 3 o estoque do SKU X', hoje, dependencias());
+    expect(r.mensagem).toContain('diga o valor final');
+    expect(r.mensagem).toContain('informe o saldo final');
+    expect(r.mensagem).toContain('Para consultar');
+  });
+
+  it('fora do escopo não diz mais que toda alteração é só pelo painel', async () => {
+    const r = await consultarAssistente({ acao: 'fora_do_escopo' }, 'Exclua o pedido 1', hoje, dependencias());
+    expect(r.mensagem).toContain('preparar alterações de estoque, nome ou descrição');
+    expect(r.mensagem).toContain('Para outras alterações, use o painel correspondente');
+  });
+});
