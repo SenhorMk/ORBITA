@@ -7,7 +7,7 @@ export const pedidoAssistente = z.object({
 }).strict();
 
 const data = z.string().date();
-const periodo = z.discriminatedUnion('tipo', [
+const periodo = z.union([
   z.object({ tipo: z.literal('dias'), dias: z.number().int().min(1).max(90) }).strict(),
   z.object({ tipo: z.literal('datas'), inicio: data, fim: data }).strict(),
 ]);
@@ -15,7 +15,8 @@ export type PeriodoAssistente = z.infer<typeof periodo>;
 const referencia = z.string().trim().min(1).max(120);
 const idPedido = z.string().regex(/^\d{1,18}$/u);
 
-export const ferramentaAssistente = z.discriminatedUnion('acao', [
+/** A Groq aceita anyOf, emitido por z.union. Cada alternativa tem campos e discriminantes próprios. */
+export const ferramentaAssistente = z.union([
   pedidoEdicao,
   z.object({ acao: z.literal('vendas_do_periodo'), periodo }).strict(),
   z.object({ acao: z.literal('produtos_mais_vendidos'), periodo, ordenar: z.enum(['quantidade', 'valor']) }).strict(),
