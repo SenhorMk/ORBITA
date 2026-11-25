@@ -4,73 +4,24 @@ import { useCallback, useRef, useState } from 'react';
 import { History, RefreshCw } from 'lucide-react';
 
 import { Modal } from '@/components/ui/modal';
-import { Pilula } from '@/components/ui/StatusPill';
+import { AbasDeVisao } from '@/components/ui/AbasDeVisao';
 import { EstadoCarregando, EstadoVazio } from '@/components/ui/estados';
 import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizationPanel';
-import type { PapelMembro } from '@/lib/organizationContext';
-import { rotuloDoMembro } from '@/lib/organizacao/identidadeDoMembro';
-import {
-  respostaDoHistoricoSchema,
-  type Atividade,
-  type AutorDaAtividade,
-  type OrigemDoHistorico,
-} from '@/lib/auditoria/historicoDeAtividades';
+import { respostaDoHistoricoSchema, type Atividade, type OrigemDoHistorico } from '@/lib/auditoria/historicoDeAtividades';
+import { agruparPorDia } from '@/lib/auditoria/apresentacaoDoHistorico';
 import { comPrazo } from './comPrazo';
+import { LinhaDoHistorico } from './LinhaDoHistorico';
 
 const POR_PAGINA = 20;
 
-const FILTROS: readonly { readonly rotulo: string; readonly origem: OrigemDoHistorico | null }[] = [
-  { rotulo: 'Todos', origem: null },
-  { rotulo: 'Pessoas', origem: 'pessoas' },
-  { rotulo: 'Bot', origem: 'bot' },
-  { rotulo: 'Sistema', origem: 'sistema' },
+type Filtro = 'todos' | OrigemDoHistorico;
+
+const FILTROS: readonly { readonly id: Filtro; readonly rotulo: string; readonly vazio: string }[] = [
+  { id: 'todos', rotulo: 'Todos', vazio: 'Ainda não há atividades registradas nesta organização.' },
+  { id: 'pessoas', rotulo: 'Pessoas', vazio: 'Nenhuma ação feita por pessoas da organização.' },
+  { id: 'bot', rotulo: 'Bot', vazio: 'O bot de atendimento ainda não respondeu ninguém.' },
+  { id: 'sistema', rotulo: 'Sistema', vazio: 'Nenhuma ação automática do sistema.' },
 ];
-
-const PAPEL: Record<PapelMembro, { rotulo: string; cor: string }> = {
-  owner: { rotulo: 'Dono', cor: 'var(--accent)' },
-  admin: { rotulo: 'Administrador', cor: 'var(--info)' },
-  member: { rotulo: 'Membro', cor: 'var(--txt2)' },
-};
-
-const DATA_HORA = new Intl.DateTimeFormat('pt-BR', {
-  dateStyle: 'short', timeStyle: 'medium', timeZone: 'America/Sao_Paulo',
-});
-
-function quando(iso: string): string {
-  const data = new Date(iso);
-  return Number.isNaN(data.getTime()) ? iso : DATA_HORA.format(data);
-}
-
-function Autor({ autor, viaAssistente }: { readonly autor: AutorDaAtividade; readonly viaAssistente: boolean }) {
-  if (autor.tipo === 'bot') return <Pilula rotulo="Bot (IA)" cor="var(--warning)" />;
-  if (autor.tipo === 'sistema') return <Pilula rotulo="Sistema" cor="var(--txt3)" />;
-  const papel = autor.papel ? PAPEL[autor.papel] : { rotulo: 'Não é mais membro', cor: 'var(--danger)' };
-  return (
-    <span className="flex items-center flex-wrap" style={{ gap: 6 }}>
-      <strong className="text-sm" style={{ color: 'var(--txt)' }}>{rotuloDoMembro(autor)}</strong>
-      <Pilula rotulo={papel.rotulo} cor={papel.cor} />
-      {viaAssistente && <Pilula rotulo="via assistente" cor="var(--info)" />}
-      {/* O ID completo fica no `title`; o curto basta para distinguir pessoas sem nome. */}
-      <span title={autor.userId} style={{ font: '400 11px/1.4 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
-        ID {autor.userId.slice(0, 8)}
-      </span>
-    </span>
-  );
-}
-
-function ItemDoHistorico({ atividade }: { readonly atividade: Atividade }) {
-  return (
-    <li className="flex flex-col" style={{ gap: 6, padding: '12px 0', borderTop: '1px solid var(--line)' }}>
-      <Autor autor={atividade.autor} viaAssistente={atividade.viaAssistente} />
-      <span className="text-sm" style={{ color: 'var(--txt2)' }}>{atividade.descricao}</span>
-      <span style={{ font: '400 11px/1.4 var(--font-jetbrains-mono), monospace', color: 'var(--txt3)' }}>
-        {quando(atividade.createdAt)} · {atividade.acao} · {atividade.recurso}
-        {atividade.recursoId ? ` ${atividade.recursoId}` : ''}
-        {atividade.correlationId ? ` · req ${atividade.correlationId}` : ''}
-      </span>
-    </li>
-  );
-}
 
 interface Falha { readonly status: number; readonly mensagem: string }
 
@@ -89,14 +40,14 @@ export interface HistoricoDeAtividadesProps {
 /**
  * Botão e painel do histórico de atividades da organização ativa.
  *
- * Quem fez o quê, e quando: cada linha diz se foi uma pessoa (nome, papel na
- * organização e ID), a resposta automática da IA ou o sistema. Quem monta a
- * `key` (a seleção de organização) destrói o painel ao trocar de organização,
+ * Quem fez o quê, e quando, agrupado por dia: cada linha diz se foi uma pessoa
+ * (nome e papel na organização), o bot de atendimento ou o sistema. Quem monta
+ * a `key` (a seleção de organização) destrói o painel ao trocar de organização,
  * então uma página de A nunca aparece em B.
  */
 export function HistoricoDeAtividades({ fetchWithAuth, podeGerir }: HistoricoDeAtividadesProps) {
   const [aberto, setAberto] = useState(false);
-  const [origem, setOrigem] = useState<OrigemDoHistorico | null>(null);
+  const [filtro, setFiltro] = useState<Filtro>('todos');
   const [atividades, setAtividades] = useState<Atividade[] | null>(null);
   const [total, setTotal] = useState(0);
   const [carregando, setCarregando] = useState(false);
@@ -105,11 +56,11 @@ export function HistoricoDeAtividades({ fetchWithAuth, podeGerir }: HistoricoDeA
   // uma leitura não pode deixar a resposta antiga por cima da nova.
   const leituraAtual = useRef(0);
 
-  const ler = useCallback(async (offset: number, filtro: OrigemDoHistorico | null) => {
+  const ler = useCallback(async (offset: number, escolhido: Filtro) => {
     const minha = ++leituraAtual.current;
     setCarregando(true);
     setFalha(null);
-    const url = `/api/auditoria?limit=${POR_PAGINA}&offset=${offset}${filtro ? `&origem=${filtro}` : ''}`;
+    const url = `/api/auditoria?limit=${POR_PAGINA}&offset=${offset}${escolhido === 'todos' ? '' : `&origem=${escolhido}`}`;
     try {
       const resposta = await comPrazo(fetchWithAuth, url);
       if (minha !== leituraAtual.current) return;
@@ -133,20 +84,21 @@ export function HistoricoDeAtividades({ fetchWithAuth, podeGerir }: HistoricoDeA
     }
   }, [fetchWithAuth]);
 
-  /** Recomeça da primeira página: ao abrir o painel e a cada troca de filtro. */
-  function recomecar(filtro: OrigemDoHistorico | null) {
-    setOrigem(filtro);
+  /** Recomeça da primeira página: ao abrir, ao atualizar e a cada troca de filtro. */
+  function recomecar(escolhido: Filtro) {
+    setFiltro(escolhido);
     setAtividades(null);
-    void ler(0, filtro);
+    void ler(0, escolhido);
   }
 
   const temMais = atividades !== null && atividades.length < total;
+  const vazio = FILTROS.find((f) => f.id === filtro)?.vazio ?? '';
 
   return (
     <>
       <button
         type="button"
-        onClick={() => { setAberto(true); recomecar(origem); }}
+        onClick={() => { setAberto(true); recomecar(filtro); }}
         className="orbita-chip cursor-pointer"
         disabled={!podeGerir}
         title={podeGerir ? undefined : 'Só administradores e donos veem o histórico.'}
@@ -161,30 +113,17 @@ export function HistoricoDeAtividades({ fetchWithAuth, podeGerir }: HistoricoDeA
         tamanho="drawer"
         eyebrow="Rastreabilidade"
         titulo="Histórico de atividades"
-        descricao="Quem fez cada ação nesta organização: pessoa, bot ou sistema, com data e hora."
+        descricao="Tudo o que foi feito nesta organização, por quem e quando: pessoas, o bot de atendimento e o sistema."
         descricaoOculta={false}
       >
-        <div className="flex flex-col" style={{ gap: 12 }}>
-          <fieldset className="orbita-acoes flex-wrap m-0 p-0 border-0 min-w-0">
-            <legend className="sr-only">Filtrar por autor</legend>
-            {FILTROS.map((f) => (
-              <button
-                key={f.rotulo}
-                type="button"
-                className="orbita-chip cursor-pointer"
-                aria-pressed={origem === f.origem}
-                style={origem === f.origem ? { borderColor: 'var(--accent)', color: 'var(--txt)' } : undefined}
-                onClick={() => recomecar(f.origem)}
-              >
-                {f.rotulo}
-              </button>
-            ))}
-          </fieldset>
+        <div className="flex flex-col" style={{ gap: 14 }}>
+          <AbasDeVisao rotulo="Quem fez" abas={FILTROS} ativa={filtro} onMudar={recomecar} />
 
           {falha && (
-            <div role="alert" className="flex flex-col items-start text-xs" style={{ gap: 8, color: 'var(--danger)' }}>
-              <span><strong>{falha.status === 0 ? 'Sem resposta' : `HTTP ${falha.status}`}</strong> — {falha.mensagem}</span>
-              <button type="button" className="orbita-acao" onClick={() => { void ler(0, origem); }}>
+            <div role="alert" className="flex flex-col items-start text-xs"
+              style={{ gap: 8, padding: 12, borderRadius: 14, border: '1px solid var(--danger)', color: 'var(--txt2)' }}>
+              <span><strong style={{ color: 'var(--danger)' }}>{falha.status === 0 ? 'Sem resposta' : `HTTP ${falha.status}`}</strong> — {falha.mensagem}</span>
+              <button type="button" className="orbita-acao" onClick={() => recomecar(filtro)}>
                 <RefreshCw className="w-4 h-4" />
                 Tentar de novo
               </button>
@@ -194,17 +133,32 @@ export function HistoricoDeAtividades({ fetchWithAuth, podeGerir }: HistoricoDeA
           {atividades === null ? (
             !falha && <EstadoCarregando mensagem="Lendo o histórico desta organização…" />
           ) : atividades.length === 0 ? (
-            <EstadoVazio titulo="Nada registrado" descricao="Nenhuma atividade com este filtro." />
+            <EstadoVazio titulo="Nada por aqui" descricao={vazio} />
           ) : (
             <>
-              <span className="orbita-eyebrow">{atividades.length} de {total}</span>
-              <ul className="m-0 p-0 list-none">
-                {atividades.map((a) => <ItemDoHistorico key={a.id} atividade={a} />)}
-              </ul>
+              <div className="flex items-center justify-between" style={{ gap: 8 }}>
+                <span className="text-xs" style={{ color: 'var(--txt3)' }}>
+                  Mostrando {atividades.length} de {total} {total === 1 ? 'registro' : 'registros'}
+                </span>
+                <button type="button" className="orbita-chip cursor-pointer" disabled={carregando} onClick={() => recomecar(filtro)}>
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Atualizar
+                </button>
+              </div>
+
+              {agruparPorDia(atividades, new Date()).map((grupo) => (
+                <section key={grupo.rotulo} className="flex flex-col">
+                  <h3 className="orbita-eyebrow m-0" style={{ padding: '0 4px 6px' }}>{grupo.rotulo}</h3>
+                  <ul className="m-0 p-0 list-none">
+                    {grupo.atividades.map((a) => <LinhaDoHistorico key={a.id} atividade={a} />)}
+                  </ul>
+                </section>
+              ))}
+
               {temMais && (
-                <button type="button" className="orbita-acao w-fit" disabled={carregando}
-                  onClick={() => { void ler(atividades.length, origem); }}>
-                  {carregando ? 'Carregando…' : 'Carregar mais'}
+                <button type="button" className="orbita-acao w-fit self-center" disabled={carregando}
+                  onClick={() => { void ler(atividades.length, filtro); }}>
+                  {carregando ? 'Carregando…' : `Carregar mais ${Math.min(POR_PAGINA, total - atividades.length)}`}
                 </button>
               )}
             </>

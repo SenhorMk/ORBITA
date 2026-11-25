@@ -59,6 +59,8 @@ export const atividadeSchema = z.object({
   createdAt: z.string(),
   autor: autorDaAtividadeSchema,
   viaAssistente: z.boolean(),
+  /** Severidade do catálogo: `critical` pede conferência de alguém. */
+  gravidade: z.enum(['info', 'warning', 'critical']),
 });
 export type Atividade = z.infer<typeof atividadeSchema>;
 
@@ -101,10 +103,12 @@ export async function montarHistorico(
     const autor: AutorDaAtividade = e.actorId && identidade
       ? { tipo: 'pessoa', userId: e.actorId, papel: papeis.get(e.actorId) ?? null, ...identidade }
       : autorSemPessoa(e.metadata);
+    const definicao = getAuditEventDefinition(e.acao);
     return {
       id: e.id,
       acao: e.acao,
-      descricao: getAuditEventDefinition(e.acao)?.descricao ?? e.acao,
+      descricao: definicao?.descricao ?? e.acao,
+      gravidade: definicao?.severidade ?? 'info',
       recurso: e.recurso,
       recursoId: e.recursoId,
       correlationId: e.correlationId,

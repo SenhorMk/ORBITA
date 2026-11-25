@@ -22,7 +22,7 @@ function atividade(overrides: Partial<Atividade>): Atividade {
     id: 'a1', acao: 'catalog.product_saved', descricao: 'Produto cadastrado ou atualizado no Bling e espelhado no ORBITA.',
     recurso: 'produto', recursoId: '42', correlationId: 'corr-1', createdAt: '2026-11-24T15:30:00Z',
     autor: { tipo: 'pessoa', userId: MARIA, papel: 'admin', nome_exibicao: 'Maria Silva', origem_do_nome: 'cadastro' },
-    viaAssistente: false, ...overrides,
+    viaAssistente: false, gravidade: 'info', ...overrides,
   };
 }
 
@@ -46,13 +46,17 @@ describe('HistoricoDeAtividades', () => {
     const dialogo = await abrir(fetchWithAuth);
     const itens = await within(dialogo).findAllByRole('listitem');
 
+    expect(within(itens[0]).getByText('Salvou um produto')).toBeInTheDocument();
     expect(within(itens[0]).getByText('Maria Silva')).toBeInTheDocument();
-    expect(within(itens[0]).getByText(/^Administrador$/i)).toBeInTheDocument();
+    expect(within(itens[0]).getByText('Administrador')).toBeInTheDocument();
+    // O rastro técnico fica nos detalhes: descrição do catálogo e ID completo.
     expect(within(itens[0]).getByText(/Produto cadastrado/)).toBeInTheDocument();
-    expect(within(itens[0]).getByText(/ID 11111111/)).toBeInTheDocument();
-    expect(within(itens[1]).getByText(/^Bot \(IA\)$/i)).toBeInTheDocument();
-    expect(within(itens[2]).getByText(/^Sistema$/i)).toBeInTheDocument();
+    expect(within(itens[0]).getByText(MARIA)).toBeInTheDocument();
+    expect(within(itens[1]).getByText('Respondeu um cliente pelo WhatsApp')).toBeInTheDocument();
+    expect(within(itens[1]).getByText('Bot de atendimento (IA)')).toBeInTheDocument();
+    expect(within(itens[2]).getByText('Sistema automático')).toBeInTheDocument();
     expect(within(itens[3]).getByText(/^via assistente$/i)).toBeInTheDocument();
+    expect(within(dialogo).getByText('Mostrando 4 de 4 registros')).toBeInTheDocument();
     expect(fetchWithAuth).toHaveBeenCalledWith('/api/auditoria?limit=20&offset=0', expect.anything());
   });
 
@@ -63,7 +67,24 @@ describe('HistoricoDeAtividades', () => {
     const dialogo = await abrir(fetchWithAuth);
 
     expect(await within(dialogo).findByText('Sem nome cadastrado')).toBeInTheDocument();
-    expect(within(dialogo).getByText(/^Não é mais membro$/i)).toBeInTheDocument();
+    expect(within(dialogo).getByText('Não é mais membro')).toBeInTheDocument();
+  });
+
+  it('destaca a ação que pede conferência', async () => {
+    const fetchWithAuth = vi.fn(async () => pagina([atividade({ acao: 'order.manual_sale_unresolved', gravidade: 'critical' })]));
+    const dialogo = await abrir(fetchWithAuth);
+
+    expect(await within(dialogo).findByText(/^Precisa de conferência$/i)).toBeInTheDocument();
+  });
+
+  it('filtro sem resultado explica o vazio', async () => {
+    const fetchWithAuth = vi.fn(async (url: string) => pagina(url.includes('origem=bot') ? [] : [atividade({})]));
+    const dialogo = await abrir(fetchWithAuth);
+    await within(dialogo).findAllByRole('listitem');
+
+    await userEvent.click(within(dialogo).getByRole('tab', { name: 'Bot' }));
+
+    expect(await within(dialogo).findByText('O bot de atendimento ainda não respondeu ninguém.')).toBeInTheDocument();
   });
 
   it('filtra pelo tipo de autor', async () => {
@@ -71,9 +92,10 @@ describe('HistoricoDeAtividades', () => {
     const dialogo = await abrir(fetchWithAuth);
     await within(dialogo).findAllByRole('listitem');
 
-    await userEvent.click(within(dialogo).getByRole('button', { name: 'Bot' }));
+    await userEvent.click(within(dialogo).getByRole('tab', { name: 'Bot' }));
 
     expect(fetchWithAuth).toHaveBeenLastCalledWith('/api/auditoria?limit=20&offset=0&origem=bot', expect.anything());
+    expect(within(dialogo).getByRole('tab', { name: 'Bot' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('carrega a próxima página e junta à lista', async () => {

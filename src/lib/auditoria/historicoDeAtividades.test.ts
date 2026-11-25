@@ -80,7 +80,7 @@ describe('montarHistorico', () => {
     const [atividade] = await montarHistorico([evento({ metadata: { origem: 'ia', run_id: 'r' } })], p);
 
     expect(Object.keys(atividade).sort()).toEqual(
-      ['acao', 'autor', 'correlationId', 'createdAt', 'descricao', 'id', 'recurso', 'recursoId', 'viaAssistente'],
+      ['acao', 'autor', 'correlationId', 'createdAt', 'descricao', 'gravidade', 'id', 'recurso', 'recursoId', 'viaAssistente'],
     );
     expect(atividadeSchema.safeParse(atividade).success).toBe(true);
   });
@@ -90,5 +90,13 @@ describe('montarHistorico', () => {
     const [atividade] = await montarHistorico([evento({ acao: 'evento.novo_desconhecido' })], p);
 
     expect(atividade.descricao).toBe('evento.novo_desconhecido');
+    expect(atividade.gravidade).toBe('info');
+  });
+
+  it('traz a severidade do catálogo, para a tela destacar o que pede conferência', async () => {
+    const { p } = portas({}, {});
+    const [atividade] = await montarHistorico([evento({ acao: 'order.manual_sale_unresolved' })], p);
+
+    expect(atividade.gravidade).toBe('critical');
   });
 });
