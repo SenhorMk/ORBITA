@@ -13,6 +13,7 @@ import { estadoDoBling, estadoDoChatwoot, type EstadoDaIntegracao } from '@/lib/
 import { chaveDaSelecao } from '@/components/organizacao/useLeituraPorOrganizacao';
 import type { SelecaoDeOrganizacao } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
 import { CampoParaCopiar } from './CampoParaCopiar';
+import { HistoricoDeAtividades } from './HistoricoDeAtividades';
 import { comPrazo } from './comPrazo';
 import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizationPanel';
 import { useIntegracoes, type LeituraDeIntegracoes } from './useIntegracoes';
@@ -585,6 +586,9 @@ export function IntegrationsPanel({
               <RefreshCw className="w-4 h-4" />
               Atualizar
             </button>
+            {selecao !== null && (
+              <HistoricoDeAtividades key={`historico-${chave ?? 'sem-organizacao'}`} fetchWithAuth={fetchWithAuth} podeGerir={podeGerir} />
+            )}
           </div>
         </div>
       </div>

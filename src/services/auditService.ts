@@ -50,6 +50,8 @@ export interface ListAuditEventsQuery {
   offset?: number;
   acao?: string;
   actorId?: string;
+  /** Tipo de autor: humano, resposta automática da IA, ou o resto sem humano. */
+  origem?: 'pessoas' | 'bot' | 'sistema';
 }
 
 /** Valida `acao`/`metadata` contra o catálogo versionado ou lança um erro tipado. */
@@ -186,6 +188,14 @@ export async function listAuditEvents(
   }
   if (query.actorId) {
     builder = builder.eq('actor_id', query.actorId);
+  }
+  // A IA grava `origem: 'ia'` sem ator humano (migration 95).
+  if (query.origem === 'pessoas') {
+    builder = builder.not('actor_id', 'is', null);
+  } else if (query.origem === 'bot') {
+    builder = builder.is('actor_id', null).eq('metadata->>origem', 'ia');
+  } else if (query.origem === 'sistema') {
+    builder = builder.is('actor_id', null).or('metadata->>origem.is.null,metadata->>origem.neq.ia');
   }
 
   const { data, count, error } = await builder;
