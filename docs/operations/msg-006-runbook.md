@@ -9,7 +9,7 @@ conclusão da inbox. Arquivo na ordem 92 do ledger.
 ```text
 webhook autenticado → inbox (commit) → 200
 worker: reivindicar (lease + token) → traduzir → aplicar (transação única)
-operador: GET /api/sac/casos, painel Integrações > Mensagens recebidas
+operador: GET /api/sac/casos (o painel "Mensagens recebidas" saiu da aba Integrações)
 ```
 
 | Peça | Onde |

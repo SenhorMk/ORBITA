@@ -260,20 +260,6 @@ export const catalogoDeAjuda = {
     "depois": "Autorizar OAuth registra uma conexão; sincronização e recebimento têm estados próprios.",
     "atencao": "Conectado não comprova worker ativo ou sincronização concluída. Não exponha tokens; desligar não apaga o histórico."
   },
-  "integracoes.inbox": {
-    "titulo": "Acompanhar processamento de mensagens recebidas",
-    "oQueE": "A inbox preserva entregas recebidas e seu estado de processamento.",
-    "comoUsar": "Confira a conexão e o estado do evento antes de usar a recuperação permitida.",
-    "depois": "Um evento aceito pode aguardar worker antes de aparecer na conversa.",
-    "atencao": "Webhook acessível não prova processamento. Recuperação não autoriza enviar uma resposta duplicada."
-  },
-  "integracoes.envios": {
-    "titulo": "Resolver envio com resultado ambíguo",
-    "oQueE": "Esta lista separa envios que exigem atenção ou confirmação do efeito externo.",
-    "comoUsar": "Confira conversa, tentativa e estado; use somente a ação de conciliação oferecida.",
-    "depois": "A confirmação registra o resultado conhecido sem pressupor uma nova entrega.",
-    "atencao": "Unknown pode significar que o destinatário já recebeu. Nunca reenvie automaticamente para tentar descobrir."
-  },
   "billing.plano": {
     "titulo": "Entender as ações de assinatura",
     "oQueE": "Este painel consulta a assinatura e oferece as ações de faturamento permitidas.",

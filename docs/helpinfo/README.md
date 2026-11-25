@@ -4,7 +4,7 @@ O pacote `ORBITA-D07-HelpInfo-65.zip` foi recuperado e seu SHA256 conferido. A i
 
 ## Cobertura
 
-`matriz.json` e `matriz.csv` mantêm as 65 superfícies originais e acrescentam a ajuda de movimentações de estoque do #153: 66 superfícies com conteúdo e montagem, além de uma exclusão formal do legado `TransactionList`. Essa contagem não equivale a todos os estados possíveis do produto. As localizações foram recalculadas sobre a main `2e0b98f`, com #152 e #153. A ajuda do controle de atendimento foi revisada para IA-first, takeover e devolução com resumo e mensagem nova. Foram esclarecidos o resumo financeiro e a impossibilidade de editar papéis pela lista de membros.
+`matriz.json` e `matriz.csv` mantêm as 65 superfícies originais e acrescentam a ajuda de movimentações de estoque do #153: 66 superfícies com conteúdo e montagem (64 depois que as listas técnicas "Mensagens recebidas" e "Envios com atenção" saíram da aba Integrações), além de uma exclusão formal do legado `TransactionList`. Essa contagem não equivale a todos os estados possíveis do produto. As localizações foram recalculadas sobre a main `2e0b98f`, com #152 e #153. A ajuda do controle de atendimento foi revisada para IA-first, takeover e devolução com resumo e mensagem nova. Foram esclarecidos o resumo financeiro e a impossibilidade de editar papéis pela lista de membros.
 
 O #153 foi mesclado na main em `2e0b98f` e incorporado por merge normal à branch do HelpInfo. A 66ª ajuda agora é montada na seção existente “Movimentações de estoque” do detalhe do produto. A implementação ERP continua vindo da main, sem alterações neste PR de ajuda.
 

@@ -1056,60 +1056,6 @@
     "layoutReview": "Montagem revisada junto ao título, rótulo, ação ou grupo correspondente. Evidência visual por componente: consultar revisão de layout."
   },
   {
-    "id": "integracoes.inbox",
-    "area": "Integrações",
-    "component": "src/components/integracoes/MensagensRecebidas.tsx",
-    "surface": "Inbox, falhas e recuperação",
-    "purpose": "Acompanhar processamento de mensagens recebidas",
-    "what": "A inbox preserva entregas recebidas e seu estado de processamento.",
-    "how": "Confira a conexão e o estado do evento antes de usar a recuperação permitida.",
-    "after": "Um evento aceito pode aguardar worker antes de aparecer na conversa.",
-    "risk": "Webhook acessível não prova processamento. Recuperação não autoriza enviar uma resposta duplicada.",
-    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
-    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
-    "anchors": [
-      {
-        "line": 57,
-        "kind": "Ajuda contextual associada ao contexto"
-      }
-    ],
-    "locations": [
-      {
-        "file": "src/components/integracoes/MensagensRecebidas.tsx",
-        "line": 57
-      }
-    ],
-    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
-    "layoutReview": "Montagem revisada junto ao título, rótulo, ação ou grupo correspondente. Evidência visual por componente: consultar revisão de layout."
-  },
-  {
-    "id": "integracoes.envios",
-    "area": "Integrações",
-    "component": "src/components/integracoes/EnviosComAtencao.tsx",
-    "surface": "Outbox, unknown e conciliação",
-    "purpose": "Resolver envio com resultado ambíguo",
-    "what": "Esta lista separa envios que exigem atenção ou confirmação do efeito externo.",
-    "how": "Confira conversa, tentativa e estado; use somente a ação de conciliação oferecida.",
-    "after": "A confirmação registra o resultado conhecido sem pressupor uma nova entrega.",
-    "risk": "Unknown pode significar que o destinatário já recebeu. Nunca reenvie automaticamente para tentar descobrir.",
-    "existingHelp": "textos e avisos pontuais; sem HelpInfo contextual padronizado",
-    "coverage": "integrada na main pós-152 e153; conteúdo e montagem revalidados",
-    "anchors": [
-      {
-        "line": 119,
-        "kind": "Ajuda contextual associada ao contexto"
-      }
-    ],
-    "locations": [
-      {
-        "file": "src/components/integracoes/EnviosComAtencao.tsx",
-        "line": 119
-      }
-    ],
-    "nominalReview": "Conteúdo conferido contra o comportamento existente; sem mudança de regra.",
-    "layoutReview": "Montagem revisada junto ao título, rótulo, ação ou grupo correspondente. Evidência visual por componente: consultar revisão de layout."
-  },
-  {
     "id": "billing.plano",
     "area": "Plano & Faturamento (oculto)",
     "component": "src/components/billing/BillingPanel.tsx",

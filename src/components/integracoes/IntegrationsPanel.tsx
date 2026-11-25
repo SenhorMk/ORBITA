@@ -13,8 +13,6 @@ import { estadoDoBling, estadoDoChatwoot, type EstadoDaIntegracao } from '@/lib/
 import { chaveDaSelecao } from '@/components/organizacao/useLeituraPorOrganizacao';
 import type { SelecaoDeOrganizacao } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
 import { CampoParaCopiar } from './CampoParaCopiar';
-import { EnviosComAtencao } from './EnviosComAtencao';
-import { MensagensRecebidas } from './MensagensRecebidas';
 import { comPrazo } from './comPrazo';
 import type { AuthenticatedFetch } from '@/components/organizacao/useOrganizationPanel';
 import { useIntegracoes, type LeituraDeIntegracoes } from './useIntegracoes';
@@ -635,14 +633,6 @@ export function IntegrationsPanel({
             recarregar={integracoes.recarregar}
           />
         </div>
-      )}
-
-      {selecao !== null && (
-        <EnviosComAtencao key={`envios-${chave ?? 'sem-organizacao'}`} fetchWithAuth={fetchWithAuth} selecao={selecao} podeGerir={podeGerir} />
-      )}
-
-      {selecao !== null && (
-        <MensagensRecebidas key={`mensagens-${chave ?? 'sem-organizacao'}`} fetchWithAuth={fetchWithAuth} selecao={selecao} />
       )}
     </div>
   );
