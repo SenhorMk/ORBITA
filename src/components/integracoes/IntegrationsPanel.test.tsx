@@ -8,15 +8,6 @@ import { IntegrationsPanel } from './IntegrationsPanel';
 import type { SelecaoDeOrganizacao } from '@/components/organizacao/usePapelNaOrganizacaoAtiva';
 import { PRAZO_DA_INTEGRACAO_MS } from './comPrazo';
 
-// A seção de envios (MSG-007) tem leitura e testes próprios
-// (EnviosComAtencao.test.tsx); aqui ela não pode disputar o fetch dos cartões.
-vi.mock('./useMensagensRecebidas', () => ({
-  useMensagensRecebidas: () => ({ dados: { eventos: [], casos: [] }, carregando: false, erro: null, recarregar: async () => {} }),
-}));
-vi.mock('./useEnviosComAtencao', () => ({
-  useEnviosComAtencao: () => ({ dados: [], carregando: false, erro: null, recarregar: async () => {} }),
-}));
-
 function jsonResponse(body: unknown, status = 200): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
 }

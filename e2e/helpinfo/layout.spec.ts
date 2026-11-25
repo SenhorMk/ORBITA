@@ -83,12 +83,12 @@ for (const [width, height] of resolutions) for (const theme of ['claro', 'escuro
   });
 }
 
-test('66 ajudas: teclado, Escape, foco e largura em tela pequena', async ({ page }) => {
+test('64 ajudas: teclado, Escape, foco e largura em tela pequena', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   await page.getByRole('button', { name: 'galeria', exact: true }).click();
   const triggers = page.locator('[data-help-id]');
-  await expect(triggers).toHaveCount(66);
+  await expect(triggers).toHaveCount(64);
   for (const trigger of await triggers.all()) {
     await trigger.press('Space');
     await expect(page.getByRole('button', { name: 'Fechar ajuda', exact: true })).toBeFocused();
