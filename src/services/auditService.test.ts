@@ -145,4 +145,44 @@ describe('auditService', () => {
     expect(result.total).toBe(1);
     expect(result.events[0].acao).toBe('org.member_added');
   });
+
+  describe('listAuditEvents filtra pelo tipo de autor', () => {
+    /** Builder que só registra os filtros aplicados e resolve vazio. */
+    function clienteQueRegistra() {
+      const filtros: unknown[][] = [];
+      const builder: Record<string, unknown> = {};
+      for (const metodo of ['select', 'eq', 'order', 'range', 'is', 'not', 'or']) {
+        builder[metodo] = (...args: unknown[]) => { filtros.push([metodo, ...args]); return builder; };
+      }
+      builder.then = (resolver: (v: unknown) => unknown) => resolver({ data: [], count: 0, error: null });
+      const cliente = { from: () => builder } as unknown as SupabaseClient;
+      return { cliente, filtros };
+    }
+
+    it('pessoas: só eventos com ator humano', async () => {
+      const { cliente, filtros } = clienteQueRegistra();
+      await listAuditEvents(cliente, scope, { origem: 'pessoas' });
+      expect(filtros).toContainEqual(['not', 'actor_id', 'is', null]);
+    });
+
+    it('bot: sem ator humano e com origem ia', async () => {
+      const { cliente, filtros } = clienteQueRegistra();
+      await listAuditEvents(cliente, scope, { origem: 'bot' });
+      expect(filtros).toContainEqual(['is', 'actor_id', null]);
+      expect(filtros).toContainEqual(['eq', 'metadata->>origem', 'ia']);
+    });
+
+    it('sistema: sem ator humano e sem origem ia', async () => {
+      const { cliente, filtros } = clienteQueRegistra();
+      await listAuditEvents(cliente, scope, { origem: 'sistema' });
+      expect(filtros).toContainEqual(['is', 'actor_id', null]);
+      expect(filtros).toContainEqual(['or', 'metadata->>origem.is.null,metadata->>origem.neq.ia']);
+    });
+
+    it('sempre limitado à organização verificada', async () => {
+      const { cliente, filtros } = clienteQueRegistra();
+      await listAuditEvents(cliente, scope, { origem: 'bot' });
+      expect(filtros).toContainEqual(['eq', 'organizacao_id', 'org-123']);
+    });
+  });
 });
