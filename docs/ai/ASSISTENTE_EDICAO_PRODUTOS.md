@@ -10,7 +10,7 @@ O fluxo é pergunta → seleção explícita → prévia sem escrita no ERP → 
 
 Limites da primeira versão: até 20 produtos por proposta; busca por nome/categoria exige catálogo com menos de 1000 produtos ativos (SKU exato continua disponível). Estoque exige exatamente um depósito cadastrado, ativo e considerado no saldo. Lotes maiores ou vários depósitos são recusados inteiros, com orientação para restringir ou usar a gestão de estoque.
 
-“Deixe com 5” define o saldo em 5. Somar/remover quantidades não faz parte desta versão. Descrição significa `descricaoCurta`, descrição principal do produto na loja, e não descrição complementar. Os textos de substituição são copiados do pedido; a IA não inventa conteúdo.
+“Deixe com 5” define o saldo em 5. Estoque em lote (`estoque_em_lote`, em `estoqueEmLote.ts`): um pedido pode citar até 20 produtos, cada um com a sua operação (`definir`, `somar` ou `subtrair`) e quantidade, por exemplo “chegaram 5 tepis, retire 2 do SKU X e deixe o kuripe em 10”. O servidor resolve cada referência pelo ranking no catálogo escopado, lê o saldo atual no Bling e grava na proposta o **saldo final absoluto** de cada item. A confirmação continua igual: se o saldo mudou desde a prévia, o item fica `alterado_apos_previa` e nada é enviado. Não há prévia parcial: referência ambígua ou desconhecida, produto repetido ou saldo final negativo recusam o lote e listam os itens a corrigir. Palavra da referência ou número que não estão no pedido, ou operação sem verbo compatível, também recusam. Descrição significa `descricaoCurta`, descrição principal do produto na loja, e não descrição complementar. Os textos de substituição são copiados do pedido; a IA não inventa conteúdo.
 
 ## Ticket ADM-PROD-01
 

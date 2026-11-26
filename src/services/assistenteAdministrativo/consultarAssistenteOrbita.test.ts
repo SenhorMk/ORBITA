@@ -109,10 +109,10 @@ describe('ferramentas de consulta do Assistente ORBITA', () => {
 });
 
 describe('mensagens de orientação do Assistente ORBITA', () => {
-  it('esclarecer explica como pedir alteração com valor final (resposta de "aumente em 3")', async () => {
+  it('esclarecer explica como pedir alteração de estoque em lote, somando, retirando ou definindo', async () => {
     const r = await consultarAssistente({ acao: 'esclarecer' }, 'Aumente em 3 o estoque do SKU X', hoje, dependencias());
-    expect(r.mensagem).toContain('diga o valor final');
-    expect(r.mensagem).toContain('informe o saldo final');
+    expect(r.mensagem).toContain('cite cada produto e a quantidade');
+    expect(r.mensagem).toContain('adicione 5 no SKU X, retire 2 do SKU Y');
     expect(r.mensagem).toContain('Para consultar');
   });
 

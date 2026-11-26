@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { escolhaEdicao, pedidoEdicao, propostaEdicao, resultadoEdicao } from './edicaoDeProdutosContract';
+import { estoqueEmLoteDoModelo, pedidoEstoqueEmLote } from './estoqueEmLote';
 
 export const pedidoAssistente = z.object({
   pergunta: z.string().trim().min(4).max(4500),
@@ -18,6 +19,7 @@ const idPedido = z.string().regex(/^\d{1,18}$/u);
 /** A Groq aceita anyOf, emitido por z.union. Cada alternativa tem campos e discriminantes próprios. */
 export const ferramentaAssistente = z.union([
   pedidoEdicao,
+  pedidoEstoqueEmLote,
   z.object({ acao: z.literal('vendas_do_periodo'), periodo }).strict(),
   z.object({ acao: z.literal('produtos_mais_vendidos'), periodo, ordenar: z.enum(['quantidade', 'valor']) }).strict(),
   z.object({ acao: z.literal('consultar_estoque'), referencia }).strict(),
@@ -48,6 +50,7 @@ export const ferramentaDoModelo = z.union([
   z.object({ acao: z.literal('editar_estoque'), ...seletorDeEdicao, valor: z.number().int().min(0).max(1_000_000) }).strict(),
   z.object({ acao: z.literal('editar_nome'), ...seletorDeEdicao, valor: textoDeEdicao.max(120) }).strict(),
   z.object({ acao: z.literal('editar_descricao'), ...seletorDeEdicao, valor: textoDeEdicao }).strict(),
+  estoqueEmLoteDoModelo,
   z.object({ acao: z.literal('vendas_do_periodo'), periodo }).strict(),
   z.object({ acao: z.literal('produtos_mais_vendidos'), periodo, ordenar: z.enum(['quantidade', 'valor']) }).strict(),
   z.object({ acao: z.literal('consultar_estoque'), referencia }).strict(),

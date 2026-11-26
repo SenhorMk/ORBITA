@@ -65,13 +65,12 @@ function ranking(itens: Awaited<ReturnType<Leituras['itensDasVendas']>>, ordenar
 }
 
 /**
- * Também é a resposta de um pedido relativo de estoque ("aumente em 3"), que a
- * trava de `selecionarFerramenta` transforma em esclarecer: por isso explica
- * como pedir uma alteração, e não só uma consulta.
+ * Também é a resposta quando a trava de `selecionarFerramenta` recusa um
+ * "editar_estoque" relativo: por isso explica como pedir uma alteração, e não só uma consulta.
  */
 export const MENSAGEM_ESCLARECER = 'Não consegui identificar o pedido. Para consultar, indique o período, o produto (nome ou SKU) '
-  + 'ou o número do pedido. Para alterar um produto, diga o valor final, por exemplo: "defina o estoque do SKU X para 10" '
-  + 'ou "mude o nome do SKU X para Y". Somar ou retirar unidades não é feito por aqui: informe o saldo final.';
+  + 'ou o número do pedido. Para alterar estoque, cite cada produto e a quantidade, por exemplo: '
+  + '"adicione 5 no SKU X, retire 2 do SKU Y e deixe o SKU Z em 10". Para nome, diga "mude o nome do SKU X para Y".';
 
 /** O assistente prepara edições de estoque, nome e descrição (com confirmação); o resto fica nos painéis. */
 export const MENSAGEM_FORA_DO_ESCOPO = 'Posso consultar vendas, produtos, estoque, pedidos e rastreio, e preparar alterações de estoque, '
@@ -82,6 +81,7 @@ export async function consultarAssistente(
 ): Promise<RespostaAssistente> {
   switch (ferramenta.acao) {
     case 'editar_produtos':
+    case 'estoque_em_lote':
       return { mensagem: 'A prévia de edição deve ser preparada pelo fluxo administrativo autenticado.' };
     case 'vendas_do_periodo':
     case 'produtos_mais_vendidos': {
