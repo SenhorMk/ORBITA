@@ -77,8 +77,10 @@ export const MENSAGEM_FORA_DO_ESCOPO = 'Posso consultar vendas, produtos, estoqu
   + 'nome ou descrição de produtos para você confirmar. Para outras alterações, use o painel correspondente.';
 
 export async function consultarAssistente(
-  ferramenta: FerramentaAssistente, pergunta: string, hoje: string, deps: Dependencias,
+  ferramenta: FerramentaAssistente, pergunta: string, hoje: string, deps: Dependencias, anteriores: readonly string[] = [],
 ): Promise<RespostaAssistente> {
+  // Produto e número de pedido podem ter sido citados numa pergunta anterior ("e o rastreio dele?").
+  const citado = [...anteriores, pergunta].join('\n');
   switch (ferramenta.acao) {
     case 'editar_produtos':
     case 'estoque_em_lote':
@@ -109,7 +111,7 @@ export async function consultarAssistente(
       };
     }
     case 'consultar_estoque': {
-      const saldo = await responderConsultaDeEstoque({ acao: 'consultar', produto: ferramenta.referencia }, pergunta, deps.estoque);
+      const saldo = await responderConsultaDeEstoque({ acao: 'consultar', produto: ferramenta.referencia }, citado, deps.estoque);
       if (saldo.estado === 'ambiguo') return {
         mensagem: saldo.mensagem, fonte, detalhes: saldo.candidatos.map(p => [p.nome, p.codigo].filter(Boolean).join(' · ')),
       };
@@ -126,7 +128,7 @@ export async function consultarAssistente(
     }
     case 'consultar_pedido':
     case 'consultar_rastreamento': {
-      if (!pergunta.match(/\d+/gu)?.includes(ferramenta.referencia)) return { mensagem: 'Informe o número comercial ou o ID do Bling.' };
+      if (!citado.match(/\d+/gu)?.includes(ferramenta.referencia)) return { mensagem: 'Informe o número comercial ou o ID do Bling.' };
       const pedidos = await deps.leituras.pedido(ferramenta.referencia, ferramenta.por);
       if (pedidos.length > 1) return { mensagem: 'Há mais de um pedido com esse número. Informe o ID do Bling.', fonte };
       if (!pedidos.length) return { mensagem: 'Pedido não encontrado na organização ativa.', fonte };

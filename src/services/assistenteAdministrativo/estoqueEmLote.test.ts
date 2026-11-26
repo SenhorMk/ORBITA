@@ -124,6 +124,13 @@ describe('estoque em lote: o modelo não inventa produto, número nem operação
     expect(conferirPedidoDeLote(pedido, pergunta)).not.toBeNull();
   });
 
+  it('o produto pode vir de uma pergunta anterior; quantidade e operação só da pergunta atual', () => {
+    const anteriores = ['Quanto tem do tepi?'];
+    expect(conferirPedidoDeLote(lote({ referencia: 'tepi', operacao: 'somar', quantidade: 5 }), 'Adiciona 5 nele', anteriores)).toBeNull();
+    expect(conferirPedidoDeLote(lote({ referencia: 'tepi', operacao: 'somar', quantidade: 5 }), 'E no cacau também', ['Adiciona 5 no tepi'])).not.toBeNull();
+    expect(conferirPedidoDeLote(lote({ referencia: 'tepi', operacao: 'somar', quantidade: 3 }), 'Deixa ele em 3', ['Adiciona 5 no tepi'])).not.toBeNull();
+  });
+
   it.each([
     [lote({ referencia: 'rapé cravo 15ml', operacao: 'definir', quantidade: 10 }), 'Coloca 10 de estoque no rapé de cravo 15ml'],
     [lote({ referencia: 'tepi', operacao: 'somar', quantidade: 5 }), 'Coloca mais 5 tepis'],

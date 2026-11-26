@@ -104,6 +104,14 @@ describe('edição pelo assistente: proposta → confirmação → resultado', (
     }, 'Deixe o estoque do Rapé em 5')).proposta).toBeUndefined();
   });
 
+  it('o produto pode vir de uma pergunta anterior; o novo valor e o "todos", só da atual', async () => {
+    const a = ambiente();
+    const renomear = { acao: 'editar_produtos', selecao: 'um', por: 'sku', referencia: 'RAP-1', campo: 'nome', valor: 'Rapé Novo' } as const;
+    expect((await a.servico.propor(scope, renomear, 'Agora renomeie ele para Rapé Novo', ['Quanto tem do RAP-1?'])).proposta).toBeDefined();
+    expect((await a.servico.propor(scope, renomear, 'Agora renomeie ele', ['Renomeie RAP-1 para Rapé Novo'])).proposta).toBeUndefined();
+    expect((await a.servico.propor(scope, { ...renomear, selecao: 'todos' }, 'Renomeie para Rapé Novo', ['Mostre todos os RAP-1'])).proposta).toBeUndefined();
+  });
+
   it('o novo texto da descrição é literal, e mudança remota após prévia impede a escrita', async () => {
     const a = ambiente();
     const previa = await a.servico.propor(scope, {

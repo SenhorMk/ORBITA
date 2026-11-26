@@ -3,7 +3,9 @@
 import { useId, useRef, useState, type FormEvent } from 'react';
 import { Bot, ChevronRight, X } from 'lucide-react';
 
-import { respostaAssistenteSchema, type RespostaAssistente } from '@/services/assistenteAdministrativo/contratoAssistenteOrbita';
+import {
+  LIMITES_DO_HISTORICO, respostaAssistenteSchema, type RespostaAssistente, type TurnoAnterior,
+} from '@/services/assistenteAdministrativo/contratoAssistenteOrbita';
 
 type Proposta = NonNullable<RespostaAssistente['proposta']>;
 type Escolha = NonNullable<RespostaAssistente['escolha']>;
@@ -17,6 +19,14 @@ type Turno = {
 /** "confirmo"/"cancelar" digitados equivalem aos botões da prévia pendente. */
 const CONFIRMAR_DIGITADO = /^(?:sim|ok|confirmo|confirmar|confirma|pode confirmar|confirmado)[.!\s]*$/iu;
 const CANCELAR_DIGITADO = /^(?:n[aã]o|cancelar|cancela|cancelo|desisto)[.!\s]*$/iu;
+
+/** Memória curta enviada ao servidor: só trocas respondidas, já cortadas no limite do contrato. */
+function memoriaCurta(turnos: readonly Turno[]): TurnoAnterior[] {
+  return turnos.filter(t => t.resposta).slice(-LIMITES_DO_HISTORICO.turnos).map(t => ({
+    pergunta: t.pergunta.slice(0, LIMITES_DO_HISTORICO.pergunta),
+    resposta: [t.resposta!.mensagem, ...(t.resposta!.detalhes ?? [])].join('\n').slice(0, LIMITES_DO_HISTORICO.resposta),
+  }));
+}
 
 interface Props {
   readonly organizacaoId: string;
@@ -260,7 +270,7 @@ export function AssistenteOrbita({ organizacaoId, fetchWithAuth }: Props) {
     setTurnos([...anteriores, { pergunta }]);
     try {
       const { ok, dados } = await postarAssistente(fetchWithAuth, '/api/assistente/orbita',
-        { pergunta, organizacaoEsperada: organizacaoId });
+        { pergunta, organizacaoEsperada: organizacaoId, historico: memoriaCurta(anteriores) });
       if (!ok) {
         setTurnos([...anteriores, { pergunta, falha: dados.mensagem || 'Não foi possível consultar o assistente.' }]);
         return;

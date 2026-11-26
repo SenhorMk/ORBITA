@@ -42,6 +42,9 @@ export async function POST(request: Request) {
   }, 409);
 
   const { pergunta } = entrada.data;
+  // Trocas com dados pessoais saem da memória, como a própria pergunta sairia.
+  const historico = entrada.data.historico.filter(t => !pedeDadosPessoais(t.pergunta) && !pedeDadosPessoais(t.resposta));
+  const anteriores = historico.map(t => t.pergunta);
   if (pedeDadosPessoais(pergunta)) return responder({
     mensagem: 'Consulte dados pessoais na área de clientes com as permissões da sua conta. Aqui posso consultar vendas, estoque e pedidos.',
   });
@@ -54,22 +57,22 @@ export async function POST(request: Request) {
   }, rateLimitDenialStatus(limite));
 
   const hoje = dataDeSaoPaulo.format(new Date());
-  const sinal = AbortSignal.any([request.signal, AbortSignal.timeout(12_000)]);
+  const sinal = AbortSignal.any([request.signal, AbortSignal.timeout(20_000)]);
   try {
-    const ferramenta = await selecionarFerramenta(pergunta, hoje, sinal);
+    const ferramenta = await selecionarFerramenta(pergunta, hoje, sinal, historico);
     if (ferramenta.acao === 'editar_produtos' || ferramenta.acao === 'estoque_em_lote') {
       if (!escopoTemCapacidade(scope, 'organization:manage')) return responder({ mensagem: 'A alteração de produtos exige permissão de gestão.' }, 403);
       if (process.env.ORBITA_ASSISTENTE_EDICAO_PRODUTOS_ENABLED !== 'true') return responder({ mensagem: 'A edição de produtos pelo assistente ainda não está habilitada neste ambiente.' }, 503);
       const portas = edicoesDeProdutosDoAssistente(supabaseServer, bling.forVerifiedOrganization(scope));
       return responder(ferramenta.acao === 'estoque_em_lote'
-        ? await proporEstoqueEmLote(portas, scope, ferramenta, pergunta)
-        : await criarEdicaoDeProdutos(portas).propor(scope, ferramenta, pergunta));
+        ? await proporEstoqueEmLote(portas, scope, ferramenta, pergunta, anteriores)
+        : await criarEdicaoDeProdutos(portas).propor(scope, ferramenta, pergunta, anteriores));
     }
     const resposta = await consultarAssistente(ferramenta, pergunta, hoje, {
       leituras: leiturasDoAssistente(supabaseServer, scope, sinal),
       estoque: referencia => lerSaldoDoProduto(supabaseServer, scope, referencia),
       detalheBling: id => bling.forVerifiedOrganization(scope).getPedido(id, sinal),
-    });
+    }, anteriores);
     return responder(resposta);
   } catch (erro) {
     if (erro instanceof IntervaloComMuitosRegistros) {
