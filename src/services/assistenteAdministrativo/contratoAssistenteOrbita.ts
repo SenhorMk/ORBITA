@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { escolhaEdicao, pedidoEdicao, propostaEdicao, resultadoEdicao } from './edicaoDeProdutosContract';
-import { estoqueEmLoteDoModelo, pedidoEstoqueEmLote } from './estoqueEmLote';
+import { estoqueEmLoteDoModelo, pedidoEstoqueEmLote } from './estoqueEmLoteContract';
 
 export const pedidoAssistente = z.object({
   pergunta: z.string().trim().min(4).max(4500),

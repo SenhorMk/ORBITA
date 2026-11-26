@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { VerifiedOrganizationScope } from '@/lib/verifiedOrganizationScope';
 import { criarEdicaoDeProdutos, type PortasDeEdicao } from './editarProdutos';
-import { conferirPedidoDeLote, proporEstoqueEmLote, type PedidoEstoqueEmLote } from './estoqueEmLote';
+import { conferirPedidoDeLote, proporEstoqueEmLote } from './estoqueEmLote';
+import type { PedidoEstoqueEmLote } from './estoqueEmLoteContract';
 
 const scope = { organizationId: 'org-a', actorId: 'ator-a', role: 'admin' } as VerifiedOrganizationScope;
 const cravo15 = { id: '55555555-5555-4555-8555-555555555555', blingId: '515', nome: 'Rapé 15ml Nome:Cravo', codigo: 'HX-RAP-15-CRAVO', categoria: null };
