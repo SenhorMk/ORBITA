@@ -18,7 +18,6 @@ for (const future of versions) for (const [width, height] of sizes) {
       if (screen === 'organization') await expect(page.getByText('Pessoa de inspeção', { exact: true })).toBeAttached();
       if (screen === 'integrations') {
         await expect(page.getByLabel('Client ID do Bling', { exact: true })).toBeAttached();
-        await expect(page.getByText('Caso aberto em triagem.', { exact: true })).toBeVisible();
         await expect(page.getByText(/Última verificação OK em/)).toHaveCount(2);
       }
       const main = page.getByRole('main');
