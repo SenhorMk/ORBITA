@@ -69,6 +69,15 @@ describe('selecionarFerramenta: contrato enviado à Groq', () => {
     ['Troque a descrição do Kuripe Cobra para Kuripe de bambu',
       { acao: 'editar_descricao', selecao: 'um', por: 'nome', referencia: 'Kuripe Cobra', valor: 'Kuripe de bambu' },
       { acao: 'editar_produtos', campo: 'descricao', selecao: 'um', por: 'nome', referencia: 'Kuripe Cobra', valor: 'Kuripe de bambu' }],
+    ['Chegaram 5 tepis, retire 2 do RAP-1 e deixe o kuripe em 10',
+      { acao: 'estoque_em_lote', itens: [
+        { referencia: 'tepi', operacao: 'somar', quantidade: 5 },
+        { referencia: 'RAP-1', operacao: 'subtrair', quantidade: 2 },
+        { referencia: 'kuripe', operacao: 'definir', quantidade: 10 }] },
+      { acao: 'estoque_em_lote', itens: [
+        { referencia: 'tepi', operacao: 'somar', quantidade: 5 },
+        { referencia: 'RAP-1', operacao: 'subtrair', quantidade: 2 },
+        { referencia: 'kuripe', operacao: 'definir', quantidade: 10 }] }],
   ])('%s: esquema aceito e resposta convertida ao contrato interno', async (pergunta, doModelo, interno) => {
     vi.stubEnv('GROQ_API_KEY', 'fixture-do-contrato-groq');
     const capturadas: Esquema[] = [];
@@ -76,6 +85,15 @@ describe('selecionarFerramenta: contrato enviado à Groq', () => {
     await expect(selecionarFerramenta(pergunta, '2026-11-24', new AbortController().signal)).resolves.toEqual(interno);
     expect(capturadas).toHaveLength(1);
     expect(anyOfSemDiscriminador(capturadas[0])).toEqual([]);
+  });
+
+  it('um lote vazio ou com mais de 20 itens devolvido pelo modelo é recusado (falha fechada)', async () => {
+    vi.stubEnv('GROQ_API_KEY', 'fixture-do-contrato-groq');
+    const item = { referencia: 'tepi', operacao: 'somar', quantidade: 1 };
+    for (const itens of [[], Array.from({ length: 21 }, () => item)]) {
+      groqFalsa({ acao: 'estoque_em_lote', itens }, []);
+      await expect(selecionarFerramenta('Adicione 1 tepi', '2026-11-24', new AbortController().signal)).rejects.toThrow();
+    }
   });
 
   it('o detector reproduz a recusa da Groq para uma união aninhada sem discriminador único', () => {
