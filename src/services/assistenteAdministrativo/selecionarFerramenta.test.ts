@@ -38,9 +38,10 @@ function anyOfSemDiscriminador(esquema: Esquema, caminho = '$'): string[] {
   return falhas;
 }
 
-function groqFalsa(respostaDoModelo: unknown, capturadas: Esquema[]) {
+function groqFalsa(respostaDoModelo: unknown, capturadas: Esquema[], corpos: { model: string; messages: { role: string; content: unknown }[] }[] = []) {
   vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
     const corpo = JSON.parse(String(init.body));
+    corpos.push(corpo);
     const { schema, strict } = corpo.response_format.json_schema;
     capturadas.push(schema);
     const falhas = anyOfSemDiscriminador(schema);
@@ -94,6 +95,21 @@ describe('selecionarFerramenta: contrato enviado à Groq', () => {
       groqFalsa({ acao: 'estoque_em_lote', itens }, []);
       await expect(selecionarFerramenta('Adicione 1 tepi', '2026-11-24', new AbortController().signal)).rejects.toThrow();
     }
+  });
+
+  it('usa o modelo maior e envia as trocas anteriores antes da pergunta atual', async () => {
+    vi.stubEnv('GROQ_API_KEY', 'fixture-do-contrato-groq');
+    const corpos: Parameters<typeof groqFalsa>[2] = [];
+    groqFalsa({ acao: 'consultar_estoque', referencia: 'cacau' }, [], corpos);
+    const historico = [{ pergunta: 'Quanto tem do tepi?', resposta: 'Tepi de Bambu tem 10 unidades disponíveis.' }];
+    await selecionarFerramenta('E do cacau?', '2026-11-26', new AbortController().signal, historico);
+    expect(corpos[0].model).toBe('openai/gpt-oss-120b');
+    const conversa = corpos[0].messages.filter(m => m.role !== 'system').map(m => [m.role, JSON.stringify(m.content)]);
+    expect(conversa).toHaveLength(3);
+    expect(conversa.map(([papel]) => papel)).toEqual(['user', 'assistant', 'user']);
+    expect(conversa[0][1]).toContain('Quanto tem do tepi?');
+    expect(conversa[1][1]).toContain('10 unidades');
+    expect(conversa[2][1]).toContain('E do cacau?');
   });
 
   it('o detector reproduz a recusa da Groq para uma união aninhada sem discriminador único', () => {

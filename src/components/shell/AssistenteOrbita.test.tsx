@@ -86,6 +86,26 @@ describe('painel: prévia e confirmação de produtos', () => {
   });
 });
 
+describe('painel: memória curta da conversa', () => {
+  it('a pergunta seguinte leva as trocas anteriores já respondidas', async () => {
+    const corpos: { historico?: unknown }[] = [];
+    const usuario = userEvent.setup();
+    render(<AssistenteOrbita organizacaoId={org} fetchWithAuth={async (_url, options) => {
+      corpos.push(JSON.parse(String(options?.body)));
+      return Response.json({ mensagem: 'Tepi de Bambu tem 10 unidades disponíveis.', detalhes: ['SKU HX-TEPI-01'] });
+    }} />);
+    await usuario.click(screen.getByRole('button', { name: 'Assistente ORBITA' }));
+    await usuario.type(screen.getByRole('textbox'), 'Quanto tem do tepi?{Enter}');
+    await screen.findByText('Tepi de Bambu tem 10 unidades disponíveis.');
+    await usuario.type(screen.getByRole('textbox'), 'E do cacau?{Enter}');
+    await screen.findByText('E do cacau?');
+    expect(corpos[0].historico).toEqual([]);
+    expect(corpos[1].historico).toEqual([
+      { pergunta: 'Quanto tem do tepi?', resposta: 'Tepi de Bambu tem 10 unidades disponíveis.\nSKU HX-TEPI-01' },
+    ]);
+  });
+});
+
 describe("painel: escolha entre produtos parecidos", () => {
   const outroId = "44444444-4444-4444-8444-444444444444";
   const pedido = { acao: "editar_produtos", selecao: "um", por: "nome", referencia: "rape de cravo", campo: "estoque", valor: 5 };

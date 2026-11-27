@@ -48,7 +48,7 @@ const negada: RespostaEdicao = { mensagem: 'A alteração exige permissão de ge
 class EdicaoDeProdutos {
   constructor(private readonly portas: PortasDeEdicao) {}
 
-    async propor(scope: VerifiedOrganizationScope, entrada: PedidoEdicao, pergunta: string): Promise<RespostaEdicao> {
+    async propor(scope: VerifiedOrganizationScope, entrada: PedidoEdicao, pergunta: string, anteriores: readonly string[] = []): Promise<RespostaEdicao> {
       const portas = this.portas;
       if (!escopoTemCapacidade(scope, 'organization:manage')) return negada;
       const parsed = pedidoEdicao.safeParse(entrada);
@@ -59,7 +59,8 @@ class EdicaoDeProdutos {
         return { mensagem: 'Esta operação define o saldo final. Diga, por exemplo, “deixe o estoque do SKU X em 5”.' };
       }
       // O modelo não pode expandir o alcance, inventar uma referência ou redigir outro valor.
-      if (!literal.includes(normalizar(pedido.referencia))
+      // A referência pode vir de uma pergunta anterior da conversa; alcance e valor, só da atual.
+      if (![...anteriores, pergunta].some(texto => normalizar(texto).includes(normalizar(pedido.referencia)))
           || (pedido.selecao === 'todos' && !/\b(?:todos|todas)\b/u.test(literal))
           || (typeof pedido.valor === 'string' && !pergunta.includes(pedido.valor))
           || (typeof pedido.valor === 'number' && !pergunta.match(/-?\d+(?:[.,]\d+)?/gu)?.includes(String(pedido.valor)))) {

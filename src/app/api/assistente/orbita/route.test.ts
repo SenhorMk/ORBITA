@@ -57,6 +57,20 @@ describe('autorização e limites do Assistente ORBITA', () => {
     expect(mocks.selecionar).not.toHaveBeenCalled();
   });
 
+  it('repassa a memória curta ao seletor, sem trocas com dados pessoais, e recusa histórico grande demais', async () => {
+    const historico = [
+      { pergunta: 'Qual o email do cliente do pedido 12?', resposta: 'Consulte dados pessoais na área de clientes.' },
+      { pergunta: 'Quanto tem do tepi?', resposta: 'Tepi de Bambu tem 10 unidades disponíveis.' },
+    ];
+    const comHistorico = (lista: unknown[]) => new Request('http://localhost/api/assistente/orbita', {
+      method: 'POST', body: JSON.stringify({ pergunta: 'E do cacau?', organizacaoEsperada: orgA, historico: lista }),
+    });
+    expect((await POST(comHistorico(historico))).status).toBe(200);
+    expect(mocks.selecionar).toHaveBeenCalledWith('E do cacau?', expect.any(String), expect.any(AbortSignal), [historico[1]]);
+    expect(mocks.consultar).toHaveBeenCalledWith(expect.anything(), 'E do cacau?', expect.any(String), expect.anything(), ['Quanto tem do tepi?']);
+    expect((await POST(comHistorico(Array.from({ length: 7 }, () => historico[1])))).status).toBe(400);
+  });
+
   it('propaga a recusa de autenticação sem acessar dados', async () => {
     mocks.scope.mockResolvedValueOnce({ _tag: 'RequestScopeDenied', response: Response.json({}, { status: 401 }) });
     expect((await POST(req())).status).toBe(401);

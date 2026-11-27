@@ -19,10 +19,11 @@ function normalizar(texto: string) {
  * O modelo só copia o que a pessoa escreveu. Recusa referência com palavra que não
  * está no pedido, número que não está no pedido e operação sem verbo compatível
  * (por exemplo, "definir" quando o pedido só fala em somar). Devolve o motivo ou null.
+ * O produto pode vir das perguntas `anteriores` ("adiciona 5 nele"); número e verbo, só da atual.
  */
-export function conferirPedidoDeLote(pedido: PedidoEstoqueEmLote, pergunta: string): string | null {
+export function conferirPedidoDeLote(pedido: PedidoEstoqueEmLote, pergunta: string, anteriores: readonly string[] = []): string | null {
   const literal = normalizar(pergunta);
-  const doPedido = palavras(pergunta);
+  const doPedido = palavras([...anteriores, pergunta].join('\n'));
   const numeros = new Set(literal.match(/\d+/gu) ?? []);
   for (const item of pedido.itens) {
     const ausente = palavras(item.referencia).some(p => !doPedido.some(d => d === p || d.startsWith(p) || p.startsWith(d)));
@@ -47,12 +48,13 @@ function saldoFinal(operacao: PedidoEstoqueEmLote['itens'][number]['operacao'], 
 /** Resolve cada referência no catálogo escopado, lê o saldo no Bling e guarda UMA proposta. Nada é enviado ao Bling aqui. */
 export async function proporEstoqueEmLote(
   portas: PortasDeEdicao, scope: VerifiedOrganizationScope, entrada: PedidoEstoqueEmLote, pergunta: string,
+  anteriores: readonly string[] = [],
 ): Promise<RespostaDeLote> {
   if (!escopoTemCapacidade(scope, 'organization:manage')) return { mensagem: 'A alteração exige permissão de gestão na organização ativa.' };
   const parsed = pedidoEstoqueEmLote.safeParse(entrada);
   if (!parsed.success) return indisponivel;
   const pedido = parsed.data;
-  const motivo = conferirPedidoDeLote(pedido, pergunta);
+  const motivo = conferirPedidoDeLote(pedido, pergunta, anteriores);
   if (motivo) return { mensagem: motivo };
 
   const catalogo = await portas.catalogo(scope);

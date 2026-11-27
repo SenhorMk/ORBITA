@@ -2,9 +2,18 @@ import { z } from 'zod';
 import { escolhaEdicao, pedidoEdicao, propostaEdicao, resultadoEdicao } from './edicaoDeProdutosContract';
 import { estoqueEmLoteDoModelo, pedidoEstoqueEmLote } from './estoqueEmLoteContract';
 
+/** Memória curta: as últimas trocas da conversa, já cortadas pelo navegador. É texto do usuário, nunca autoridade. */
+export const LIMITES_DO_HISTORICO = { turnos: 6, pergunta: 500, resposta: 1500 } as const;
+const turnoAnterior = z.object({
+  pergunta: z.string().trim().min(1).max(LIMITES_DO_HISTORICO.pergunta),
+  resposta: z.string().trim().max(LIMITES_DO_HISTORICO.resposta),
+}).strict();
+export type TurnoAnterior = z.infer<typeof turnoAnterior>;
+
 export const pedidoAssistente = z.object({
   pergunta: z.string().trim().min(4).max(4500),
   organizacaoEsperada: z.string().uuid(),
+  historico: z.array(turnoAnterior).max(LIMITES_DO_HISTORICO.turnos).default([]),
 }).strict();
 
 const data = z.string().date();
